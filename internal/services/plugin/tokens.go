@@ -30,6 +30,9 @@ type AccessToken struct {
 	Hint      string    `json:"hint"` // last 4 chars, for telling tokens apart
 	CreatedAt time.Time `json:"created_at"`
 	LastUsed  time.Time `json:"last_used,omitempty"`
+	// CreatedBy is the wick user who generated (or last rotated) the token;
+	// the service's Host API calls on a token route run as that person.
+	CreatedBy string `json:"created_by,omitempty"`
 }
 
 type tokenFile struct {
@@ -111,8 +114,13 @@ func (t *Tokens) List(key string) []AccessToken {
 // Generate makes a new access token for key and returns its plaintext —
 // the only time it is ever available.
 func (t *Tokens) Generate(key, name string) (AccessToken, string, error) {
+	return t.GenerateBy(key, name, "")
+}
+
+// GenerateBy is Generate recording the admin who made the token.
+func (t *Tokens) GenerateBy(key, name, by string) (AccessToken, string, error) {
 	plain := randToken(accessPrefix)
-	at := AccessToken{ID: randToken("")[:12], Name: name, Hash: hashToken(plain), Hint: plain[len(plain)-4:], CreatedAt: time.Now().UTC()}
+	at := AccessToken{ID: randToken("")[:12], Name: name, Hash: hashToken(plain), Hint: plain[len(plain)-4:], CreatedAt: time.Now().UTC(), CreatedBy: by}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.f.Access[key] = append(t.f.Access[key], at)
@@ -125,12 +133,21 @@ var ErrTokenNotFound = errors.New("token not found")
 // Rotate replaces token id's secret, keeping its name; the old secret stops
 // working at once.
 func (t *Tokens) Rotate(key, id string) (AccessToken, string, error) {
+	return t.RotateBy(key, id, "")
+}
+
+// RotateBy is Rotate recording the admin who rotated it ("" keeps the
+// previous owner).
+func (t *Tokens) RotateBy(key, id, by string) (AccessToken, string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for i, at := range t.f.Access[key] {
 		if at.ID == id {
 			plain := randToken(accessPrefix)
 			at.Hash, at.Hint, at.CreatedAt, at.LastUsed = hashToken(plain), plain[len(plain)-4:], time.Now().UTC(), time.Time{}
+			if by != "" {
+				at.CreatedBy = by
+			}
 			t.f.Access[key][i] = at
 			return at, plain, t.save()
 		}
@@ -154,8 +171,15 @@ func (t *Tokens) Revoke(key, id string) error {
 
 // Verify reports whether bearer is a live access token of key.
 func (t *Tokens) Verify(key, bearer string) bool {
+	_, ok := t.VerifyOwner(key, bearer)
+	return ok
+}
+
+// VerifyOwner is Verify that also returns who created the token ("" for a
+// token made before owners were recorded).
+func (t *Tokens) VerifyOwner(key, bearer string) (string, bool) {
 	if bearer == "" {
-		return false
+		return "", false
 	}
 	h := hashToken(bearer)
 	t.mu.Lock()
@@ -163,10 +187,10 @@ func (t *Tokens) Verify(key, bearer string) bool {
 	for i, at := range t.f.Access[key] {
 		if subtle.ConstantTimeCompare([]byte(at.Hash), []byte(h)) == 1 {
 			t.f.Access[key][i].LastUsed = time.Now().UTC()
-			return true
+			return at.CreatedBy, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // IssueCallback makes the callback token for a new process of key (scoped

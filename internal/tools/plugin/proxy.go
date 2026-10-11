@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/plugin/host"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -29,9 +30,12 @@ type Proxy struct {
 
 // request is what one proxied call needs besides the raw request.
 type request struct {
-	user *tool.User               // nil = no session (webhook / public visitor)
-	cfg  map[string]string        // the tool's current config
-	wrap func(body []byte) []byte // wraps a page fragment in wick's layout; nil = never wrap
+	user *tool.User // nil = no session (webhook / public visitor)
+	// tokenUser is the owner of the wick access token a webhook request
+	// carried (nil = none or not a valid wick token).
+	tokenUser *tool.User
+	cfg       map[string]string        // the tool's current config
+	wrap      func(body []byte) []byte // wraps a page fragment in wick's layout; nil = never wrap
 }
 
 // ServeCtx proxies a session-gated tool route.
@@ -59,12 +63,17 @@ func (p *Proxy) ServeCtx(c *tool.Ctx, cfgKeys []string) {
 	p.serve(c.W, c.R, req)
 }
 
-// ServeWebhook proxies a manifest-declared webhook route: no session, no
-// user headers, never wrapped.
+// ServeWebhook proxies a manifest-declared webhook route: no session and
+// never wrapped. A request carrying a valid wick PAT/JWT gets its owner as
+// X-Wick-Token-User-* headers, and the plugin's Host API calls for it run as
+// that person.
 func (p *Proxy) ServeWebhook(c *tool.WebhookCtx, cfgKeys []string) {
 	req := request{cfg: map[string]string{}}
 	for _, k := range cfgKeys {
 		req.cfg[k] = c.Cfg(k)
+	}
+	if u, ok := c.TokenUser(); ok {
+		req.tokenUser = &u
 	}
 	p.serve(c.W, c.R, req)
 }
@@ -93,6 +102,8 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 		return
 	}
 	defer release()
+	callID, end := p.beginCall(req)
+	defer end()
 	rp := &httputil.ReverseProxy{
 		Transport:     rt,
 		FlushInterval: -1, // SSE / streamed output goes through per write
@@ -101,6 +112,10 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 			pr.Out.URL.Host = "plugin"
 			pr.Out.Host = "plugin"
 			injectHeaders(pr.Out.Header, p.base, req.user)
+			injectTokenUser(pr.Out.Header, req.tokenUser)
+			if callID != "" {
+				pr.Out.Header.Set(host.HeaderCallID, callID)
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error { return p.modify(resp, r, req) },
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -133,6 +148,37 @@ func injectHeaders(h http.Header, base string, u *tool.User) {
 	h.Set(wickplugin.HeaderUserRole, role)
 	if len(u.Tags) > 0 {
 		h.Set(wickplugin.HeaderUserTags, strings.Join(u.Tags, ","))
+	}
+}
+
+// beginCall records who the request runs for on the Host API: the session
+// user, else the token owner.
+func (p *Proxy) beginCall(req request) (string, func()) {
+	switch {
+	case req.user != nil:
+		return wickplugin.BeginHostCall(p.key, wickplugin.KindTool, req.user.ID, "caller", "")
+	case req.tokenUser != nil:
+		return wickplugin.BeginHostCall(p.key, wickplugin.KindTool, req.tokenUser.ID, "token", "")
+	}
+	return "", func() {}
+}
+
+// injectTokenUser sets the X-Wick-Token-User-* headers (after injectHeaders
+// dropped every client-sent X-Wick-* one).
+func injectTokenUser(h http.Header, u *tool.User) {
+	if u == nil {
+		return
+	}
+	role := "user"
+	if u.IsAdmin {
+		role = "admin"
+	}
+	h.Set(wickplugin.HeaderTokenUserID, u.ID)
+	h.Set(wickplugin.HeaderTokenUserEmail, u.Email)
+	h.Set(wickplugin.HeaderTokenUserName, u.Name)
+	h.Set(wickplugin.HeaderTokenUserRole, role)
+	if len(u.Tags) > 0 {
+		h.Set(wickplugin.HeaderTokenUserTags, strings.Join(u.Tags, ","))
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/plugin/host"
 	pb "github.com/yogasw/wick/pkg/plugin/proto"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -92,6 +93,54 @@ func UserFromHeaders(r *http.Request) (tool.User, bool) {
 	return u, true
 }
 
+// TokenUserFromHeaders reads the owner of the wick access token a webhook
+// request carried, as the host verified and injected it. ok is false when
+// the request carried no valid wick token.
+func TokenUserFromHeaders(r *http.Request) (tool.User, bool) {
+	id := r.Header.Get(wickplugin.HeaderTokenUserID)
+	if id == "" {
+		return tool.User{}, false
+	}
+	u := tool.User{
+		ID:      id,
+		Name:    r.Header.Get(wickplugin.HeaderTokenUserName),
+		Email:   r.Header.Get(wickplugin.HeaderTokenUserEmail),
+		IsAdmin: r.Header.Get(wickplugin.HeaderTokenUserRole) == "admin",
+	}
+	for _, t := range strings.Split(r.Header.Get(wickplugin.HeaderTokenUserTags), ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			u.Tags = append(u.Tags, t)
+		}
+	}
+	return u, true
+}
+
+type tokenUserKey struct{}
+
+// tokenUserFromCtx is the plugin-side tool.TokenResolver: the plugin cannot
+// verify a token itself, so WebhookCtx.TokenUser answers with what the host
+// verified for this request (wrap put it on the context).
+func tokenUserFromCtx(ctx context.Context, _ string) (tool.User, bool) {
+	u, ok := ctx.Value(tokenUserKey{}).(tool.User)
+	return u, ok
+}
+
+// wrap carries the host-verified token owner and the Host API call id of a
+// request on its context.
+func wrap(next http.Handler) http.Handler {
+	return host.CallIDHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := TokenUserFromHeaders(r); ok {
+			r = r.WithContext(context.WithValue(r.Context(), tokenUserKey{}, u))
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// Host returns wick's Host API for this tool plugin (see wickplugin.Host).
+// Pass the request context so user-level calls run for the person behind
+// the request; host.ErrHostAPIUnavailable means an older wick.
+func Host(ctx context.Context) (host.Host, error) { return wickplugin.Host(ctx) }
+
 type toolServer struct {
 	pb.UnimplementedToolServer
 	schema []byte
@@ -153,7 +202,8 @@ func Handler(mod tool.Module, cfg map[string]string) http.Handler {
 		store.set(cfg)
 	}
 	tool.SetUserResolver(UserFromHeaders)
-	return r.handler()
+	tool.SetTokenResolver(tokenUserFromCtx)
+	return wrap(r.handler())
 }
 
 // Manifest returns the tool half of mod's manifest (routes are registered to
@@ -194,7 +244,8 @@ func ServeTool(mod tool.Module, opts ...Option) {
 	_ = os.Chmod(sock, 0o600)
 	wickplugin.ApplyRlimits()
 	tool.SetUserResolver(UserFromHeaders)
-	srv := &http.Server{Handler: r.handler(), ReadHeaderTimeout: 10 * time.Second}
+	tool.SetTokenResolver(tokenUserFromCtx)
+	srv := &http.Server{Handler: wrap(r.handler()), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	schema, _ := json.Marshal(tm)
 	goplugin.Serve(&goplugin.ServeConfig{

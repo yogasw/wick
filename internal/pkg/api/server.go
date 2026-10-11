@@ -261,7 +261,8 @@ func NewServer() *Server {
 	if n := toolPlugins.Load(connplugin.KindDir(wickplugin.KindTool), jobPluginStore.Enabled, jobPluginStore.Record, tools.Register); n > 0 {
 		log.Info().Int("plugins", n).Msg("tool plugins: loaded")
 	}
-	toolPlugins.Start()
+	// toolPlugins.Start (keep_warm spawns) waits for startHostAPI below so
+	// those processes are born with the Host API env and broker.
 	home.PluginVersions = toolPlugins.Version
 
 	// A job/tool that declares Replaces (a plugin extracted from a built-in)
@@ -314,7 +315,7 @@ func NewServer() *Server {
 		mgr.SetDNSServersLoader(func() string { return configsSvc.Get(configs.KeyDNSServers) })
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
 		pluginMgr = mgr
-		go pluginMgr.WarmUp()
+		// WarmUp waits for startHostAPI below (Host API env + broker).
 	}
 
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
@@ -3120,6 +3121,19 @@ func NewServer() *Server {
 		return &serviceplugin.User{ID: u.ID, Email: u.Email, Name: u.Name, Admin: u.IsAdmin()}
 	}
 	servicePlugins.Configs = configsSvc
+	// Plugin Host API: one server, a gRPC door per plugin process (broker)
+	// and a private loopback HTTP door for every kind. Rest dispatches into
+	// the inner mux r, not the outer middleware chain.
+	hostAPISvc := startHostAPI(context.Background(), hostAPIDeps{
+		db: db, router: r, auth: authSvc, pats: tokensSvc, configs: configsSvc,
+		connectors: connectorsSvc, layout: agentsLayout, service: servicePlugins,
+	})
+	// Plugin processes spawned from here on carry the Host API; keep_warm
+	// tools and the connector warm-up start only now (see TestHostAPIStartsBeforePluginSpawns).
+	toolPlugins.Start()
+	if pluginMgr != nil {
+		go pluginMgr.WarmUp()
+	}
 	if n := servicePlugins.Load(connplugin.KindDir(wickplugin.KindService), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
 		log.Info().Int("plugins", n).Msg("service plugins: loaded")
 	}
@@ -3306,11 +3320,12 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub}
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub}
 }
 
 type Server struct {
 	router         *http.ServeMux
+	hostAPI        *hostAPI
 	configsSvc     *configs.Service
 	authMidd       *login.Middleware
 	agentsPool     *agentpool.Pool
@@ -3983,6 +3998,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			s.servicePlugins.Shutdown()
 		}
 		jobplugin.KillAll()
+		s.hostAPI.Close()
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
@@ -4259,6 +4275,7 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 		s.servicePlugins.Shutdown()
 	}
 	jobplugin.KillAll()
+	s.hostAPI.Close()
 	if s.pluginMgr != nil {
 		s.pluginMgr.KillAll()
 	}

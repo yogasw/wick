@@ -49,6 +49,7 @@ type GRPCConn interface {
 // It is what GRPCClient() dispenses; the manager keeps it alive per plugin.
 type grpcClient struct {
 	inner pb.ConnectorClient
+	key   string // plugin key for Host API call ids ("" = none)
 }
 
 // Execute runs one operation in the plugin and returns the raw result JSON.
@@ -57,6 +58,8 @@ func (c *grpcClient) Execute(ctx context.Context, call ExecCall) (ExecResult, er
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
 	}
+	ctx, end := beginHostCall(ctx, c.key, KindConnector, call.CallerUserID, call.SessionID)
+	defer end()
 	resp, err := c.inner.Execute(ctx, &pb.ExecuteRequest{
 		Operation:    call.Operation,
 		ArgsJson:     args,
@@ -82,6 +85,8 @@ func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) (ExecResu
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
 	}
+	ctx, end := beginHostCall(ctx, c.key, KindConnector, call.CallerUserID, call.SessionID)
+	defer end()
 	stream, err := c.inner.ExecuteStream(ctx, &pb.ExecuteRequest{
 		Operation:    call.Operation,
 		ArgsJson:     args,

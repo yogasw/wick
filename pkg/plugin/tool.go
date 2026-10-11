@@ -30,6 +30,13 @@ const (
 	HeaderUserRole  = "X-Wick-User-Role" // "admin" or "user"; absent = no session
 	HeaderUserTags  = "X-Wick-User-Tags" // comma-separated tag names
 	HeaderBase      = "X-Wick-Base"      // "/tools/{key}"
+	// HeaderTokenUser* name the owner of the wick access token (PAT/JWT) a
+	// webhook request carried, when wick could verify it; absent otherwise.
+	HeaderTokenUserID    = "X-Wick-Token-User-Id"
+	HeaderTokenUserEmail = "X-Wick-Token-User-Email"
+	HeaderTokenUserName  = "X-Wick-Token-User-Name"
+	HeaderTokenUserRole  = "X-Wick-Token-User-Role"
+	HeaderTokenUserTags  = "X-Wick-Token-User-Tags"
 	// HeaderLayout on a plugin response asks the host to wrap the body (an
 	// HTML fragment) in wick's page layout; HeaderTitle names the page.
 	HeaderLayout = "X-Wick-Layout"
@@ -78,18 +85,40 @@ type ToolModule struct {
 
 // ToolGRPCPlugin is the go-plugin descriptor for the Tool control service.
 // Impl is set only on the plugin side.
+//
+// HostKey/HostKind (host side) name the plugin the Host API is served for
+// over the broker; HostKey "" serves none. Service plugins share this
+// descriptor, hence the kind.
 type ToolGRPCPlugin struct {
 	goplugin.NetRPCUnsupportedPlugin
-	Impl pb.ToolServer
+	Impl     pb.ToolServer
+	HostKey  string
+	HostKind string
 }
 
-func (p *ToolGRPCPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Server) error {
+func (p *ToolGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	pb.RegisterToolServer(s, p.Impl)
+	dialHostBroker(broker)
 	return nil
 }
 
-func (p *ToolGRPCPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+func (p *ToolGRPCPlugin) GRPCClient(_ context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+	kind := p.HostKind
+	if kind == "" {
+		kind = KindTool
+	}
+	serveHostBroker(broker, p.HostKey, kind)
 	return &toolClient{inner: pb.NewToolClient(c)}, nil
+}
+
+// ToolVersionedPluginsFor is ToolVersionedPlugins for one plugin of kind
+// (tool or service): the host also serves it the Host API over the broker.
+func ToolVersionedPluginsFor(key, kind string) map[int]goplugin.PluginSet {
+	out := map[int]goplugin.PluginSet{}
+	for _, v := range SupportedProtoVersions() {
+		out[v] = goplugin.PluginSet{ToolPluginName: &ToolGRPCPlugin{HostKey: key, HostKind: kind}}
+	}
+	return out
 }
 
 // ToolVersionedPlugins is the host-side plugin set for tool plugins.

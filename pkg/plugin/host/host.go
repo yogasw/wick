@@ -125,15 +125,38 @@ func FromHTTP(baseURL, token string, hc *http.Client) (Host, error) {
 }
 
 var (
-	connMu sync.RWMutex
-	conn   grpc.ClientConnInterface
+	connMu   sync.RWMutex
+	conn     grpc.ClientConnInterface
+	connFunc func() (grpc.ClientConnInterface, error)
+	connGen  uint64
 )
+
+// ConnGeneration changes every time SetConn / SetConnFunc records a new
+// connection, so a cached probe of the old one can be dropped.
+func ConnGeneration() uint64 {
+	connMu.RLock()
+	defer connMu.RUnlock()
+	return connGen
+}
 
 // SetConn records the broker connection for Default. The plugin SDK calls it
 // once the host announces a Host API broker id; plugins do not.
 func SetConn(c grpc.ClientConnInterface) {
 	connMu.Lock()
-	conn = c
+	conn, connFunc = c, nil
+	connGen++
+	connMu.Unlock()
+}
+
+// SetConnFunc records a broker connection that is still being dialled: Default
+// waits for f (called once, its result kept) and falls back to the HTTP env
+// when it fails. The plugin SDK sets it while it dials the broker; plugins do
+// not.
+func SetConnFunc(f func() (grpc.ClientConnInterface, error)) {
+	once := sync.OnceValues(f)
+	connMu.Lock()
+	conn, connFunc = nil, once
+	connGen++
 	connMu.Unlock()
 }
 
@@ -142,8 +165,13 @@ func SetConn(c grpc.ClientConnInterface) {
 // a process not started by wick) yields ErrHostAPIUnavailable.
 func Default() (Host, error) {
 	connMu.RLock()
-	c := conn
+	c, f := conn, connFunc
 	connMu.RUnlock()
+	if c == nil && f != nil {
+		if fc, err := f(); err == nil {
+			c = fc
+		}
+	}
 	if c != nil {
 		return FromConn(c)
 	}

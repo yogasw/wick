@@ -67,6 +67,7 @@ func (s *grpcServer) runOp(ctx context.Context, req *pb.ExecuteRequest) ([]byte,
 		}
 	}
 	cctx := connector.NewCtx(ctx, req.GetInstanceId(), req.Creds, input, nil, nil, masks)
+	cctx.SetUserNameResolver(hostUserName(ctx))
 	if uid := req.GetCallerUserId(); uid != "" {
 		cctx.SetCallerUserID(uid)
 	}

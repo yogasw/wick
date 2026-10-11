@@ -34,11 +34,29 @@ var ErrNotReady = errors.New("tool plugin not ready")
 type spawnFn func(binary, socket string) (kill func(), conn wickplugin.ToolConn, alive func() bool, err error)
 
 func spawnProcess(binary, socket string) (func(), wickplugin.ToolConn, func() bool, error) {
+	return spawnFor("")(binary, socket)
+}
+
+// spawnFor is spawnProcess for plugin key: the process also gets the Host
+// API (broker + env).
+func spawnFor(key string) spawnFn {
+	return func(binary, socket string) (func(), wickplugin.ToolConn, func() bool, error) {
+		return spawnTool(key, binary, socket)
+	}
+}
+
+func spawnTool(key, binary, socket string) (func(), wickplugin.ToolConn, func() bool, error) {
+	plugins := wickplugin.ToolVersionedPlugins
+	if key != "" {
+		plugins = wickplugin.ToolVersionedPluginsFor(key, wickplugin.KindTool)
+	}
+	env, release := wickplugin.HostProcessEnv(key, wickplugin.KindTool)
 	client, raw, err := connplugin.Spawn(connplugin.SpawnSpec{
 		Binary:   binary,
-		Plugins:  wickplugin.ToolVersionedPlugins,
+		Plugins:  plugins,
 		Dispense: wickplugin.ToolPluginName,
-		Env:      []string{wickplugin.EnvToolSocket + "=" + socket},
+		Env:      append([]string{wickplugin.EnvToolSocket + "=" + socket}, env...),
+		Release:  release,
 	})
 	if err != nil {
 		return nil, nil, nil, err

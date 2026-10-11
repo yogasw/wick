@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/rs/zerolog/log"
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
@@ -35,10 +36,29 @@ const TriggerScheduled = "cron"
 type spawnFn func(binary string) (kill func(), conn wickplugin.JobConn, err error)
 
 func spawnProcess(binary string) (func(), wickplugin.JobConn, error) {
+	return spawnFor("")(binary)
+}
+
+// spawnFor is spawnProcess for plugin key: the process also gets the Host
+// API (broker + env).
+func spawnFor(key string) spawnFn {
+	return func(binary string) (func(), wickplugin.JobConn, error) {
+		plugins := wickplugin.JobVersionedPlugins
+		if key != "" {
+			plugins = wickplugin.JobVersionedPluginsFor(key)
+		}
+		env, release := wickplugin.HostProcessEnv(key, wickplugin.KindJob)
+		return spawnJob(binary, plugins, env, release)
+	}
+}
+
+func spawnJob(binary string, plugins map[int]goplugin.PluginSet, env []string, release func()) (func(), wickplugin.JobConn, error) {
 	client, raw, err := connplugin.Spawn(connplugin.SpawnSpec{
 		Binary:   binary,
-		Plugins:  wickplugin.JobVersionedPlugins,
+		Plugins:  plugins,
 		Dispense: wickplugin.JobPluginName,
+		Env:      env,
+		Release:  release,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -101,7 +121,7 @@ func timeout() time.Duration {
 // BuildModule turns one discovered kind=job plugin into a job.Module whose
 // Run spawns the binary for exactly one call.
 func BuildModule(f connplugin.Found) job.Module {
-	return buildModule(f, spawnProcess, timeout())
+	return buildModule(f, spawnFor(f.Key), timeout())
 }
 
 func buildModule(f connplugin.Found, spawn spawnFn, limit time.Duration) job.Module {

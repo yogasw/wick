@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // callbackKey is the reserved /x/{key} segment of the callback API a
@@ -56,6 +58,11 @@ func (h *Host) serveCallbackAPI(w http.ResponseWriter, r *http.Request, sub stri
 		return
 	}
 	if r.Method == http.MethodGet && sub == "/api/whoami" {
+		if h.HostAPI != nil {
+			// The Host API whoami is a superset of the original body.
+			h.HostAPI.ServeAs(w, r, key, wickplugin.KindService, scopes)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"plugin": key, "scopes": scopes})
 		return

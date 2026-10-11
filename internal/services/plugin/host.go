@@ -15,6 +15,7 @@ import (
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	wickhost "github.com/yogasw/wick/pkg/plugin/host"
 )
 
 // User is the signed-in wick user of a request.
@@ -47,6 +48,9 @@ type Host struct {
 	// Audit records an admin change of a service setting (actor, service
 	// key, what changed); nil = log only.
 	Audit func(actor, key, detail string)
+	// HostAPI is the private Host API door (nil = none): its address goes
+	// to every process and each proxied request gets a call id.
+	HostAPI HostAPIDoor
 
 	sockDir  string
 	spawn    spawnFn
@@ -57,6 +61,23 @@ type Host struct {
 	once     sync.Once
 	started  atomic.Bool
 }
+
+// HostAPIDoor is the Host API side the service host needs
+// (hostapi.Bridge satisfies it).
+type HostAPIDoor interface {
+	URL() string
+	// BeginCallFrom records who one proxied request runs for; the plugin
+	// echoes the id on its Host API calls. end forgets it.
+	BeginCallFrom(key, kind, userID, source, sessionID string) (callID string, end func())
+	// ServeAs serves a Host API request for an already authenticated plugin.
+	ServeAs(w http.ResponseWriter, r *http.Request, key, kind string, scopes []string)
+}
+
+// Identity sources a service request hands the Host API (hostapi.Source*).
+const (
+	sourceCaller = "caller"
+	sourceToken  = "token"
+)
 
 var (
 	defMu sync.RWMutex
@@ -194,11 +215,17 @@ func (h *Host) Add(key, version string, sm wickplugin.ServiceModule, binary stri
 }
 
 // processEnv is the callback env of a new process: a fresh scoped token
-// (unless revoked) and wick's base URL. The token is never logged.
+// (unless revoked), wick's base URL and the private Host API door. The token
+// is never logged.
 func (h *Host) processEnv(key string, scopes []string) []string {
 	var env []string
 	if h.BaseURL != nil {
 		env = append(env, wickplugin.EnvBaseURL+"="+h.BaseURL())
+	}
+	if h.HostAPI != nil {
+		if u := h.HostAPI.URL(); u != "" {
+			env = append(env, wickhost.EnvHostAPIURL+"="+u)
+		}
 	}
 	if h.Tokens != nil {
 		if tok, ok := h.Tokens.IssueCallback(key, scopes); ok {
@@ -284,10 +311,15 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var user *User
+	var owner string
 	switch route.Auth {
 	case wickplugin.AuthPublic:
 	case wickplugin.AuthToken:
-		if h.Tokens == nil || !h.Tokens.Verify(key, bearer(r)) {
+		var ok bool
+		if h.Tokens != nil {
+			owner, ok = h.Tokens.VerifyOwner(key, bearer(r))
+		}
+		if !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="wick"`)
 			http.Error(w, "invalid or missing token", http.StatusUnauthorized)
 			return
@@ -305,7 +337,7 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.proxy(w, r, s, sub, user)
+	h.proxy(w, r, s, sub, user, owner)
 }
 
 func bearer(r *http.Request) string {
@@ -316,8 +348,10 @@ func bearer(r *http.Request) string {
 	return strings.TrimSpace(v)
 }
 
-// proxy forwards r (path sub) to s, flushing every write (SSE).
-func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub string, u *User) {
+// proxy forwards r (path sub) to s, flushing every write (SSE). u is the
+// session user (Session routes), owner the access token's creator (Token
+// routes); the Host API runs the request's calls as that person.
+func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub string, u *User, owner string) {
 	rt, err := s.Sup.Transport()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Service %q is not running (%s).", s.Key, s.Sup.Status().State), http.StatusServiceUnavailable)
@@ -326,6 +360,19 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub str
 	h.inflight.Add(1)
 	defer h.inflight.Add(-1)
 	base := "/x/" + s.Key
+	callID := ""
+	if h.HostAPI != nil {
+		var end func()
+		switch {
+		case u != nil:
+			callID, end = h.HostAPI.BeginCallFrom(s.Key, wickplugin.KindService, u.ID, sourceCaller, "")
+		case owner != "":
+			callID, end = h.HostAPI.BeginCallFrom(s.Key, wickplugin.KindService, owner, sourceToken, "")
+		default:
+			end = func() {}
+		}
+		defer end()
+	}
 	rp := &httputil.ReverseProxy{
 		Transport:     rt,
 		FlushInterval: -1,
@@ -334,6 +381,12 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub str
 			pr.Out.URL.Scheme, pr.Out.URL.Host, pr.Out.Host = "http", "plugin", "plugin"
 			pr.Out.URL.Path, pr.Out.URL.RawPath = sub, ""
 			injectHeaders(pr.Out.Header, base, u)
+			if owner != "" {
+				pr.Out.Header.Set(HeaderTokenOwnerID, owner)
+			}
+			if callID != "" {
+				pr.Out.Header.Set(wickhost.HeaderCallID, callID)
+			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			log.Warn().Str("service", s.Key).Err(err).Msg("service plugin: proxy error")
@@ -342,6 +395,10 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub str
 	}
 	rp.ServeHTTP(w, r)
 }
+
+// HeaderTokenOwnerID names, on a Token route, the wick user who created the
+// access token the request carried.
+const HeaderTokenOwnerID = "X-Wick-Token-Owner-Id"
 
 // injectHeaders drops client X-Wick-* headers and sets the trusted ones.
 func injectHeaders(hd http.Header, base string, u *User) {

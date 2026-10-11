@@ -319,6 +319,15 @@ func (s *Service) GetOwned(owner, key string) string {
 	return s.cache[ownerKey{Owner: owner, Key: key}].Value
 }
 
+// Lookup returns the cached row for (owner, key) — value plus its metadata
+// (IsSecret, Type, ...) — and whether such a row exists.
+func (s *Service) Lookup(owner, key string) (entity.Config, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	row, ok := s.cache[ownerKey{Owner: owner, Key: key}]
+	return row, ok
+}
+
 // envOverrideForUI shapes an env-supplied value into the form the UI
 // widget for v.Type expects. For kvlist, the env var is a CSV (one
 // origin per item) but the widget parses Value as a JSON array of

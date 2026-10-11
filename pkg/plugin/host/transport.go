@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -27,6 +28,9 @@ var maxResponseBytes int64 = 64 << 20
 type grpcTransport struct{ cc grpc.ClientConnInterface }
 
 func (t *grpcTransport) call(ctx context.Context, rpc string, in, out proto.Message) error {
+	if id := CallIDFrom(ctx); id != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, MetadataCallID, id)
+	}
 	return fromGRPC(t.cc.Invoke(ctx, "/"+hostpb.Host_ServiceDesc.ServiceName+"/"+rpc, in, out))
 }
 
@@ -145,6 +149,9 @@ func (t *httpTransport) rest(ctx context.Context, in *hostpb.RestRequest, out *h
 
 func (t *httpTransport) do(req *http.Request) (*http.Response, []byte, error) {
 	req.Header.Set("Authorization", "Bearer "+t.token)
+	if id := CallIDFrom(req.Context()); id != "" {
+		req.Header.Set(HeaderCallID, id)
+	}
 	if req.Header.Get("Accept") == "" {
 		req.Header.Set("Accept", "application/json")
 	}

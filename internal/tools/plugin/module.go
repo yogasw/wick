@@ -159,7 +159,7 @@ var methods = []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
 // BuildModule turns one discovered kind=tool plugin into a tool.Module whose
 // routes proxy to the plugin, and registers its runner with the pool.
 func (p *Pool) BuildModule(f connplugin.Found) tool.Module {
-	return p.buildModule(f, spawnProcess, connplugin.RunDir())
+	return p.buildModule(f, spawnFor(f.Key), connplugin.RunDir())
 }
 
 func (p *Pool) buildModule(f connplugin.Found, spawn spawnFn, sockDir string) tool.Module {
