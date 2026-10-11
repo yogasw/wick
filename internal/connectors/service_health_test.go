@@ -58,7 +58,7 @@ func TestRunHealthCheck_LocksFailingOps(t *testing.T) {
 	}
 	svc, id := newSvcHealth(t, healthModule(&report, nil))
 
-	result, err := svc.RunHealthCheck(context.Background(), id)
+	result, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"b", "c"}, result.NewlyLocked)
 	assert.Empty(t, result.NewlyCleared)
@@ -79,7 +79,7 @@ func TestRunHealthCheck_ClearsRecoveredOps(t *testing.T) {
 	svc, id := newSvcHealth(t, healthModule(&report, nil))
 
 	// Round 1: a locked, b ok.
-	_, err := svc.RunHealthCheck(context.Background(), id)
+	_, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.NoError(t, err)
 	st, _ := svc.OperationStatesFull(context.Background(), id, "health-stub")
 	require.True(t, st["a"].SystemDisabled)
@@ -89,7 +89,7 @@ func TestRunHealthCheck_ClearsRecoveredOps(t *testing.T) {
 		{Key: "a", OK: true},
 		{Key: "b", OK: true},
 	}
-	result, err := svc.RunHealthCheck(context.Background(), id)
+	result, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"a"}, result.NewlyCleared)
 	assert.Empty(t, result.NewlyLocked)
@@ -105,7 +105,7 @@ func TestRunHealthCheck_NoHook(t *testing.T) {
 		Operations: []connector.Category{},
 	}
 	svc, id := newSvcHealth(t, mod)
-	_, err := svc.RunHealthCheck(context.Background(), id)
+	_, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNoHealthCheck))
 }
@@ -115,7 +115,7 @@ func TestRunHealthCheck_PropagatesHookError(t *testing.T) {
 	upstreamErr := errors.New("invalid_auth")
 	svc, id := newSvcHealth(t, healthModule(&report, &upstreamErr))
 
-	_, err := svc.RunHealthCheck(context.Background(), id)
+	_, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid_auth")
 }
@@ -123,7 +123,7 @@ func TestRunHealthCheck_PropagatesHookError(t *testing.T) {
 func TestExecute_BlockedBySystemDisabled(t *testing.T) {
 	report := []connector.OpHealth{{Key: "a", OK: false, Reason: "needs scope: chat:write"}}
 	svc, id := newSvcHealth(t, healthModule(&report, nil))
-	_, err := svc.RunHealthCheck(context.Background(), id)
+	_, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.NoError(t, err)
 
 	// SystemDisabled is now advisory — admin can override by keeping Enabled=true.
@@ -137,7 +137,7 @@ func TestExecute_BlockedBySystemDisabled(t *testing.T) {
 func TestOperationStates_FoldsSystemDisabled(t *testing.T) {
 	report := []connector.OpHealth{{Key: "a", OK: false, Reason: "x"}}
 	svc, id := newSvcHealth(t, healthModule(&report, nil))
-	_, err := svc.RunHealthCheck(context.Background(), id)
+	_, err := svc.RunHealthCheck(context.Background(), id, "")
 	require.NoError(t, err)
 
 	// SystemDisabled is advisory — effective state = Enabled flag only.

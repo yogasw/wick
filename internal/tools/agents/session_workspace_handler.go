@@ -471,7 +471,7 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 		return
 	}
 
-	report, err := globalConnectors.HealthCheckSessionInstance(c.Context(), inst.BaseKey, inst.ID, cfg)
+	report, err := globalConnectors.HealthCheckSessionInstance(c.Context(), inst.BaseKey, inst.ID, cfg, user.ID)
 	if err != nil {
 		if err == connectors.ErrNoHealthCheck {
 			c.JSON(http.StatusOK, map[string]any{"ok": false, "no_health_check": true, "note": "No health check — pass ?operation= to run a real call."})

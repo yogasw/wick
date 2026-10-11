@@ -261,16 +261,19 @@ func TestPluginCtxParity(t *testing.T) {
 		t.Fatalf("unary fail = %+v, %v", ures, uerr)
 	}
 
-	// "Test setup" runs the plugin module's HealthCheck. (RunHealthCheck
-	// decrypts under the empty-user key like for in-process modules, so the
-	// u1-bound token above stays opaque: only the report's arrival is checked
-	// here; the plaintext path is checked through the hook directly below.)
+	// "Test setup" runs the plugin module's HealthCheck. RunHealthCheck
+	// decrypts under the triggering user's key, so the u1-bound token
+	// reaches the hook as plaintext for u1 and stays opaque for anyone else.
 	if hostMod.HealthCheck == nil {
 		t.Fatal("manifest did not carry has_health_check")
 	}
-	hc, err := svc.RunHealthCheck(ctx, id)
-	if err != nil || len(hc.Ops) != 1 || hc.Ops[0].Key != "probe" || hc.Ops[0].Reason != "token" {
-		t.Fatalf("health check = %+v, %v", hc, err)
+	hc, err := svc.RunHealthCheck(ctx, id, "u1")
+	if err != nil || len(hc.Ops) != 1 || hc.Ops[0].Key != "probe" || !hc.Ops[0].OK {
+		t.Fatalf("health check as u1 = %+v, %v", hc, err)
+	}
+	hc, err = svc.RunHealthCheck(ctx, id, "u2")
+	if err != nil || len(hc.Ops) != 1 || hc.Ops[0].OK || hc.Ops[0].Reason != "token" {
+		t.Fatalf("health check as u2 = %+v, %v", hc, err)
 	}
 	report, err := hostMod.HealthCheck(connector.NewCtx(ctx, id, map[string]string{"token": gapCredPlain}, nil, nil, nil, nil))
 	if err != nil || len(report) != 1 || !report[0].OK {

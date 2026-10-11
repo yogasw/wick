@@ -1649,10 +1649,13 @@ type HealthCheckResult struct {
 //
 // The hook itself runs against a Ctx populated from the row's stored
 // configs — encrypted credentials are decrypted on read, identical to
-// Execute. The caller's permission to act on this row is the manager
-// handler's job; this method is unauthenticated by design (it is a
-// background-style operation, not user input).
-func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*HealthCheckResult, error) {
+// Execute. callerUserID is the user who triggered the test: wick_enc_
+// tokens are user-scoped, so they decrypt under that user's key, the
+// same as Execute's p.UserID. Pass "" when no user triggered the run
+// (background job) to fall back to the empty-user key. The caller's
+// permission to act on this row is the manager handler's job; this
+// method is unauthenticated by design.
+func (s *Service) RunHealthCheck(ctx context.Context, connectorID, callerUserID string) (*HealthCheckResult, error) {
 	c, err := s.repo.Get(ctx, connectorID)
 	if err != nil {
 		return nil, fmt.Errorf("connector not found: %w", err)
@@ -1668,10 +1671,10 @@ func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*Heal
 	cfg := s.LoadConfigs(*c)
 	// Decrypt any wick_enc_ tokens in the credential map before handing
 	// them to the hook — the hook calls upstream APIs the same way an
-	// Execute would. Health-check has no per-user context (it runs from
-	// the admin row page), so decrypt under the empty-user master key.
+	// Execute would, so decrypt under the triggering user's key. A token
+	// that user cannot open stays ciphertext and the hook fails upstream.
 	if s.enc != nil && !s.enc.Disabled() {
-		decoded, _, derr := unmaskMap(s.enc, cfg, "")
+		decoded, _, derr := unmaskMap(s.enc, cfg, callerUserID)
 		if derr == nil {
 			cfg = decoded
 		}
@@ -1721,10 +1724,10 @@ var ErrNoHealthCheck = errors.New("connector does not implement HealthCheck")
 
 // decryptInstanceConfig resolves a session-workspace instance's config
 // map to plaintext: wick_cenc_ master tokens (the secret fields) via the
-// system master key, plus any wick_enc_ tokens via the empty-user key.
-// Used by the virtual execute/health paths, which have no DB row to read
-// credentials from.
-func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]string, error) {
+// system master key, plus any wick_enc_ tokens via callerUserID's key
+// ("" = empty-user key). Used by the virtual health path, which has no
+// DB row to read credentials from.
+func (s *Service) decryptInstanceConfig(config map[string]string, callerUserID string) (map[string]string, error) {
 	out := make(map[string]string, len(config))
 	for k, v := range config {
 		out[k] = v
@@ -1742,7 +1745,7 @@ func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]st
 		}
 		out[k] = plain
 	}
-	if decoded, _, derr := unmaskMap(s.enc, out, ""); derr == nil {
+	if decoded, _, derr := unmaskMap(s.enc, out, callerUserID); derr == nil {
 		out = decoded
 	}
 	return out, nil
@@ -1752,8 +1755,9 @@ func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]st
 // against a session-workspace instance's own config — the "test setup"
 // button for an ephemeral instance. Returns ErrNoHealthCheck when the
 // base module registers no hook, so the caller can fall back to running
-// a real operation as the probe.
-func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string) ([]connector.OpHealth, error) {
+// a real operation as the probe. callerUserID decrypts wick_enc_ tokens
+// the same way as RunHealthCheck.
+func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string, callerUserID string) ([]connector.OpHealth, error) {
 	mod, ok := s.Module(baseKey)
 	if !ok {
 		return nil, fmt.Errorf("no implementation registered for base connector key %q", baseKey)
@@ -1761,7 +1765,7 @@ func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, insta
 	if mod.HealthCheck == nil {
 		return nil, ErrNoHealthCheck
 	}
-	cfg, err := s.decryptInstanceConfig(config)
+	cfg, err := s.decryptInstanceConfig(config, callerUserID)
 	if err != nil {
 		return nil, err
 	}

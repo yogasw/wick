@@ -705,7 +705,7 @@ func (h *Handler) runConnectorHealthCheck(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	result, err := h.connectors.RunHealthCheck(ctx, row.ID)
+	result, err := h.connectors.RunHealthCheck(ctx, row.ID, userID(user))
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusOK)

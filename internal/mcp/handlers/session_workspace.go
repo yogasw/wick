@@ -454,7 +454,7 @@ func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest
 	}
 
 	// Default: base module HealthCheck.
-	report, err := svc.HealthCheckSessionInstance(r.Context(), inst.BaseKey, inst.ID, inst.Config)
+	report, err := svc.HealthCheckSessionInstance(r.Context(), inst.BaseKey, inst.ID, inst.Config, user.ID)
 	if err != nil {
 		if err == connectors.ErrNoHealthCheck {
 			writeWorkspaceResult(w, req, rsp, map[string]any{
