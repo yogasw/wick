@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { AVATAR_EVENTS, CLASSIC_EVENT_POSES, DEFAULT_EVENT_POSES, classicPoseOf, cleanOverrides, eventOf, poseFor, resolvePose, toolEvent } from "../events";
+import { AVATAR_EVENTS, CLASSIC_EVENT_POSES, DEFAULT_EVENT_POSES, IMAGE_EVENT_POSES, classicPoseOf, cleanOverrides, eventOf, imagePoseOf, poseFor, resolvePose, toolEvent } from "../events";
 import { classicPoseFor } from "../shape";
 import { EXPRESSIONS, STATES } from "../blob/core/types";
 
@@ -43,22 +43,22 @@ describe("resolvePose", () => {
   });
 
   test("fallback: an unknown tool orbits, no tool thinks, never idle while working", () => {
-    expect(resolvePose({ working: true, toolName: "frobnicate" })).toEqual({ state: "orbit", classic: "orbit", event: null });
-    expect(resolvePose({ working: true, tool: true })).toEqual({ state: "orbit", classic: "orbit", event: null });
-    expect(resolvePose({ working: true })).toEqual({ state: "thinking", classic: "thinking", event: null });
+    expect(resolvePose({ working: true, toolName: "frobnicate" })).toEqual({ state: "orbit", classic: "orbit", image: "orbit", event: null });
+    expect(resolvePose({ working: true, tool: true })).toEqual({ state: "orbit", classic: "orbit", image: "orbit", event: null });
+    expect(resolvePose({ working: true })).toEqual({ state: "thinking", classic: "thinking", image: "thinking", event: null });
   });
 
   test("a row turned off falls back to the plain cue, not idle", () => {
     const off = { read: { off: true }, run: { off: true }, ask_user: { off: true }, done: { off: true }, error: { off: true } };
-    expect(resolvePose({ working: true, toolName: "Read", overrides: off })).toEqual({ state: "orbit", classic: "orbit", event: null });
-    expect(resolvePose({ working: true, toolName: "Bash", toolError: true, overrides: off })).toEqual({ state: "orbit", classic: "orbit", event: null });
+    expect(resolvePose({ working: true, toolName: "Read", overrides: off })).toEqual({ state: "orbit", classic: "orbit", image: "orbit", event: null });
+    expect(resolvePose({ working: true, toolName: "Bash", toolError: true, overrides: off })).toEqual({ state: "orbit", classic: "orbit", image: "orbit", event: null });
     expect(resolvePose({ attention: true, overrides: off }).state).toBe("alert");
     expect(resolvePose({ done: true, overrides: off }).state).toBe("notify");
   });
 
   test("priority: disabled > needs-attention > error > tool > thinking > idle", () => {
     const all = { disabled: true, attention: true, working: true, toolName: "Read", toolError: true, done: true };
-    expect(resolvePose(all)).toEqual({ state: "sleep", classic: "sleep", event: null });
+    expect(resolvePose(all)).toEqual({ state: "sleep", classic: "sleep", image: "sleep", event: null });
     expect(resolvePose({ ...all, disabled: false }).event).toBe("ask_user");
     expect(resolvePose({ ...all, disabled: false, attention: false }).event).toBe("error");
     expect(resolvePose({ ...all, disabled: false, attention: false, toolError: false }).event).toBe("read");
@@ -138,5 +138,49 @@ describe("classic defaults: edge cases", () => {
     expect(cleanOverrides({ error: { state: "idle" } })).toBeUndefined();
     // Rows without a classic default still drop their default state.
     expect(cleanOverrides({ run: { state: "thinking" } }, { classic: true })).toBeUndefined();
+  });
+});
+
+describe("image poses per event", () => {
+  test("defaults as in the mockup", () => {
+    expect(IMAGE_EVENT_POSES).toEqual({
+      read: "scan", run: "thinking", write: "type", delegate: "send", ask_user: "alert", remote_wait: "wait", error: "fail", done: "notify", compact: "swirl",
+    });
+    for (const ev of AVATAR_EVENTS) expect(imagePoseOf(ev)).toBe(IMAGE_EVENT_POSES[ev]);
+  });
+
+  test("resolvePose carries the image pose; the blob and classic ones are unchanged", () => {
+    expect(resolvePose({ working: true, toolName: "Read" })).toMatchObject({ state: "wide", classic: "orbit", image: "scan", event: "read" });
+    expect(resolvePose({ working: true, toolError: true })).toMatchObject({ state: "idle", classic: "alert", image: "fail", event: "error" });
+    expect(resolvePose({ disabled: true })).toMatchObject({ classic: "sleep", image: "sleep", event: null });
+    expect(resolvePose({ working: true, toolName: "Read", overrides: { read: { off: true } } })).toMatchObject({ classic: "orbit", image: "orbit", event: null });
+  });
+
+  test("an image pick: the image draws it, classic its look-alike, the blob its default", () => {
+    const o = { read: { state: "type" } };
+    expect(poseFor("read", o)).toEqual(DEFAULT_EVENT_POSES.read);
+    expect(resolvePose({ working: true, toolName: "Read", overrides: o })).toMatchObject({ state: "wide", classic: "orbit", image: "type" });
+    expect(classicPoseOf("error", poseFor("error", { error: { state: "squeeze" } })!, { error: { state: "squeeze" } })).toBe("thinking");
+  });
+
+  test("legacy picks draw their look-alike on the image", () => {
+    expect(imagePoseOf("read", { read: { state: "sleep" } })).toBe("wait");
+    expect(imagePoseOf("done", { done: { state: "burst" } })).toBe("notify");
+    expect(imagePoseOf("run", { run: { state: "orbit" } })).toBe("orbit");
+    expect(imagePoseOf("run", { run: { state: "bogus" } })).toBe("thinking");
+    expect(imagePoseOf("done", { done: { expression: "happy" } })).toBe("notify");
+  });
+
+  test("cleanOverrides: image defaults save as none, image poses are kept from any table", () => {
+    expect(cleanOverrides({ read: { state: "scan" }, error: { state: "fail" } }, { classic: true, image: true })).toBeUndefined();
+    expect(cleanOverrides({ read: { state: "wide" } }, { classic: true, image: true })).toEqual({ read: { state: "wide" } });
+    expect(cleanOverrides({ read: { state: "scan" }, run: { state: "dance" } })).toEqual({ read: { state: "scan" } });
+    // Only the edited row is compared with the table's default: an image
+    // pick that equals the blob default (read = wide) survives a blob edit.
+    expect(cleanOverrides({ read: { state: "wide" }, done: { off: true } }, { only: "done" })).toEqual({ read: { state: "wide" }, done: { off: true } });
+    expect(cleanOverrides({ read: { state: "wide" }, done: { state: "notify" } }, { only: "done" })).toEqual({ read: { state: "wide" } });
+    expect(cleanOverrides({ write: { state: "orbit", expression: "attentive" } }, { only: "read" })).toEqual({ write: { state: "orbit", expression: "attentive" } });
+    // Classic table unchanged: the failed-tool row's pick is kept.
+    expect(cleanOverrides({ error: { state: "idle" } }, { classic: true })).toEqual({ error: { state: "idle" } });
   });
 });

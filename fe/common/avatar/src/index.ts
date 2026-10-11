@@ -20,7 +20,7 @@ export {
   type Fidget, type FidgetEnv, type FidgetPose,
 } from "./blob/motion/fidget";
 export {
-  AVATAR_EVENTS, AVATAR_EVENT_LABELS, DEFAULT_EVENT_POSES, isAvatarEvent, toolEvent, toolWords, eventOf, poseFor, classicPoseOf, CLASSIC_EVENT_POSES,
+  AVATAR_EVENTS, AVATAR_EVENT_LABELS, DEFAULT_EVENT_POSES, isAvatarEvent, toolEvent, toolWords, eventOf, poseFor, classicPoseOf, CLASSIC_EVENT_POSES, IMAGE_EVENT_POSES, imagePoseOf,
   fallbackState, resolvePose, cleanOverrides, type AvatarEvent, type EventPose, type EventOverride, type EventOverrides, type PoseInput, type ResolvedPose,
 } from "./events.js";
 export { STATES as BLOB_STATES } from "./blob/core/types";

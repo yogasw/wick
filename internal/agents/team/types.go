@@ -169,6 +169,14 @@ var BlobStates = []string{
 	"sleep", "play", "orbit", "swirl", "burst", "comet",
 }
 
+// ImagePoses mirrors IMAGE_POSES in fe/common/avatar/src/image.ts: the
+// image avatar's own poses. An event row may name one of these or a blob
+// state; the blob draws its default for an image-only pose.
+var ImagePoses = []string{
+	"idle", "wide", "scan", "thinking", "type", "orbit", "send",
+	"wait", "alert", "fail", "notify", "swirl", "squeeze",
+}
+
 // AvatarShapes lists the shapes the avatar component can draw.
 var AvatarShapes = []string{"circle", "squircle", "triangle", "diamond"}
 
@@ -257,7 +265,7 @@ func NormalizeAvatar(a Avatar) Avatar {
 }
 
 // normalizeAvatarEvents keeps the rows the UI can draw: a known event with
-// Off, a known state or a known (or empty = own) expression. Anything else
+// Off, a known state (blob state or image pose) or a known (or empty = own) expression. Anything else
 // is dropped, and a table with nothing left is nil.
 func normalizeAvatarEvents(in map[string]AvatarEventPose) map[string]AvatarEventPose {
 	out := map[string]AvatarEventPose{}
@@ -270,7 +278,7 @@ func normalizeAvatarEvents(in map[string]AvatarEventPose) map[string]AvatarEvent
 			continue
 		}
 		var row AvatarEventPose
-		if slices.Contains(BlobStates, p.State) {
+		if slices.Contains(BlobStates, p.State) || slices.Contains(ImagePoses, p.State) {
 			row.State = p.State
 		}
 		if p.Expression != nil && (*p.Expression == "" || slices.Contains(BlobExpressions, *p.Expression)) {

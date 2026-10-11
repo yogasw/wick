@@ -21,13 +21,13 @@
      agent's own table (`events`), the cues above when a row is off. */
   import BlobAvatar from "./BlobAvatar.svelte";
   import ImageAvatar from "./ImageAvatar.svelte";
-  import { isImageKind, safeImageSrc, type AvatarImageView } from "./image.js";
+  import { imageAvatarPose, isImageKind, safeImageSrc, type AvatarImageView, type ImageAvatarPose, type ImagePose } from "./image.js";
   import { isBlobKind, blobStateFor } from "./blob.js";
   import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, classicPoseFor, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
   import { createFidget, type FidgetPose } from "./blob/motion/fidget";
   import { idleAnimationsOn } from "./idle.js";
-  import { classicPoseOf, poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
+  import { classicPoseOf, imagePoseOf, poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
 
   type Props = {
     /** "" / absent = classic, "blob" = blob mascot (team.Avatar.kind). */
@@ -62,8 +62,10 @@
     alert?: boolean;
     /** Has something new to read. */
     notify?: boolean;
-    /** Force a state (Settings preview); otherwise derived from the flags. */
-    pose?: AvatarState;
+    /** Force a state (Settings preview); otherwise derived from the flags.
+        An image pose (scan, type, …) is drawn as is by an image avatar,
+        as its look-alike by the others. */
+    pose?: AvatarState | ImagePose;
     /** Draw one still frame and never animate (cards, dense lists). */
     still?: boolean;
     /** Animate this one (roster, header, empty state, preview). A blob
@@ -138,6 +140,11 @@
   /* The blob's motion and temporary expression; back to the agent's own
      the moment the event is over. */
   const blobPose = $derived(pose ? blobStateFor(normalizeState(pose)) : event ? (forced?.state ?? "orbit") : resolved.state);
+  /* The image avatar has a motion per pose, so it draws the row's image
+     pose (events.ts imagePoseOf), not the classic look-alike. */
+  const imagePose = $derived<ImageAvatarPose>(
+    pose ? imageAvatarPose(pose) : event ? (forced ? imagePoseOf(event, events) : "orbit") : resolved.image,
+  );
   const blobExpression = $derived(pose ? expression : event ? (forced?.expression ?? expression) : (resolved.expression ?? expression));
 
   let hover = $state(false);
@@ -198,7 +205,7 @@
 </script>
 
 {#if pictured && image}
-  <ImageAvatar {image} {size} {color} {title} onerror={() => (failedSrc = imageSrc)} pose={current} animate={!reduced && (live || !!event || current !== "idle")} />
+  <ImageAvatar {image} {size} {color} {title} onerror={() => (failedSrc = imageSrc)} pose={imagePose} animate={!reduced && (live || !!event || imagePose !== "idle")} />
 {:else if blob}
   <BlobAvatar {shape} expression={blobExpression} {color} {size} pose={blobPose} {live} {restless} {still} hatching={hatching && !reduced} {title} />
 {:else}

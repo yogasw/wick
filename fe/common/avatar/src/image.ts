@@ -96,3 +96,33 @@ export function safeImageSrc(src: string | undefined | null): string {
 /** avatarImageUrl is the stored picture's URL, versioned so it can be cached. */
 export const avatarImageUrl = (base: string, agentId: string, v: string) =>
   `${base}/api/team/agents/${encodeURIComponent(agentId)}/avatar/image?v=${encodeURIComponent(v)}`;
+
+/** The image avatar's own poses (the mockup's Poses grid): each has its
+    own motion (ImageAvatar), offered as is in Settings › Avatar › Reacts
+    to. sleep (disabled) and egg (hatching) are drawn too, but are states,
+    not picks. */
+export const IMAGE_POSES = ["idle", "wide", "scan", "thinking", "type", "orbit", "send", "wait", "alert", "fail", "notify", "swirl", "squeeze"] as const;
+export type ImagePose = (typeof IMAGE_POSES)[number];
+/** What ImageAvatar draws: a pose, or the disabled / hatching state. */
+export type ImageAvatarPose = ImagePose | "sleep" | "egg";
+export const isImagePose = (p: unknown): p is ImagePose => IMAGE_POSES.includes(p as ImagePose);
+
+/* The nearest image pose for a stored name it has no motion of its own
+   for: blob-only poses and the six classic states saved before the image
+   had its own set (a sleeping row breathes, as wait does). */
+const IMAGE_LEGACY_POSES: Record<string, ImagePose> = {
+  sleep: "wait", egg: "idle", hatching: "idle", disabled: "wait", working: "thinking",
+  play: "orbit", comet: "send", wink: "notify", burst: "notify", exclaim: "alert",
+};
+
+/** imagePoseFor is the image pose for a stored name: its own poses pass
+    through, a legacy or blob-only one gets its look-alike, anything else
+    is idle. */
+export function imagePoseFor(p: string | null | undefined): ImagePose {
+  if (isImagePose(p)) return p;
+  return IMAGE_LEGACY_POSES[p ?? ""] ?? "idle";
+}
+
+/** imageAvatarPose is what ImageAvatar draws for a state or pose name:
+    sleep and egg stay (disabled, hatching), the rest as imagePoseFor. */
+export const imageAvatarPose = (p: string | null | undefined): ImageAvatarPose => (p === "sleep" || p === "egg" ? p : imagePoseFor(p));

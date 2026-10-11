@@ -49,6 +49,41 @@ func TestAvatarEventListsMatchUI(t *testing.T) {
 	if len(BlobStates) != 13 || BlobStates[0] != "idle" || BlobStates[12] != "comet" {
 		t.Fatalf("BlobStates %v", BlobStates)
 	}
+	// The full lists, in order: IMAGE_POSES in fe/common/avatar/src/image.ts
+	// and STATES in fe/common/avatar/src/blob/core/types.ts.
+	wantImage := []string{"idle", "wide", "scan", "thinking", "type", "orbit", "send", "wait", "alert", "fail", "notify", "swirl", "squeeze"}
+	if !reflect.DeepEqual(ImagePoses, wantImage) {
+		t.Fatalf("ImagePoses %v", ImagePoses)
+	}
+	wantBlob := []string{"idle", "thinking", "wink", "wide", "alert", "notify", "exclaim", "sleep", "play", "orbit", "swirl", "burst", "comet"}
+	if !reflect.DeepEqual(BlobStates, wantBlob) {
+		t.Fatalf("BlobStates %v", BlobStates)
+	}
+}
+
+// An image avatar's own poses (scan, type, fail, …) are kept on a save,
+// next to blob states; a name in neither list is still dropped.
+func TestAvatarEventsKeepImagePoses(t *testing.T) {
+	// One table is shared by every style, so the kind does not scope it:
+	// image, blob and classic ("") keep the same rows.
+	for _, kind := range []string{AvatarKindImage, AvatarKindBlob, ""} {
+		shape := "circle"
+		if kind == AvatarKindBlob {
+			shape = "cloud"
+		}
+		in := Avatar{Kind: kind, Shape: shape, Color: "#27b199", Events: map[string]AvatarEventPose{
+			"read":  {State: "scan"},
+			"write": {State: "type"},
+			"error": {State: "fail"},
+			"run":   {State: "wide"},
+			"done":  {State: "dance"},
+		}}
+		got := DecodeAvatar(EncodeAvatar(in)).Events
+		want := map[string]AvatarEventPose{"read": {State: "scan"}, "write": {State: "type"}, "error": {State: "fail"}, "run": {State: "wide"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("kind %q: events %+v", kind, got)
+		}
+	}
 }
 
 // ToolFailed is the newest finished tool's error, cleared by the next

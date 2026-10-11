@@ -215,3 +215,54 @@ describe("Reacts to: previews animate", () => {
   });
 
 });
+
+describe("AgentSettings avatar: Poses grid", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) })));
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  });
+
+  test("Image shows the 13 poses, each tile drawing and labelling its own", () => {
+    render(AgentSettings, { props: props(imgAgent) });
+    const grid = screen.getByTestId("avatar-poses");
+    expect(grid.textContent).toContain("Poses");
+    expect(grid.textContent).toContain("Every pose has its own motion. Pick them in the table below.");
+    const poses = ["idle", "wide", "scan", "thinking", "type", "orbit", "send", "wait", "alert", "fail", "notify", "swirl", "squeeze"];
+    for (const p of poses) {
+      const tile = screen.getByTestId(`avatar-pose-${p}`);
+      expect(tile.lastElementChild?.textContent?.trim()).toBe(p);
+      expect(tile.querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe(p);
+    }
+    expect(grid.querySelectorAll("[data-testid=image-avatar]").length).toBe(13);
+    vi.unstubAllGlobals();
+  });
+
+  test("the Poses heading matches Reacts to", () => {
+    render(AgentSettings, { props: props(imgAgent) });
+    const h = screen.getByText("Poses", { selector: "[data-testid=avatar-poses] > p" });
+    const r = screen.getByText("Reacts to");
+    expect(h.className).toBe(r.className);
+    vi.unstubAllGlobals();
+  });
+
+  test("under reduced motion the 13 tiles are still frames, marks kept", () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }));
+    render(AgentSettings, { props: props(imgAgent) });
+    const tiles = [...screen.getByTestId("avatar-poses").querySelectorAll("[data-testid=image-avatar]")];
+    expect(tiles.length).toBe(13);
+    for (const t of tiles) expect(t.classList.contains("animate")).toBe(false);
+    expect(screen.getByTestId("avatar-pose-wait").querySelector("[data-fx=wave]")).not.toBeNull();
+    expect(screen.getByTestId("avatar-pose-send").querySelector("[data-fx=send]")).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  test("Classic and Blob have no Poses grid", () => {
+    const { unmount } = render(AgentSettings, { props: props(agent) });
+    expect(screen.queryByTestId("avatar-poses")).toBeNull();
+    unmount();
+    render(AgentSettings, { props: props({ ...agent, avatar: { kind: "blob", shape: "cloud", color: "#8b5cf6" } } as unknown as AgentItem) });
+    expect(screen.queryByTestId("avatar-poses")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+});

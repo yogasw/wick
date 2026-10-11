@@ -4,8 +4,8 @@ import { render, screen, fireEvent } from "@testing-library/svelte";
 import { BLOB_STATES } from "@wick-fe/common-avatar";
 import AvatarEventsTable from "../AvatarEventsTable.svelte";
 
-/* Classic and Image draw fewer poses than the blob: a blob-only default
-   (read = wide, compact = swirl) shows as the pose they draw for it, and
+/* Classic draws fewer poses than the blob: a blob-only default
+   (read = wide, compact = swirl) shows as the pose it draws for it, and
    the stored override keeps the blob value. */
 const pose = (ev: string) => screen.getByRole("combobox", { name: new RegExp(`^${ev} pose$`) }) as HTMLSelectElement;
 afterEach(() => vi.unstubAllGlobals());
@@ -56,18 +56,65 @@ describe("Reacts to: classic style", () => {
 });
 
 describe("Reacts to: image style", () => {
-  test("blob-only defaults show and animate as their classic pose", () => {
-    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
-    const image = { src: "/tools/agents/api/team/agents/a1/avatar/image?v=0123456789abcdef", aspect: 1, fit: "fill", x: 0, y: 0, zoom: 0 };
-    render(AvatarEventsTable, { props: { kind: "image", shape: "circle", color: "#27b199", image, onChange: vi.fn() } });
-    expect(pose("Reading / searching").value).toBe("orbit");
-    expect(pose("Waiting on a remote agent").value).toBe("orbit");
-    expect(options()).not.toContain("wide");
-    expect(options()).not.toContain("swirl");
-    expect(screen.getByTestId("avatar-event-read").querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe("orbit");
-    expect(screen.getByTestId("avatar-event-compact").querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe("thinking");
-    expect(pose("A tool failed").value).toBe("alert");
-    expect(screen.getByTestId("avatar-event-error").querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe("alert");
+  const image = { src: "/tools/agents/api/team/agents/a1/avatar/image?v=0123456789abcdef", aspect: 1, fit: "fill", x: 0, y: 0, zoom: 0 };
+  const props = (extra: Record<string, unknown> = {}) => ({ kind: "image", shape: "circle", color: "#27b199", image, onChange: vi.fn(), ...extra });
+  const drawn = (ev: string) => screen.getByTestId(`avatar-event-${ev}`).querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose");
+  const live = () => vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+
+  test("the dropdown lists the 13 image poses, unmapped", () => {
+    live();
+    render(AvatarEventsTable, { props: props() });
+    expect([...pose("Reading / searching").options].map((o) => o.value)).toEqual(["idle", "wide", "scan", "thinking", "type", "orbit", "send", "wait", "alert", "fail", "notify", "swirl", "squeeze"]);
+    expect(options()).not.toContain("sleep");
+    expect(screen.queryByRole("combobox", { name: /expression$/ })).toBeNull();
+  });
+
+  test("defaults as in the mockup, each row drawing its own pose", () => {
+    live();
+    render(AvatarEventsTable, { props: props() });
+    const want: [string, string, string][] = [
+      ["read", "Reading / searching", "scan"], ["run", "Running a command / build", "thinking"], ["write", "Writing / editing", "type"],
+      ["delegate", "Delegating to a sub-agent", "send"], ["ask_user", "Waiting for you", "alert"], ["remote_wait", "Waiting on a remote agent", "wait"],
+      ["error", "A tool failed", "fail"], ["done", "Turn finished", "notify"], ["compact", "Compacting context", "swirl"],
+    ];
+    for (const [ev, label, p] of want) {
+      expect(pose(label).value).toBe(p);
+      expect(pose(label).title).toBe("");
+      expect(drawn(ev)).toBe(p);
+    }
+  });
+
+  test("a pick is saved as the image pose; the image default saves as none", async () => {
+    live();
+    const onChange = vi.fn();
+    render(AvatarEventsTable, { props: props({ onChange }) });
+    await fireEvent.change(pose("Reading / searching"), { target: { value: "squeeze" } });
+    expect(onChange).toHaveBeenLastCalledWith({ read: { state: "squeeze" } });
+    // wide is the blob's default for read, not the image's: a real pick.
+    await fireEvent.change(pose("Reading / searching"), { target: { value: "wide" } });
+    expect(onChange).toHaveBeenLastCalledWith({ read: { state: "wide" } });
+    await fireEvent.change(pose("Reading / searching"), { target: { value: "scan" } });
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("legacy picks (classic sleep, blob-only) show and draw as their look-alike", () => {
+    live();
+    render(AvatarEventsTable, { props: props({ events: { read: { state: "sleep" }, done: { state: "burst" }, run: { state: "orbit" } } }) });
+    expect(pose("Reading / searching").value).toBe("wait");
+    expect(pose("Reading / searching").title).toBe("Saved pose: sleep");
+    expect(drawn("read")).toBe("wait");
+    expect(pose("Turn finished").value).toBe("notify");
+    expect(pose("Turn finished").title).toBe("Saved pose: burst");
+    expect(pose("Running a command / build").value).toBe("orbit");
+    expect(pose("Running a command / build").title).toBe("");
+    expect(drawn("run")).toBe("orbit");
+  });
+
+  test("an off row falls back to the plain cue", () => {
+    live();
+    render(AvatarEventsTable, { props: props({ events: { read: { off: true } } }) });
+    expect(pose("Reading / searching").disabled).toBe(true);
+    expect(drawn("read")).toBe("orbit");
   });
 });
 
@@ -90,5 +137,47 @@ describe("Reacts to: blob style", () => {
     render(AvatarEventsTable, { props: { kind: "blob", shape: "cloud", color: "#8b5cf6", events: { error: { state: "burst" } }, onChange } });
     await fireEvent.change(pose("A tool failed"), { target: { value: "idle" } });
     expect(onChange).toHaveBeenLastCalledWith(undefined);
+  });
+});
+
+describe("Reacts to: across styles", () => {
+  const image = { src: "/tools/agents/api/team/agents/a1/avatar/image?v=0123456789abcdef", aspect: 1, fit: "fill", x: 0, y: 0, zoom: 0 };
+  const live = () => vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+
+  test("an image pick equal to the blob default survives an edit from the blob table", async () => {
+    live();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const onImage = vi.fn();
+    const first = render(AvatarEventsTable, { props: { kind: "image", shape: "circle", color: "#27b199", image, onChange: onImage } });
+    await fireEvent.change(pose("Reading / searching"), { target: { value: "wide" } });
+    const saved = onImage.mock.calls.at(-1)?.[0];
+    expect(saved).toEqual({ read: { state: "wide" } });
+    first.unmount();
+
+    const onBlob = vi.fn();
+    const blob = render(AvatarEventsTable, { props: { kind: "blob", shape: "cloud", color: "#8b5cf6", events: saved, onChange: onBlob } });
+    await fireEvent.click(screen.getByRole("switch", { name: "Turn finished on" }));
+    const afterBlob = onBlob.mock.calls.at(-1)?.[0];
+    expect(afterBlob).toEqual({ read: { state: "wide" }, done: { off: true } });
+    blob.unmount();
+
+    // And from the classic table.
+    const onClassic = vi.fn();
+    render(AvatarEventsTable, { props: { shape: "circle", color: "#27b199", events: saved, onChange: onClassic } });
+    await fireEvent.change(pose("Running a command / build"), { target: { value: "alert" } });
+    expect(onClassic).toHaveBeenLastCalledWith({ read: { state: "wide" }, run: { state: "alert" } });
+  });
+
+  test("an image-only saved pose is named as saved on the classic and blob tables", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const events = { read: { state: "scan" } };
+    const c = render(AvatarEventsTable, { props: { shape: "circle", color: "#27b199", events, onChange: vi.fn() } });
+    expect(pose("Reading / searching").value).toBe("orbit");
+    expect(pose("Reading / searching").title).toBe("Saved pose: scan");
+    c.unmount();
+    render(AvatarEventsTable, { props: { kind: "blob", shape: "cloud", color: "#8b5cf6", events, onChange: vi.fn() } });
+    expect(pose("Reading / searching").value).toBe("wide");
+    expect(pose("Reading / searching").title).toBe("Saved pose: scan");
+    expect(pose("Running a command / build").title).toBe("");
   });
 });

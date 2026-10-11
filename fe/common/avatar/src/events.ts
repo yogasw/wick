@@ -11,6 +11,7 @@
    thinking while a turn has none, alert / notify / idle otherwise. */
 import { EXPRESSIONS, STATES, type BlobExpression, type BlobState } from "./blob/core/types";
 import { classicPoseFor, type AvatarState, type ClassicPoseName } from "./shape.js";
+import { imagePoseFor, isImagePose, type ImageAvatarPose, type ImagePose } from "./image.js";
 
 /** The events with a row in the table, in the order Settings lists them. */
 export const AVATAR_EVENTS = ["read", "run", "write", "delegate", "ask_user", "remote_wait", "error", "done", "compact"] as const;
@@ -53,6 +54,25 @@ export const DEFAULT_EVENT_POSES: Record<AvatarEvent, EventPose> = {
    still there. These rows draw this pose instead while the owner has
    not picked one; the blob keeps the table's default. */
 export const CLASSIC_EVENT_POSES: Partial<Record<AvatarEvent, ClassicPoseName>> = { error: "fail" };
+
+/* The image avatar has a motion for every row (image.ts IMAGE_POSES), so
+   its defaults are its own, as in the mockup's table. A row the owner
+   picked a pose for draws that pose (or its look-alike) instead. */
+export const IMAGE_EVENT_POSES: Record<AvatarEvent, ImagePose> = {
+  read: "scan",
+  run: "thinking",
+  write: "type",
+  delegate: "send",
+  ask_user: "alert",
+  remote_wait: "wait",
+  error: "fail",
+  done: "notify",
+  compact: "swirl",
+};
+
+/* A stored row state the UI knows: a blob state or an image pose (the
+   server keeps both, team.AvatarPoses). */
+const knownPose = (s: unknown) => STATES.includes(s as BlobState) || isImagePose(s);
 
 export const isAvatarEvent = (e: string | null | undefined): e is AvatarEvent => AVATAR_EVENTS.includes(e as AvatarEvent);
 
@@ -161,8 +181,18 @@ export function poseFor(ev: AvatarEvent, overrides?: EventOverrides | null): Eve
     the row's classic default (CLASSIC_EVENT_POSES), else the blob pose's
     look-alike. */
 export function classicPoseOf(ev: AvatarEvent, pose: EventPose, overrides?: EventOverrides | null): AvatarState {
-  const picked = STATES.includes(overrides?.[ev]?.state as BlobState);
+  const own = overrides?.[ev]?.state;
+  if (isImagePose(own) && !STATES.includes(own as BlobState)) return classicPoseFor(own);
+  const picked = STATES.includes(own as BlobState);
   return classicPoseFor(picked ? pose.state : (CLASSIC_EVENT_POSES[ev] ?? pose.state));
+}
+
+/** imagePoseOf is the pose the image avatar draws for a row: the owner's
+    pick (a legacy or blob-only one as its look-alike, imagePoseFor), else
+    the row's image default (IMAGE_EVENT_POSES). */
+export function imagePoseOf(ev: AvatarEvent, overrides?: EventOverrides | null): ImagePose {
+  const own = overrides?.[ev]?.state;
+  return knownPose(own) ? imagePoseFor(own) : IMAGE_EVENT_POSES[ev];
 }
 
 /** fallbackState is the pose with no table row to go by: the cues every
@@ -181,6 +211,8 @@ export type ResolvedPose = {
   state: BlobState;
   /** The classic avatar's state (it has no wide / swirl / …). */
   classic: AvatarState;
+  /** The image avatar's pose (it has a motion per row). */
+  image: ImageAvatarPose;
   /** Temporary expression; absent = the agent's own. */
   expression?: BlobExpression;
   /** The event behind it, null for the fallback. */
@@ -194,17 +226,28 @@ export function resolvePose(i: PoseInput): ResolvedPose {
   const fb = fallbackState(i);
   const ev = eventOf(i);
   const pose = ev ? poseFor(ev, i.overrides) : null;
-  if (!ev || !pose) return { state: fb === "egg" ? "idle" : fb, classic: fb, event: null };
+  if (!ev || !pose) return { state: fb === "egg" ? "idle" : fb, classic: fb, image: fb, event: null };
   const classic = classicPoseOf(ev, pose, i.overrides);
-  return pose.expression ? { state: pose.state, classic, expression: pose.expression, event: ev } : { state: pose.state, classic, event: ev };
+  const image = imagePoseOf(ev, i.overrides);
+  return pose.expression ? { state: pose.state, classic, image, expression: pose.expression, event: ev } : { state: pose.state, classic, image, event: ev };
 }
 
 /** cleanOverrides drops rows that say nothing and unknown events, so a
     table edited back to its defaults saves as no override at all. An
     edit from the classic / image table (classic) keeps a row's blob
     default state when that row draws a classic default of its own
-    (CLASSIC_EVENT_POSES): there it is a real pick, not the default. */
-export function cleanOverrides(o: EventOverrides | null | undefined, opts?: { classic?: boolean }): Record<string, EventOverride> | undefined {
+    (CLASSIC_EVENT_POSES): there it is a real pick, not the default. An
+    edit from the image table (image) compares a row's state with the
+    image default instead (IMAGE_EVENT_POSES). Image-only poses (scan,
+    type, …) are kept from any table: the blob draws its default for
+    them. With `only`, just that row (the one being edited) is compared
+    with the table's default: every other row is kept as stored, since a
+    pick made from another style's table can equal this table's default
+    (image read = wide is the blob's default) and must survive. */
+export function cleanOverrides(
+  o: EventOverrides | null | undefined,
+  opts?: { classic?: boolean; image?: boolean; only?: AvatarEvent },
+): Record<string, EventOverride> | undefined {
   const out: Record<string, EventOverride> = {};
   for (const ev of AVATAR_EVENTS) {
     const r = o?.[ev];
@@ -215,9 +258,11 @@ export function cleanOverrides(o: EventOverrides | null | undefined, opts?: { cl
     }
     const d = DEFAULT_EVENT_POSES[ev];
     const row: EventOverride = {};
-    const keep = !!opts?.classic && ev in CLASSIC_EVENT_POSES;
-    if (r.state && (r.state !== d.state || keep) && STATES.includes(r.state as BlobState)) row.state = r.state;
-    if (r.expression !== undefined && r.expression !== (d.expression ?? "") && (r.expression === "" || EXPRESSIONS.includes(r.expression as BlobExpression))) row.expression = r.expression;
+    const keep = !opts?.image && !!opts?.classic && ev in CLASSIC_EVENT_POSES;
+    const def = opts?.image ? IMAGE_EVENT_POSES[ev] : d.state;
+    const asStored = !!opts?.only && opts.only !== ev;
+    if (r.state && (asStored || r.state !== def || keep) && knownPose(r.state)) row.state = r.state;
+    if (r.expression !== undefined && (asStored || r.expression !== (d.expression ?? "")) && (r.expression === "" || EXPRESSIONS.includes(r.expression as BlobExpression))) row.expression = r.expression;
     if (row.state || row.expression !== undefined) out[ev] = row;
   }
   return Object.keys(out).length ? out : undefined;

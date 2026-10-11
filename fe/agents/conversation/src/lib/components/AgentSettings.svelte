@@ -11,7 +11,7 @@
   import { toastOk } from "@wick-fe/common-stores";
   import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
-  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, isImageKind, switchAvatarKind, avatarImageUrl, type AvatarSpec } from "@wick-fe/common-avatar";
+  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, IMAGE_POSES, colorInputValue, isBlobKind, isImageKind, switchAvatarKind, avatarImageUrl, type AvatarSpec } from "@wick-fe/common-avatar";
   const pendingImage = (a: AvatarSpec) => isImageKind(a.kind) && !a.image?.v;
   import AvatarImageEditor from "./AvatarImageEditor.svelte";
   import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
@@ -808,6 +808,22 @@
         {/each}
       </div>
     </div>
+    {#if isImageKind(draft.avatar.kind)}
+      <!-- The image avatar's own poses (the mockup's Poses grid): each one
+           moves its own way; the table below picks them per event. -->
+      <div data-testid="avatar-poses">
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">Poses</p>
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600">Every pose has its own motion. Pick them in the table below.</p>
+        <div class="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-7">
+          {#each IMAGE_POSES as p (p)}
+            <div class="flex flex-col items-center gap-1.5 text-center" data-testid="avatar-pose-{p}">
+              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} color={draft.avatar.color} image={avatarImage} size={40} pose={p} live />
+              <span class="text-[11px] text-black-800 dark:text-black-600">{p}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
     <AvatarEventsTable
       kind={draft.avatar.kind}
       image={avatarImage}
