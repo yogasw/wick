@@ -157,6 +157,19 @@ describe("no quick poll", () => {
   });
 });
 
+/* P55: an idle row dozes (eyes closed, "z", full colour); only a disabled
+   agent greys out, avatar and name/line together. */
+describe("dozing is not disabled", () => {
+  it("RosterAvatar passes dozing apart from asleep, the row fades only when disabled", () => {
+    const av = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
+    expect(av).toMatch(/asleep=\{a\.disabled\} \{dozing\}/);
+    expect(av).not.toMatch(/a\.disabled \|\| dozing/);
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/data-testid="roster-meta"/);
+    expect(app).toMatch(/class:opacity-50=\{a\.disabled\} data-testid="roster-meta"/);
+  });
+});
+
 describe("sub-agents working after the agent's own turn", () => {
   it("one background sub-agent: working, named, with the 🤖 cue", () => {
     const s = rosterStatus(row({ subagents_working: ["wick-fixer"] }));

@@ -33,9 +33,11 @@
     restless?: boolean;
     still?: boolean;
     hatching?: boolean;
+    /** pose "sleep" of an idle agent, not a disabled one: full colour. */
+    dozing?: boolean;
     title?: string;
   };
-  let { shape, expression, color, size = 40, pose = "idle", live = false, restless = false, still = false, hatching = false, title }: Props = $props();
+  let { shape, expression, color, size = 40, pose = "idle", live = false, restless = false, still = false, hatching = false, dozing = false, title }: Props = $props();
 
   const WINK_MS = 450;
   const reduced = prefersReducedMotion();
@@ -143,7 +145,7 @@
     width={size}
     height={size}
     class="blob-avatar shrink-0"
-    style:opacity={pose === "sleep" ? 0.55 : 1}
+    style:opacity={pose === "sleep" && !dozing ? 0.55 : 1}
     alt={title ?? "avatar"}
     title={title}
     draggable="false"

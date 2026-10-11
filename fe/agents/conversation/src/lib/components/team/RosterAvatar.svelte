@@ -18,7 +18,8 @@
     /** This agent's main chat is the one on screen (mainChatOpen). */
     open: boolean;
     hatching?: boolean;
-    /** Idle since before today: asleep like a disabled agent (dozing). */
+    /** Idle since before today: dozes (eyes closed, a "z", full colour);
+        only a disabled agent greys out. */
     dozing?: boolean;
   };
   let { agent: a, st, open, hatching = false, dozing = false }: Props = $props();
@@ -28,5 +29,5 @@
 </script>
 
 <AvatarActivity {activity} size={38} rings>
-  <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={!ring && avatarWorking(a.status, st.work)} tool={st.work === "tool" || st.work === "subagent" || st.work === "replying"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={!ring && st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled || dozing} {hatching} alert={st.attention} />
+  <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={!ring && avatarWorking(a.status, st.work)} tool={st.work === "tool" || st.work === "subagent" || st.work === "replying"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={!ring && st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} {dozing} {hatching} alert={st.attention} />
 </AvatarActivity>

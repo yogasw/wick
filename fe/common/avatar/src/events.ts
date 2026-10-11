@@ -144,6 +144,9 @@ export type PoseInput = {
   done?: boolean;
   /** Something new to read. */
   notify?: boolean;
+  /** Idle a long while (the roster: since before today): eyes closed in
+      full colour, not greyed like disabled. Anything else wins. */
+  dozing?: boolean;
   overrides?: EventOverrides | null;
 };
 
@@ -217,13 +220,18 @@ export type ResolvedPose = {
   expression?: BlobExpression;
   /** The event behind it, null for the fallback. */
   event: AvatarEvent | null;
+  /** Dozing (PoseInput.dozing): classic and blob close their eyes as
+      sleep does but stay in colour, the image keeps its idle pose; the
+      caller draws the "z" marker. Absent = awake. */
+  doze?: true;
 };
 
 /** resolvePose: disabled > needs-attention > error > tool in flight >
-    thinking > idle, each event through the agent's table, a row that is
-    off through the fallback. */
+    thinking > idle (dozing when asked), each event through the agent's
+    table, a row that is off through the fallback. */
 export function resolvePose(i: PoseInput): ResolvedPose {
   const fb = fallbackState(i);
+  if (fb === "idle" && i.dozing) return { state: "sleep", classic: "sleep", image: "idle", event: null, doze: true };
   const ev = eventOf(i);
   const pose = ev ? poseFor(ev, i.overrides) : null;
   if (!ev || !pose) return { state: fb === "egg" ? "idle" : fb, classic: fb, image: fb, event: null };

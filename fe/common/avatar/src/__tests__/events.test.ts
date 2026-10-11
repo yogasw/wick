@@ -67,6 +67,21 @@ describe("resolvePose", () => {
     expect(resolvePose({ hatching: true, working: true }).classic).toBe("egg");
   });
 
+  test("dozing: eyes closed in colour, never over disabled or any activity", () => {
+    expect(resolvePose({ dozing: true })).toEqual({ state: "sleep", classic: "sleep", image: "idle", event: null, doze: true });
+    // disabled stays the greyed sleep, without the doze flag
+    expect(resolvePose({ disabled: true, dozing: true })).toEqual({ state: "sleep", classic: "sleep", image: "sleep", event: null });
+    // working, a tool, attention, a finished turn and unread all win
+    expect(resolvePose({ dozing: true, working: true })).toMatchObject({ classic: "thinking" });
+    expect(resolvePose({ dozing: true, working: true }).doze).toBeUndefined();
+    expect(resolvePose({ dozing: true, working: true, toolName: "Read" })).toMatchObject({ event: "read" });
+    expect(resolvePose({ dozing: true, attention: true }).doze).toBeUndefined();
+    expect(resolvePose({ dozing: true, done: true }).state).toBe("notify");
+    expect(resolvePose({ dozing: true, notify: true }).classic).toBe("notify");
+    expect(resolvePose({ dozing: true, hatching: true }).classic).toBe("egg");
+    expect(resolvePose({}).doze).toBeUndefined();
+  });
+
   test("an override changes the pose and the expression; '' = own expression", () => {
     const o = { read: { state: "play", expression: "suspicious" }, write: { expression: "" } };
     expect(resolvePose({ working: true, toolName: "Grep", overrides: o })).toMatchObject({ state: "play", expression: "suspicious", classic: "orbit" });

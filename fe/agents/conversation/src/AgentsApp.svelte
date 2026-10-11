@@ -739,7 +739,9 @@
               <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} mark={teamMark(a, st)} />
               {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
             </span>
-            <span class="min-w-0 flex-1">
+            <!-- A disabled agent's name and line fade with its avatar: the
+                 only row that reads switched off (an idle one dozes). -->
+            <span class="min-w-0 flex-1" class:opacity-50={a.disabled} data-testid="roster-meta">
               <span class="flex items-baseline gap-2">
                 <!-- No pills: a remote agent gets its source icon after the
                      name; being shared is told in the chat header. -->

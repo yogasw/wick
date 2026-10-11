@@ -91,10 +91,13 @@
   /* Marks around the frame, sized off the avatar (--av-size). */
   .fx { position: absolute; pointer-events: none; }
   .orbit { inset: -8%; border-radius: 9999px; border: 1.5px dashed color-mix(in srgb, var(--av-c) 45%, transparent); }
+  /* The dot rides the dashed line itself (centred on it), not the
+     picture's edge: there it sat on the ring and its glow read as a
+     clipped smudge beside a small (roster) avatar. */
   .orbit::after {
-    content: ""; position: absolute; top: calc(var(--av-size) * -0.03); left: 50%;
-    width: max(4px, calc(var(--av-size) * 0.08)); aspect-ratio: 1; transform: translateX(-50%);
-    border-radius: 9999px; background: var(--av-c); box-shadow: 0 0 6px var(--av-c);
+    content: ""; position: absolute; top: -0.75px; left: 50%;
+    width: max(4px, calc(var(--av-size) * 0.08)); aspect-ratio: 1; transform: translate(-50%, -50%);
+    border-radius: 9999px; background: var(--av-c); box-shadow: 0 0 3px var(--av-c);
   }
   .dots { top: -6%; right: -4%; display: flex; gap: max(1px, 4%); }
   .dots b { width: max(3px, calc(var(--av-size) * 0.07)); aspect-ratio: 1; border-radius: 9999px; background: var(--av-c); }

@@ -38,8 +38,8 @@ export function rosterEntries(agents: AgentItem[], groups: GroupItem[], query: s
   return list.sort((x, y) => captain(y) - captain(x) || waits(y) - waits(x) || at(y) - at(x) || name(x).localeCompare(name(y)));
 }
 
-/** dozing: an idle row last active before today reads asleep — dimmed,
-    eyes closed — as the mockup's quiet rows do. Anything it is doing, waits
+/** dozing: an idle row last active before today dozes — eyes closed and
+    a "z", in full colour (only a disabled agent greys out). Anything it is doing, waits
     on or has unread keeps it awake. */
 export function dozing(
   a: Pick<AgentItem, "last_active" | "disabled">,
