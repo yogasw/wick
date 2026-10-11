@@ -133,7 +133,7 @@ becomes an **item** the admin can block on its own:
 
 | Kind | Declared as | Admin item | Rules |
 |---|---|---|---|
-| `connectors` | connector module key + the ops it may run | `<connector>.<op>`, e.g. `slack.send_message` | an op outside the list is `PermissionDenied: op not declared`; which **instance** runs is decided at runtime (one the acting user may see), so the same plugin works on every install |
+| `connectors` | connector module key + the ops it may run | `<connector>.<op>`, e.g. `slack.send_message` | an op outside the list is `PermissionDenied` (`not declared in host_resources.connectors`); which **instance** runs is decided at runtime (one the acting user may see), so the same plugin works on every install |
 | `rest` | `method` + `path` pattern | `<METHOD> <pattern>`, e.g. `GET /api/tickets/*` | path must start with `/api/` or `/manager/api/`; `*` = exactly one non-empty segment, `**` only as the last segment (one or more); HEAD counts as GET; no `?`, `#`, `%`, `\` or dot segments; plugin-management paths (`/manager/api/` + a segment containing `plugin`) and wildcards right under `/manager/api/` cannot be declared |
 | `db` | `table` + `mode` (`read` or `write`) | `<table>:read`, `<table>:write` (a `write` declaration yields both) | the SQL is parsed (fail closed): one statement, declared tables only, no DDL/`SET`/`COPY`/`EXPLAIN`, only allow-listed functions; a write also checks every table it **reads** under `db.read` |
 | `config` | `owner` + `key` | `<owner>/<key>`, e.g. `job:notion-ticket-sync/token` | one exact value per entry — there is **no wildcard for secrets**; the audit records the item, never the value |

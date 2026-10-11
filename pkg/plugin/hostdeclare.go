@@ -15,10 +15,10 @@ var declared struct {
 // DeclareHostAccess records the Host API scopes (and, for rest.*, db.*,
 // connectors.execute and config.read_secret, the host_resources) this plugin
 // binary uses. Call it in main before Serve / ServeJob / ServeTool /
-// service.Serve: the self-built manifest (--dump-manifest, so `wick plugin
-// build`) then carries them as host_scopes and host_resources, and an
-// invalid declaration fails the dump instead of the install. A later call
-// replaces an earlier one. See docs/plugins/host-api.md.
+// service.ServeService: the self-built manifest (--dump-manifest, so `wick
+// plugin build`) then carries them as host_scopes and host_resources, and
+// an invalid declaration fails the dump instead of the install. A later
+// call replaces an earlier one. See docs/plugins/host-api.md.
 func DeclareHostAccess(scopes []string, resources *HostResources) {
 	declared.mu.Lock()
 	defer declared.mu.Unlock()
