@@ -3421,7 +3421,7 @@ func streamSSE(c *tool.Ctx) {
 		if sess, found := globalMgr.Registry().Session(sessionID); found {
 			if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
 				globalGitWatch.acquire(sessionID, cwd)
-				defer globalGitWatch.release(sessionID)
+				defer globalGitWatch.release(sessionID, cwd)
 			}
 		}
 	}
@@ -3541,7 +3541,7 @@ func streamMultiSSE(c *tool.Ctx) {
 			if sess, found := globalMgr.Registry().Session(id); found {
 				if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
 					globalGitWatch.acquire(id, cwd)
-					defer globalGitWatch.release(id)
+					defer globalGitWatch.release(id, cwd)
 				}
 			}
 		}

@@ -13,13 +13,10 @@ export const sessionID = writable<string>(readSessionID());
 // The full snapshot is the single source of truth. It arrives once via
 // HTTP on first load, then is replaced wholesale by each git_status SSE
 // event — so there is no per-change fetch (zero polling).
-export const snapshot = writable<GitStatusSnapshot>({
-  repos: [],
-  statuses: {},
-  active: "",
-  active_explicit: false,
-  total_changed: 0,
-});
+function emptySnapshot(): GitStatusSnapshot {
+  return { repos: [], statuses: {}, active: "", active_explicit: false, total_changed: 0 };
+}
+export const snapshot = writable<GitStatusSnapshot>(emptySnapshot());
 // Which repo is selected is remembered PER SESSION. The id has to come
 // from the sessionID store, not from the URL: mounted as an island in the
 // conversation shell there is no ?session= to read, so every session fell
@@ -39,6 +36,10 @@ export const activeRepo = writable<string>(readStoredRepo(currentSession));
 sessionID.subscribe((id) => {
   if (id === currentSession) return;
   currentSession = id;
+  // The store outlives the island: remounted for another session (often
+  // in another project), it still held the previous session's repos and
+  // drew them until the first fetch landed.
+  snapshot.set(emptySnapshot());
   activeRepo.set(readStoredRepo(id));
 });
 // hydrating suppresses the server write while a value is being applied
@@ -120,7 +121,11 @@ export async function loadRepos(): Promise<void> {
   if (!id) return;
   loading.set(true);
   try {
-    applySnapshot(await api.getRepos(id));
+    const s = await api.getRepos(id);
+    // A fetch started for the previous session can land after the switch;
+    // applying it would select that session's repo under the new one's key.
+    if (get(sessionID) !== id) return;
+    applySnapshot(s);
   } finally {
     loading.set(false);
   }
