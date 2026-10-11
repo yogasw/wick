@@ -3,6 +3,7 @@
      runs — just the reusable ConfigsForm scoped to the tool key, with a
      tool-scoped save injected (POSTs /manager/api/tools/{key}/configs/…). */
   import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
+  import HostAccessCard from "../plugins/host/HostAccessCard.svelte";
   import { toastError } from "@wick-fe/common-stores";
   import { getTool, setToolConfig } from "$lib/api.js";
   import type { ToolDetail } from "$lib/types.js";
@@ -135,6 +136,8 @@
         </div>
       </section>
     {/if}
+
+    <HostAccessCard pluginKey={toolKey} />
 
     <section>
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Settings</h2>

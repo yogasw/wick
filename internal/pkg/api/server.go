@@ -3127,7 +3127,17 @@ func NewServer() *Server {
 	hostAPISvc := startHostAPI(context.Background(), hostAPIDeps{
 		db: db, router: r, auth: authSvc, pats: tokensSvc, configs: configsSvc,
 		connectors: connectorsSvc, layout: agentsLayout, service: servicePlugins,
+		send: func(ctx context.Context, _, sessionID, text string) (bool, error) {
+			if agentsPool == nil {
+				return false, errors.New("agent pool is not running")
+			}
+			if err := agentsPool.Send(ctx, sessionID, "", string(agentsession.OriginREST), "user", text); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
 	})
+	hostAPISvc.RegisterAdmin(r, authMidd.RequireAdmin)
 	// Plugin processes spawned from here on carry the Host API; keep_warm
 	// tools and the connector warm-up start only now (see TestHostAPIStartsBeforePluginSpawns).
 	toolPlugins.Start()

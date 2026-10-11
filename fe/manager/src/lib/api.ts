@@ -791,3 +791,122 @@ export async function uploadPluginZip(file: File): Promise<{ key: string; kind: 
   if (!res.ok) throw new Error(body.error || `upload failed (${res.status})`);
   return body;
 }
+
+/* ── Plugin Host API access (Admin → Plugins → Host access) ────────────── */
+
+export type HostAccessStatus = "allowed" | "blocked" | "undeclared" | "off-by-default" | "unknown";
+
+export interface HostAccessItem {
+  item: string;
+  blocked: boolean;
+  destructive: boolean;
+}
+
+export interface HostAccessScope {
+  scope: string;
+  label?: string;
+  description?: string;
+  declared: boolean;
+  known: boolean;
+  status: HostAccessStatus;
+  reason?: string;
+  /* "allow" / "block" = an admin decision; "" or absent = the default. */
+  overlay?: "allow" | "block" | "";
+  default_allow: boolean;
+  destructive: boolean;
+  sensitive: boolean;
+  declarative: boolean;
+  resource?: string;
+  items?: HostAccessItem[];
+  calls_24h: number;
+  /* failed = every unsuccessful call; denied = refused with PermissionDenied. */
+  failed_24h: number;
+  denied_24h: number;
+}
+
+export interface PluginHostAccess {
+  key: string;
+  kind: string;
+  version: string;
+  declares: boolean;
+  blocked_all: boolean;
+  /* An admin revoked all Host API access (tokens and broker) until restored. */
+  revoked: boolean;
+  scopes: HostAccessScope[];
+  item_count: number;
+  calls_24h: number;
+  failed_24h: number;
+  denied_24h: number;
+  last_call?: string;
+}
+
+export interface HostCall {
+  ts: string;
+  plugin: string;
+  kind: string;
+  rpc: string;
+  scope: string;
+  item?: string;
+  user_id?: string;
+  source?: string;
+  ok: boolean;
+  code?: string;
+  duration_ms: number;
+}
+
+export interface HostCallPage {
+  calls: HostCall[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+const hostAccessBase = (key: string) => `/manager/api/plugin-host-access/${encodeURIComponent(key)}`;
+
+/* Admin-only: plugins that declare (or were seen using) the Host API. */
+export function listHostAccess(): Promise<PluginHostAccess[]> {
+  return apiGet<PluginHostAccess[]>("/manager/api/plugin-host-access");
+}
+
+/* One plugin of any kind (the "What it can do" card). */
+export function getHostAccess(key: string): Promise<PluginHostAccess> {
+  return apiGet<PluginHostAccess>(hostAccessBase(key));
+}
+
+/* Turns a scope ON/OFF; null clears the admin decision back to the default. */
+export function setHostScope(key: string, scope: string, allowed: boolean | null): Promise<PluginHostAccess> {
+  return apiPost<PluginHostAccess>(`${hostAccessBase(key)}/scope`, { scope, allowed });
+}
+
+/* Blocks one declared item (✕) or lets it follow its scope again (↺). */
+export function setHostItem(key: string, scope: string, item: string, blocked: boolean): Promise<PluginHostAccess> {
+  return apiPost<PluginHostAccess>(`${hostAccessBase(key)}/item`, { scope, item, blocked });
+}
+
+export function setHostBlockAll(key: string, blocked: boolean): Promise<PluginHostAccess> {
+  return apiPost<PluginHostAccess>(`${hostAccessBase(key)}/block-all`, { blocked });
+}
+
+export interface HostRevokeResult {
+  access: PluginHostAccess;
+  /* Live process tokens dropped by this revoke. */
+  dropped: number;
+  /* false when the plugin already was in the asked state. */
+  changed: boolean;
+}
+
+/* Revokes (true) all Host API access of a plugin — its tokens and broker
+   calls, persistently, every kind — or restores it (false). */
+export function setHostRevoked(key: string, revoked: boolean): Promise<HostRevokeResult> {
+  return apiPost<HostRevokeResult>(`${hostAccessBase(key)}/revoke`, { revoked });
+}
+
+export function listHostCalls(f: { plugin?: string; failed?: boolean; page?: number; limit?: number } = {}): Promise<HostCallPage> {
+  const p = new URLSearchParams();
+  if (f.plugin) p.set("plugin", f.plugin);
+  if (f.failed) p.set("failed", "1");
+  if (f.page && f.page > 1) p.set("page", String(f.page));
+  if (f.limit) p.set("limit", String(f.limit));
+  const qs = p.toString();
+  return apiGet<HostCallPage>("/manager/api/plugin-host-calls" + (qs ? `?${qs}` : ""));
+}

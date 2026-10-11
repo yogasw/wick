@@ -6,6 +6,7 @@
      Config auto-save is owned by ConfigsForm; the rest POSTs through the
      JSON api client. */
   import { Button, TextInput, TextArea, NumberInput, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
+  import HostAccessCard from "./plugins/host/HostAccessCard.svelte";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getConnectorRow,
@@ -451,6 +452,8 @@
         onchanged={refresh}
       />
     {/if}
+
+    <HostAccessCard pluginKey={connectorKey} />
 
     {#if showInstanceConfig}
       <section>

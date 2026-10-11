@@ -4,7 +4,7 @@
 import type { AvailablePlugin, InstalledPlugin, PluginOrigin } from "$lib/api.js";
 import type { PluginEntry } from "$lib/types.js";
 
-export type Tab = "installed" | "marketplace" | "sources" | "add";
+export type Tab = "installed" | "marketplace" | "sources" | "host" | "add";
 export type KindFilter = "all" | InstalledPlugin["kind"];
 export type OriginFilter = "all" | "official" | "source" | "upload" | "local";
 export type StatusFilter = "all" | "active" | "disabled" | "update" | "error";
@@ -12,7 +12,7 @@ export type SortKey = "name" | "kind" | "checked" | "update";
 export type MarketFilter = "all" | "not-installed" | "installed" | "update";
 export type MarketSort = "name" | "updated";
 
-export const TABS: Tab[] = ["installed", "marketplace", "sources", "add"];
+export const TABS: Tab[] = ["installed", "marketplace", "sources", "host", "add"];
 export const MARKET_FILTERS: MarketFilter[] = ["all", "not-installed", "installed", "update"];
 export const MARKET_SORTS: MarketSort[] = ["name", "updated"];
 export const KINDS: KindFilter[] = ["all", "connector", "tool", "job", "service"];

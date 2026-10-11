@@ -3,6 +3,7 @@ package hostapi
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,7 +33,7 @@ type ManifestDirectory struct {
 	at      time.Time
 }
 
-var _ PluginDirectory = (*ManifestDirectory)(nil)
+var _ AdminDirectory = (*ManifestDirectory)(nil)
 
 // NewManifestDirectory returns a directory over scan; call Reload once the
 // plugins are installed.
@@ -83,6 +84,19 @@ func (d *ManifestDirectory) Plugin(key string) (PluginInfo, bool) {
 	defer d.mu.Unlock()
 	p, ok = d.plugins[key]
 	return p, ok
+}
+
+// All lists every installed plugin, sorted by key (the admin Host access
+// page).
+func (d *ManifestDirectory) All() []PluginInfo {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]PluginInfo, 0, len(d.plugins))
+	for _, p := range d.plugins {
+		out = append(out, p)
+	}
+	slices.SortFunc(out, func(a, b PluginInfo) int { return strings.Compare(a.Key, b.Key) })
+	return out
 }
 
 // UnknownScopes lists the host_scopes key declares that this wick does not

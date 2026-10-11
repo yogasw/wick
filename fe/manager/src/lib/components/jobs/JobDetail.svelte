@@ -7,6 +7,7 @@
      stop on success/error or on unmount — the interval is cleared in both
      paths so no timer leaks. */
   import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
+  import HostAccessCard from "../plugins/host/HostAccessCard.svelte";
   import { onDestroy } from "svelte";
   import { Button, TextInput, NumberInput } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -250,6 +251,8 @@
         {/if}
       </div>
     </section>
+
+    <HostAccessCard pluginKey={jobKey} />
 
     <section>
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Configuration</h2>

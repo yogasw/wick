@@ -11,7 +11,9 @@
      install-state and sort filters. Uninstall works for every kind, from
      Installed and Marketplace. Add: Upload a zip, Link (plugins.json or a .zip,
      installed once) or GitHub release (public, or private with a PAT that is
-     write-only). Everyone logged in can read; actions are admin-only
+     write-only). Host access (admin): what each plugin may call back into
+     wick, with per-scope / per-item switches and the call audit. Everyone
+     logged in can read; actions are admin-only
      server-side and hidden here for non-admins. */
   import { Button, TextInput, KebabMenu, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -23,6 +25,7 @@
     type InstalledPlugin, type OfficialCatalog, type PluginOrigin, type PluginProgress,
   } from "$lib/api.js";
   import PluginUpdateProgress from "./PluginUpdateProgress.svelte";
+  import HostAccess from "./host/HostAccess.svelte";
   import { pluginPhaseLabel } from "./updateProgress.js";
   import {
     parseQuery, queryString, filterInstalled, facetCounts, sortInstalled, paginate, matchesText,
@@ -508,6 +511,7 @@
     <button class={tabClass(query.tab === "marketplace")} onclick={() => setTab("marketplace")}>Marketplace <span class="text-xs text-black-700">{market.length}</span></button>
     <button class={tabClass(query.tab === "sources")} onclick={() => setTab("sources")}>Sources <span class="text-xs text-black-700">{sources.length + (official ? 1 : 0)}</span></button>
     {#if isAdmin}
+      <button class={tabClass(query.tab === "host")} onclick={() => setTab("host")}>Host access</button>
       <button class={tabClass(query.tab === "add")} onclick={() => { setTab("add"); editing = null; form = blankForm(); }}>Add new plugin</button>
     {/if}
   </div>
@@ -641,6 +645,11 @@
       {/if}
     </div>
     {@render pager(installedPage)}
+  {:else if query.tab === "host" && isAdmin}
+    <div class="flex flex-wrap items-center gap-2">{@render searchBox("Search plugins…")}</div>
+    <HostAccess filter={query.q} />
+  {:else if query.tab === "host"}
+    <p class="px-4 py-8 text-center text-sm text-black-700 dark:text-black-600" data-testid="host-admin-only">Host access is admin only.</p>
   {:else if query.tab === "sources"}
     <div class="flex flex-wrap items-center gap-2">{@render searchBox("Search sources…")}</div>
     <div class="space-y-3">

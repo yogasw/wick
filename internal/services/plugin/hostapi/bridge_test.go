@@ -203,6 +203,10 @@ type fakeServiceTokens struct{ revoked map[string]bool }
 
 func (f *fakeServiceTokens) LookupCallback(string) (string, []string, bool) { return "", nil, false }
 func (f *fakeServiceTokens) CallbackRevoked(key string) bool                { return f.revoked[key] }
+func (f *fakeServiceTokens) SetCallbackRevoked(key string, revoked bool) error {
+	f.revoked[key] = revoked
+	return nil
+}
 
 type toolStub struct{ pb.UnimplementedToolServer }
 type jobStub struct{ pb.UnimplementedJobServer }

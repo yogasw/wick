@@ -25,6 +25,7 @@ type hostAPI struct {
 	bridge *hostapi.Bridge
 	audit  *hostapi.Audit
 	dir    *hostapi.ManifestDirectory
+	admin  *hostapi.Admin
 }
 
 // hostAPIDeps is what wick hands the Host API server.
@@ -37,6 +38,9 @@ type hostAPIDeps struct {
 	connectors *connectors.Service
 	layout     agentconfig.Layout
 	service    *serviceplugin.Host
+	// send queues a message into a session (SendToSession); nil leaves the
+	// RPC Unimplemented.
+	send func(ctx context.Context, userID, sessionID, text string) (bool, error)
 }
 
 // startHostAPI builds the Host API once, opens its private door and installs
@@ -76,6 +80,9 @@ func startHostAPI(ctx context.Context, d hostAPIDeps) *hostAPI {
 		}
 		return u, d.auth.GetUserFilterTagIDs(ctx, id), nil
 	})
+	layoutData := &hostapi.LayoutData{Layout: d.layout, Users: users, Send: d.send}
+	connRunner := hostapi.NewConnectorRunner(d.connectors)
+	perms := hostapi.NewPermissions(store)
 	srv := hostapi.NewServer(hostapi.Deps{
 		Plugins:     dir,
 		Users:       dbUsers{db: d.db},
@@ -83,13 +90,13 @@ func startHostAPI(ctx context.Context, d hostAPIDeps) *hostAPI {
 		Configs:     ownedConfigs{c: d.configs},
 		Accounts:    connectedAccounts{svc: d.connectors},
 		PATs:        d.pats,
-		Sessions:    &hostapi.LayoutData{Layout: d.layout, Users: users},
-		Tickets:     &hostapi.LayoutData{Layout: d.layout, Users: users},
+		Sessions:    layoutData,
+		Tickets:     layoutData,
 		Principals:  d.auth,
-		Connectors:  hostapi.NewConnectorRunner(d.connectors),
+		Connectors:  connRunner,
 		Router:      d.router,
 		DB:          d.db,
-		Perms:       hostapi.NewPermissions(store),
+		Perms:       perms,
 		Audit:       audit,
 		WickVersion: appname.BuildAppVersion,
 	})
@@ -107,7 +114,25 @@ func startHostAPI(ctx context.Context, d hostAPIDeps) *hostAPI {
 	if d.service != nil {
 		d.service.HostAPI = bridge
 	}
-	return &hostAPI{bridge: bridge, audit: audit, dir: dir}
+	admin := &hostapi.Admin{Plugins: dir, Perms: perms, Calls: store, Op: connRunner.Op, Revoke: bridge.SetRevoked, Revoked: bridge.Revoked,
+		Actor: func(r *http.Request) string {
+			if u := login.GetUser(r.Context()); u != nil {
+				return u.ID
+			}
+			return ""
+		}}
+	return &hostAPI{bridge: bridge, audit: audit, dir: dir, admin: admin}
+}
+
+// RegisterAdmin mounts the Host access admin API (Plugins → Host access);
+// wrap is the admin middleware. Safe on a nil hostAPI.
+func (h *hostAPI) RegisterAdmin(mux *http.ServeMux, wrap func(http.Handler) http.Handler) {
+	if h == nil || h.admin == nil {
+		// The Host API did not start: the page still answers, with 503.
+		hostapi.RegisterUnavailableAdmin(mux, wrap)
+		return
+	}
+	h.admin.RegisterAdmin(mux, wrap)
 }
 
 // Close stops the door and flushes the audit.

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -171,6 +172,42 @@ func (b *Bridge) RevokeKey(key string) {
 	}
 	delete(b.issued, key)
 }
+
+// RevocationStore persists the per-plugin revoke flag (the service host's
+// token file, the same flag as the "Callback to wick" switch).
+type RevocationStore interface {
+	SetCallbackRevoked(key string, revoked bool) error
+}
+
+// ErrRevocationUnavailable means no store can keep the revoke flag.
+var ErrRevocationUnavailable = errors.New("host api revocation is not available")
+
+// SetRevoked revokes (true) or restores (false) all Host API access of key,
+// for every kind and both doors. Revoking sets the persistent flag (the
+// broker interceptor and the door refuse key, ProcessEnv issues no token,
+// a service's callback token is dropped) and drops key's live process
+// tokens; dropped counts those. changed is false when key already was in
+// the asked state. Restoring lets the next process get a token again.
+func (b *Bridge) SetRevoked(key string, revoked bool) (dropped int, changed bool, err error) {
+	store, ok := b.service.(RevocationStore)
+	if b.service == nil || !ok {
+		return 0, false, ErrRevocationUnavailable
+	}
+	changed = b.revoked(key) != revoked
+	if err := store.SetCallbackRevoked(key, revoked); err != nil {
+		return 0, false, err
+	}
+	if revoked {
+		b.mu.Lock()
+		dropped = len(b.issued[key])
+		b.mu.Unlock()
+		b.RevokeKey(key)
+	}
+	return dropped, changed, nil
+}
+
+// Revoked reports whether an admin revoked key's Host API access.
+func (b *Bridge) Revoked(key string) bool { return b.revoked(key) }
 
 func (b *Bridge) revoked(key string) bool {
 	return b.service != nil && b.service.CallbackRevoked(key)

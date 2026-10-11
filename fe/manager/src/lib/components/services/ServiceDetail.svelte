@@ -7,6 +7,7 @@
      Rotate / Revoke — the secret is shown once), the callback token switch,
      and the last log lines (refreshed every 3 s). */
   import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
+  import HostAccessCard from "../plugins/host/HostAccessCard.svelte";
   import { Button, TextInput, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
@@ -384,6 +385,8 @@
         {/if}
       </div>
     </section>
+
+    <HostAccessCard pluginKey={serviceKey} />
 
     <section>
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Log <span class="text-xs font-normal text-black-700 dark:text-black-600">last {data.logs?.length ?? 0} lines</span></h2>
