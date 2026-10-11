@@ -881,3 +881,77 @@ func TestRecheckIgnoresAnotherTurnsMarker(t *testing.T) {
 		t.Fatalf("recheck = %+v %v", rc, err)
 	}
 }
+
+// TestOlderMessageIgnoredWithMarkerOff: with the marker off, the remote's
+// message from turn A edited after turn B was sent is not turn B's — not
+// through the event, not through a read (one window only, after our
+// message), not through Recheck — while a reply after turn B still is.
+func TestOlderMessageIgnoredWithMarkerOff(t *testing.T) {
+	f, src, rt := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", Marker: new(bool)})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := src.Send(ctx, remote.Turn{Text: "question A", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	thread := f.posts[0]["ts"]
+	note := f.reply("UBOT", "_Lagi mengurai…_")
+	rt.Dispatch(Message{Channel: "C1", TS: note, ThreadTS: thread, User: "UBOT", Text: "_Lagi mengurai…_"})
+	src.End(remote.Handle{})
+	h, err := src.Send(ctx, remote.Turn{Text: "question B", SessionDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.posts[1]["text"], MarkerPrefix) {
+		t.Fatalf("marker off but posted %q", f.posts[1]["text"])
+	}
+	sentB := f.posts[1]["ts"]
+	ch, err := src.Receive(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := f.nextTS()
+	final := "The full answer.\nEND RESPONSE 0123456789ab"
+	f.mu.Lock()
+	for _, m := range f.replies {
+		if m["ts"] == note {
+			m["text"], m["edited"] = final, map[string]any{"ts": edit}
+		}
+	}
+	f.reads = nil
+	f.mu.Unlock()
+	rt.Dispatch(changed(thread, note, edit, final))
+	if evs := drain(ch); len(evs) != 0 {
+		t.Fatalf("event path took the edit: %+v", evs)
+	}
+	// positive control: the event path does carry a reply after turn B
+	reply := f.reply("UBOT", "Answer B")
+	rt.Dispatch(Message{Channel: "C1", TS: reply, ThreadTS: thread, User: "UBOT", Text: "Answer B"})
+	if got := lastText(drain(ch)); got != "Answer B" {
+		t.Fatalf("event path reply = %q, want %q", got, "Answer B")
+	}
+	evs, _, err := src.Fetch(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the read holds the reply already taken, never the old edit
+	for _, ev := range evs {
+		if strings.Contains(ev.Text, "The full answer") {
+			t.Fatalf("read took the edit: %+v", evs)
+		}
+	}
+	if _, ok := doneText(evs); ok {
+		t.Fatalf("read ended the turn: %+v", evs)
+	}
+	f.mu.Lock()
+	reads := strings.Join(f.reads, " ")
+	f.mu.Unlock()
+	if reads != sentB+".." {
+		t.Fatalf("turn B read %q, want only %q", reads, sentB+"..")
+	}
+	src.End(h)
+	rc, err := src.Recheck(ctx, dir)
+	if err != nil || rc.Done || rc.Text != "Answer B" {
+		t.Fatalf("recheck = %+v %v", rc, err)
+	}
+}

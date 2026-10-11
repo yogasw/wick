@@ -28,6 +28,8 @@
     <input type="checkbox" class="mt-1" bind:checked={marker} data-testid="{idPrefix}-marker" />
     <span>END RESPONSE marker<br /><span class="text-xs text-black-800 dark:text-black-600">
       {marker ? "Each turn asks the agent to end its reply with a marker line; the turn ends there." : "No marker: the turn ends once the reply has been quiet for the idle time."}
+    </span><br /><span class="text-xs text-black-800 dark:text-black-600" data-testid="{idPrefix}-marker-edit-hint">
+      Turn this on if the remote bot answers by editing an earlier message — without it, edited replies are ignored.
     </span></span>
   </label>
 

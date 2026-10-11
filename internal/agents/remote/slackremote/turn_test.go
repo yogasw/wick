@@ -295,15 +295,6 @@ func TestOlderMessageTakenIntoTurn(t *testing.T) {
 	}
 }
 
-func TestOlderMessageNeedsMarkerOn(t *testing.T) {
-	tr := turnB()
-	tr.token = ""
-	evs, _, _ := feed(tr, Message{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Full answer.\nEND RESPONSE tokB"})
-	if len(evs) != 0 {
-		t.Fatalf("events = %+v", evs)
-	}
-}
-
 // TestTakenOlderMessageLeavesWithoutMarker: in the grace window after the
 // turn, the taken message is edited again with another turn's marker —
 // it leaves the reply instead of showing that answer.
@@ -343,5 +334,41 @@ func TestPruneTakenOlderMessageByWindow(t *testing.T) {
 	// read whole and gone: deleted
 	if evs := tr.prune(map[string]bool{}, true, true); lastText(evs) != "" || len(evs) == 0 {
 		t.Fatalf("prune = %+v", evs)
+	}
+}
+
+// TestTrackerIgnoresOlderMessageWithMarkerOff: with the marker off, a message
+// from before our own is never taken, whatever its edit says — no event
+// (so no idle reset), no end, nothing kept for a later read.
+func TestTrackerIgnoresOlderMessageWithMarkerOff(t *testing.T) {
+	cases := map[string]Message{
+		"plain edit":                               {TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Answer, finished late"},
+		"edit without edited":                      {TS: "2.0", Edited: true, Text: "Answer, finished late"},
+		"never marked edited":                      {TS: "2.0", Text: "Answer, finished late"},
+		"edit carrying marker":                     {TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Full answer.\nEND RESPONSE 0123456789ab"},
+		"edit with B's marker":                     {TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Full answer.\nEND RESPONSE tokB"},
+		"deleted":                                  {TS: "2.0", Deleted: true},
+		"from before turn A":                       {TS: "0.5", Edited: true, EditedTS: "4.0", Text: "Answer"},
+		"our own message re-edited is not a reply": {TS: "3.0", Edited: true, EditedTS: "4.0", Text: "Answer"},
+	}
+	for name, m := range cases {
+		t.Run(name, func(t *testing.T) {
+			tr := turnB()
+			tr.token = ""
+			evs, done, _ := feed(tr, m)
+			if len(evs) != 0 || done != "" {
+				t.Fatalf("events = %+v", evs)
+			}
+			if len(tr.msgs) != 0 || len(tr.older) != 0 || tr.lastTS != "" || tr.done {
+				t.Fatalf("tracker kept msgs=%v older=%v lastTS=%q done=%v", tr.msgs, tr.older, tr.lastTS, tr.done)
+			}
+			// a reply after our message is still the turn's
+			if _, done, _ := feed(tr, Message{TS: "3.1", Text: "Answer B"}); done != "" || tr.lastTS != "3.1" {
+				t.Fatalf("after reply done=%q lastTS=%q", done, tr.lastTS)
+			}
+			if got, _ := tr.compose(); got != "Answer B" {
+				t.Fatalf("compose = %q", got)
+			}
+		})
 	}
 }
