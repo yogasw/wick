@@ -44,7 +44,7 @@ Then:
 Config fields come from a struct with `wick:"..."` tags via `entity.StructToConfigs(Config{})` (`desc=…`, `secret`, `required`, `url`; the field name becomes the snake_case key). Admins edit them in wick; never hard-code credentials.
 
 - **connector** — one input struct per operation; mark writes as destructive. Read config from the op's `Ctx`.
-- **tool** — same `tool.Router` as a built-in tool (`r.GET("/", …)`, `c.HTML`, `c.Cfg`, `c.User()`). wick wraps `c.HTML` pages in its layout.
+- **tool** — same `tool.Router` as a built-in tool (`r.GET("/", …)`, `c.HTML`, `c.Cfg`, `c.User()`). wick wraps `c.HTML` pages in its layout. In a webhook route `c.TokenUser()` returns the person the host verified: a wick PAT (`Authorization: Bearer`, checked first) or wick's own SSO JWT in `X-Wick-User` (a custom MCP connector with the `sso` scheme whose URL is this tool on this wick). The host binds that JWT through its `wick_url` claim, which must be on a wick host and this tool's `/tools/{key}` or a path under it, and requires a lifetime of at most 15 min. `aud` alone is not trusted. `User.Source` / header `X-Wick-Token-User-Source` is `pat` or `sso`. `c.TokenCaller()` additionally returns `system` (`system:wick`, wick listing tools at boot: role `system`, no email, no Host API call as a user); treat it as read-only. Client-sent `X-Wick-*` headers are dropped.
 - **job** — read config with `job.FromContext(ctx).Cfg("key")`, log progress with `job.Logf(ctx, …)` (it lands in the run history), return markdown. Honour `ctx`; nothing survives between runs.
 - **service** — see section 6.
 

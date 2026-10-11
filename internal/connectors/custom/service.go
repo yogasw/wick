@@ -2,6 +2,7 @@ package custom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -61,6 +63,9 @@ type Service struct {
 
 	logins oauthLogins // in-flight OAuth browser logins (oauth scheme)
 
+	// listenPort is wick's own TCP port (SetListenPort); 0 until Run.
+	listenPort atomic.Int64
+
 	mu       sync.Mutex
 	loadedAt map[string]time.Time // def ID → last module build
 	keyToID  map[string]string    // def key → def ID
@@ -69,7 +74,7 @@ type Service struct {
 func New(d Deps) *Service {
 	httpClient := d.HTTP
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: stripCrossOriginAuth}
 	}
 	base := d.BaseURL
 	if base == nil {
@@ -85,6 +90,24 @@ func New(d Deps) *Service {
 		loadedAt: map[string]time.Time{},
 		keyToID:  map[string]string{},
 	}
+}
+
+// stripCrossOriginAuth is the MCP client's CheckRedirect: a redirect to
+// another origin (scheme, host or port) drops X-Wick-User and
+// Authorization, so a server answering 307 to elsewhere cannot hand the
+// caller's SSO token or bearer to that host. net/http forwards custom
+// headers on redirect, and only drops Authorization off-domain. Keeps the
+// default 10-redirect limit.
+func stripCrossOriginAuth(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	prev := via[len(via)-1].URL
+	if !strings.EqualFold(req.URL.Scheme, prev.Scheme) || !strings.EqualFold(req.URL.Host, prev.Host) {
+		req.Header.Del("X-Wick-User")
+		req.Header.Del("Authorization")
+	}
+	return nil
 }
 
 // SetTags late-binds the tags service (constructed after connectors
@@ -143,7 +166,7 @@ func (s *Service) mcp(h *http.Client) *mcpClient {
 	if h == nil {
 		h = s.http
 	}
-	return &mcpClient{http: h, secrets: s.keys, sso: s.sso, issuer: s.base}
+	return &mcpClient{http: h, secrets: s.keys, sso: s.sso, issuer: s.base, ownHosts: s.ownAudiences}
 }
 
 // ── registry lifecycle ───────────────────────────────────────────────
@@ -839,6 +862,9 @@ func (s *Service) TestServer(ctx context.Context, f *ServerForm, caller *SSOClai
 	if err := f.validate(); err != nil {
 		return ProbeResult{OK: false, Error: err.Error()}
 	}
+	if err := s.validateSSO(f); err != nil {
+		return ProbeResult{OK: false, Error: err.Error()}
+	}
 	srv := serverConfig{
 		URL:           f.URL,
 		AuthScheme:    f.AuthScheme,
@@ -872,6 +898,9 @@ func (s *Service) TestServer(ctx context.Context, f *ServerForm, caller *SSOClai
 // seeded instance ID for the redirect.
 func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, existingID, createdBy string) (*entity.CustomConnectorMCPServer, string, string, error) {
 	if err := f.validate(); err != nil {
+		return nil, "", "", err
+	}
+	if err := s.validateSSO(f); err != nil {
 		return nil, "", "", err
 	}
 	perUser := f.AuthScheme == "oauth" && f.OAuthPerUser

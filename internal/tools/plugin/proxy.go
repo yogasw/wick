@@ -31,8 +31,9 @@ type Proxy struct {
 // request is what one proxied call needs besides the raw request.
 type request struct {
 	user *tool.User // nil = no session (webhook / public visitor)
-	// tokenUser is the owner of the wick access token a webhook request
-	// carried (nil = none or not a valid wick token).
+	// tokenUser is who a webhook request authenticated as — a wick PAT's
+	// owner, the user behind wick's SSO JWT, or wick itself (Source
+	// tool.TokenSourceSystem). nil = no credential wick could verify.
 	tokenUser *tool.User
 	cfg       map[string]string        // the tool's current config
 	wrap      func(body []byte) []byte // wraps a page fragment in wick's layout; nil = never wrap
@@ -64,15 +65,16 @@ func (p *Proxy) ServeCtx(c *tool.Ctx, cfgKeys []string) {
 }
 
 // ServeWebhook proxies a manifest-declared webhook route: no session and
-// never wrapped. A request carrying a valid wick PAT/JWT gets its owner as
-// X-Wick-Token-User-* headers, and the plugin's Host API calls for it run as
-// that person.
+// never wrapped. A request carrying a valid wick PAT or SSO JWT (see
+// tool.WebhookCtx.TokenCaller) gets its owner as X-Wick-Token-User-* headers,
+// and the plugin's Host API calls for it run as that person — except for
+// wick's own system identity, which is passed on but runs no call as a user.
 func (p *Proxy) ServeWebhook(c *tool.WebhookCtx, cfgKeys []string) {
 	req := request{cfg: map[string]string{}}
 	for _, k := range cfgKeys {
 		req.cfg[k] = c.Cfg(k)
 	}
-	if u, ok := c.TokenUser(); ok {
+	if u, ok := c.TokenCaller(); ok { // incl. wick's system identity
 		req.tokenUser = &u
 	}
 	p.serve(c.W, c.R, req)
@@ -152,29 +154,41 @@ func injectHeaders(h http.Header, base string, u *tool.User) {
 }
 
 // beginCall records who the request runs for on the Host API: the session
-// user, else the token owner.
+// user, else the token owner. wick's system identity (tools/list at boot) is
+// nobody: its Host API calls fall back to the plugin's own wick_pat, the
+// same as an anonymous webhook.
 func (p *Proxy) beginCall(req request) (string, func()) {
 	switch {
 	case req.user != nil:
 		return wickplugin.BeginHostCall(p.key, wickplugin.KindTool, req.user.ID, "caller", "")
-	case req.tokenUser != nil:
+	case req.tokenUser != nil && req.tokenUser.Source != tool.TokenSourceSystem:
 		return wickplugin.BeginHostCall(p.key, wickplugin.KindTool, req.tokenUser.ID, "token", "")
 	}
 	return "", func() {}
 }
 
 // injectTokenUser sets the X-Wick-Token-User-* headers (after injectHeaders
-// dropped every client-sent X-Wick-* one).
+// dropped every client-sent X-Wick-* one), always with the source.
 func injectTokenUser(h http.Header, u *tool.User) {
 	if u == nil {
 		return
 	}
+	source := u.Source
+	if source == "" {
+		source = tool.TokenSourcePAT
+	}
 	role := "user"
-	if u.IsAdmin {
+	switch {
+	case source == tool.TokenSourceSystem:
+		role = "system"
+	case u.IsAdmin:
 		role = "admin"
 	}
+	h.Set(wickplugin.HeaderTokenUserSource, source)
 	h.Set(wickplugin.HeaderTokenUserID, u.ID)
-	h.Set(wickplugin.HeaderTokenUserEmail, u.Email)
+	if u.Email != "" {
+		h.Set(wickplugin.HeaderTokenUserEmail, u.Email)
+	}
 	h.Set(wickplugin.HeaderTokenUserName, u.Name)
 	h.Set(wickplugin.HeaderTokenUserRole, role)
 	if len(u.Tags) > 0 {

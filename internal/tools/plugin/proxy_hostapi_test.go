@@ -57,3 +57,53 @@ func TestProxyTokenUserHeadersAndCallID(t *testing.T) {
 		t.Fatalf("bridge calls = %v", fb.got)
 	}
 }
+
+// Every injection names its credential, a forged source header from the
+// client is dropped with the rest of X-Wick-*, and wick's system identity
+// is passed on (role system, no email) without a Host API call as a user.
+func TestProxyTokenUserSourceAndSystem(t *testing.T) {
+	fb := &fakeBridge{}
+	wickplugin.SetHostBridge(fb)
+	t.Cleanup(func() { wickplugin.SetHostBridge(nil) })
+
+	h := http.Header{}
+	h.Set(wickplugin.HeaderTokenUserSource, "system")
+	h.Set(wickplugin.HeaderTokenUserRole, "admin")
+	injectHeaders(h, "/tools/demo", nil)
+	if h.Get(wickplugin.HeaderTokenUserSource) != "" || h.Get(wickplugin.HeaderTokenUserRole) != "" {
+		t.Fatalf("client-sent token-user headers survived: %v", h)
+	}
+
+	injectTokenUser(h, &tool.User{ID: "u7"}) // a PAT owner from an older resolver
+	if h.Get(wickplugin.HeaderTokenUserSource) != wickplugin.TokenUserSourcePAT {
+		t.Fatalf("PAT source = %q", h.Get(wickplugin.HeaderTokenUserSource))
+	}
+
+	sso := &tool.User{ID: "u8", Email: "u8@example.com", Source: tool.TokenSourceSSO}
+	h = http.Header{}
+	injectTokenUser(h, sso)
+	if h.Get(wickplugin.HeaderTokenUserSource) != wickplugin.TokenUserSourceSSO || h.Get(wickplugin.HeaderTokenUserID) != "u8" {
+		t.Fatalf("sso headers = %v", h)
+	}
+
+	sys := &tool.User{ID: tool.SystemUserID, Name: "wick", Source: tool.TokenSourceSystem}
+	h = http.Header{}
+	injectTokenUser(h, sys)
+	if h.Get(wickplugin.HeaderTokenUserID) != wickplugin.TokenUserSystemID ||
+		h.Get(wickplugin.HeaderTokenUserRole) != "system" ||
+		h.Get(wickplugin.HeaderTokenUserSource) != wickplugin.TokenUserSourceSystem ||
+		h.Values(wickplugin.HeaderTokenUserEmail) != nil {
+		t.Fatalf("system headers = %v", h)
+	}
+
+	p := &Proxy{key: "demo"}
+	if id, _ := p.beginCall(request{tokenUser: sys}); id != "" {
+		t.Fatalf("system identity got a user call id %q", id)
+	}
+	if id, _ := p.beginCall(request{tokenUser: sso}); id != "cid-u8" {
+		t.Fatalf("sso call id = %q", id)
+	}
+	if len(fb.got) != 1 || fb.got[0] != "demo/tool/u8/token" {
+		t.Fatalf("bridge calls = %v", fb.got)
+	}
+}

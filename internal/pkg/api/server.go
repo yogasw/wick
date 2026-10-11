@@ -2660,20 +2660,28 @@ func NewServer() *Server {
 			Tags: toolTagNames(r.Context(), login.GetUserTagIDs(r.Context())),
 		}, true
 	})
+	// One loader for both verified credentials (PAT, SSO JWT): unknown,
+	// deleted and not-approved users are refused on every request.
+	loadToolUser := func(ctx context.Context, uid string) (tool.User, bool) {
+		return approvedToolUser(ctx, uid, authSvc.GetUserByID, func(ctx context.Context, uid string) []string {
+			return toolTagNames(ctx, authSvc.GetUserFilterTagIDs(ctx, uid))
+		})
+	}
 	tool.SetTokenResolver(func(ctx context.Context, plain string) (tool.User, bool) {
 		uid, err := tokensSvc.Authenticate(ctx, plain)
 		if err != nil {
 			return tool.User{}, false
 		}
-		u, err := authSvc.GetUserByID(ctx, uid)
-		if err != nil || u == nil || !u.Approved {
-			return tool.User{}, false
-		}
-		return tool.User{
-			ID: u.ID, Name: u.Name, Email: u.Email, IsAdmin: u.IsAdmin(),
-			Tags: toolTagNames(ctx, authSvc.GetUserFilterTagIDs(ctx, uid)),
-		}, true
+		return loadToolUser(ctx, uid)
 	})
+	// wick's own SSO JWT (X-Wick-User), sent by a custom MCP connector whose
+	// server is a tool on this wick: recognised when it was minted for that
+	// tool on this wick and its subject is an approved user (or wick itself).
+	// The key is loaded once here so verifying never touches the DB.
+	if err := customConnSvc.WarmSSOKey(); err != nil {
+		log.Warn().Err(err).Msg("sso key not loaded; SSO JWTs are refused until one is minted")
+	}
+	tool.SetHeaderTokenResolver(customconn.SSOTokenResolver(customConnSvc.VerifySSOCaller, loadToolUser))
 	agentstool.SetTagsService(tagsSvc)
 	agentstool.SetSkillStore(agentskills.NewStore(db))
 	customConnSvc.EnsureInstanceTags(context.Background())
@@ -3330,7 +3338,7 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub}
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
 }
 
 type Server struct {
@@ -3349,8 +3357,11 @@ type Server struct {
 	// registry + broadcaster are in scope) and reused by Run to wire
 	// the agentctl refresh_session handler. nil before agents boot.
 	syncSessionMeta func(sessionID string)
-	channelReg      *agentchannels.Registry
-	db              *gorm.DB
+	// customConn learns the listen port in Run, so SSO JWTs a custom MCP
+	// connector mints for wick's loopback address are recognised.
+	customConn *customconn.Service
+	channelReg *agentchannels.Registry
+	db         *gorm.DB
 	// resourceSampler records agent memory/CPU/IO into the history buffer
 	// behind the Resources page. Built in NewServer but STARTED in Run,
 	// which owns the context cancelled at shutdown — running it on
@@ -3761,6 +3772,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// can reach wick's local proxy endpoints (e.g. /integrations/slack/send)
 	// without needing any credentials injected into their environment.
 	os.Setenv("WICK_PORT", fmt.Sprintf("%d", port)) //nolint:errcheck
+	if s.customConn != nil {
+		s.customConn.SetListenPort(port)
+	}
 
 	// Start agent control socket — lets stdio MCP processes send
 	// switch_provider / kill commands to this daemon's pool.

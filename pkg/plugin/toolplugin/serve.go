@@ -93,9 +93,12 @@ func UserFromHeaders(r *http.Request) (tool.User, bool) {
 	return u, true
 }
 
-// TokenUserFromHeaders reads the owner of the wick access token a webhook
-// request carried, as the host verified and injected it. ok is false when
-// the request carried no valid wick token.
+// TokenUserFromHeaders reads who a webhook request authenticated as, as the
+// host verified and injected it: the owner of a wick PAT, a user behind
+// wick's SSO JWT, or wick itself (ID tool.SystemUserID). User.Source says
+// which; a host too old to send the source header only injected PAT
+// owners, so an absent source reads as tool.TokenSourcePAT. ok is false
+// when the request carried no credential the host could verify.
 func TokenUserFromHeaders(r *http.Request) (tool.User, bool) {
 	id := r.Header.Get(wickplugin.HeaderTokenUserID)
 	if id == "" {
@@ -106,6 +109,10 @@ func TokenUserFromHeaders(r *http.Request) (tool.User, bool) {
 		Name:    r.Header.Get(wickplugin.HeaderTokenUserName),
 		Email:   r.Header.Get(wickplugin.HeaderTokenUserEmail),
 		IsAdmin: r.Header.Get(wickplugin.HeaderTokenUserRole) == "admin",
+		Source:  r.Header.Get(wickplugin.HeaderTokenUserSource),
+	}
+	if u.Source == "" {
+		u.Source = tool.TokenSourcePAT
 	}
 	for _, t := range strings.Split(r.Header.Get(wickplugin.HeaderTokenUserTags), ",") {
 		if t = strings.TrimSpace(t); t != "" {
@@ -123,6 +130,24 @@ type tokenUserKey struct{}
 func tokenUserFromCtx(ctx context.Context, _ string) (tool.User, bool) {
 	u, ok := ctx.Value(tokenUserKey{}).(tool.User)
 	return u, ok
+}
+
+// tokenUserFromRequest is the plugin-side tool.HeaderTokenResolver: a call
+// with no bearer (wick's SSO JWT) still reaches WebhookCtx.TokenUser with
+// what the host verified (the host already checked the tool path).
+func tokenUserFromRequest(r *http.Request, _ string) (tool.User, bool) {
+	return tokenUserFromCtx(r.Context(), "")
+}
+
+// installResolvers points pkg/tool's identity hooks at the host-injected
+// headers. Plugin process ONLY: these resolvers trust X-Wick-* request
+// headers, which is safe solely behind wick's proxy (it strips every
+// client-sent X-Wick-* header first). Never call ServeTool/Handler inside
+// the wick process — a built-in tool would then believe forged headers.
+func installResolvers() {
+	tool.SetUserResolver(UserFromHeaders)
+	tool.SetTokenResolver(tokenUserFromCtx)
+	tool.SetHeaderTokenResolver(tokenUserFromRequest)
 }
 
 // wrap carries the host-verified token owner and the Host API call id of a
@@ -201,8 +226,7 @@ func Handler(mod tool.Module, cfg map[string]string) http.Handler {
 	if cfg != nil {
 		store.set(cfg)
 	}
-	tool.SetUserResolver(UserFromHeaders)
-	tool.SetTokenResolver(tokenUserFromCtx)
+	installResolvers()
 	return wrap(r.handler())
 }
 
@@ -243,8 +267,7 @@ func ServeTool(mod tool.Module, opts ...Option) {
 	}
 	_ = os.Chmod(sock, 0o600)
 	wickplugin.ApplyRlimits()
-	tool.SetUserResolver(UserFromHeaders)
-	tool.SetTokenResolver(tokenUserFromCtx)
+	installResolvers()
 	srv := &http.Server{Handler: wrap(r.handler()), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	schema, _ := json.Marshal(tm)

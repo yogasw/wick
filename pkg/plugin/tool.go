@@ -30,13 +30,24 @@ const (
 	HeaderUserRole  = "X-Wick-User-Role" // "admin" or "user"; absent = no session
 	HeaderUserTags  = "X-Wick-User-Tags" // comma-separated tag names
 	HeaderBase      = "X-Wick-Base"      // "/tools/{key}"
-	// HeaderTokenUser* name the owner of the wick access token (PAT/JWT) a
-	// webhook request carried, when wick could verify it; absent otherwise.
+	// HeaderTokenUser* name who a webhook request authenticated as, when
+	// wick could verify its credential; absent otherwise. The credential is
+	// a wick PAT (Authorization: Bearer, checked first) or wick's own SSO
+	// JWT in X-Wick-User (sent by a custom MCP connector with the sso
+	// scheme whose server is this wick); HeaderTokenUserSource says which.
+	// For the JWT wick mints for itself (tools/list at boot or reload) the
+	// ID is TokenUserSystemID, the role "system" and there is no email; the
+	// plugin's Host API calls for that request run without a user (plugin
+	// identity / wick_pat), never as "system:wick".
 	HeaderTokenUserID    = "X-Wick-Token-User-Id"
 	HeaderTokenUserEmail = "X-Wick-Token-User-Email"
 	HeaderTokenUserName  = "X-Wick-Token-User-Name"
-	HeaderTokenUserRole  = "X-Wick-Token-User-Role"
+	HeaderTokenUserRole  = "X-Wick-Token-User-Role" // "admin", "user" or "system"
 	HeaderTokenUserTags  = "X-Wick-Token-User-Tags"
+	// HeaderTokenUserSource is set with every HeaderTokenUser* injection:
+	// TokenUserSourcePAT, TokenUserSourceSSO or TokenUserSourceSystem.
+	// Plugins use it when PAT and SSO callers get different rights.
+	HeaderTokenUserSource = "X-Wick-Token-User-Source"
 	// HeaderLayout on a plugin response asks the host to wrap the body (an
 	// HTML fragment) in wick's page layout; HeaderTitle names the page.
 	HeaderLayout = "X-Wick-Layout"
@@ -45,6 +56,15 @@ const (
 	LayoutPage = "page"
 	// HeaderPrefix is the namespace the host strips from client requests.
 	HeaderPrefix = "X-Wick-"
+)
+
+// HeaderTokenUserSource values (same strings as tool.TokenSource*).
+const (
+	TokenUserSourcePAT    = "pat"
+	TokenUserSourceSSO    = "sso"
+	TokenUserSourceSystem = "system"
+	// TokenUserSystemID is HeaderTokenUserID for wick's own SSO identity.
+	TokenUserSystemID = "system:wick"
 )
 
 // ToolMeta is the manifest form of tool.Tool. It is a plain copy (not

@@ -27,6 +27,33 @@ from repositories you control.
 - **Sockets.** Tool/service sockets are created `0600` in a `0700` run dir,
   so the `X-Wick-User-*` headers the host injects cannot be forged from
   another local user; browser-supplied `X-Wick-*` headers are stripped.
+- **Tool webhook identity.** `X-Wick-Token-User-*` (with
+  `X-Wick-Token-User-Source` = `pat`, `sso` or `system`) is set only after
+  the host verified the credential.
+
+  For wick's SSO JWT (`X-Wick-User`), `aud` is NOT the safeguard. Any
+  approved user who registers an `sso` connector may pick its audience, so
+  a connector pointing at an outside server with audience = wick's host
+  would make wick hand that server tokens "for wick". wick therefore:
+  - mints every token with a `wick_url` claim — the URL it is actually
+    sent to, set by wick and not editable;
+  - accepts a token only when `wick_url` is on one of wick's own hosts
+    (from server config: the base URL's host, or loopback on wick's own
+    listen port; never the request's `Host` header) and at the called
+    tool's `/tools/{key}` or a path under it. A token sent elsewhere, or minted for another
+    tool, is refused;
+  - refuses to save or mint for an `sso` connector whose audience names
+    wick while its URL is not wick;
+  - caps a token's lifetime at 15 minutes (clamped at mint, refused at
+    save, rejected at verify), since the system identity has no user to
+    revoke;
+  - verifies against a key cached in memory, so a forged header never
+    costs a database round-trip.
+
+  The subject must be an approved user, checked per request. `system:wick`
+  is passed on as the system identity, runs no Host API call as a user, and
+  must be treated as read-only by the plugin. `TokenUser()` does not return
+  it.
 - **Service tokens.** Route tokens are stored hashed and can be rotated or
   revoked; the callback token `WICK_PLUGIN_TOKEN` is scoped to the plugin's
   `CallbackScopes` and revocable.

@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -427,7 +428,7 @@ func (s *Service) adoptServerDescription(ctx context.Context, def *entity.Custom
 // a calling user (boot, reload). Per-call execution still forwards the
 // real caller; only tool *listing* sees this subject.
 func systemSSOClaims() *SSOClaims {
-	return &SSOClaims{Subject: "system:wick", Name: "wick"}
+	return &SSOClaims{Subject: tool.SystemUserID, Name: "wick"}
 }
 
 // toolsToOps maps a live tool catalog onto DefOps, skipping excluded

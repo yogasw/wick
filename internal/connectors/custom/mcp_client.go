@@ -10,11 +10,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -37,6 +39,10 @@ type SecretCodec interface {
 type SSOSigner interface {
 	Mint(claims SSOClaims, ttl time.Duration) (string, error)
 	PublicKeyPEM() (string, error)
+	// Verify checks a token's signature against this signer's key and its
+	// exp/iat at now; audience and issuer are the caller's to check (see
+	// Service.VerifySSOCaller).
+	Verify(token string, now time.Time) (SSOClaims, error)
 }
 
 // SSOClaims is the caller identity forwarded as X-Wick-User.
@@ -47,6 +53,11 @@ type SSOClaims struct {
 	Groups   []string `json:"groups,omitempty"`
 	Audience string   `json:"aud"`
 	Issuer   string   `json:"iss"`
+	// WickURL is the MCP URL the token was minted for (claim wick_url),
+	// always set by wick from the server row. wick itself accepts a token
+	// only when this URL is under the tool being called on one of its own
+	// hosts — the binding aud alone cannot give, since aud is admin-set.
+	WickURL string `json:"wick_url,omitempty"`
 }
 
 // MCPTool is one entry from a tools/list response. Meta carries the
@@ -104,6 +115,10 @@ type mcpClient struct {
 	secrets SecretCodec
 	sso     SSOSigner
 	issuer  func() string // wick base URL for the iss claim
+	// ownHosts is wick's own audience set (Service.ownAudiences); nil in
+	// tests that do not care. Used to refuse an sso audience naming wick
+	// on a server that is not wick.
+	ownHosts func() map[string]bool
 }
 
 // maxMCPResponse caps how much of an upstream MCP response wick reads.
@@ -173,7 +188,17 @@ func (c *mcpClient) buildHeaders(srv serverConfig, user *SSOClaims) (http.Header
 		if claims.Audience == "" {
 			claims.Audience = srv.SSOAudience
 		}
+		if c.ownHosts != nil {
+			// Re-checked at mint, not only on save: the base URL or port
+			// may have changed since the server row was stored.
+			if err := checkSSOAudience(srv.URL, claims.Audience, c.ownHosts()); err != nil {
+				return nil, err
+			}
+		}
 		claims.Issuer = c.issuer()
+		// wick_url binds the token to where it is actually sent; set here
+		// from the server row, never from the form or the caller.
+		claims.WickURL = srv.URL
 		ttl := time.Duration(srv.SSOTTLSeconds) * time.Second
 		if ttl <= 0 {
 			ttl = 5 * time.Minute
@@ -538,12 +563,38 @@ type KeyStore interface {
 
 type ssoSigner struct {
 	keys KeyStore
+	// pub caches the verification key once the seed was loaded (Mint or
+	// Warm), so Verify never touches the configs store.
+	pub atomic.Pointer[ed25519.PublicKey]
 }
 
 // NewSSOSigner builds the default signer backed by the configs table.
 func NewSSOSigner(keys KeyStore) SSOSigner { return &ssoSigner{keys: keys} }
 
-func (s *ssoSigner) seed() (ed25519.PrivateKey, error) {
+func (s *ssoSigner) seed() (ed25519.PrivateKey, error) { return s.cache(s.loadSeed(true)) }
+
+// Warm loads an existing seed into the verification-key cache without
+// generating one. Run once at boot so Verify can check tokens minted
+// before a restart; a wick that never minted keeps an empty cache.
+func (s *ssoSigner) Warm() error {
+	_, err := s.cache(s.loadSeed(false))
+	return err
+}
+
+func (s *ssoSigner) cache(k ed25519.PrivateKey, err error) (ed25519.PrivateKey, error) {
+	if err == nil {
+		pub := k.Public().(ed25519.PublicKey)
+		s.pub.Store(&pub)
+	}
+	return k, err
+}
+
+// errNoSSOKey: no seed was loaded or ever generated, so no token can verify.
+var errNoSSOKey = errors.New("no sso signing key yet")
+
+// loadSeed returns the signing key; with create=false (Warm) a wick that
+// never minted a token answers errNoSSOKey instead of generating one.
+func (s *ssoSigner) loadSeed(create bool) (ed25519.PrivateKey, error) {
 	ctx := context.Background()
 	// EnsureOwned does double duty, and MUST run before the read:
 	// it registers the row's metadata (SetOwned rejects keys the
@@ -575,6 +626,9 @@ func (s *ssoSigner) seed() (ed25519.PrivateKey, error) {
 		}
 		return ed25519.NewKeyFromSeed(raw), nil
 	}
+	if !create {
+		return nil, errNoSSOKey
+	}
 	raw := make([]byte, ed25519.SeedSize)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
@@ -602,6 +656,9 @@ func (s *ssoSigner) Mint(claims SSOClaims, ttl time.Duration) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if ttl > maxSSOTTL {
+		ttl = maxSSOTTL
+	}
 	now := time.Now()
 	full := map[string]any{
 		"sub": claims.Subject,
@@ -615,6 +672,9 @@ func (s *ssoSigner) Mint(claims SSOClaims, ttl time.Duration) (string, error) {
 	}
 	if claims.Name != "" {
 		full["name"] = claims.Name
+	}
+	if claims.WickURL != "" {
+		full["wick_url"] = claims.WickURL
 	}
 	if len(claims.Groups) > 0 {
 		full["groups"] = claims.Groups

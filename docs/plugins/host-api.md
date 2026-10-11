@@ -156,7 +156,7 @@ RPCs fall into two groups:
 
 | Order | Identity | Where it comes from |
 |---|---|---|
-| 1 | the person who opened or triggered the plugin (`source=caller`) | the call id of the request being served: the user behind a connector execute, a tool request (`X-Wick-User-Id`), or a triggered job |
+| 1 | the person who opened or triggered the plugin (`source=caller`; `source=token` for a tool webhook authenticated by a PAT or wick's SSO JWT) | the call id of the request being served: the user behind a connector execute, a tool request (`X-Wick-User-Id`), a tool webhook's verified credential (`X-Wick-Token-User-Id`, not for the `system` source), or a triggered job |
 | 2 | the owner of the PAT in the plugin's `wick_pat` config (`source=pat`) | an admin pastes a personal access token (usually of a bot or admin account) into the plugin's config |
 | — | neither | `FailedPrecondition: no user identity — set wick_pat in the plugin config or run on behalf of a user` |
 

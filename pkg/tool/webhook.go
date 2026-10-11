@@ -166,20 +166,63 @@ func (c *WebhookCtx) Meta() Tool { return c.meta }
 // Base returns the absolute mount path for this tool ("/tools/{Key}").
 func (c *WebhookCtx) Base() string { return c.meta.Path }
 
-// TokenUser authenticates the request's Authorization: Bearer header as a
-// wick Personal Access Token and returns its owner.
+// TokenUser authenticates the request's own credential and returns the
+// PERSON behind it.
 //
 // A webhook route carries no session, so this is how a machine surface can
-// know WHO is calling instead of only THAT the call is allowed: the caller
-// creates a token under their own account and sends it like any bearer.
-// ok is false when the header is absent, the token is not a wick PAT, or
-// it has been revoked.
+// know WHO is calling instead of only THAT the call is allowed. Checked in
+// order:
+//
+//  1. Authorization: Bearer <wick Personal Access Token> — the caller
+//     creates a token under their own account and sends it like any
+//     bearer. User.Source is TokenSourcePAT.
+//  2. wick's SSO JWT in X-Wick-User, as a custom MCP connector with the
+//     sso scheme sends it when its server is this tool on this wick:
+//     signed by wick, at most 15 minutes long and unexpired, minted for a
+//     URL under this tool's own path on one of wick's own hosts, for an
+//     approved user. User.Source is TokenSourceSSO.
+//
+// An invalid bearer does not hide a valid JWT on the same request. ok is
+// false when neither is present or valid — and for wick's own system
+// identity, which is not a person; use TokenCaller to see that one. Check
+// u.Source when a PAT and an SSO call deserve different rights.
 func (c *WebhookCtx) TokenUser() (User, bool) {
-	h := c.R.Header.Get("Authorization")
-	if len(h) < 7 || !strings.EqualFold(h[:7], "Bearer ") {
+	u, ok := c.TokenCaller()
+	if !ok || u.Source == TokenSourceSystem {
 		return User{}, false
 	}
-	return ResolveToken(c.R.Context(), strings.TrimSpace(h[7:]))
+	return u, true
+}
+
+// TokenCaller is TokenUser plus wick's own system identity: a JWT wick
+// minted for itself (ID SystemUserID, Source TokenSourceSystem, no email,
+// not admin) when listing an MCP server's tools at boot or reload. That
+// caller is nobody — treat it as read-only.
+func (c *WebhookCtx) TokenCaller() (User, bool) {
+	h := c.R.Header.Get("Authorization")
+	if len(h) >= 7 && strings.EqualFold(h[:7], "Bearer ") {
+		if u, ok := ResolveToken(c.R.Context(), strings.TrimSpace(h[7:])); ok {
+			if u.Source == "" {
+				u.Source = TokenSourcePAT
+			}
+			return u, true
+		}
+	}
+	if headerTokenResolver == nil {
+		return User{}, false
+	}
+	return headerTokenResolver(c.R, c.toolBase())
+}
+
+// toolBase is the tool's mount path, "/tools/{key}".
+func (c *WebhookCtx) toolBase() string {
+	if c.meta.Path != "" {
+		return c.meta.Path
+	}
+	if c.meta.Key != "" {
+		return "/tools/" + c.meta.Key
+	}
+	return ""
 }
 
 // Cfg returns the current value of a config row declared by this tool,

@@ -90,7 +90,15 @@ Wick can register an external MCP server (streamable HTTP only) and re-expose it
 
 **About `oauth`:** this is the standard MCP authorization flow — pick it when the server answers unauthenticated calls with `401 invalid_token`. Wick discovers the server's authorization server (RFC 9728/8414), registers an OAuth client automatically when the server supports dynamic registration (or use the manual client ID/secret/scopes fields), and signs you in through a browser popup with PKCE. **Accounts are per instance**: clicking **Test now** runs the login, saving creates the connector with that account as its first instance, and every additional instance connects its own account via the **Connect account →** button on its page. Access tokens refresh transparently when they expire. Use `sso` instead only for in-house servers that validate wick's own JWT.
 
-**About `sso`:** per request, wick mints an ED25519-signed JWT for the user who triggered the call, with claims `sub` (user ID), `email`, `name`, `groups` (the user's tag IDs, for downstream RBAC), `aud` (defaults to the MCP URL host), `iss` (your wick base URL), and `iat`/`exp` (TTL defaults to 5 minutes). Your MCP server must validate the token against wick's public key, published at:
+**About `sso`:** per request, wick mints an ED25519-signed JWT for the user who triggered the call. Claims:
+- `sub` (user ID), `email`, `name`;
+- `groups` (the user's tag IDs, for downstream RBAC);
+- `aud` (defaults to the MCP URL host);
+- `iss` (your wick base URL);
+- `wick_url` (the exact MCP URL the token is sent to, set by wick);
+- `iat`/`exp`. The TTL defaults to 5 minutes, and at most 900 seconds is allowed: a longer value is refused on save and clamped at mint.
+
+A custom audience that names this wick's own host is refused unless the MCP URL is this wick too. The connector's URL may be a tool on this same wick (e.g. a tool plugin serving MCP under `/tools/{key}/…`, at the base URL or at `http://127.0.0.1:<wick port>/…`). wick then recognises its own token on that tool's webhook routes, but only when `wick_url` points under that tool. Your MCP server must validate the token against wick's public key, published at:
 
 ```
 https://<your-wick-host>/.well-known/wick-pubkey.pem
