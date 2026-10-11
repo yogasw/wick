@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { avatarWorking, busyWork, rosterStatus, withTurn, withActivity, type WorkState } from "../rosterStatus.js";
+import { avatarWorking, busyWork, rosterStatus, teamMark, withTurn, withActivity, type WorkState } from "../rosterStatus.js";
 import type { SessionActivity } from "../stores/sessionsStream.js";
 
 const row = (p: Record<string, unknown> = {}) => ({ id: "a1", status: "idle", disabled: false, ...p });
@@ -325,8 +325,24 @@ describe("Team task work in the avatar and the header", () => {
     expect(app).toMatch(/data-testid="header-typing"[^>]*>\{[^}]*\}<Dots \/><\/span>/);
     expect(app).not.toMatch(/class="dots"|\.dots i/);
     expect(app).toMatch(/<PresenceDot [^>]*mark=\{teamMark\(a, st\)\} \/>/);
-    expect(app).toMatch(/if \(a\.team_asks && st\.attention\) return "asks";/);
-    expect(app).toMatch(/return st\.work === "replying" \? "task" : null;/);
+  });
+
+  it("teamMark: the task badge only for a Team task, never a side chat from you, Slack or a schedule", () => {
+    const mark = (p: Record<string, unknown>) => {
+      const a = row(p);
+      return teamMark(a, rosterStatus(a));
+    };
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "you" }] })).toBeNull();
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "", source: "Slack" }] })).toBeNull();
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "", source: "Schedule" }] })).toBeNull();
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "Captain" }] })).toBe("task");
+    expect(mark({ replying_to: "Captain" })).toBe("task");
+    expect(mark({ replying_to: "you" })).toBe("task");
+    // Side chats read "replying" all the same: only the badge differs.
+    expect(rosterStatus(row({ working_sessions: [{ id: "s1", label: "", trigger: "you" }] })).work).toBe("replying");
+    expect(mark({ team_asks: { to: "Captain", question: "?" } })).toBe("asks");
+    expect(mark({ disabled: true, replying_to: "Captain" })).toBeNull();
+    expect(mark({})).toBeNull();
   });
 
   it("a teammate asking its sender gets the amber count badge on its row", () => {

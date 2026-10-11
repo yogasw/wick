@@ -45,7 +45,7 @@
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
-  import { rosterStatus, withTurn, withActivity, busyWork, avatarWorking, type RosterStatus } from "./lib/rosterStatus.js";
+  import { rosterStatus, withTurn, withActivity, busyWork, avatarWorking, teamMark } from "./lib/rosterStatus.js";
   import { mainChatOpen } from "./lib/avatarActivity.js";
   import { liveRoster, boundedDebounce, singleFlight, ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS } from "./lib/rosterLive.js";
   import type { SessionActivity } from "./lib/stores/sessionsStream.js";
@@ -576,15 +576,6 @@
         }
       : undefined,
   });
-
-  /* The Team-task mark on a row's avatar in place of the dot: the amber
-     "?" while a teammate asks its sender, the task badge while it works
-     on one. */
-  function teamMark(a: AgentItem, st: RosterStatus): "asks" | "task" | null {
-    if (a.disabled) return null;
-    if (a.team_asks && st.attention) return "asks";
-    return st.work === "replying" ? "task" : null;
-  }
 
   function rowPreview(a: AgentItem): { text: string; silent: boolean } {
     if (a.disabled) return { text: "Disabled", silent: false };

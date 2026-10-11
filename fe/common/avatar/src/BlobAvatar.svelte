@@ -51,7 +51,8 @@
   let winkTimer: ReturnType<typeof setTimeout> | undefined;
   const shown = $derived<BlobState>(winking ? "wink" : pose);
   function onClick() {
-    if (!animate || pose === "sleep") return;
+    // A dozing agent still winks, as AgentAvatar; only a disabled one does not.
+    if (!animate || (pose === "sleep" && !dozing)) return;
     winking = true;
     clearTimeout(winkTimer);
     winkTimer = setTimeout(() => (winking = false), WINK_MS);

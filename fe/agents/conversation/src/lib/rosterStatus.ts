@@ -134,6 +134,25 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
   return { unread, attention, work, typing, presence, label };
 }
 
+/** teamMark is the Team-task mark on a row's avatar in place of the dot:
+    the amber "?" while a teammate asks its sender, the task badge while
+    it works on a Team task — one replying_to names, or another chat an
+    agent sent it. A side chat from you, Slack or a schedule also reads
+    "replying" but is no Team task, so it gets no badge. */
+export function teamMark(
+  a: Pick<AgentItem, "disabled"> & Partial<Pick<AgentItem, "team_asks" | "replying_to" | "working_sessions">>,
+  st: Pick<RosterStatus, "attention" | "work">,
+): "asks" | "task" | null {
+  if (a.disabled) return null;
+  if (a.team_asks && st.attention) return "asks";
+  if (st.work !== "replying") return null;
+  if ((a.replying_to ?? "").trim()) return "task";
+  // trigger is "you", "" (Slack, a schedule, an outside caller) or the
+  // agent whose Team task runs in that chat.
+  const trigger = ((a.working_sessions ?? [])[0]?.trigger ?? "").trim();
+  return trigger !== "" && trigger !== "you" ? "task" : null;
+}
+
 /** withTurn is the roster after agent id's main-chat turn started or
     ended on the stream: the row reads working (or idle, with its tool
     cleared) at once instead of after the next poll. */

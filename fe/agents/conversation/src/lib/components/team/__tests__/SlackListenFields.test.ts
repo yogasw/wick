@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import SlackListenFields from "../SlackListenFields.svelte";
 
-const HINT = "Turn this on if the remote bot answers by editing an earlier message — without it, edited replies are ignored.";
+const HINT = "Turn this on if the remote bot answers by editing an earlier message — without it, edits to messages from before the request are ignored.";
 
 const props = (marker: boolean) => ({ listen: "target" as const, marker, mention: false, idleSec: 0, maxSec: 0, idPrefix: "t" });
 
