@@ -13,7 +13,8 @@ import (
 
 // deferredRecoveryInterval is how often sessions Reload passed over are
 // looked at again. A var so tests can drive recoverDeferred directly
-// without a watcher racing them.
+// without a watcher racing them. Read only by deferRecovery, on the
+// caller's goroutine, so a test restoring it never races the watcher.
 var deferredRecoveryInterval = 2 * time.Second
 
 // resetSessionStatus forces a session whose subprocess is gone back to
@@ -78,14 +79,15 @@ func (r *Registry) deferRecovery(ids map[string]time.Time) {
 	}
 	r.deferMu.Unlock()
 	if start {
-		go r.watchDeferredRecovery()
+		go r.watchDeferredRecovery(deferredRecoveryInterval)
 	}
 }
 
-// watchDeferredRecovery re-checks the deferred sessions until none is left.
-func (r *Registry) watchDeferredRecovery() {
+// watchDeferredRecovery re-checks the deferred sessions every interval
+// until none is left.
+func (r *Registry) watchDeferredRecovery(interval time.Duration) {
 	for {
-		time.Sleep(deferredRecoveryInterval)
+		time.Sleep(interval)
 		if r.recoverDeferred() == 0 {
 			return
 		}
