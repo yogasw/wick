@@ -110,6 +110,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 		Transport:     rt,
 		FlushInterval: -1, // SSE / streamed output goes through per write
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			setForwarded(pr)
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = "plugin"
 			pr.Out.Host = "plugin"
@@ -126,6 +127,18 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 		},
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// setForwarded hands the plugin the public origin of the request: Out.Host
+// is "plugin", so a URL built from it (a poll_url) would point nowhere.
+// SetXForwarded alone says "http" behind wick's TLS-terminating proxy, so an
+// inbound X-Forwarded-Proto wins.
+func setForwarded(pr *httputil.ProxyRequest) {
+	proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
+	pr.SetXForwarded()
+	if proto = strings.TrimSpace(proto); proto != "" {
+		pr.Out.Header.Set("X-Forwarded-Proto", proto)
+	}
 }
 
 // deliveryHeaders are the X-Wick-* headers wick's own outgoing webhooks

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"os"
 	"strings"
 	"sync"
@@ -385,4 +386,22 @@ func TestA2AClientThroughHost(t *testing.T) {
 	}
 	b, _ := json.Marshal(kinds)
 	t.Logf("message/stream events via host: %s", b)
+}
+
+// Behind wick's TLS-terminating proxy the service still sees https, so
+// service.BaseURL hands out a usable link.
+func TestSetForwardedKeepsInboundProto(t *testing.T) {
+	in := httptest.NewRequest(http.MethodGet, "http://example.test/x/svc/", nil)
+	in.Header.Set("X-Forwarded-Proto", "https")
+	pr := &httputil.ProxyRequest{In: in, Out: in.Clone(in.Context())}
+	pr.Out.Header.Del("X-Forwarded-Proto")
+	setForwarded(pr)
+	if pr.Out.Header.Get("X-Forwarded-Host") != "example.test" || pr.Out.Header.Get("X-Forwarded-Proto") != "https" {
+		t.Fatalf("forwarded = %v", pr.Out.Header)
+	}
+	in.Header.Del("X-Forwarded-Proto")
+	setForwarded(pr)
+	if got := pr.Out.Header.Get("X-Forwarded-Proto"); got != "http" {
+		t.Fatalf("plain http proto = %q", got)
+	}
 }

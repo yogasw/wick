@@ -377,7 +377,7 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub str
 		Transport:     rt,
 		FlushInterval: -1,
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetXForwarded()
+			setForwarded(pr)
 			pr.Out.URL.Scheme, pr.Out.URL.Host, pr.Out.Host = "http", "plugin", "plugin"
 			pr.Out.URL.Path, pr.Out.URL.RawPath = sub, ""
 			injectHeaders(pr.Out.Header, base, u)
@@ -399,6 +399,17 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub str
 // HeaderTokenOwnerID names, on a Token route, the wick user who created the
 // access token the request carried.
 const HeaderTokenOwnerID = "X-Wick-Token-Owner-Id"
+
+// setForwarded sets X-Forwarded-For/-Host/-Proto for service.BaseURL.
+// SetXForwarded alone says "http" behind wick's TLS-terminating proxy, so an
+// inbound X-Forwarded-Proto wins.
+func setForwarded(pr *httputil.ProxyRequest) {
+	proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
+	pr.SetXForwarded()
+	if proto = strings.TrimSpace(proto); proto != "" {
+		pr.Out.Header.Set("X-Forwarded-Proto", proto)
+	}
+}
 
 // injectHeaders drops client X-Wick-* headers and sets the trusted ones.
 func injectHeaders(hd http.Header, base string, u *User) {

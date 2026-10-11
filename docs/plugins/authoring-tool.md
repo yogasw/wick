@@ -33,7 +33,8 @@ func main() {
   login and access check (`RequireToolAccess`) and adds `X-Wick-User-Id`,
   `X-Wick-User-Role`, `X-Wick-User-Tags` and `X-Wick-Base`. Incoming
   `X-Wick-*` headers from the browser are stripped, so the plugin can trust
-  them.
+  them. `X-Forwarded-Proto` / `X-Forwarded-Host` carry the public origin
+  (the request's `Host` is `plugin`), so build absolute URLs from those.
 - `c.HTML` pages are wrapped in the wick layout; JSON and HTMX fragments pass
   through unchanged. Static files from `r.Static` are proxied too.
 - Webhook routes (`WebhookGroup`) are reachable at `/tools/{key}/webhook/*`

@@ -1,7 +1,10 @@
 package plugin
 
 import (
+	"crypto/tls"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -131,5 +134,43 @@ func TestProxyTokenUserSourceAndSystem(t *testing.T) {
 	}
 	if len(fb.got) != 1 || fb.got[0] != "demo/tool/u8/token" {
 		t.Fatalf("bridge calls = %v", fb.got)
+	}
+}
+
+// The plugin sees the public origin, not Out.Host "plugin": a URL it builds
+// from X-Forwarded-Proto/-Host (a poll_url) must pass wick's same-origin check.
+func TestProxyForwardsPublicOrigin(t *testing.T) {
+	cases := []struct {
+		name, inProto, wantProto string
+		tls                      bool
+	}{
+		{"behind TLS proxy", "https", "https", false},
+		{"first of a list", "https, http", "https", false},
+		{"plain http", "", "http", false},
+		{"direct TLS", "", "https", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := httptest.NewRequest(http.MethodGet, "http://example.test/tools/demo/x", nil)
+			in.RemoteAddr = "10.0.0.9:1234"
+			if c.inProto != "" {
+				in.Header.Set("X-Forwarded-Proto", c.inProto)
+			}
+			if c.tls {
+				in.TLS = &tls.ConnectionState{}
+			}
+			pr := &httputil.ProxyRequest{In: in, Out: in.Clone(in.Context())}
+			pr.Out.Header.Del("X-Forwarded-Proto") // ReverseProxy strips it before Rewrite
+			setForwarded(pr)
+			if got := pr.Out.Header.Get("X-Forwarded-Host"); got != "example.test" {
+				t.Fatalf("X-Forwarded-Host = %q", got)
+			}
+			if got := pr.Out.Header.Get("X-Forwarded-Proto"); got != c.wantProto {
+				t.Fatalf("X-Forwarded-Proto = %q, want %q", got, c.wantProto)
+			}
+			if got := pr.Out.Header.Get("X-Forwarded-For"); got != "10.0.0.9" {
+				t.Fatalf("X-Forwarded-For = %q", got)
+			}
+		})
 	}
 }
