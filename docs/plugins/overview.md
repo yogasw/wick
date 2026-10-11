@@ -53,6 +53,15 @@ Which one to pick:
    page. Services restart on the new binary; tools and jobs pick it up on the
    next spawn.
 
+## Calling back into wick
+
+A plugin of any kind can call wick through the [Host API](./host-api.md):
+look up users, read sessions and tickets, run another connector's declared
+operation, read config. Connector, tool and job plugins use the gRPC broker;
+every kind (service and non-Go plugins included) can use the HTTP door at
+`WICK_HOST_API_URL` with `WICK_PLUGIN_TOKEN`. Each call needs a scope in the
+manifest's `host_scopes`, runs as a real person, and is audited.
+
 ## Where files live
 
 ```
@@ -87,4 +96,5 @@ at 108 bytes.
   [service](./authoring-service.md)
 - Distribution: [index format](./index-format.md) · [sources](./sources.md) ·
   [release](./release.md)
-- [Security](./security.md) · [A2A repeater walkthrough](./service-a2a.md)
+- [Host API](./host-api.md) · [Security](./security.md) ·
+  [A2A repeater walkthrough](./service-a2a.md)

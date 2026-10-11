@@ -39,6 +39,12 @@ zip; check `module.meta.key`, the operations and configs there.
 or upload the zip from **Admin → Plugins → Add new plugin → Upload**. The
 connector then appears in `wick_list` like a built-in one.
 
+## Calling wick (Host API)
+
+An operation can call back into wick with `wickplugin.Host(c.Context())` — look up users, read tickets, run another connector's declared op as the person who called this one. `c.UserName(id)` already resolves names through it. The sample `connector/httpbin` op `whoami_host` calls `Whoami` + `GetUser` and declares `users.read` in `main`. See [Host API](./host-api.md) for the scopes, the `host_scopes` /
+`host_resources` manifest keys (declared with
+`wickplugin.DeclareHostAccess` in `main`) and who each call runs as.
+
 ## Release
 
 Bump `VERSION` and follow [Release](./release.md).

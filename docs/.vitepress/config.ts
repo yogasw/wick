@@ -93,6 +93,7 @@ export default withMermaid(defineConfig({
           { text: 'Index format', link: '/plugins/index-format' },
           { text: 'Sources', link: '/plugins/sources' },
           { text: 'Release', link: '/plugins/release' },
+          { text: 'Host API', link: '/plugins/host-api' },
           { text: 'Security', link: '/plugins/security' },
           { text: 'A2A repeater walkthrough', link: '/plugins/service-a2a' },
         ],

@@ -30,6 +30,15 @@ from repositories you control.
 - **Service tokens.** Route tokens are stored hashed and can be rotated or
   revoked; the callback token `WICK_PLUGIN_TOKEN` is scoped to the plugin's
   `CallbackScopes` and revocable.
+- **Host API.** A plugin calling back into wick is limited to the scopes
+  in its manifest's `host_scopes`; `rest.*`, `db.*`, `connectors.execute`
+  and `config.read_secret` also need an exact `host_resources` declaration
+  (no declaration, no access), and `db.*`, `rest.write` and
+  `config.read_secret` are off until an admin allows them. Calls run as the
+  triggering user or the owner of the plugin's `wick_pat` — never as a
+  synthetic admin — and are audited for 7 days. Admins block scopes or
+  single items, block all, or revoke a plugin on **Plugins → Host access**.
+  See [Host API](./host-api.md).
 - **Audit.** Every install, update, upload and source change is logged with
   actor, source, key, old → new version and `zip_sha256`.
 - **No silent updates.** `auto_update` is off unless enabled per source.

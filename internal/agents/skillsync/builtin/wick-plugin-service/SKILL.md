@@ -161,11 +161,39 @@ empty outside wick. **Never log the token.**
   code registers them with `Host.HandleCallback("METHOD /api/...", scope, h)`;
   a token without that scope gets `403`. Handlers read the caller with
   `CallerFrom(ctx)`.
-- **Today only `whoami` is registered** — declaring other scopes has no effect
-  until a host endpoint uses them. Add the endpoint host-side first.
+- `CallbackScopes` is the legacy list; the endpoints a plugin uses now are the
+  **Host API** HTTP door (below), gated by `host_scopes` instead.
 - Admin can revoke (`callback-revoke`) — the live token dies at once and later
   spawns get no `WICK_PLUGIN_TOKEN` until `callback-allow` (applies on next
   start).
+
+### Host API over the HTTP door
+
+A service has no gRPC broker, so it reaches the Host API (`docs/plugins/host-api.md`)
+over HTTP: `$WICK_HOST_API_URL/x/-/api/...` (private loopback address; fall back to
+`WICK_BASE_URL` only when unset) with `Authorization: Bearer $WICK_PLUGIN_TOKEN`. In Go:
+
+```go
+h, err := host.Default()            // reads WICK_HOST_API_URL / WICK_PLUGIN_TOKEN
+if errors.Is(err, host.ErrHostAPIUnavailable) { /* degrade */ }
+u, err := h.GetUserByEmail(r.Context(), &hostpb.GetUserByEmailRequest{Email: e})
+```
+
+- Declare scopes with `wickplugin.DeclareHostAccess(scopes, resources)` in `main`
+  before `service.ServeService`; they land in the manifest's `host_scopes` /
+  `host_resources`.
+- `GET /x/-/api/whoami` answers a **superset**: the old `{"plugin","scopes"}` keys
+  plus the Host API fields (`plugin_key`, `scopes_declared`, `scopes_allowed`,
+  `host_api_version`…). `host_api_version` 0 = a wick without the Host API (every
+  other RPC → `ErrHostAPIUnavailable`).
+- **Identity per route** for user-level RPCs (sessions, tickets, connectors,
+  `Rest`, `Query`): `Session` → the signed-in user; `Token` → the owner of the
+  access token (the admin who created/rotated it; sent as `X-Wick-Token-Owner-Id`);
+  `Public` and background goroutines → the plugin's `wick_pat` config, else
+  `FailedPrecondition`. wick ties a call to its route through `X-Wick-Call-Id`;
+  `service.ServeService` wraps the mux with `host.CallIDHandler`, so always call
+  with `r.Context()`. A call made after the request returned has no caller.
+- Plugin-level RPCs (`users.read`, `GetConfig`, `whoami`) need no identity.
 
 Access tokens (`wick_svc_…`, for `token` routes) are different: persisted
 hashed in `<plugins root>/service-tokens.json`, plaintext shown once, can be

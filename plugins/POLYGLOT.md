@@ -153,9 +153,30 @@ their traffic is **plain HTTP**, not gRPC:
 - Trust the `X-Wick-User-Id`, `X-Wick-User-Role`, `X-Wick-User-Tags` and
   `X-Wick-Base` headers: the host strips client-sent `X-Wick-*` and the socket
   is only reachable by the wick user.
-- Services also get `WICK_BASE_URL` + `WICK_PLUGIN_TOKEN` in the environment
-  for calling wick back.
+- Every kind gets `WICK_HOST_API_URL` + `WICK_PLUGIN_TOKEN` in the
+  environment for calling wick back (see below).
 - SSE / streaming works: write and flush, the proxy flushes per write.
+
+## Host API over HTTP
+
+A non-Go plugin of any kind calls back into wick through the HTTP door of
+the [Host API](../docs/plugins/host-api.md): plain JSON to
+`$WICK_HOST_API_URL/x/-/api/...` with `Authorization: Bearer
+$WICK_PLUGIN_TOKEN` (fall back to `WICK_BASE_URL` on a wick that sets no
+`WICK_HOST_API_URL`). Copy the `X-Wick-Call-Id` header of the request you are
+serving onto your calls so they run as that request's user.
+
+```bash
+curl -s -H "Authorization: Bearer $WICK_PLUGIN_TOKEN" "$WICK_HOST_API_URL/x/-/api/whoami"
+curl -s -H "Authorization: Bearer $WICK_PLUGIN_TOKEN" -H "X-Wick-Call-Id: $CALL_ID" \
+  -H 'Content-Type: application/json' -d '{"method":"ListTickets","args":{"project_id":"p1"}}' \
+  "$WICK_HOST_API_URL/x/-/api/invoke"
+```
+
+Declare what you call in `plugin.json` next to `kind` — `"host_scopes":
+["users.read"]`, plus `"host_resources"` for `rest.*`, `db.*`,
+`connectors.execute` and `config.read_secret`. A response without the
+`X-Wick-Host-Api` header means the wick predates the Host API: degrade.
 
 ## Job plugins: gRPC `Job`
 

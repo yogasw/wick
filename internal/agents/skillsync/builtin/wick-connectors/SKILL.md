@@ -67,6 +67,10 @@ The division of labour matters: **you create the blank instance, the user fills 
 
 `wick_execute` and `wick_get` re-validate visibility and per-operation enable state on every call; they never trust a list-time cache. If a user's tag is removed or an op is disabled, the very next call fails. Treat an authorization error as current truth, not a glitch to retry.
 
+## Plugins calling connectors
+
+A wick plugin (not you) can also run a connector operation, through the Host API scope `connectors.execute` — but only the connector ops it declared in its manifest (`host_resources.connectors`, e.g. `slack` → `lookup_user_by_email`), and always **as a user**: the person who triggered the plugin, else the owner of the plugin's `wick_pat`. It sees only the instances that user may see, and an admin can block any single op on Plugins → Host access. So when a plugin reports `PermissionDenied` on a connector op, the op is undeclared or blocked — it is not a connector outage.
+
 ## The Wick Manager exception
 
 The `wickmanager` connector is surfaced differently: its operations appear directly in `tools/list` as `wick_manager_<op>` (e.g. `wick_manager_app_list`, `wick_manager_job_run_now`). Call them without the discovery cycle. It is excluded from `wick_list` / `wick_search` to avoid double-exposure.

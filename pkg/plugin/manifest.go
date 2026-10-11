@@ -223,6 +223,9 @@ func BuildSelfManifest(mod connector.Module, signKeyPath string) (Manifest, erro
 		SHA256:        sum,
 		Module:        mod,
 	}
+	if err := applyHostAccess(&m); err != nil {
+		return Manifest{}, err
+	}
 	if signKeyPath != "" {
 		sig, err := SignSHA256(signKeyPath, sum)
 		if err != nil {

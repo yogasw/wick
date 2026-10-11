@@ -54,6 +54,12 @@ wick plugin build --kind tool <key> --target linux/amd64
 
 The tool then shows on the home grid with a "plugin" badge.
 
+## Calling wick (Host API)
+
+A handler can call back into wick with `toolplugin.Host(c.Context())`; calls run as the user behind the request. The sample connector `plugins/connector/httpbin` (op `whoami_host`) shows the calls end to end. See [Host API](./host-api.md) for the scopes, the `host_scopes` /
+`host_resources` manifest keys (declared with
+`wickplugin.DeclareHostAccess` in `main`) and who each call runs as.
+
 ## Moving a built-in tool
 
 1. Keep the tool package as is.

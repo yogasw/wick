@@ -1,6 +1,6 @@
 ---
 name: wick-plugin-authoring
-description: Use when the user asks you to BUILD a wick plugin — write the code for a new connector, tool, job, or service plugin, wrap existing code as one, or turn an HTTP app, webhook receiver or remote agent into a service plugin. Covers picking the kind, starting from plugins/<kind>/_template, the Module contract and main.go entry per kind, testing without wick, `wick plugin build` packaging, installing through Add new plugin, verifying, and service specifics (routes and auth, config, callback, RemoteSource for Team). For installing, updating or troubleshooting an existing plugin use wick-plugins instead.
+description: Use when the user asks you to BUILD a wick plugin — write the code for a new connector, tool, job, or service plugin, wrap existing code as one, or turn an HTTP app, webhook receiver or remote agent into a service plugin. Covers picking the kind, starting from plugins/<kind>/_template, the Module contract and main.go entry per kind, testing without wick, the Host API (host_scopes / host_resources, calling wick back as the user), `wick plugin build` packaging, installing through Add new plugin, verifying, and service specifics (routes and auth, config, callback, RemoteSource for Team). For installing, updating or troubleshooting an existing plugin use wick-plugins instead.
 ---
 
 # Building a wick plugin
@@ -99,11 +99,70 @@ Routes: []service.Route{
 
 **Config.** `env.Cfg("key")` reads the current value. wick pushes config after each start and again on every save, without a restart — read it per request, do not copy it at startup.
 
-**Callback.** `env.Callback()` returns the wick base URL and a per-process token; `env.CallbackRequest(ctx, method, path, body)` builds an authorized request. Today the only callback endpoint is `GET /x/-/api/whoami`. Never log the token.
+**Callback.** `env.Callback()` returns the wick base URL and a per-process token; `env.CallbackRequest(ctx, method, path, body)` builds an authorized request. `/x/-/api/` is the HTTP door of the Host API (section 7); prefer `host.Default()` over hand-built requests. Never log the token.
 
 **Lifecycle.** wick starts every enabled service at boot and restarts a crashed one with backoff (1 s doubling to 30 s; reset after a minute of uptime). Stop sends SIGTERM and kills after 5 s. Keep startup fast and handle SIGTERM. Installing or updating a service loads its new manifest and starts it right away — no wick reload.
 
 **RemoteSource (Team remote agent).** Set `Module.RemoteSource` to a value implementing `Send(ctx, service.RemoteTurn) (service.RemoteSendResult, error)`, `Receive(ctx, handle) (<-chan service.RemoteEvent, error)` and `Done(handle)`. Optionally implement `Describe() (name, detail string)` to name the agent in the wizard. The plugin then shows up as a **Plugin** source when adding a Team remote agent. Event kinds are `text_delta`, `text`, `status`, `attachment`, `done`, `error`; close the channel after `done` or `error`. Return `ContextID` from `Send` to keep a conversation thread; wick sends it back on the next turn. For an A2A agent, `a2aservice.Mount(mux, card, reply)` (`pkg/service/a2aservice`) serves the agent card and JSON-RPC endpoint — `plugins/service/example_a2a_repeater` does both.
+
+## 7. Host API (calling back into wick)
+
+Any kind can call wick: users, sessions, tickets, config, another connector's op, and (as a safety net) wick's REST API or database. Full reference: `docs/plugins/host-api.md` (site page `plugins/host-api`). Two doors, same rules: the gRPC broker (connector/tool/job; the SDK dials it) and the HTTP door `$WICK_HOST_API_URL/x/-/api/...` with `Authorization: Bearer $WICK_PLUGIN_TOKEN` (every kind, service and non-Go included).
+
+**Scopes** (declare each one you use in `host_scopes`):
+
+| Scope | RPCs | Default | Needs `host_resources` |
+|---|---|---|---|
+| `whoami` | `Whoami`, `ListMethods` | allow | – |
+| `users.read` | `ListUsers`, `GetUser`, `GetUserByEmail` | allow | – |
+| `accounts.read` | `ConnectedAccounts` | allow | – |
+| `sessions.read` | `ListSessions`, `GetSessionMeta` | allow | – |
+| `sessions.notify` | `SendToSession` (destructive) | allow | – |
+| `tickets.read` | `GetTicket`, `ListTickets` | allow | – |
+| `tickets.write` | `CreateTicket`, `UpdateTicket`, `AttachSession` (destructive) | allow | – |
+| `config.read_other` | `GetConfig` of another owner (secrets stay empty) | allow | – |
+| `config.read_secret` | `GetConfig` of another owner's secret (sensitive) | **OFF** | `config` |
+| `connectors.read` | `ListConnectorInstances` | allow | – |
+| `connectors.execute` | `ExecuteConnector` | allow | `connectors` |
+| `rest.read` | `Rest` GET/HEAD | allow | `rest` |
+| `rest.write` | `Rest` POST/PUT/PATCH/DELETE (destructive) | **OFF** | `rest` |
+| `db.read` | `Query` | **OFF** | `db` |
+| `db.write` | `Query` with `write=true` (destructive) | **OFF** | `db` |
+| `datadir` | none (declarative) | allow | – |
+| `net.listen` | none (declarative) | allow | – |
+
+`Invoke` calls a method by name under that method's scope. A plugin's own config needs no scope; `wick_pat` is never readable.
+
+**Whitelist rules.** No declaration, no access for `rest.*`, `db.*`, `connectors.execute`, `config.read_secret`. Declare as narrowly as possible — the admin blocks per item: `connectors` = connector key + exact ops (`slack.lookup_user_by_email`); `rest` = method + path pattern under `/api/` or `/manager/api/` (`*` one segment, `**` last only; plugin-management paths are refused); `db` = table + `read`/`write`; `config` = exact owner + key (no wildcard for secrets). Default-OFF scopes do nothing until an admin allows them on Plugins → Host access.
+
+**Declare in `main`** — never by editing `plugin.json`; the build dumps it and fails on an invalid declaration:
+
+```go
+func main() {
+	wickplugin.DeclareHostAccess(
+		[]string{wickplugin.ScopeHostUsersRead, wickplugin.ScopeHostConnectorsExec},
+		&wickplugin.HostResources{Connectors: []wickplugin.HostConnectorResource{
+			{Connector: "slack", Ops: []string{"lookup_user_by_email"}},
+		}},
+	)
+	wickplugin.Serve(Module())
+}
+```
+
+A non-Go plugin writes `"host_scopes": [...]` and `"host_resources": {...}` at the top level of its `plugin.json`.
+
+**Identity.** User-level RPCs (sessions, tickets, connectors, `Rest`, `Query`) run as the person who triggered the plugin (via the request's call id — always pass the request context), else as the owner of the PAT in the plugin's `wick_pat` config, else they fail with `FailedPrecondition`. Never as a synthetic admin. Service routes: `Session` → the signed-in user, `Token` → the token's owner, `Public`/background → `wick_pat`.
+
+**Code per kind:**
+
+- connector: `c.UserName(id)` already uses the Host API; otherwise `h, err := wickplugin.Host(c.Context())` (live sample: `plugins/connector/httpbin`, op `whoami_host` — `Whoami` + `GetUser` on `c.CallerUserID()`, declared `users.read`).
+- tool: `h, err := toolplugin.Host(c.Context())`.
+- job: `h, err := wickplugin.Host(ctx)` with the `Run` context (cron runs have no caller → `wick_pat`).
+- service: `h, err := host.Default()` and call with `r.Context()`.
+
+Then e.g. `h.GetUser(ctx, &hostpb.GetUserRequest{Id: id})`. Always handle `errors.Is(err, host.ErrHostAPIUnavailable)` (older wick → degrade) and `errors.As(err, &pd)` with `pd *host.PermissionDeniedError` (scope/item blocked or undeclared).
+
+**Adding a scope** (wick repo): change `pkg/plugin/hostscopes.go`, then `docs/plugins/host-api.md`, this skill and the admin section of **wick-plugins**. `TestHostAPIDocsInSync` (`go test ./pkg/plugin/`) fails, naming the file, until every scope and RPC appears in all of them.
 
 ## Pitfalls
 
