@@ -563,6 +563,11 @@ export type TeamSettingValues = {
   open_team: boolean;
   /** "Idle animations": idle avatars fidget now and then. */
   idle_animations: boolean;
+  /** Projects on the Team Tickets page, in the order picked. GET lists
+      only the ones the caller can open with ticket mode on; [] = none
+      picked yet. Not in TEAM_SETTING_KEYS: an array does not diff with
+      !==, so the Tickets tab saves it itself. */
+  ticket_projects?: string[];
 };
 export const TEAM_SETTING_KEYS: (keyof TeamSettingValues)[] = ["prompt", "open_team", "idle_animations"];
 
