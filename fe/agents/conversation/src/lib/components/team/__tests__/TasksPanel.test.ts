@@ -102,20 +102,53 @@ describe("TasksPanel (combined §4)", () => {
     expect(within(r).getByText("not my job")).toBeDefined();
   });
 
-  test("actions: Answer / quiet Cancel / Jump, working Cancel / Jump, none once ended", () => {
+  test("actions: Answer / Jump with the quiet Cancel below, working Cancel / Jump, none once ended", () => {
     const fn = () => vi.fn().mockResolvedValue(undefined);
     render(TasksPanel, { props: { tasks, onAnswer: fn(), onCancel: fn(), onJump: vi.fn() } });
     const btns = (name: string) => within(rowOf(name)).getAllByRole("button").map((b) => b.textContent!.trim());
     const q = rowOf("Rio");
     expect(within(q).getByText("Answer").closest("button")!.dataset.variant).toBe("warn");
     expect(within(q).getByText("Cancel").closest("button")!.dataset.variant).toBeUndefined();
-    expect(within(q).getAllByText("Jump")[0].closest("button")!.dataset.variant).toBe("default");
+    expect(within(q).getByText("Jump").closest("button")!.dataset.variant).toBe("default");
     const w = rowOf("Anton");
     expect(within(w).getByText("Cancel").closest("button")!.dataset.variant).toBe("danger");
     expect(within(w).queryByText("Answer")).toBeNull();
     // Ended rows: no action buttons beyond the quiet links by the raw payload.
     for (const n of ["Lia", "Kai", "Mo"]) expect(btns(n).filter((t) => t === "Cancel" || t === "Answer")).toEqual([]);
     expect(within(rowOf("Mo")).queryAllByRole("button").some((b) => b.dataset.variant)).toBe(false);
+  });
+
+  test("density: working Thread / Cancel / Jump, needs input Answer / Jump, Open chat in the quiet footer", () => {
+    const fn = () => vi.fn().mockResolvedValue(undefined);
+    const withChat = [
+      ...tasks.map((t) => ({ ...t, chat_id: "chat-" + t.task_id, ...(t.task_id === "w" ? { message_count: 4 } : {}) })),
+      // The sender is answering: still active, so its red Cancel stays on the primary line.
+      task({ task_id: "a", to_handle: "zed", to_name: "Zed", state: "input_required", summary: "Which env?", chat_id: "chat-a" }),
+    ];
+    render(TasksPanel, { props: { tasks: withChat, onAnswer: fn(), onCancel: fn(), onJump: vi.fn(), onOpenChat: vi.fn(), loadThread: fn() } });
+    const primary = (name: string) => [...within(rowOf(name)).getByTestId("tasks-row-actions").querySelectorAll("button[data-variant]")].map((b) => b.textContent!.trim());
+    const footer = (name: string) => within(rowOf(name)).getByTestId("tasks-row-footer");
+    expect(primary("Anton")).toEqual(["Thread · 4", "Cancel", "Jump"]);
+    expect(primary("Zed")).toEqual(["Answer", "Cancel", "Jump"]);
+    expect(within(rowOf("Zed")).getAllByText("Cancel")).toHaveLength(1);
+    expect(within(rowOf("Zed")).getByText("Cancel").closest("button")!.dataset.variant).toBe("danger");
+    expect(primary("Rio")).toEqual(["Answer", "Jump"]);
+    // The question's quiet Cancel and every Open chat sit by Raw payload; Jump only where it is not a primary button.
+    expect([...footer("Rio").querySelectorAll("button")].map((b) => b.textContent!.trim())).toEqual(["Raw payload", "Cancel", "Open chat ↗"]);
+    expect([...footer("Anton").querySelectorAll("button")].map((b) => b.textContent!.trim())).toEqual(["Raw payload", "Open chat ↗"]);
+    expect([...footer("Lia").querySelectorAll("button")].map((b) => b.textContent!.trim())).toEqual(["Raw payload", "Jump", "Open chat ↗"]);
+    for (const n of ["Rio", "Anton", "Zed", "Lia", "Kai", "Mo"]) {
+      expect(within(rowOf(n)).getAllByLabelText(`Open ${n}'s chat`)).toHaveLength(1);
+      expect(within(rowOf(n)).getAllByLabelText(`Jump to ${n}'s task`)).toHaveLength(1);
+    }
+    for (const n of ["Lia", "Kai", "Mo"]) expect(within(rowOf(n)).queryByTestId("tasks-row-actions")).toBeNull();
+  });
+
+  test("no Open chat on a row whose task has no chat yet", () => {
+    render(TasksPanel, { props: { tasks: [task({}), task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", chat_id: "chat-d" })], onOpenChat: vi.fn(), onJump: vi.fn() } });
+    expect(within(rowOf("Anton")).queryByLabelText("Open Anton's chat")).toBeNull();
+    expect(within(rowOf("Anton")).getByTestId("tasks-row-footer").textContent!.trim()).toBe("Raw payload");
+    expect(within(rowOf("Lia")).getByLabelText("Open Lia's chat")).toBeDefined();
   });
 
   test("Answer opens the shared AnswerBox and sends", async () => {
@@ -225,7 +258,7 @@ describe("TasksPanel (combined §4)", () => {
   test("Raw payload toggles, with Jump / Open chat beside it on an ended row (not inside it)", async () => {
     const onJump = vi.fn();
     const onOpenChat = vi.fn();
-    render(TasksPanel, { props: { tasks: [task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", updated_at: at(10, 8) })], onJump, onOpenChat } });
+    render(TasksPanel, { props: { tasks: [task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", updated_at: at(10, 8), chat_id: "chat-d" })], onJump, onOpenChat } });
     expect(document.querySelector("summary, details")).toBeNull();
     const raw = screen.getByText("Raw payload");
     expect(raw.getAttribute("aria-expanded")).toBe("false");

@@ -2,13 +2,15 @@
   /* The Tasks rail (mockup §4): every Team task this chat sent, grouped
      Needs input / Working / Done today / Earlier (folded) / Failed ·
      Canceled. A row reads name (+ status tag once it ended), the time on
-     the right, the title, then the question in amber or, while it works, the live
-     progress line in green; needs input offers
-     Answer / Cancel / Jump, working Thread · N / Cancel / Jump (Thread
-     opens the task's TaskThread under the row). Answer opens the shared
+     the right, the title, then the question in amber or, while it works,
+     the live progress line in green; needs input offers Answer / Jump,
+     working Thread · N / Cancel / Jump (Thread opens the task's
+     TaskThread under the row), all on one line. Answer opens the shared
      AnswerBox, Cancel asks first (CancelConfirm), and the raw payload
-     stays one click away under each row. A working teammate's avatar
-     orbits, one waiting on the person pulses (AvatarActivity). A failed
+     stays one click away under each row, beside the quiet links (a
+     question's Cancel, Open chat ↗ once the task has a chat, an ended
+     row's Jump). A working teammate's avatar orbits, one waiting on the
+     person pulses (AvatarActivity). A failed
      row offers Retry and a declined one Reassign (a menu of this chat's
      other teammates) at the right of its first line; once sent again the
      row links to the new task ("Retried → Name"). */
@@ -280,17 +282,14 @@
                   <!-- What the teammate's turn is doing now (live, plain text, one line). -->
                   <div data-testid="tasks-row-progress" title={taskProgress(t)} class="mt-1 truncate text-[11.5px] text-green-600 dark:text-green-400">{taskProgress(t)}</div>
                 {/if}
-                {#if active && (onAnswer || onCancel || onJump || onOpenChat || (s === "working" && loadThread))}
-                  <div class="mt-1.5 flex flex-wrap items-center gap-1">
+                {#if active && ((ask && onAnswer) || (s !== "needs_you" && onCancel) || onJump || (s === "working" && loadThread))}
+                  <div data-testid="tasks-row-actions" class="mt-1.5 flex flex-wrap items-center gap-1">
                     {#if s === "working" && loadThread}<SmBtn icon="msg" data-testid="tasks-row-thread" aria-expanded={!!threadOpen[t.task_id]} aria-label={nameOf(t) + "'s thread"} onclick={() => { threadOpen = { ...threadOpen, [t.task_id]: !threadOpen[t.task_id] }; }}>Thread{t.message_count ? ` · ${t.message_count}` : ""}</SmBtn>{/if}
                     {#if ask && onAnswer}<SmBtn variant="warn" aria-label={"Answer " + nameOf(t)} onclick={() => { answering = answering === t.task_id ? null : t.task_id; }}>Answer</SmBtn>{/if}
-                    {#if s === "needs_you" && onCancel}
-                      <button type="button" aria-label={"Cancel task for " + nameOf(t)} onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }} class="px-1.5 py-[3px] text-[10.5px] font-medium text-black-700 hover:text-red-600 dark:hover:text-red-400">Cancel</button>
-                    {:else if onCancel}
+                    {#if s !== "needs_you" && onCancel}
                       <SmBtn variant="danger" aria-label={"Cancel task for " + nameOf(t)} onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }}>Cancel</SmBtn>
                     {/if}
                     {#if onJump}<SmBtn icon="jump" aria-label={"Jump to " + nameOf(t) + "'s task"} onclick={() => onJump?.(t)}>Jump</SmBtn>{/if}
-                    {#if onOpenChat}<SmBtn icon="open" aria-label={"Open " + nameOf(t) + "'s chat"} onclick={() => onOpenChat?.(t)}>Open chat</SmBtn>{/if}
                   </div>
                 {/if}
                 {#if s === "working" && loadThread && threadOpen[t.task_id]}
@@ -313,11 +312,12 @@
                     />
                   </div>
                 {/if}
-                <!-- Raw payload below the fold; on an ended row the quiet Jump / Open chat sit beside it. -->
-                <div class="mt-1 flex items-center gap-2 text-[10.5px] text-black-700">
+                <!-- Raw payload below the fold, the quiet links beside it: a question's Cancel, an ended row's Jump (an active row has it above), Open chat. -->
+                <div data-testid="tasks-row-footer" class="mt-1 flex items-center gap-2 text-[10.5px] text-black-700">
                   <button type="button" aria-expanded={!!rawOpen[t.task_id]} onclick={() => { rawOpen = { ...rawOpen, [t.task_id]: !rawOpen[t.task_id] }; }} class="select-none hover:text-black-900 dark:hover:text-white-100">Raw payload</button>
+                  {#if s === "needs_you" && onCancel}<button type="button" aria-label={"Cancel task for " + nameOf(t)} onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }} class="hover:text-red-600 dark:hover:text-red-400">Cancel</button>{/if}
                   {#if !active && onJump}<button type="button" aria-label={"Jump to " + nameOf(t) + "'s task"} onclick={() => onJump?.(t)} class="hover:text-green-600 dark:hover:text-green-400">Jump</button>{/if}
-                  {#if !active && onOpenChat}<button type="button" aria-label={"Open " + nameOf(t) + "'s chat"} onclick={() => onOpenChat?.(t)} class="hover:text-green-600 dark:hover:text-green-400">Open chat ↗</button>{/if}
+                  {#if onOpenChat && t.chat_id}<button type="button" aria-label={"Open " + nameOf(t) + "'s chat"} onclick={() => onOpenChat?.(t)} class="hover:text-green-600 dark:hover:text-green-400">Open chat ↗</button>{/if}
                 </div>
                 {#if rawOpen[t.task_id]}<pre data-testid="tasks-row-raw" class="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-[10px] text-black-700 dark:text-black-600">{JSON.stringify(t, null, 2)}</pre>{/if}
               </div>
