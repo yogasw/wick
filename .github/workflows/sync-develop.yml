@@ -1,0 +1,142 @@
+name: Sync develop
+
+# Keeps develop from ever falling behind master. Every push to master — the
+# develop squash, the release-sync squash from release.yml, the plugin
+# catalog commit from release-plugins.yml, an admin hotfix — is merged back
+# into develop: fast-forward when develop has nothing of its own, otherwise a
+# merge commit. ADMIN_TOKEN pushes, matching the develop ruleset's admin
+# bypass. See RELEASING.md.
+#
+# On a conflict it aborts, pushes master's commit to a new branch
+# sync/master-into-develop-<sha> and opens the PR "Sync master into develop"
+# from it (or moves an open one forward), and warns in the job summary. The
+# PR head is never master itself: resolving a conflict in GitHub commits to
+# the head branch, and that must not be master. It never force-pushes, and it
+# ends green on a conflict: a release never waits on this workflow.
+#
+# Nothing triggers on a push to develop, so this cannot loop.
+
+on:
+  push:
+    branches:
+      - master
+  # Manual re-run, e.g. when a newer run replaced a pending one.
+  workflow_dispatch:
+
+permissions: {}
+
+# Own group, not shared with merge-develop-to-master.yml or release.yml: GitHub
+# keeps one pending run per group and cancels the older pending one, so a
+# shared group could cancel a sync behind a promote. Within this group a newer
+# pending sync replacing an older one loses nothing: every run merges the
+# CURRENT master. Running beside a promote is safe: pushes here are non-forced
+# with a retry, and promote re-checks develop/master and pins its merge sha.
+concurrency:
+  group: wick-sync-develop
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge master into develop
+    runs-on: ubuntu-latest
+    permissions:
+      # GITHUB_TOKEN pushes the sync/* branch on a conflict; develop is pushed
+      # with ADMIN_TOKEN (checkout credentials) for the ruleset bypass.
+      contents: write
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+      - name: Merge and push
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # develop can move under us (a PR merge); retry on a rejected push,
+          # never force.
+          for i in 1 2 3; do
+            git fetch origin master develop
+            git checkout -B develop origin/develop
+            if git merge-base --is-ancestor origin/master HEAD; then
+              echo "develop already contains master"
+              echo "result=up-to-date" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if git merge-base --is-ancestor HEAD origin/master; then
+              git merge --ff-only origin/master
+              RESULT=fast-forward
+            elif git merge --no-ff --no-edit -m "chore: sync master into develop" origin/master; then
+              RESULT=merge
+            else
+              git merge --abort || true
+              echo "result=conflict" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if git push origin HEAD:develop; then
+              echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+              echo "develop synced with master ($RESULT)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Push rejected (attempt $i), refetching..."
+            sleep 10
+          done
+          echo "::error::could not push develop after 3 attempts"
+          exit 1
+
+      - name: Open or update the sync PR
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          MASTER_SHA=$(git rev-parse origin/master)
+          # Push with GITHUB_TOKEN instead of the checkout's ADMIN_TOKEN: an
+          # empty extraheader drops the inherited one first. Never forced.
+          AUTH=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          push_branch() {
+            git -c http.https://github.com/.extraheader= \
+                -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+                push origin "$MASTER_SHA:refs/heads/$1"
+          }
+          BODY="master (${MASTER_SHA:0:8}) could not be merged into develop automatically (conflict). Resolve the conflict on this PR's branch (never commit to master), then merge it with a merge commit, not squash, and delete the branch."
+          # Same-repo PRs only; a fork can name a branch anything.
+          OPEN=$(gh pr list --repo "$REPO" --base develop --state open \
+            --json number,headRefName,isCrossRepository \
+            --jq 'map(select((.isCrossRepository | not) and (.headRefName | startswith("sync/master-into-develop-")))) | .[0] | select(.) | "\(.number) \(.headRefName)"')
+          if [ -n "$OPEN" ]; then
+            NUMBER=${OPEN%% *}
+            BRANCH=${OPEN#* }
+            if ! printf '%s' "$BRANCH" | grep -Eq '^sync/master-into-develop-[0-9a-f]+$'; then
+              echo "::error::unexpected sync branch name on PR #$NUMBER"
+              exit 1
+            fi
+            # Move the open PR forward to the current master. Rejected when
+            # someone already pushed a resolution there: leave it alone.
+            if push_branch "$BRANCH"; then
+              NOTE="PR #$NUMBER now carries master ${MASTER_SHA:0:8}."
+            else
+              NOTE="PR #$NUMBER already has resolution commits and still carries an older master; after merging it, run Sync develop once by hand."
+              BODY="$BODY Newer master commits are not in this branch yet: run Sync develop by hand after merging."
+            fi
+            gh pr edit "$NUMBER" --repo "$REPO" --body "$BODY"
+          else
+            BRANCH="sync/master-into-develop-${MASTER_SHA:0:8}"
+            push_branch "$BRANCH"
+            URL=$(gh pr create --repo "$REPO" --base develop --head "$BRANCH" \
+              --title "Sync master into develop" --body "$BODY")
+            NUMBER=${URL##*/}
+            NOTE="Opened PR #$NUMBER from $BRANCH."
+          fi
+          echo "::warning::master conflicts with develop; resolve PR #$NUMBER"
+          {
+            echo "> [!WARNING]"
+            echo "> master conflicts with develop. develop was not pushed. $NOTE Resolve it on the PR branch, never on master."
+          } >> "$GITHUB_STEP_SUMMARY"

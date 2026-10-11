@@ -99,7 +99,7 @@ Subject line ≤ 72 characters. No period at the end. Body only when the *why* i
 1. Fork and branch: `git checkout -b feat/my-feature`
 2. Make changes, add tests where appropriate
 3. `go build ./...` and `go test ./... -race` — both must pass
-4. Open a pull request against `master`
+4. Open a pull request against `develop` (master only takes the release squash, see [RELEASING.md](https://github.com/yogasw/wick/blob/master/RELEASING.md))
 5. Fill in the PR description: what changed, why, how to test
 
 > **Docs stay in sync.** When you work in this repo with Claude Code, a

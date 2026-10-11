@@ -680,16 +680,23 @@ jobs:
           gh api repos/yogasw/wick/pulls/$PR_NUMBER/update-branch \
             --method PUT || true
           sleep 15
+          MERGED=false
           for i in 1 2 3; do
             echo "Merge-to-master attempt $i..."
             gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \
               --method PUT \
               --field merge_method=squash \
-              --field commit_title="chore: sync go.mod.tmpl and docs for v${VERSION}" && break
+              --field commit_title="chore: sync go.mod.tmpl and docs for v${VERSION}" && { MERGED=true; break; }
             echo "Attempt $i failed, refreshing branch and retrying in 10s..."
             gh api repos/yogasw/wick/pulls/$PR_NUMBER/update-branch --method PUT || true
             sleep 10
           done
+          # Keep the branch (and so the PR) when the merge never went through:
+          # deleting it would drop the version bump from master silently.
+          if [ "$MERGED" != true ]; then
+            echo "::error::PR #$PR_NUMBER could not be merged into master; release-sync/v${VERSION} kept"
+            exit 1
+          fi
           gh api repos/yogasw/wick/git/refs/heads/release-sync/v${VERSION} \
             --method DELETE
 
