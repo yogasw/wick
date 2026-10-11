@@ -2090,6 +2090,9 @@ func routeToRemoteTurns(ev *slackevents.MessageEvent) bool {
 			TS: ev.Message.Timestamp, ThreadTS: ev.Message.ThreadTimestamp,
 			User: ev.Message.User, BotID: ev.Message.BotID, Text: ev.Message.Text,
 		}
+		if ev.Message.Edited != nil {
+			edited.EditedTS = ev.Message.Edited.Timestamp
+		}
 	}
 	if ev.SubType == "message_deleted" && ev.PreviousMessage != nil {
 		edited = &slackremote.Message{

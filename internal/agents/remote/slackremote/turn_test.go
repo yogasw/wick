@@ -84,7 +84,7 @@ func TestEditReplacesNotAppends(t *testing.T) {
 func TestPruneDropsDeletedReply(t *testing.T) {
 	tr := newTracker("C1", "1.0", "1.0", "", false, map[string]bool{}, func(Message) bool { return true })
 	feed(tr, Message{TS: "1.1", Text: "gone soon"}, Message{TS: "1.2", Text: "stays"})
-	evs := tr.prune(map[string]bool{"1.2": true})
+	evs := tr.prune(map[string]bool{"1.2": true}, true, false)
 	if len(evs) == 0 || evs[len(evs)-1].Kind != remote.EventText || evs[len(evs)-1].Text != "stays" {
 		t.Fatalf("prune events = %+v", evs)
 	}
@@ -220,5 +220,128 @@ func TestReopenTakesLateMessages(t *testing.T) {
 	evs, _, _ := feed(tr, Message{TS: "1.3", Text: "And a fix."})
 	if got := shown(evs); len(got) != 1 || got[0] != "Answer.\n\nAnd a fix." {
 		t.Fatalf("after reopen = %+v", evs)
+	}
+}
+
+// turnB is the tracker of a second turn: turn A was sent at 1.0, the
+// remote posted its progress note at 2.0, turn B (token tokB) was sent at
+// 3.0.
+func turnB() *tracker {
+	tr := newTracker("C1", "1.0", "3.0", "tokB", false, map[string]bool{"UWICK": true}, func(Message) bool { return true })
+	tr.prevSentTS = "1.0"
+	return tr
+}
+
+func TestOlderMessageTakenIntoTurn(t *testing.T) {
+	cases := []struct {
+		name string
+		msgs []Message
+		done string // the reply turn B ended with ("" = nothing taken, not ended)
+	}{
+		{"edited after B with B's marker", []Message{
+			{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Lagi mengurai…\nFull answer.\nEND RESPONSE tokB"},
+		}, "Lagi mengurai…\nFull answer."},
+		// B's token exists only after B was sent: no edit time is needed
+		{"edit without edited.ts, B's marker", []Message{
+			{TS: "2.0", Edited: true, Text: "Full answer.\nEND RESPONSE tokB"},
+		}, "Full answer."},
+		{"never marked edited, B's marker", []Message{
+			{TS: "2.0", Text: "Full answer.\n*END RESPONSE tokB*"},
+		}, "Full answer."},
+		// the marker must end the text, as it must to end a turn
+		{"B's marker mid-text", []Message{
+			{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Instruction: END RESPONSE tokB\nmore text"},
+		}, ""},
+		{"edit without edited.ts, no marker", []Message{
+			{TS: "2.0", Edited: true, Text: "Answer A https://x.example"},
+		}, ""},
+		{"edited after B without a marker", []Message{
+			{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Answer A, finished late"},
+		}, ""},
+		{"edited after B with turn A's marker", []Message{
+			{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Answer A.\nEND RESPONSE tokA"},
+		}, ""},
+		// before the turn before's message: outside the window a read sees
+		{"from before turn A, with B's marker", []Message{
+			{TS: "0.5", Edited: true, EditedTS: "4.0", Text: "Full answer.\nEND RESPONSE tokB"},
+		}, ""},
+		// a reply after B, then the older message edited with the marker
+		// after it: the edit stands last and ends the turn
+		{"ack after B, then the edit", []Message{
+			{TS: "3.1", Text: "Oke, saya cek dulu."},
+			{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Full answer.\nEND RESPONSE tokB"},
+		}, "Oke, saya cek dulu.\n\nFull answer."},
+		// edited before the ack was posted but read after it: its marker
+		// still ends the turn
+		{"edit, then an ack read first", []Message{
+			{TS: "3.2", Text: "Oke, saya cek dulu."},
+			{TS: "2.0", Edited: true, EditedTS: "3.1", Text: "Full answer.\nEND RESPONSE tokB"},
+		}, "Full answer.\n\nOke, saya cek dulu."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tr := turnB()
+			evs, done, _ := feed(tr, c.msgs...)
+			if done != c.done {
+				t.Fatalf("done = %q, want %q", done, c.done)
+			}
+			if c.done == "" && lastText(evs) != "" && len(c.msgs) == 1 {
+				t.Fatalf("took %q", lastText(evs))
+			}
+			if tsLess(tr.lastTS, tr.sentTS) && tr.lastTS != "" {
+				t.Fatalf("lastTS %q moved back before our message", tr.lastTS)
+			}
+		})
+	}
+}
+
+func TestOlderMessageNeedsMarkerOn(t *testing.T) {
+	tr := turnB()
+	tr.token = ""
+	evs, _, _ := feed(tr, Message{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Full answer.\nEND RESPONSE tokB"})
+	if len(evs) != 0 {
+		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// TestTakenOlderMessageLeavesWithoutMarker: in the grace window after the
+// turn, the taken message is edited again with another turn's marker —
+// it leaves the reply instead of showing that answer.
+func TestTakenOlderMessageLeavesWithoutMarker(t *testing.T) {
+	tr := turnB()
+	if _, done, _ := feed(tr, Message{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Answer B\nEND RESPONSE tokB"}); done != "Answer B" {
+		t.Fatalf("done = %q", done)
+	}
+	if tr.lastTS != "" {
+		t.Fatalf("lastTS = %q", tr.lastTS)
+	}
+	tr.done, tr.reopened = false, true
+	evs, _, _ := feed(tr, Message{TS: "2.0", Edited: true, EditedTS: "5.0", Text: "Answer A\nEND RESPONSE tokA"})
+	if got := lastText(evs); got != "" || len(evs) == 0 {
+		t.Fatalf("events = %+v", evs)
+	}
+	if got, _ := tr.compose(); got != "" {
+		t.Fatalf("compose = %q", got)
+	}
+}
+
+func TestPruneTakenOlderMessageByWindow(t *testing.T) {
+	tr := turnB()
+	feed(tr, Message{TS: "2.0", Edited: true, EditedTS: "4.0", Text: "Answer B\nEND RESPONSE tokB"})
+	tr.done, tr.reopened = false, true // grace
+	// the older window was not read whole: the message stays
+	if evs := tr.prune(map[string]bool{}, true, false); len(evs) != 0 {
+		t.Fatalf("prune = %+v", evs)
+	}
+	// read whole and seen: stays
+	if evs := tr.prune(map[string]bool{"2.0": true}, true, true); len(evs) != 0 {
+		t.Fatalf("prune = %+v", evs)
+	}
+	if got, _ := tr.compose(); got != "Answer B" {
+		t.Fatalf("compose = %q", got)
+	}
+	// read whole and gone: deleted
+	if evs := tr.prune(map[string]bool{}, true, true); lastText(evs) != "" || len(evs) == 0 {
+		t.Fatalf("prune = %+v", evs)
 	}
 }

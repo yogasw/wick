@@ -241,3 +241,37 @@ func TestRecheckFallsBackToTheTurnsOwnThread(t *testing.T) {
 		t.Fatalf("state not repaired: %+v", st)
 	}
 }
+
+// TestRouterTakesOlderEditedMessage: the same edit as a message_changed
+// event, with or without edited.ts; without this turn's marker it is
+// never taken.
+func TestRouterTakesOlderEditedMessage(t *testing.T) {
+	for _, c := range []struct {
+		name, editedTS, text, done string
+	}{
+		{"edited after B", "4.0", "Full answer.\nEND RESPONSE tokB", "Full answer."},
+		{"no edited.ts", "", "Full answer.\nEND RESPONSE tokB", "Full answer."},
+		{"unfurl, no marker", "", "Answer A https://x.example", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := NewRouter()
+			tr := turnB()
+			rt.add(tr)
+			m, ok := FromEvent("C1", "message_changed", "4.0", "", "", "", "",
+				&Message{TS: "2.0", ThreadTS: "1.0", User: "UBOT", EditedTS: c.editedTS, Text: c.text})
+			if !ok || m.EditedTS != c.editedTS {
+				t.Fatalf("FromEvent = %+v %v", m, ok)
+			}
+			rt.Dispatch(m)
+			done := ""
+			for len(tr.events) > 0 {
+				if ev := <-tr.events; ev.Kind == remote.EventDone {
+					done = ev.Text
+				}
+			}
+			if done != c.done {
+				t.Fatalf("done = %q, want %q", done, c.done)
+			}
+		})
+	}
+}

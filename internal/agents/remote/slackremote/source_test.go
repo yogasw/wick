@@ -28,6 +28,13 @@ type fakeSlack struct {
 	token   string
 	// missing is a thread ts conversations.replies answers thread_not_found for.
 	missing string
+	// reads records each read's "oldest..latest"; filter makes a read
+	// return only the messages between them, a page at most, as Slack
+	// does.
+	reads  []string
+	filter bool
+	// failOld makes a read bounded by latest (the older window) fail.
+	failOld bool
 }
 
 func (f *fakeSlack) nextTS() string {
@@ -59,7 +66,23 @@ func (f *fakeSlack) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		f.fetches++
-		out["messages"] = f.replies
+		oldest, latest := r.Form.Get("oldest"), r.Form.Get("latest")
+		f.reads = append(f.reads, oldest+".."+latest)
+		if f.failOld && latest != "" {
+			out = map[string]any{"ok": false, "error": "ratelimited"}
+			break
+		}
+		msgs := f.replies
+		if f.filter {
+			msgs = nil
+			for _, m := range f.replies {
+				ts := m["ts"].(string)
+				if (oldest == "" || tsLess(oldest, ts)) && (latest == "" || tsLess(ts, latest)) && len(msgs) < repliesLimit {
+					msgs = append(msgs, m)
+				}
+			}
+		}
+		out["messages"] = msgs
 	default:
 		out = map[string]any{"ok": false, "error": "unknown_method"}
 	}
@@ -443,5 +466,418 @@ func TestLegacyStateStartsANewThread(t *testing.T) {
 	}
 	if st := LoadState(dir); st.Target != "channel:C1" || st.ThreadTS != f.posts[0]["ts"] {
 		t.Fatalf("state = %+v", st)
+	}
+}
+
+// editedEarlierTurn plays the thread where the remote answers turn B by
+// editing the message it posted during turn A: turn A gets first (the
+// remote's message), turn B is sent, then that message is edited to
+// then — with edited.ts after turn B's message, or without edited when
+// noEdited. It returns what turn B's read reported and the Recheck after
+// it.
+func editedEarlierTurn(t *testing.T, first func(tokA string) string, then func(tokA, tokB string) string, noEdited ...bool) ([]remote.Event, Recheck) {
+	t.Helper()
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := src.Send(ctx, remote.Turn{Text: "question A", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	tokA := f.lastToken(t)
+	msgTS := f.reply("UBOT", first(tokA))
+	if _, _, err := src.Fetch(ctx, remote.Handle{}); err != nil {
+		t.Fatal(err)
+	}
+	src.End(remote.Handle{})
+	if _, err := src.Send(ctx, remote.Turn{Text: "question B", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	tokB := f.lastToken(t)
+	f.mu.Lock()
+	sentA, sentB := f.posts[0]["ts"], f.posts[1]["ts"]
+	for _, m := range f.replies {
+		if m["ts"] == msgTS {
+			m["text"] = then(tokA, tokB)
+			if len(noEdited) == 0 || !noEdited[0] {
+				m["edited"] = map[string]any{"user": "UBOT", "ts": f.nextTS()}
+			}
+		}
+	}
+	f.reads = nil
+	f.mu.Unlock()
+	evs, _, err := src.Fetch(ctx, remote.Handle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	reads := strings.Join(f.reads, " ")
+	f.mu.Unlock()
+	if want := sentB + ".. " + sentA + ".." + sentB; reads != want {
+		t.Fatalf("turn B read %q, want %q", reads, want)
+	}
+	src.End(remote.Handle{})
+	rc, err := src.Recheck(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs, rc
+}
+
+func doneText(evs []remote.Event) (string, bool) {
+	for _, ev := range evs {
+		if ev.Kind == remote.EventDone {
+			return ev.Text, true
+		}
+	}
+	return "", false
+}
+
+func TestOlderMessageEditedWithThisTurnsMarker(t *testing.T) {
+	evs, rc := editedEarlierTurn(t,
+		func(string) string { return "_Lagi mengurai…_\n_Tinggal satu cek lagi…_" },
+		func(_, tokB string) string { return "The full answer.\n\nEND RESPONSE " + tokB },
+	)
+	if got, ok := doneText(evs); !ok || got != "The full answer." {
+		t.Fatalf("turn B done = %q %v, events %+v", got, ok, evs)
+	}
+	if !rc.Done || rc.Text != "The full answer." {
+		t.Fatalf("recheck = %+v", rc)
+	}
+}
+
+func TestEarlierMessageNotTakenWithoutThisTurnsMarker(t *testing.T) {
+	cases := map[string]struct {
+		first func(tokA string) string
+		then  func(tokA, tokB string) string
+	}{
+		// turn A ended on progress; the remote finishes A late, unmarked
+		"unfinished turn finished late": {
+			func(string) string { return "_Lagi mengurai…_" },
+			func(string, string) string { return "Answer A, finished late" },
+		},
+		// turn A ended on its marker; an edit keeps that marker
+		"marked answer unfurled": {
+			func(tokA string) string { return "Answer A https://x.example\nEND RESPONSE " + tokA },
+			func(tokA, _ string) string { return "Answer A https://x.example\nEND RESPONSE " + tokA },
+		},
+		"marked answer reworded": {
+			func(tokA string) string { return "Answer A\nEND RESPONSE " + tokA },
+			func(tokA, _ string) string { return "Answer A, reworded\nEND RESPONSE " + tokA },
+		},
+		// turn A ended on idle with a reply, edited later
+		"unmarked answer edited": {
+			func(string) string { return "Answer A" },
+			func(string, string) string { return "Answer A, edited" },
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			evs, rc := editedEarlierTurn(t, c.first, c.then)
+			if txt := lastText(evs); txt != "" {
+				t.Fatalf("turn B took %q", txt)
+			}
+			if _, ok := doneText(evs); ok || rc.Done || rc.Text != "" {
+				t.Fatalf("events %+v, recheck %+v", evs, rc)
+			}
+		})
+	}
+}
+
+// sendTurn sends one turn through src and returns its handle and token.
+func sendTurn(t *testing.T, f *fakeSlack, src *Source, dir, text string) (remote.Handle, string) {
+	t.Helper()
+	h, err := src.Send(context.Background(), remote.Turn{Text: text, SessionDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, f.lastToken(t)
+}
+
+// changed is the message_changed event of the remote's message ts, as
+// the Slack channel hands it on.
+func changed(thread, ts, editedTS, text string) Message {
+	m, _ := FromEvent("C1", "message_changed", editedTS, "", "", "", "",
+		&Message{TS: ts, ThreadTS: thread, User: "UBOT", EditedTS: editedTS, Text: text})
+	return m
+}
+
+func drain(ch <-chan remote.Event) (evs []remote.Event) {
+	for {
+		select {
+		case ev := <-ch:
+			evs = append(evs, ev)
+		default:
+			return evs
+		}
+	}
+}
+
+// TestRealSequenceThroughEvents: the reported thread, through Send/End and
+// the router — progress note during turn A, turn B sent, the note edited
+// into B's answer with B's marker.
+func TestRealSequenceThroughEvents(t *testing.T) {
+	f, src, rt := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question A")
+	thread := f.posts[0]["ts"]
+	note := f.reply("UBOT", "_Lagi mengurai…_\n_Tinggal satu cek lagi…_")
+	rt.Dispatch(Message{Channel: "C1", TS: note, ThreadTS: thread, User: "UBOT", Text: "_Lagi mengurai…_"})
+	src.End(remote.Handle{})
+	h, tokB := sendTurn(t, f, src, dir, "question B")
+	ch, err := src.Receive(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := f.nextTS()
+	final := "The full answer.\nEND RESPONSE " + tokB
+	f.mu.Lock()
+	for _, m := range f.replies {
+		if m["ts"] == note {
+			m["text"], m["edited"] = final, map[string]any{"ts": edit}
+		}
+	}
+	f.mu.Unlock()
+	rt.Dispatch(changed(thread, note, edit, final))
+	if got, ok := doneText(drain(ch)); !ok || got != "The full answer." {
+		t.Fatalf("turn B done = %q %v", got, ok)
+	}
+	if st := LoadState(dir); st.LastTS != f.posts[1]["ts"] {
+		t.Fatalf("state lastTS = %q, want our message %q", st.LastTS, f.posts[1]["ts"])
+	}
+	src.End(remote.Handle{})
+	if rc, err := src.Recheck(ctx, dir); err != nil || !rc.Done || rc.Text != "The full answer." {
+		t.Fatalf("recheck = %+v %v", rc, err)
+	}
+}
+
+// TestOlderThanTurnBeforeNotTaken: a message from turn A edited with turn
+// C's marker is outside turn C's window (after B's message) — neither an
+// event nor a read nor Recheck takes it.
+func TestOlderThanTurnBeforeNotTaken(t *testing.T) {
+	f, src, rt := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question A")
+	thread := f.posts[0]["ts"]
+	note := f.reply("UBOT", "_Lagi mengurai…_")
+	src.End(remote.Handle{})
+	sendTurn(t, f, src, dir, "question B")
+	src.End(remote.Handle{})
+	h, tokC := sendTurn(t, f, src, dir, "halo?")
+	ch, _ := src.Receive(ctx, h)
+	edit := f.nextTS()
+	final := "Answer.\nEND RESPONSE " + tokC
+	f.mu.Lock()
+	for _, m := range f.replies {
+		if m["ts"] == note {
+			m["text"], m["edited"] = final, map[string]any{"ts": edit}
+		}
+	}
+	f.mu.Unlock()
+	rt.Dispatch(changed(thread, note, edit, final))
+	evs := drain(ch)
+	fetched, _, err := src.Fetch(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs = append(evs, fetched...)
+	if lastText(evs) != "" {
+		t.Fatalf("events = %+v", evs)
+	}
+	src.End(remote.Handle{})
+	if rc, err := src.Recheck(ctx, dir); err != nil || rc.Done || rc.Text != "" {
+		t.Fatalf("recheck = %+v %v", rc, err)
+	}
+}
+
+// TestLongEarlierTurnKeepsNewestReplies: a turn before with more than a
+// page of messages does not push this turn's reply off the read.
+func TestLongEarlierTurnKeepsNewestReplies(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question A")
+	for i := 0; i < repliesLimit+20; i++ {
+		f.reply("UBOT", fmt.Sprintf("line %d", i))
+	}
+	src.End(remote.Handle{})
+	h, tokB := sendTurn(t, f, src, dir, "question B")
+	f.reply("UBOT", "Answer B\nEND RESPONSE "+tokB)
+	evs, _, err := src.Fetch(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := doneText(evs); !ok || got != "Answer B" {
+		t.Fatalf("done = %q %v", got, ok)
+	}
+}
+
+// TestOlderMessageTakenWithoutEditedOnTheWire: Slack may not mark a bot's
+// update as edited; the marker alone is enough.
+func TestOlderMessageTakenWithoutEditedOnTheWire(t *testing.T) {
+	evs, rc := editedEarlierTurn(t,
+		func(string) string { return "_Lagi mengurai…_" },
+		func(_, tokB string) string { return "The full answer.\nEND RESPONSE " + tokB },
+		true,
+	)
+	if got, ok := doneText(evs); !ok || got != "The full answer." {
+		t.Fatalf("turn B done = %q %v, events %+v", got, ok, evs)
+	}
+	if !rc.Done || rc.Text != "The full answer." {
+		t.Fatalf("recheck = %+v", rc)
+	}
+}
+
+// TestSingleReadWithoutTurnBefore: the first turn, and every turn with the
+// marker off, reads one window only, as before.
+func TestSingleReadWithoutTurnBefore(t *testing.T) {
+	for name, marker := range map[string]*bool{"marker on": nil, "marker off": new(bool)} {
+		t.Run(name, func(t *testing.T) {
+			f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", Marker: marker})
+			f.filter = true
+			ctx := context.Background()
+			dir := t.TempDir()
+			h, err := src.Send(ctx, remote.Turn{Text: "one", SessionDir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := src.Fetch(ctx, h); err != nil {
+				t.Fatal(err)
+			}
+			src.End(h)
+			f.mu.Lock()
+			first := len(f.reads)
+			f.mu.Unlock()
+			if first != 1 {
+				t.Fatalf("first turn read %d windows", first)
+			}
+			if h, err = src.Send(ctx, remote.Turn{Text: "two", SessionDir: dir}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := src.Fetch(ctx, h); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			second := len(f.reads) - first
+			f.mu.Unlock()
+			if want := map[bool]int{true: 2, false: 1}[marker == nil]; second != want {
+				t.Fatalf("second turn read %d windows, want %d", second, want)
+			}
+		})
+	}
+}
+
+// TestDMOlderWindow: in a DM the older window is read from the thread and
+// the channel's history alike.
+func TestDMOlderWindow(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetDM, User: "UBOT"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question A")
+	note := f.reply("UBOT", "_Lagi mengurai…_")
+	src.End(remote.Handle{})
+	h, tokB := sendTurn(t, f, src, dir, "question B")
+	f.mu.Lock()
+	for _, m := range f.replies {
+		if m["ts"] == note {
+			m["text"] = "DM answer.\nEND RESPONSE " + tokB
+		}
+	}
+	f.reads = nil
+	f.mu.Unlock()
+	evs, _, err := src.Fetch(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := doneText(evs); !ok || got != "DM answer." {
+		t.Fatalf("done = %q %v, events %+v", got, ok, evs)
+	}
+	f.mu.Lock()
+	reads := len(f.reads)
+	f.mu.Unlock()
+	if reads != 4 {
+		t.Fatalf("reads = %d, want 4 (replies + history, two windows)", reads)
+	}
+}
+
+// TestOlderWindowErrorKeepsNewest: a failed read of the older window (a
+// 429) does not throw away the newest window's reply in a live turn;
+// Recheck reports it.
+func TestOlderWindowErrorKeepsNewest(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question A")
+	src.End(remote.Handle{})
+	h, tokB := sendTurn(t, f, src, dir, "question B")
+	f.reply("UBOT", "Answer B\nEND RESPONSE "+tokB)
+	f.mu.Lock()
+	f.failOld = true
+	f.mu.Unlock()
+	evs, _, err := src.Fetch(ctx, h)
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+	if got, ok := doneText(evs); !ok || got != "Answer B" {
+		t.Fatalf("done = %q %v", got, ok)
+	}
+	src.End(h)
+	if _, err := src.Recheck(ctx, dir); err == nil {
+		t.Fatal("recheck hid the failed read")
+	}
+}
+
+// TestHalfLegacyState: state written before the token and the turn before
+// were kept still works — Recheck by the marker's prefix, and the next
+// turn reads both windows.
+func TestHalfLegacyState(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question A")
+	src.End(remote.Handle{})
+	st := LoadState(dir)
+	st.Token, st.PrevSentTS = "", ""
+	saveState(dir, st)
+	f.reply("UBOT", "Answer A\nEND RESPONSE 0123456789ab")
+	rc, err := src.Recheck(ctx, dir)
+	if err != nil || !rc.Done || rc.Text != "Answer A" {
+		t.Fatalf("recheck = %+v %v", rc, err)
+	}
+	h, tokB := sendTurn(t, f, src, dir, "question B")
+	if got := LoadState(dir); got.PrevSentTS != st.SentTS || got.Token != tokB {
+		t.Fatalf("state = %+v", got)
+	}
+	f.reply("UBOT", "Answer B\nEND RESPONSE "+tokB)
+	evs, _, err := src.Fetch(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := doneText(evs); got != "Answer B" {
+		t.Fatalf("done = %q", got)
+	}
+}
+
+// TestRecheckIgnoresAnotherTurnsMarker: with the token kept, a reply
+// ending with another turn's marker does not end this one.
+func TestRecheckIgnoresAnotherTurnsMarker(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f.filter = true
+	ctx := context.Background()
+	dir := t.TempDir()
+	sendTurn(t, f, src, dir, "question")
+	src.End(remote.Handle{})
+	f.reply("UBOT", "Something\nEND RESPONSE 0123456789ab")
+	rc, err := src.Recheck(ctx, dir)
+	if err != nil || rc.Done {
+		t.Fatalf("recheck = %+v %v", rc, err)
 	}
 }

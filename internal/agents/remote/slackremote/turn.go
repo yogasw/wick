@@ -48,12 +48,19 @@ type tracker struct {
 	label      string
 	done       bool
 	events     chan remote.Event
+	// prevSentTS is the turn before's own message in this thread. older
+	// holds the messages from before sentTS this turn took (takesOlder),
+	// each with its edit's ts ("" = unknown: its own ts), which orders it
+	// in the reply.
+	prevSentTS string
+	older      map[string]string
 }
 
 func newTracker(channel, threadTS, sentTS, token string, topLevel bool, ignore map[string]bool, accept func(Message) bool) *tracker {
 	return &tracker{
 		channel: channel, threadTS: threadTS, sentTS: sentTS, token: token, topLevel: topLevel,
 		ignore: ignore, accept: accept, msgs: map[string]string{}, events: make(chan remote.Event, 256),
+		older: map[string]string{},
 	}
 }
 
@@ -123,10 +130,20 @@ func (t *tracker) observe(m Message) []remote.Event {
 		}
 		return out
 	}
-	if !tsLess(t.sentTS, m.TS) || t.ignore[m.User] || t.ignore[m.BotID] || !t.accept(m) {
+	if t.ignore[m.User] || t.ignore[m.BotID] || !t.accept(m) {
 		return nil
 	}
-	if tsLess(t.lastTS, m.TS) {
+	text := t.clean(m.Text)
+	if !tsLess(t.sentTS, m.TS) {
+		take, drop := t.takesOlder(m, text)
+		if !take {
+			return nil
+		}
+		// An older message no longer carrying the marker leaves the turn
+		// as a deleted one would.
+		m.Deleted = m.Deleted || drop
+	} else if tsLess(t.lastTS, m.TS) {
+		// lastTS only moves forward from our message.
 		t.lastTS = m.TS
 	}
 	finished := false
@@ -151,7 +168,6 @@ func (t *tracker) observe(m Message) []remote.Event {
 	// A message may also be an answer still being written with its
 	// progress note as the last line ("found X\n_reading the code…_"):
 	// the text above is the reply so far, the last line the label.
-	text := t.clean(m.Text)
 	if body, label, ok := splitProgress(text); ok && !m.Deleted {
 		t.label = label
 		if !tsLess(m.TS, t.progressTS) {
@@ -174,6 +190,61 @@ func (t *tracker) observe(m Message) []remote.Event {
 	}
 	out = t.busyStatus(out)
 	return t.report(out, finished)
+}
+
+// takesOlder reports whether m, a message from before this turn's own,
+// is taken into this turn, and drop whether one taken before now leaves
+// it. A remote may answer by editing a message it posted before our
+// latest one (its progress note from the turn before). Such a message is
+// taken only with the marker on, when it was posted after the turn
+// before's message (readFrom: the window a read covers too, so an event
+// and a read agree) and its text ends with this turn's marker, as a
+// reply that ends the turn does (endsWithMarker). The token is made
+// before our message is sent, so a text carrying it was written after:
+// no edit time is needed, and none is relied on (Slack may not mark a
+// bot's update as edited). Without the marker an older message may be an
+// earlier turn's late or finished reply, which must never come back as
+// this turn's, so it is not taken. A taken message stays taken through
+// later edits while it ends with the marker; edited without it, or
+// deleted, it leaves the turn. Only the turn just before is heard, and
+// only with the marker on.
+func (t *tracker) takesOlder(m Message, text string) (take, drop bool) {
+	if t.token == "" || m.TS == t.sentTS || !tsLess(t.readFrom(), m.TS) {
+		return false, false
+	}
+	marked := endsWithMarker(text, MarkerPrefix+t.token)
+	if _, ok := t.older[m.TS]; ok {
+		if m.Deleted || !marked {
+			delete(t.older, m.TS)
+			return true, true
+		}
+		if m.EditedTS != "" {
+			t.older[m.TS] = m.EditedTS
+		}
+		return true, false
+	}
+	if m.Deleted || !marked {
+		return false, false
+	}
+	t.older[m.TS] = m.EditedTS
+	return true, false
+}
+
+// endsWithMarker: text's last words are marker, past the markup a bot may
+// wrap it in — the test compose ends a turn by.
+func endsWithMarker(text, marker string) bool {
+	return strings.HasSuffix(strings.TrimRight(text, " \n*_`~"), marker)
+}
+
+// readFrom is the oldest ts this turn hears from (exclusive): our
+// message, or with the marker on the turn before's, so a message from
+// then edited into this turn's reply is heard — by an event and by a
+// read alike.
+func (t *tracker) readFrom() string {
+	if t.token != "" && t.prevSentTS != "" && tsLess(t.prevSentTS, t.sentTS) {
+		return t.prevSentTS
+	}
+	return t.sentTS
 }
 
 // react applies a reaction event on our message: ⏳ added or taken off,
@@ -274,8 +345,10 @@ func (t *tracker) setStatus(out []remote.Event, status, detail string) []remote.
 }
 
 // prune drops the replies a full read of the thread no longer has: they
-// were deleted while no event said so.
-func (t *tracker) prune(seen map[string]bool) []remote.Event {
+// were deleted while no event said so. A read has two windows — after
+// our message (newWhole) and the older one an edited message may come
+// from (oldWhole); only a window read whole tells what is gone.
+func (t *tracker) prune(seen map[string]bool, newWhole, oldWhole bool) []remote.Event {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.done {
@@ -283,10 +356,13 @@ func (t *tracker) prune(seen map[string]bool) []remote.Event {
 	}
 	gone := false
 	for ts := range t.msgs {
-		if !seen[ts] {
-			delete(t.msgs, ts)
-			gone = true
+		_, old := t.older[ts]
+		if seen[ts] || old && !oldWhole || !old && !newWhole {
+			continue
 		}
+		delete(t.msgs, ts)
+		delete(t.older, ts)
+		gone = true
 	}
 	if !gone {
 		return nil
@@ -327,8 +403,17 @@ func (t *tracker) compose() (string, bool) {
 	for k := range t.msgs {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool { return tsLess(keys[i], keys[j]) })
+	// A message taken from before our own (takesOlder) stands where it
+	// was edited, not where it was first posted.
+	at := func(k string) string {
+		if e, ok := t.older[k]; ok && e != "" {
+			return e
+		}
+		return k
+	}
+	sort.Slice(keys, func(i, j int) bool { return tsLess(at(keys[i]), at(keys[j])) })
 	parts := make([]string, 0, len(keys))
+	olderPart := make([]bool, 0, len(keys))
 	for i, k := range keys {
 		repeated := false
 		for _, later := range keys[i+1:] {
@@ -339,6 +424,8 @@ func (t *tracker) compose() (string, bool) {
 		}
 		if !repeated {
 			parts = append(parts, t.msgs[k])
+			_, old := t.older[k]
+			olderPart = append(olderPart, old)
 		}
 	}
 	if t.token == "" {
@@ -347,17 +434,24 @@ func (t *tracker) compose() (string, bool) {
 	marker := MarkerPrefix + t.token
 	// A marker already seen — in a message before the last, or anywhere
 	// once a grace window reopened the turn — is dropped, never shown,
-	// and does not end the turn again.
+	// and does not end the turn again. In a message taken from before our
+	// own it still ends the turn: such a message is taken for its marker,
+	// and a reply posted after our message may follow it in the thread.
+	olderMarked := false
 	for i := range parts {
 		if i < len(parts)-1 || t.reopened {
 			if body := strings.TrimRight(parts[i], " \n*_`~"); strings.HasSuffix(body, marker) {
 				parts[i] = strings.TrimRight(body[:len(body)-len(marker)], " \n*_`~")
+				olderMarked = olderMarked || olderPart[i]
 			}
 		}
 	}
 	text := strings.Join(parts, "\n\n")
 	if t.reopened {
 		return text, false
+	}
+	if olderMarked {
+		return text, true
 	}
 	// Some bots post rich text whose plain form runs the lines together,
 	// so the marker can close the last line instead of standing alone.
