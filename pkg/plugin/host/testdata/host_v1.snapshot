@@ -1,0 +1,139 @@
+field wick.host.v1.AccountRef.display_name=2 optional string
+field wick.host.v1.AccountRef.id=1 optional string
+field wick.host.v1.AccountRef.wick_user_id=3 optional string
+field wick.host.v1.AttachSessionRequest.session_id=2 optional string
+field wick.host.v1.AttachSessionRequest.ticket_id=1 optional string
+field wick.host.v1.ConnectedAccountsRequest.instance_id=1 optional string
+field wick.host.v1.ConnectedAccountsResponse.accounts=1 repeated wick.host.v1.AccountRef
+field wick.host.v1.ConnectorInstance.connector=2 optional string
+field wick.host.v1.ConnectorInstance.id=1 optional string
+field wick.host.v1.ConnectorInstance.label=3 optional string
+field wick.host.v1.ConnectorInstance.ops=5 repeated string
+field wick.host.v1.ConnectorInstance.status=4 optional string
+field wick.host.v1.CreateTicketRequest.assignees=6 repeated string
+field wick.host.v1.CreateTicketRequest.body=4 optional string
+field wick.host.v1.CreateTicketRequest.fields=7 repeated map<string,string>
+field wick.host.v1.CreateTicketRequest.id=2 optional string
+field wick.host.v1.CreateTicketRequest.project_id=1 optional string
+field wick.host.v1.CreateTicketRequest.status=5 optional string
+field wick.host.v1.CreateTicketRequest.title=3 optional string
+field wick.host.v1.ExecuteConnectorRequest.account_id=5 optional string
+field wick.host.v1.ExecuteConnectorRequest.args_json=4 optional bytes
+field wick.host.v1.ExecuteConnectorRequest.connector=1 optional string
+field wick.host.v1.ExecuteConnectorRequest.instance_id=2 optional string
+field wick.host.v1.ExecuteConnectorRequest.op=3 optional string
+field wick.host.v1.ExecuteConnectorResponse.meta=2 repeated map<string,string>
+field wick.host.v1.ExecuteConnectorResponse.result_json=1 optional bytes
+field wick.host.v1.GetConfigRequest.key=2 optional string
+field wick.host.v1.GetConfigRequest.owner=1 optional string
+field wick.host.v1.GetConfigResponse.found=2 optional bool
+field wick.host.v1.GetConfigResponse.secret=3 optional bool
+field wick.host.v1.GetConfigResponse.value=1 optional string
+field wick.host.v1.GetSessionMetaRequest.id=1 optional string
+field wick.host.v1.GetTicketRequest.id=1 optional string
+field wick.host.v1.GetUserByEmailRequest.email=1 optional string
+field wick.host.v1.GetUserRequest.id=1 optional string
+field wick.host.v1.InvokeRequest.args_json=2 optional bytes
+field wick.host.v1.InvokeRequest.method=1 optional string
+field wick.host.v1.InvokeResponse.result_json=1 optional bytes
+field wick.host.v1.ListConnectorInstancesRequest.connector=1 optional string
+field wick.host.v1.ListConnectorInstancesResponse.instances=1 repeated wick.host.v1.ConnectorInstance
+field wick.host.v1.ListMethodsResponse.methods=1 repeated wick.host.v1.MethodInfo
+field wick.host.v1.ListSessionsRequest.limit=3 optional int32
+field wick.host.v1.ListSessionsRequest.project_id=1 optional string
+field wick.host.v1.ListSessionsRequest.since=2 optional string
+field wick.host.v1.ListSessionsResponse.sessions=1 repeated wick.host.v1.SessionMeta
+field wick.host.v1.ListTicketsRequest.limit=3 optional int32
+field wick.host.v1.ListTicketsRequest.project_id=1 optional string
+field wick.host.v1.ListTicketsRequest.status=2 optional string
+field wick.host.v1.ListTicketsResponse.tickets=1 repeated wick.host.v1.Ticket
+field wick.host.v1.ListUsersRequest.include_unapproved=1 optional bool
+field wick.host.v1.ListUsersRequest.limit=3 optional int32
+field wick.host.v1.ListUsersRequest.q=2 optional string
+field wick.host.v1.ListUsersResponse.cached_at=2 optional string
+field wick.host.v1.ListUsersResponse.users=1 repeated wick.host.v1.User
+field wick.host.v1.MethodInfo.destructive=4 optional bool
+field wick.host.v1.MethodInfo.name=1 optional string
+field wick.host.v1.MethodInfo.scope=2 optional string
+field wick.host.v1.MethodInfo.summary=3 optional string
+field wick.host.v1.QueryRequest.args=2 repeated string
+field wick.host.v1.QueryRequest.max_rows=3 optional int32
+field wick.host.v1.QueryRequest.sql=1 optional string
+field wick.host.v1.QueryRequest.timeout_ms=4 optional int32
+field wick.host.v1.QueryRequest.write=5 optional bool
+field wick.host.v1.QueryResponse.columns=1 repeated string
+field wick.host.v1.QueryResponse.rows=2 repeated wick.host.v1.Row
+field wick.host.v1.QueryResponse.rows_affected=3 optional int64
+field wick.host.v1.QueryResponse.truncated=4 optional bool
+field wick.host.v1.RestRequest.body=3 optional bytes
+field wick.host.v1.RestRequest.headers=4 repeated map<string,string>
+field wick.host.v1.RestRequest.method=1 optional string
+field wick.host.v1.RestRequest.path=2 optional string
+field wick.host.v1.RestResponse.body=2 optional bytes
+field wick.host.v1.RestResponse.headers=3 repeated map<string,string>
+field wick.host.v1.RestResponse.status=1 optional int32
+field wick.host.v1.Row.nulls=2 repeated bool
+field wick.host.v1.Row.values=1 repeated string
+field wick.host.v1.SendToSessionRequest.session_id=1 optional string
+field wick.host.v1.SendToSessionRequest.text=2 optional string
+field wick.host.v1.SendToSessionResponse.queued=1 optional bool
+field wick.host.v1.SessionMeta.channel=5 optional string
+field wick.host.v1.SessionMeta.created_at=7 optional string
+field wick.host.v1.SessionMeta.extra=9 repeated map<string,string>
+field wick.host.v1.SessionMeta.id=1 optional string
+field wick.host.v1.SessionMeta.label=4 optional string
+field wick.host.v1.SessionMeta.owner_user_id=6 optional string
+field wick.host.v1.SessionMeta.project_id=2 optional string
+field wick.host.v1.SessionMeta.ticket_id=3 optional string
+field wick.host.v1.SessionMeta.updated_at=8 optional string
+field wick.host.v1.Ticket.assignees=6 repeated string
+field wick.host.v1.Ticket.body=4 optional string
+field wick.host.v1.Ticket.created_at=8 optional string
+field wick.host.v1.Ticket.fields=7 repeated map<string,string>
+field wick.host.v1.Ticket.id=1 optional string
+field wick.host.v1.Ticket.project_id=2 optional string
+field wick.host.v1.Ticket.status=5 optional string
+field wick.host.v1.Ticket.title=3 optional string
+field wick.host.v1.Ticket.updated_at=9 optional string
+field wick.host.v1.UpdateTicketRequest.assignees=5 repeated string
+field wick.host.v1.UpdateTicketRequest.body=4 optional string (explicit presence)
+field wick.host.v1.UpdateTicketRequest.fields=7 repeated map<string,string>
+field wick.host.v1.UpdateTicketRequest.id=1 optional string
+field wick.host.v1.UpdateTicketRequest.if_updated_at=8 optional string
+field wick.host.v1.UpdateTicketRequest.set_assignees=6 optional bool
+field wick.host.v1.UpdateTicketRequest.status=2 optional string (explicit presence)
+field wick.host.v1.UpdateTicketRequest.title=3 optional string (explicit presence)
+field wick.host.v1.User.admin=5 optional bool
+field wick.host.v1.User.approved=4 optional bool
+field wick.host.v1.User.created_at=7 optional string
+field wick.host.v1.User.email=3 optional string
+field wick.host.v1.User.id=1 optional string
+field wick.host.v1.User.name=2 optional string
+field wick.host.v1.User.tags=6 repeated string
+field wick.host.v1.WhoamiResponse.host_api_version=7 optional int32
+field wick.host.v1.WhoamiResponse.kind=3 optional string
+field wick.host.v1.WhoamiResponse.plugin_key=1 optional string
+field wick.host.v1.WhoamiResponse.plugin_version=2 optional string
+field wick.host.v1.WhoamiResponse.scopes_allowed=5 repeated string
+field wick.host.v1.WhoamiResponse.scopes_declared=4 repeated string
+field wick.host.v1.WhoamiResponse.wick_version=6 optional string
+rpc Host.AttachSession(wick.host.v1.AttachSessionRequest) wick.host.v1.Empty
+rpc Host.ConnectedAccounts(wick.host.v1.ConnectedAccountsRequest) wick.host.v1.ConnectedAccountsResponse
+rpc Host.CreateTicket(wick.host.v1.CreateTicketRequest) wick.host.v1.Ticket
+rpc Host.ExecuteConnector(wick.host.v1.ExecuteConnectorRequest) wick.host.v1.ExecuteConnectorResponse
+rpc Host.GetConfig(wick.host.v1.GetConfigRequest) wick.host.v1.GetConfigResponse
+rpc Host.GetSessionMeta(wick.host.v1.GetSessionMetaRequest) wick.host.v1.SessionMeta
+rpc Host.GetTicket(wick.host.v1.GetTicketRequest) wick.host.v1.Ticket
+rpc Host.GetUser(wick.host.v1.GetUserRequest) wick.host.v1.User
+rpc Host.GetUserByEmail(wick.host.v1.GetUserByEmailRequest) wick.host.v1.User
+rpc Host.Invoke(wick.host.v1.InvokeRequest) wick.host.v1.InvokeResponse
+rpc Host.ListConnectorInstances(wick.host.v1.ListConnectorInstancesRequest) wick.host.v1.ListConnectorInstancesResponse
+rpc Host.ListMethods(wick.host.v1.ListMethodsRequest) wick.host.v1.ListMethodsResponse
+rpc Host.ListSessions(wick.host.v1.ListSessionsRequest) wick.host.v1.ListSessionsResponse
+rpc Host.ListTickets(wick.host.v1.ListTicketsRequest) wick.host.v1.ListTicketsResponse
+rpc Host.ListUsers(wick.host.v1.ListUsersRequest) wick.host.v1.ListUsersResponse
+rpc Host.Query(wick.host.v1.QueryRequest) wick.host.v1.QueryResponse
+rpc Host.Rest(wick.host.v1.RestRequest) wick.host.v1.RestResponse
+rpc Host.SendToSession(wick.host.v1.SendToSessionRequest) wick.host.v1.SendToSessionResponse
+rpc Host.UpdateTicket(wick.host.v1.UpdateTicketRequest) wick.host.v1.Ticket
+rpc Host.Whoami(wick.host.v1.WhoamiRequest) wick.host.v1.WhoamiResponse

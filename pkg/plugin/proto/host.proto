@@ -1,0 +1,137 @@
+syntax = "proto3";
+package wick.host.v1;
+option go_package = "github.com/yogasw/wick/pkg/plugin/proto/hostpb";
+
+// Host is the service wick offers to a plugin process (plugin -> wick). It is
+// reached over the go-plugin GRPCBroker (connector/tool/job) or over HTTP at
+// /x/-/api/* with WICK_PLUGIN_TOKEN (every kind, service included); both doors
+// share one handler. Every RPC belongs to a scope; a call whose scope the
+// plugin is not allowed answers codes.PermissionDenied with {scope, plugin}.
+//
+// Compatibility: add only (new RPCs, new field numbers). Never renumber,
+// rename, retype or remove. A breaking change is a new package wick.host.v2.
+service Host {
+  // --- meta (scope: whoami, always allowed) ---
+  rpc Whoami      (WhoamiRequest)      returns (WhoamiResponse);
+  rpc ListMethods (ListMethodsRequest) returns (ListMethodsResponse);
+
+  // --- users.read ---
+  rpc ListUsers      (ListUsersRequest)      returns (ListUsersResponse);
+  rpc GetUser        (GetUserRequest)        returns (User);
+  rpc GetUserByEmail (GetUserByEmailRequest) returns (User);
+
+  // --- accounts.read ---
+  rpc ConnectedAccounts (ConnectedAccountsRequest) returns (ConnectedAccountsResponse);
+
+  // --- sessions.read / sessions.notify ---
+  rpc ListSessions   (ListSessionsRequest)   returns (ListSessionsResponse);
+  rpc GetSessionMeta (GetSessionMetaRequest) returns (SessionMeta);
+  rpc SendToSession  (SendToSessionRequest)  returns (SendToSessionResponse);
+
+  // --- tickets.read / tickets.write ---
+  rpc GetTicket     (GetTicketRequest)     returns (Ticket);
+  rpc ListTickets   (ListTicketsRequest)   returns (ListTicketsResponse);
+  rpc CreateTicket  (CreateTicketRequest)  returns (Ticket);
+  rpc UpdateTicket  (UpdateTicketRequest)  returns (Ticket);
+  rpc AttachSession (AttachSessionRequest) returns (Empty);
+
+  // --- config.read_other ---
+  rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
+
+  // --- connectors.read / connectors.execute ---
+  rpc ListConnectorInstances (ListConnectorInstancesRequest) returns (ListConnectorInstancesResponse);
+  rpc ExecuteConnector       (ExecuteConnectorRequest)       returns (ExecuteConnectorResponse);
+
+  // --- generic layer ---
+  rpc Invoke (InvokeRequest) returns (InvokeResponse);   // scope = the scope of the invoked method
+  rpc Rest   (RestRequest)   returns (RestResponse);     // rest.read (GET) / rest.write (others)
+  rpc Query  (QueryRequest)  returns (QueryResponse);    // db.read (read-only tx) / db.write
+}
+
+message Empty {}
+
+message WhoamiRequest {}
+message WhoamiResponse {
+  string plugin_key     = 1;
+  string plugin_version = 2;
+  string kind           = 3; // connector | tool | job | service
+  repeated string scopes_declared = 4;
+  repeated string scopes_allowed  = 5; // after the admin overlay
+  string wick_version   = 6;
+  int32  host_api_version = 7;          // 1
+}
+
+message ListMethodsRequest {}
+message MethodInfo { string name = 1; string scope = 2; string summary = 3; bool destructive = 4; }
+message ListMethodsResponse { repeated MethodInfo methods = 1; }
+
+// ---- users ----
+// Deliberately narrow: no password/hash, token, role other than admin, or
+// preferences.
+message User {
+  string id = 1; string name = 2; string email = 3;
+  bool approved = 4; bool admin = 5;
+  repeated string tags = 6;
+  string created_at = 7; // RFC3339
+}
+message ListUsersRequest  { bool include_unapproved = 1; string q = 2; int32 limit = 3; }
+message ListUsersResponse { repeated User users = 1; string cached_at = 2; }
+message GetUserRequest        { string id = 1; }
+message GetUserByEmailRequest { string email = 1; }
+
+// ---- accounts ----
+message AccountRef { string id = 1; string display_name = 2; string wick_user_id = 3; }
+message ConnectedAccountsRequest  { string instance_id = 1; }
+message ConnectedAccountsResponse { repeated AccountRef accounts = 1; }
+
+// ---- sessions (metadata only, never conversation content) ----
+message SessionMeta {
+  string id = 1; string project_id = 2; string ticket_id = 3; string label = 4;
+  string channel = 5; string owner_user_id = 6;
+  string created_at = 7; string updated_at = 8;
+  map<string,string> extra = 9;
+}
+message ListSessionsRequest  { string project_id = 1; string since = 2; int32 limit = 3; }
+message ListSessionsResponse { repeated SessionMeta sessions = 1; }
+message GetSessionMetaRequest { string id = 1; }
+message SendToSessionRequest  { string session_id = 1; string text = 2; }
+message SendToSessionResponse { bool queued = 1; }
+
+// ---- tickets ----
+message Ticket {
+  string id = 1; string project_id = 2; string title = 3; string body = 4;
+  string status = 5; repeated string assignees = 6; map<string,string> fields = 7;
+  string created_at = 8; string updated_at = 9;
+}
+message GetTicketRequest   { string id = 1; }
+message ListTicketsRequest { string project_id = 1; string status = 2; int32 limit = 3; }
+message ListTicketsResponse { repeated Ticket tickets = 1; }
+message CreateTicketRequest { string project_id = 1; string id = 2; string title = 3; string body = 4; string status = 5; repeated string assignees = 6; map<string,string> fields = 7; }
+message UpdateTicketRequest { string id = 1; optional string status = 2; optional string title = 3; optional string body = 4; repeated string assignees = 5; bool set_assignees = 6; map<string,string> fields = 7; string if_updated_at = 8; }
+message AttachSessionRequest { string ticket_id = 1; string session_id = 2; }
+
+// ---- config ----
+message GetConfigRequest  { string owner = 1; string key = 2; }
+message GetConfigResponse { string value = 1; bool found = 2; bool secret = 3; }
+
+// ---- connectors ----
+message ConnectorInstance { string id = 1; string connector = 2; string label = 3; string status = 4; repeated string ops = 5; }
+message ListConnectorInstancesRequest  { string connector = 1; }            // module key, e.g. "slack", "metabase"
+message ListConnectorInstancesResponse { repeated ConnectorInstance instances = 1; }
+message ExecuteConnectorRequest {
+  string connector   = 1;   // module key; must be declared in host_resources.connectors
+  string instance_id = 2;   // empty = the default instance the acting user may see (error when >1)
+  string op          = 3;   // must be in the declared ops list
+  bytes  args_json   = 4;
+  string account_id  = 5;   // optional linked account (multi-account connectors); must belong to the acting user
+}
+message ExecuteConnectorResponse { bytes result_json = 1; map<string,string> meta = 2; }
+
+// ---- generic layer ----
+message InvokeRequest  { string method = 1; bytes args_json = 2; }
+message InvokeResponse { bytes result_json = 1; }
+message RestRequest    { string method = 1; string path = 2; bytes body = 3; map<string,string> headers = 4; }
+message RestResponse   { int32 status = 1; bytes body = 2; map<string,string> headers = 3; }
+message QueryRequest   { string sql = 1; repeated string args = 2; int32 max_rows = 3; int32 timeout_ms = 4; bool write = 5; }
+message QueryResponse  { repeated string columns = 1; repeated Row rows = 2; int64 rows_affected = 3; bool truncated = 4; }
+message Row { repeated string values = 1; repeated bool nulls = 2; }
