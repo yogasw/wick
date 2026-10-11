@@ -40,4 +40,11 @@ describe("AvatarImageEditor › Crop", () => {
     await fireEvent.click(screen.getByTestId("avatar-image-fit"));
     expect(onCrop).toHaveBeenLastCalledWith({ fit: "fit", x: 0, y: 0, zoom: 0, crop: "hex" });
   });
+
+  test("G7: the whole box gets the checker backdrop, tile labels are 11px", () => {
+    render(AvatarImageEditor, { props: props({}) });
+    expect(screen.getByTestId("avatar-image-box").classList.contains("checker")).toBe(true);
+    expect(screen.getByTestId("avatar-image-frame").classList.contains("checker")).toBe(false);
+    expect(tiles().every((b) => b.classList.contains("text-[11px]"))).toBe(true);
+  });
 });

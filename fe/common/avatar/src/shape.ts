@@ -106,13 +106,18 @@ export function normalizeState(s: string | null | undefined): AvatarState {
    cannot draw: blob-only motions (blob/core/types STATES) and the
    mockup's event poses. A busy pose orbits, a churning one thinks, a
    loud one alerts, a cheerful one notifies. */
-const CLASSIC_POSES = new Map<string, AvatarState>([
+const CLASSIC_POSE_ENTRIES = [
   ["wide", "orbit"], ["play", "orbit"], ["comet", "orbit"], ["scan", "orbit"], ["type", "orbit"], ["send", "orbit"], ["wait", "orbit"],
   ["swirl", "thinking"], ["squeeze", "thinking"], ["working", "thinking"],
   ["exclaim", "alert"], ["fail", "alert"],
   ["wink", "notify"], ["burst", "notify"],
   ["disabled", "sleep"], ["hatching", "egg"],
-]);
+] as const;
+const CLASSIC_POSES = new Map<string, AvatarState>(CLASSIC_POSE_ENTRIES);
+
+/** Every pose name classicPoseFor knows: the classic states plus the
+    blob-only and mockup poses it maps. */
+export type ClassicPoseName = AvatarState | (typeof CLASSIC_POSE_ENTRIES)[number][0];
 
 /** classicPoseFor is the state the classic and image avatars draw for a
     pose: their own states pass through, a blob-only pose gets its

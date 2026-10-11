@@ -97,3 +97,10 @@ describe("BlobAvatarPicker", () => {
     expect(container.querySelector("canvas")).toBeNull();
   });
 });
+
+describe("AgentAvatar kind=classic: a failed tool", () => {
+  test("a live toolError draws alert (the fail pose), not idle", () => {
+    const { container } = render(AgentAvatar, { props: { shape: "circle", color: "#27b199", working: true, toolName: "Bash", toolError: true } });
+    expect(container.querySelector("svg.agent-avatar")?.getAttribute("data-state")).toBe("alert");
+  });
+});

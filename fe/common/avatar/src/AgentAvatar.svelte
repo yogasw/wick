@@ -27,7 +27,7 @@
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
   import { createFidget, type FidgetPose } from "./blob/motion/fidget";
   import { idleAnimationsOn } from "./idle.js";
-  import { poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
+  import { classicPoseOf, poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
 
   type Props = {
     /** "" / absent = classic, "blob" = blob mascot (team.Avatar.kind). */
@@ -133,7 +133,7 @@
   );
   const forced = $derived(event ? poseFor(event, events) : null);
   const current = $derived<AvatarState>(
-    pose ? classicPoseFor(pose) : event ? (forced ? classicPoseFor(forced.state) : stateFor({ working: true, tool: true })) : resolved.classic,
+    pose ? classicPoseFor(pose) : event ? (forced ? classicPoseOf(event, forced, events) : stateFor({ working: true, tool: true })) : resolved.classic,
   );
   /* The blob's motion and temporary expression; back to the agent's own
      the moment the event is over. */

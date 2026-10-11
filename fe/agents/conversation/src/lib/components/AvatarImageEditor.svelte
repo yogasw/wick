@@ -119,7 +119,7 @@
       {#each AVATAR_CROPS as [k, lbl] (k)}
         <button
           type="button"
-          class="flex flex-col items-center gap-1 rounded-xl border-2 p-1.5 text-xs text-black-900 dark:text-white-100 {shape === k ? 'border-green-500' : 'border-white-300 dark:border-navy-600'}"
+          class="flex flex-col items-center gap-1 rounded-xl border-2 p-1.5 text-[11px] text-black-900 dark:text-white-100 {shape === k ? 'border-green-500' : 'border-white-300 dark:border-navy-600'}"
           disabled={!safe}
           aria-pressed={shape === k}
           aria-label={lbl}
@@ -142,7 +142,7 @@
       </span>
     </div>
     <p class="mt-1 text-xs text-black-800 dark:text-black-600">Drag to move, pinch or use the slider to zoom. The dimmed part is cropped out of the avatar.</p>
-    <div class="mt-2 flex justify-center rounded-lg border border-white-300 bg-white-200 p-6 dark:border-navy-600 dark:bg-navy-700">
+    <div class="checker mt-2 flex justify-center rounded-lg border border-white-300 bg-white-200 p-6 dark:border-navy-600 dark:bg-navy-700" data-testid="avatar-image-box">
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
         bind:this={frame}
@@ -197,3 +197,16 @@
     </div>
   </div>
 </div>
+
+<style>
+  /* The mockup's .ed backdrop: a faint checker over the box's own colour
+     (bg-white-200 / navy-700, kept: only the image is set) shows where the
+     picture is transparent, inside the frame and out. */
+  .checker {
+    background-image: repeating-conic-gradient(rgb(var(--color-white-300)) 0 25%, transparent 0 50%);
+    background-size: 16px 16px;
+  }
+  :global(.dark) .checker {
+    background-image: repeating-conic-gradient(rgb(var(--color-navy-600)) 0 25%, transparent 0 50%);
+  }
+</style>

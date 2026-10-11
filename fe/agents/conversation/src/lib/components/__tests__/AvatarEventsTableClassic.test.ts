@@ -21,6 +21,20 @@ describe("Reacts to: classic style", () => {
     expect(screen.getByTestId("avatar-event-compact").querySelector("svg.agent-avatar")?.getAttribute("data-state")).toBe("thinking");
   });
 
+  test("the failed-tool row shows and moves as alert (fail)", () => {
+    render(AvatarEventsTable, { props: { shape: "circle", color: "#27b199", onChange: vi.fn() } });
+    expect(pose("A tool failed").value).toBe("alert");
+    expect(pose("A tool failed").title).toBe("Blob pose: idle");
+    expect(screen.getByTestId("avatar-event-error").querySelector("svg.agent-avatar")?.getAttribute("data-state")).toBe("alert");
+  });
+
+  test("idle picked on the failed-tool row is saved, not dropped as the blob default", async () => {
+    const onChange = vi.fn();
+    render(AvatarEventsTable, { props: { shape: "circle", color: "#27b199", onChange } });
+    await fireEvent.change(pose("A tool failed"), { target: { value: "idle" } });
+    expect(onChange).toHaveBeenLastCalledWith({ error: { state: "idle" } });
+  });
+
   test("no blob-only option in any dropdown", () => {
     render(AvatarEventsTable, { props: { shape: "circle", color: "#27b199", events: { error: { state: "burst" } }, onChange: vi.fn() } });
     const all = options();
@@ -52,6 +66,8 @@ describe("Reacts to: image style", () => {
     expect(options()).not.toContain("swirl");
     expect(screen.getByTestId("avatar-event-read").querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe("orbit");
     expect(screen.getByTestId("avatar-event-compact").querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe("thinking");
+    expect(pose("A tool failed").value).toBe("alert");
+    expect(screen.getByTestId("avatar-event-error").querySelector("[data-testid=image-avatar]")?.getAttribute("data-pose")).toBe("alert");
   });
 });
 
@@ -62,6 +78,17 @@ describe("Reacts to: blob style", () => {
     expect(pose("Reading / searching").value).toBe("wide");
     expect(pose("Compacting context").value).toBe("swirl");
     expect(pose("Reading / searching").title).toBe("");
+    // The blob's failed tool stays idle with a sad face.
+    expect(pose("A tool failed").value).toBe("idle");
+    expect(screen.getByRole("combobox", { name: /^A tool failed expression$/ }) as HTMLSelectElement).toHaveProperty("value", "sad");
     expect([...pose("Reading / searching").options].map((o) => o.value)).toEqual([...BLOB_STATES]);
+  });
+
+  test("on the blob, idle on the failed-tool row is the default and saves as none", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const onChange = vi.fn();
+    render(AvatarEventsTable, { props: { kind: "blob", shape: "cloud", color: "#8b5cf6", events: { error: { state: "burst" } }, onChange } });
+    await fireEvent.change(pose("A tool failed"), { target: { value: "idle" } });
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 });

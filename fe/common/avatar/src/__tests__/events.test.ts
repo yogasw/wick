@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { AVATAR_EVENTS, DEFAULT_EVENT_POSES, cleanOverrides, eventOf, poseFor, resolvePose, toolEvent } from "../events";
+import { AVATAR_EVENTS, CLASSIC_EVENT_POSES, DEFAULT_EVENT_POSES, classicPoseOf, cleanOverrides, eventOf, poseFor, resolvePose, toolEvent } from "../events";
+import { classicPoseFor } from "../shape";
 import { EXPRESSIONS, STATES } from "../blob/core/types";
 
 describe("toolEvent", () => {
@@ -28,7 +29,8 @@ describe("resolvePose", () => {
     expect(resolvePose({ working: true, toolName: "wick_delegate" })).toMatchObject({ state: "orbit", event: "delegate" });
     expect(resolvePose({ attention: true })).toMatchObject({ state: "alert", classic: "alert", event: "ask_user" });
     expect(resolvePose({ working: true, remote: true })).toMatchObject({ state: "wide", expression: "attentive", event: "remote_wait", classic: "orbit" });
-    expect(resolvePose({ working: true, toolName: "Bash", toolError: true })).toMatchObject({ state: "idle", expression: "sad", event: "error" });
+    // The blob reacts with its face; classic / image, faceless, alert (the fail pose).
+    expect(resolvePose({ working: true, toolName: "Bash", toolError: true })).toMatchObject({ state: "idle", expression: "sad", event: "error", classic: "alert" });
     expect(resolvePose({ done: true })).toMatchObject({ state: "notify", expression: "happy", event: "done" });
     expect(resolvePose({ working: true, toolName: "wick_compact" })).toMatchObject({ state: "swirl", event: "compact", classic: "thinking" });
   });
@@ -93,5 +95,48 @@ describe("defaults and cleanOverrides", () => {
     expect(cleanOverrides({ read: { state: "wide", expression: "curious" }, run: { off: false } })).toBeUndefined();
     expect(cleanOverrides({ read: { state: "play" }, error: { off: true, state: "wide" }, bogus: { off: true } })).toEqual({ read: { state: "play" }, error: { off: true } });
     expect(cleanOverrides({ done: { expression: "" } })).toEqual({ done: { expression: "" } });
+  });
+});
+
+describe("classicPoseOf", () => {
+  test("a failed tool draws fail (alert) on classic and image; the blob keeps idle + sad", () => {
+    expect(classicPoseOf("error", DEFAULT_EVENT_POSES.error)).toBe("alert");
+    expect(poseFor("error")).toEqual({ state: "idle", expression: "sad" });
+    // An expression-only override still has no pose of its own here.
+    expect(classicPoseOf("error", poseFor("error", { error: { expression: "angry" } })!, { error: { expression: "angry" } })).toBe("alert");
+  });
+
+  test("the owner's pose wins over the classic default", () => {
+    const o = { error: { state: "burst" } };
+    expect(classicPoseOf("error", poseFor("error", o)!, o)).toBe("notify");
+    expect(resolvePose({ working: true, toolError: true, overrides: o })).toMatchObject({ state: "burst", classic: "notify", event: "error" });
+  });
+
+  test("rows without a classic default map their blob pose as before", () => {
+    expect(classicPoseOf("read", DEFAULT_EVENT_POSES.read)).toBe("orbit");
+    expect(classicPoseOf("run", DEFAULT_EVENT_POSES.run)).toBe("thinking");
+  });
+});
+
+describe("classic defaults: edge cases", () => {
+  test("an unknown override state keeps the classic default", () => {
+    const o = { error: { state: "bogus" } };
+    expect(classicPoseOf("error", poseFor("error", o)!, o)).toBe("alert");
+    expect(resolvePose({ working: true, toolError: true, overrides: o })).toMatchObject({ state: "idle", classic: "alert", event: "error" });
+  });
+
+  test("an off error row falls back to the working pose on classic too", () => {
+    expect(resolvePose({ working: true, toolName: "Bash", toolError: true, overrides: { error: { off: true } } })).toMatchObject({ classic: "orbit", event: null });
+  });
+
+  test("every classic default is a pose classic draws (a typo would be idle)", () => {
+    for (const v of Object.values(CLASSIC_EVENT_POSES)) expect(classicPoseFor(v)).not.toBe("idle");
+  });
+
+  test("idle picked on the classic error row survives cleaning; the blob still drops it", () => {
+    expect(cleanOverrides({ error: { state: "idle" } }, { classic: true })).toEqual({ error: { state: "idle" } });
+    expect(cleanOverrides({ error: { state: "idle" } })).toBeUndefined();
+    // Rows without a classic default still drop their default state.
+    expect(cleanOverrides({ run: { state: "thinking" } }, { classic: true })).toBeUndefined();
   });
 });

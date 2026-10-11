@@ -7,7 +7,7 @@
   import { Toggle } from "@wick-fe/common-ui";
   import {
     AgentAvatar, AVATAR_EVENTS, AVATAR_EVENT_LABELS, AVATAR_STATES, BLOB_EXPRESSIONS, BLOB_STATES, DEFAULT_EVENT_POSES,
-    classicPoseFor, cleanOverrides, isBlobKind, poseFor, type AvatarEvent, type AvatarImageView, type EventOverride, type EventOverrides,
+    classicPoseOf, cleanOverrides, isBlobKind, poseFor, type AvatarEvent, type AvatarImageView, type EventOverride, type EventPose, type EventOverrides,
   } from "@wick-fe/common-avatar";
 
   type Props = {
@@ -24,15 +24,16 @@
 
   const blob = $derived(isBlobKind(kind));
   /* The classic and image avatars draw fewer states: a blob-only pose
-     shows as the one they draw for it (classicPoseFor), while the stored
-     override keeps the blob pose so switching style back loses nothing. */
+     shows as the one they draw for it (classicPoseOf), while the stored
+     override keeps the blob pose so switching style back loses nothing.
+     A row with a classic default of its own (error → fail) shows that. */
   const states = $derived<readonly string[]>(blob ? BLOB_STATES : AVATAR_STATES.filter((s) => s !== "egg"));
-  const shown = (s: string) => (blob ? s : classicPoseFor(s));
+  const shown = (ev: AvatarEvent, p: EventPose) => (blob ? p.state : classicPoseOf(ev, p, events));
   const select =
     "rounded-lg border border-white-300 bg-white-100 px-2 py-1 text-xs text-black-900 focus:border-green-500 focus:outline-none disabled:opacity-50 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
 
   function set(ev: AvatarEvent, row: EventOverride) {
-    onChange(cleanOverrides({ ...(events ?? {}), [ev]: row }));
+    onChange(cleanOverrides({ ...(events ?? {}), [ev]: row }, { classic: !blob }));
   }
   function current(ev: AvatarEvent): EventOverride {
     return events?.[ev] ?? {};
@@ -69,14 +70,15 @@
               </span>
             </td>
             <td class="px-3 py-2">
-              <!-- A blob pose shown as its classic look-alike: the title names the
-                   stored one, so re-picking the shown pose (no change) makes sense. -->
+              <!-- Classic / image show a blob pose as its look-alike, or a row's
+                   classic default (error → fail, drawn as alert) while the owner
+                   picked none: the title names the stored blob pose either way. -->
               <select
                 class={select}
                 aria-label="{AVATAR_EVENT_LABELS[ev]} pose"
                 disabled={!pose}
-                value={shown(pose?.state ?? d.state)}
-                title={!blob && shown(pose?.state ?? d.state) !== (pose?.state ?? d.state) ? `Blob pose: ${pose?.state ?? d.state}` : undefined}
+                value={shown(ev, pose ?? d)}
+                title={!blob && shown(ev, pose ?? d) !== (pose ?? d).state ? `Blob pose: ${(pose ?? d).state}` : undefined}
                 onchange={(e) => set(ev, { ...row, state: (e.currentTarget as HTMLSelectElement).value })}
               >
                 {#each states as s (s)}<option value={s}>{s}</option>{/each}
