@@ -117,7 +117,11 @@ message GetConfigRequest  { string owner = 1; string key = 2; }
 message GetConfigResponse { string value = 1; bool found = 2; bool secret = 3; }
 
 // ---- connectors ----
-message ConnectorInstance { string id = 1; string connector = 2; string label = 3; string status = 4; repeated string ops = 5; }
+message ConnectorInstance {
+  string id = 1; string connector = 2; string label = 3; string status = 4; repeated string ops = 5;
+  string owner_user_id = 6;          // the wick user who created the instance ("" = none recorded)
+  repeated string account_ids = 7;   // linked accounts the acting user may run as (ids only, never tokens)
+}
 message ListConnectorInstancesRequest  { string connector = 1; }            // module key, e.g. "slack", "metabase"
 message ListConnectorInstancesResponse { repeated ConnectorInstance instances = 1; }
 message ExecuteConnectorRequest {

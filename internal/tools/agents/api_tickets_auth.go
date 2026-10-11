@@ -213,8 +213,19 @@ func jsonQuote(s string) string {
 	return b.String()
 }
 
-// requireTicketAPI refuses a token-authenticated request when the project
-// has not opted into the REST surface.
+// isMachineRequest reports a request made by a machine: a bearer token, or
+// an in-process call wick marked with login.WithMachineCaller (a plugin
+// through the Host API Rest RPC, which carries no token of its own).
+func isMachineRequest(r *http.Request) bool {
+	if bearerToken(r) != "" {
+		return true
+	}
+	_, ok := login.MachineCaller(r.Context())
+	return ok
+}
+
+// requireTicketAPI refuses a machine request (token or plugin) when the
+// project has not opted into the REST surface.
 //
 // A cookie request is the browser UI and is always allowed: the toggle
 // governs machine access, not whether the board works. Callers answer a
@@ -222,7 +233,7 @@ func jsonQuote(s string) string {
 // the caller may see this project, so naming the real reason ("the API is
 // off") leaks nothing and saves the integrator a debugging session.
 func requireTicketAPI(c *tool.Ctx, projectID string) bool {
-	if bearerToken(c.R) == "" {
+	if !isMachineRequest(c.R) {
 		return true // cookie session — the UI, always allowed
 	}
 	cfg, ok := ticketConfigFor(projectID)
@@ -240,12 +251,13 @@ func requireTicketAPI(c *tool.Ctx, projectID string) bool {
 }
 
 // callerActor describes who is making this request, for the webhook
-// envelope. A bearer request reports as "api" rather than "user" even though
-// a PAT belongs to a person: a receiver echoing changes back needs to tell
-// its own writes apart from a human moving a card in the UI.
+// envelope. A machine request (bearer or plugin) reports as "api" rather
+// than "user" even though it runs as a person: a receiver echoing changes
+// back needs to tell its own writes apart from a human moving a card in
+// the UI.
 func callerActor(c *tool.Ctx) ticket.Actor {
 	kind := ticket.ActorUser
-	if bearerToken(c.R) != "" {
+	if isMachineRequest(c.R) {
 		kind = ticket.ActorAPI
 	}
 	u := login.GetUser(c.Context())

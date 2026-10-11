@@ -177,7 +177,8 @@ type HostResources struct {
 }
 
 // HostRestResource is one wick REST pattern: "*" matches one path segment,
-// "**" the rest of the path.
+// a final "**" the rest of the path (MatchRestPattern). HEAD counts as a
+// read like GET.
 type HostRestResource struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
@@ -207,9 +208,21 @@ func (r *HostResources) Empty() bool {
 	return r == nil || (len(r.Rest) == 0 && len(r.DB) == 0 && len(r.Connectors) == 0 && len(r.Config) == 0)
 }
 
-// Items lists the declared items of resource kind as the admin overlay keys
-// them: "GET /api/x" for rest, the table name for db, "connector.op" for
-// connectors, "owner/key" for config.
+// Admin overlay items: the one place their shape is defined. A call is
+// allowed only when its item is in Items(kind) (no declaration, no access)
+// and no overlay row (scope, item, allowed=false) blocks it. Shapes:
+//
+//   - rest:       "<METHOD> <declared pattern>", e.g. "POST /api/tickets" or
+//     "GET /api/tickets/*". The pattern as declared, not the concrete path:
+//     the first declared pattern matching a call is its item, so blocking
+//     one pattern blocks every path it matches.
+//   - db:         "<table>:<mode>", e.g. "tickets:read", "tickets:write". A
+//     "write" declaration yields both items (write implies read), so an
+//     admin can keep reads and block writes of one table.
+//   - connectors: "<connector>.<op>", e.g. "slack.send_message".
+//   - config:     "<owner>/<key>", e.g. "job:notion-ticket-sync/token".
+//
+// Items lists the declared items of resource kind in those shapes.
 func (r *HostResources) Items(kind string) []string {
 	if r == nil {
 		return nil
@@ -218,16 +231,19 @@ func (r *HostResources) Items(kind string) []string {
 	switch kind {
 	case HostResourceRest:
 		for _, x := range r.Rest {
-			out = append(out, strings.ToUpper(strings.TrimSpace(x.Method))+" "+x.Path)
+			out = append(out, RestItem(x.Method, x.Path))
 		}
 	case HostResourceDB:
 		for _, x := range r.DB {
-			out = append(out, x.Table)
+			out = append(out, DBItem(x.Table, "read"))
+			if x.Mode == "write" {
+				out = append(out, DBItem(x.Table, "write"))
+			}
 		}
 	case HostResourceConnectors:
 		for _, x := range r.Connectors {
 			for _, op := range x.Ops {
-				out = append(out, x.Connector+"."+op)
+				out = append(out, ConnectorItem(x.Connector, op))
 			}
 		}
 	case HostResourceConfig:
@@ -242,6 +258,17 @@ var restMethods = map[string]bool{
 	http.MethodGet: true, http.MethodPost: true, http.MethodPut: true,
 	http.MethodPatch: true, http.MethodDelete: true,
 }
+
+// RestItem is the host_resources.rest item key of a declared pattern.
+func RestItem(method, pattern string) string {
+	return strings.ToUpper(strings.TrimSpace(method)) + " " + pattern
+}
+
+// DBItem is the host_resources.db item key of table under mode.
+func DBItem(table, mode string) string { return table + ":" + mode }
+
+// ConnectorItem is the host_resources.connectors item key of connector's op.
+func ConnectorItem(connector, op string) string { return connector + "." + op }
 
 // ConfigItem is the host_resources.config item key of owner's key.
 func ConfigItem(owner, key string) string { return owner + "/" + key }
@@ -279,13 +306,13 @@ func (m Manifest) ValidateHostAccess() error {
 	var hasRestRead, hasRestWrite, hasDBRead, hasDBWrite bool
 	for _, x := range res.Rest {
 		method := strings.ToUpper(strings.TrimSpace(x.Method))
-		if !restMethods[method] {
+		if !restMethods[method] && method != http.MethodHead {
 			return fmt.Errorf("host_resources.rest: invalid method %q", x.Method)
 		}
 		if err := validateRestPath(x.Path); err != nil {
 			return fmt.Errorf("host_resources.rest %s: %w", x.Path, err)
 		}
-		if method == http.MethodGet {
+		if method == http.MethodGet || method == http.MethodHead {
 			hasRestRead = true
 		} else {
 			hasRestWrite = true
@@ -334,14 +361,63 @@ func (m Manifest) ValidateHostAccess() error {
 	return nil
 }
 
+// RestPathReserved reports a wick REST path no plugin may reach through the
+// Host API whatever it declares and whoever it acts for: plugin management
+// (/manager/api/plugins..., plugin-sources, plugin-audit, service-plugins
+// and the host access pages under them). A plugin must not install,
+// replace or re-permission plugins, itself included.
+func RestPathReserved(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/manager/api/")
+	if !ok {
+		return false
+	}
+	seg, _, _ := strings.Cut(rest, "/")
+	return strings.Contains(seg, "plugin") || strings.Contains(seg, "*")
+}
+
 func validateRestPath(p string) error {
 	if !strings.HasPrefix(p, "/api/") && !strings.HasPrefix(p, "/manager/api/") {
 		return fmt.Errorf("path must start with /api/ or /manager/api/")
 	}
-	for _, seg := range strings.Split(p, "/") {
+	if RestPathReserved(p) {
+		return fmt.Errorf("plugin management paths (and wildcards right under /manager/api/) cannot be declared")
+	}
+	if strings.ContainsAny(p, "?#%\\") {
+		return fmt.Errorf("path must not contain a query, fragment, escape or backslash")
+	}
+	segs := strings.Split(p, "/")
+	for i, seg := range segs {
 		if seg == "." || seg == ".." {
 			return fmt.Errorf("path must not contain dot segments")
 		}
+		if seg == "**" && i != len(segs)-1 {
+			return fmt.Errorf("** must be the last path segment")
+		}
 	}
 	return nil
+}
+
+// MatchRestPattern reports whether a wick REST path (no query string)
+// matches a declared pattern: "*" matches exactly one non-empty segment,
+// a final "**" one or more remaining segments; every other segment must be
+// equal byte for byte (no unescaping, no normalisation).
+func MatchRestPattern(pattern, path string) bool {
+	ps, xs := strings.Split(pattern, "/"), strings.Split(path, "/")
+	for i, p := range ps {
+		if p == "**" && i == len(ps)-1 {
+			return len(xs) > i && xs[i] != ""
+		}
+		if i >= len(xs) {
+			return false
+		}
+		switch {
+		case p == "*":
+			if xs[i] == "" {
+				return false
+			}
+		case p != xs[i]:
+			return false
+		}
+	}
+	return len(xs) == len(ps)
 }

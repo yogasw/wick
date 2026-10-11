@@ -1778,6 +1778,8 @@ type ConnectorInstance struct {
 	Label         string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`
 	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	Ops           []string               `protobuf:"bytes,5,rep,name=ops,proto3" json:"ops,omitempty"`
+	OwnerUserId   string                 `protobuf:"bytes,6,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"` // the wick user who created the instance ("" = none recorded)
+	AccountIds    []string               `protobuf:"bytes,7,rep,name=account_ids,json=accountIds,proto3" json:"account_ids,omitempty"`      // linked accounts the acting user may run as (ids only, never tokens)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1843,6 +1845,20 @@ func (x *ConnectorInstance) GetStatus() string {
 func (x *ConnectorInstance) GetOps() []string {
 	if x != nil {
 		return x.Ops
+	}
+	return nil
+}
+
+func (x *ConnectorInstance) GetOwnerUserId() string {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return ""
+}
+
+func (x *ConnectorInstance) GetAccountIds() []string {
+	if x != nil {
+		return x.AccountIds
 	}
 	return nil
 }
@@ -2641,13 +2657,16 @@ const file_host_proto_rawDesc = "" +
 	"\x11GetConfigResponse\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x14\n" +
 	"\x05found\x18\x02 \x01(\bR\x05found\x12\x16\n" +
-	"\x06secret\x18\x03 \x01(\bR\x06secret\"\x81\x01\n" +
+	"\x06secret\x18\x03 \x01(\bR\x06secret\"\xc6\x01\n" +
 	"\x11ConnectorInstance\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tconnector\x18\x02 \x01(\tR\tconnector\x12\x14\n" +
 	"\x05label\x18\x03 \x01(\tR\x05label\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x10\n" +
-	"\x03ops\x18\x05 \x03(\tR\x03ops\"=\n" +
+	"\x03ops\x18\x05 \x03(\tR\x03ops\x12\"\n" +
+	"\rowner_user_id\x18\x06 \x01(\tR\vownerUserId\x12\x1f\n" +
+	"\vaccount_ids\x18\a \x03(\tR\n" +
+	"accountIds\"=\n" +
 	"\x1dListConnectorInstancesRequest\x12\x1c\n" +
 	"\tconnector\x18\x01 \x01(\tR\tconnector\"_\n" +
 	"\x1eListConnectorInstancesResponse\x12=\n" +

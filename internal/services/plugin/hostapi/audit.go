@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 
@@ -53,11 +54,47 @@ func NewAudit(w AuditWriter) *Audit {
 		stop: make(chan struct{}), done: make(chan struct{})}
 }
 
-// Record queues one call. Safe on a nil Audit and after Close.
+// Column limits of entity.PluginHostCall. Several values come from the
+// plugin (a Rest path, an Invoke method name, a connector op), so Record
+// clips every bounded column: one oversized row must never fail a batch.
+const (
+	auditKeyMax   = 100
+	auditKindMax  = 20
+	auditRPCMax   = 64
+	auditScopeMax = 100
+	auditItemMax  = 255
+	auditUserMax  = 36
+	auditSrcMax   = 16
+	auditCodeMax  = 32
+	auditNoteMax  = 8192
+)
+
+// clip cuts s to at most max bytes on a UTF-8 boundary.
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	s = s[:max]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func clipCall(c entity.PluginHostCall) entity.PluginHostCall {
+	c.PluginKey, c.Kind, c.RPC = clip(c.PluginKey, auditKeyMax), clip(c.Kind, auditKindMax), clip(c.RPC, auditRPCMax)
+	c.Scope, c.Item, c.UserID = clip(c.Scope, auditScopeMax), clip(c.Item, auditItemMax), clip(c.UserID, auditUserMax)
+	c.Source, c.Code, c.Note = clip(c.Source, auditSrcMax), clip(c.Code, auditCodeMax), clip(c.Note, auditNoteMax)
+	return c
+}
+
+// Record queues one call, its columns clipped to their sizes. Safe on a nil
+// Audit and after Close.
 func (a *Audit) Record(c entity.PluginHostCall) {
 	if a == nil {
 		return
 	}
+	c = clipCall(c)
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.closed {
@@ -71,7 +108,8 @@ func (a *Audit) Record(c entity.PluginHostCall) {
 	}
 }
 
-// Dropped is how many records were lost (full queue or after Close).
+// Dropped is how many records were lost (full queue, after Close, or a row
+// the writer refused).
 func (a *Audit) Dropped() int64 { return a.dropped.Load() }
 
 // Start runs the writer until ctx ends or Close is called; the queue is
@@ -115,8 +153,21 @@ func (a *Audit) loop(ctx context.Context) {
 		if len(buf) == 0 {
 			return
 		}
-		if err := a.w.WriteCalls(context.WithoutCancel(ctx), buf); err != nil {
-			log.Ctx(ctx).Warn().Err(err).Int("rows", len(buf)).Msg("host api audit: write failed, rows lost")
+		wctx := context.WithoutCancel(ctx)
+		if err := a.w.WriteCalls(wctx, buf); err != nil && len(buf) > 1 {
+			// One bad row must not take the batch with it: retry row by
+			// row so only the row that fails is lost.
+			lost := 0
+			for i := range buf {
+				if err := a.w.WriteCalls(wctx, buf[i:i+1]); err != nil {
+					lost++
+					log.Ctx(ctx).Warn().Err(err).Str("plugin", buf[i].PluginKey).Str("rpc", buf[i].RPC).Msg("host api audit: row lost")
+				}
+			}
+			a.dropped.Add(int64(lost))
+		} else if err != nil {
+			a.dropped.Add(1)
+			log.Ctx(ctx).Warn().Err(err).Str("plugin", buf[0].PluginKey).Str("rpc", buf[0].RPC).Msg("host api audit: row lost")
 		}
 		buf = buf[:0]
 	}

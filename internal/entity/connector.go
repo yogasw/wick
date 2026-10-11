@@ -136,6 +136,9 @@ const (
 	// own tick, as the schedule's run-as user — nobody was at the keyboard,
 	// and the history should say so.
 	ConnectorRunSourceSchedule ConnectorRunSource = "schedule"
+	// ConnectorRunSourcePlugin marks runs a plugin made through the Host
+	// API (ExecuteConnector), as the acting user it resolved.
+	ConnectorRunSourcePlugin ConnectorRunSource = "plugin"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.

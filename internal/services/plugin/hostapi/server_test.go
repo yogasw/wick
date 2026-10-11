@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"gorm.io/gorm"
+
 	"github.com/yogasw/wick/internal/entity"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/plugin/host"
@@ -85,11 +87,14 @@ type fixture struct {
 	perms   *Permissions
 	audit   *memoryAudit
 	aud     *Audit
+	conns   *fakeConns
+	db      *gorm.DB
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{tickets: &fakeTickets{}, perms: NewPermissions(NewMemoryPermissionStore()), audit: &memoryAudit{}}
+	f := &fixture{tickets: &fakeTickets{}, perms: NewPermissions(NewMemoryPermissionStore()), audit: &memoryAudit{},
+		conns: newFakeConns(), db: newTestDB(t)}
 	f.users = &fakeUsers{users: []*entity.User{
 		{ID: "u1", Name: "Ada", Email: "ada@example.com", Approved: true, Role: entity.RoleAdmin, PasswordHash: "secret-hash", CreatedAt: time.Unix(0, 0)},
 		{ID: "u2", Name: "Bob", Email: "Bob@Example.com", Approved: true},
@@ -102,6 +107,7 @@ func newFixture(t *testing.T) *fixture {
 			"sync":   {Key: "sync", Kind: "job", Version: "1.2.0", ConfigOwner: "job:sync", Scopes: []string{"users.read", "tickets.read", "datadir"}},
 			"cronpt": {Key: "cronpt", Kind: "job", ConfigOwner: "job:cronpt", Scopes: []string{"tickets.read"}},
 			"badpat": {Key: "badpat", Kind: "job", ConfigOwner: "job:badpat"},
+			"gen":    genPlugin,
 			"setup": {Key: "setup", Kind: "tool", ConfigOwner: "tool:setup", Scopes: []string{"config.read_other", "config.read_secret"},
 				Resources: &wickplugin.HostResources{Config: []wickplugin.HostConfigResource{{Owner: "job:other", Key: "api_secret"}}}},
 		},
@@ -116,6 +122,10 @@ func newFixture(t *testing.T) *fixture {
 		Configs: fakeConfigs{"job:cronpt/" + PATConfigKey: "wick_pat_good", "job:badpat/" + PATConfigKey: "wick_pat_revoked",
 			"job:other/api_secret": "s3cret", "job:other/other_secret": "nope", "job:other/region": "id"},
 		PATs:        fakePATs{"wick_pat_good": "u-bot"},
+		Principals:  fakePrincipals{f.users},
+		Connectors:  f.conns,
+		Router:      newTestRouter(),
+		DB:          f.db,
 		Tickets:     f.tickets,
 		Perms:       f.perms,
 		Audit:       f.aud,
@@ -214,20 +224,17 @@ func TestGetConfigOwnAndOther(t *testing.T) {
 	}
 }
 
-func TestNotYetRPCsAreUnimplemented(t *testing.T) {
-	f := newFixture(t)
-	if _, err := f.srv.Query(as(Caller{PluginKey: "sync"}), &hostpb.QueryRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("Query err = %v", err)
-	}
-}
-
 // startDoor serves HTTPHandler the way the real door will: the plugin is
 // identified before the handler runs (here from a test header).
 func startDoor(t *testing.T, s *Server) *httptest.Server {
 	t.Helper()
 	h := HTTPHandler(s)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c := Caller{PluginKey: "sync", Kind: "job", UserID: r.Header.Get("X-Test-User"), CallbackScopes: nil}
+		key := r.Header.Get("X-Test-Plugin")
+		if key == "" {
+			key = "sync"
+		}
+		c := Caller{PluginKey: key, Kind: "job", UserID: r.Header.Get("X-Test-User"), CallbackScopes: nil}
 		if c.UserID != "" {
 			c.Source = SourceCaller
 		}
@@ -312,8 +319,9 @@ func TestHTTPRoundTripWithClient(t *testing.T) {
 		t.Fatalf("blocked ListUsers err = %v", err)
 	}
 
-	// Not served yet -> the SDK's ErrHostAPIUnavailable.
-	if _, err := h.Query(ctx, &hostpb.QueryRequest{Sql: "select 1"}); !errors.Is(err, host.ErrHostAPIUnavailable) {
+	// db.read is undeclared and off by default: a typed denial, audited
+	// with its SQL.
+	if _, err := h.Query(ctx, &hostpb.QueryRequest{Sql: "select 1"}); !errors.As(err, &pd) || pd.Scope != "db.read" {
 		t.Fatalf("Query err = %v", err)
 	}
 
@@ -330,8 +338,11 @@ func TestHTTPRoundTripWithClient(t *testing.T) {
 			t.Errorf("audit row for %q", c.PluginKey)
 		}
 	}
-	if len(calls) != 5 || denied != 2 {
-		t.Fatalf("audit rows = %d (denied %d), want 5 (2): %+v", len(calls), denied, calls)
+	if len(calls) != 6 || denied != 3 {
+		t.Fatalf("audit rows = %d (denied %d), want 6 (3): %+v", len(calls), denied, calls)
+	}
+	if calls[5].RPC != "Query" || calls[5].Note != "sql: select 1" {
+		t.Fatalf("Query audit row = %+v", calls[5])
 	}
 	if calls[1].UserID != "u1" || calls[1].Source != SourceCaller || calls[1].Note != "" {
 		t.Fatalf("GetTicket audit row = %+v", calls[1])

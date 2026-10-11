@@ -68,15 +68,18 @@ func HTTPHandler(s hostpb.HostServer) http.Handler {
 		}
 		routes = append(routes, httpRoute{Route: r, segs: strings.Split(r.Pattern, "/"), input: mt, fn: fn})
 	}
-	return &httpDoor{routes: routes}
+	return &httpDoor{routes: routes, rest: s.Rest}
 }
 
-type httpDoor struct{ routes []httpRoute }
+type httpDoor struct {
+	routes []httpRoute
+	rest   func(context.Context, *hostpb.RestRequest) (*hostpb.RestResponse, error)
+}
 
 func (d *httpDoor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.EscapedPath(), host.CallbackPrefix)
 	if path == host.RestPrefix || strings.HasPrefix(path, host.RestPrefix+"/") {
-		host.WriteHTTPError(w, notYet("Rest"))
+		d.serveRest(w, r, strings.TrimPrefix(path, host.RestPrefix))
 		return
 	}
 	segs := strings.Split(path, "/")
@@ -125,6 +128,36 @@ func (d *httpDoor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(host.HeaderHostAPI, strconv.Itoa(host.APIVersion))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// serveRest is the raw Rest passthrough: method, body and headers go in
+// as-is (the server drops the ones a plugin may not set), and the wick
+// response comes back as-is with the Host API marker added.
+func (d *httpDoor) serveRest(w http.ResponseWriter, r *http.Request, path string) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, RestMaxRequestBytes+1))
+	if err != nil || len(raw) > RestMaxRequestBytes {
+		host.WriteHTTPError(w, status.Errorf(codes.InvalidArgument, "rest body unreadable or larger than %d bytes", RestMaxRequestBytes))
+		return
+	}
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	in := &hostpb.RestRequest{Method: r.Method, Path: path, Body: raw, Headers: map[string]string{}}
+	for k, vs := range r.Header {
+		in.Headers[k] = strings.Join(vs, ", ")
+	}
+	out, err := d.rest(r.Context(), in)
+	if err != nil {
+		host.WriteHTTPError(w, err)
+		return
+	}
+	for k, v := range out.GetHeaders() {
+		w.Header().Set(k, v)
+	}
+	w.Header().Del("Content-Length")
+	w.Header().Set(host.HeaderHostAPI, strconv.Itoa(host.APIVersion))
+	w.WriteHeader(int(out.GetStatus()))
+	_, _ = w.Write(out.GetBody())
 }
 
 // matchPath matches path segments against a pattern, returning the

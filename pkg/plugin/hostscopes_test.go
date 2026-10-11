@@ -97,8 +97,11 @@ func TestValidateHostAccess(t *testing.T) {
 func TestHostResourceItems(t *testing.T) {
 	r := &HostResources{
 		Rest:       []HostRestResource{{Method: "get", Path: "/api/x"}},
-		DB:         []HostDBResource{{Table: "tickets", Mode: "read"}},
+		DB:         []HostDBResource{{Table: "tickets", Mode: "read"}, {Table: "users", Mode: "write"}},
 		Connectors: []HostConnectorResource{{Connector: "slack", Ops: []string{"a", "b"}}},
+	}
+	if got := strings.Join(r.Items(HostResourceDB), ","); got != "tickets:read,users:read,users:write" {
+		t.Errorf("db items = %q", got)
 	}
 	if got := strings.Join(r.Items(HostResourceRest), ","); got != "GET /api/x" {
 		t.Errorf("rest items = %q", got)
@@ -123,5 +126,37 @@ func TestUnknownHostScopes(t *testing.T) {
 	r := &HostResources{Config: []HostConfigResource{{Owner: "job:a", Key: "token"}}}
 	if got := strings.Join(r.Items(HostResourceConfig), ","); got != "job:a/token" {
 		t.Fatalf("config items = %q", got)
+	}
+}
+
+func TestMatchRestPattern(t *testing.T) {
+	cases := []struct {
+		pattern, path string
+		want          bool
+	}{
+		{"/api/tickets", "/api/tickets", true},
+		{"/api/tickets", "/api/tickets/1", false},
+		{"/api/tickets/*", "/api/tickets/1", true},
+		{"/api/tickets/*", "/api/tickets/", false},
+		{"/api/tickets/*", "/api/tickets/1/sessions", false},
+		{"/api/tickets/*/sessions", "/api/tickets/1/sessions", true},
+		{"/api/tickets/**", "/api/tickets/1/sessions", true},
+		{"/api/tickets/**", "/api/tickets/1", true},
+		{"/api/tickets/**", "/api/tickets", false},
+		{"/api/tickets/**", "/api/tickets/", false},
+		{"/api/tickets/**", "/api/ticketsx/1", false},
+		{"/manager/api/*", "/manager/api/x", true},
+	}
+	for _, c := range cases {
+		if got := MatchRestPattern(c.pattern, c.path); got != c.want {
+			t.Errorf("MatchRestPattern(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
+		}
+	}
+	for _, bad := range []string{"/api/%2e%2e/x", "/api/x?y=1", "/api/**/x", "/api/a\\b",
+		"/manager/api/plugins/x", "/manager/api/plugin-sources", "/manager/api/service-plugins/**", "/manager/api/**", "/manager/api/*/x"} {
+		m := Manifest{HostScopes: []string{ScopeHostRestRead}, HostResources: &HostResources{Rest: []HostRestResource{{Method: "GET", Path: bad}}}}
+		if m.ValidateHostAccess() == nil {
+			t.Errorf("path %q should not validate", bad)
+		}
 	}
 }

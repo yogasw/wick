@@ -18,7 +18,8 @@ type PluginHostPermission struct {
 
 // PluginHostCall is one Host API call a plugin made, kept for the admin
 // "Access to wick" page. Rows older than the retention window are purged.
-// Note never holds a secret or a full argument dump.
+// Note never holds a secret or a full argument dump; the one exception is
+// Query, whose SQL and params (capped at 4 KB) are recorded by design.
 type PluginHostCall struct {
 	ID         uint      `gorm:"primaryKey"`
 	Ts         time.Time `gorm:"index;index:idx_plugin_host_calls_plugin_ts,priority:2"`

@@ -89,13 +89,33 @@ func TestEveryUserLevelMethodNeedsIdentity(t *testing.T) {
 			return err
 		},
 	}
+	// The generic layer, for a plugin that declared everything and whose
+	// default-off scopes an admin allowed.
+	gctx := as(Caller{PluginKey: "gen"})
+	allowAll(t, f)
+	generic := map[string]func() error{
+		"ListConnectorInstances": func() error {
+			_, err := f.srv.ListConnectorInstances(gctx, &hostpb.ListConnectorInstancesRequest{Connector: "slack"})
+			return err
+		},
+		"ExecuteConnector": func() error {
+			_, err := f.srv.ExecuteConnector(gctx, &hostpb.ExecuteConnectorRequest{Connector: "slack", Op: "lookup_user_by_email"})
+			return err
+		},
+		"Rest":  func() error { _, err := f.srv.Rest(gctx, &hostpb.RestRequest{Path: "/api/tickets/1"}); return err },
+		"Query": func() error { _, err := f.srv.Query(gctx, &hostpb.QueryRequest{Sql: "select 1"}); return err },
+	}
 	for _, m := range wickplugin.HostMethods {
 		if !m.UserLevel {
 			continue
 		}
 		fn, ok := calls[m.Name]
 		if !ok {
-			continue // not served yet (W2b): Unimplemented before any identity
+			fn, ok = generic[m.Name]
+		}
+		if !ok {
+			t.Errorf("%s: user-level method without a test call", m.Name)
+			continue
 		}
 		if err := fn(); status.Code(err) != codes.FailedPrecondition {
 			t.Errorf("%s without a user: err = %v, want FailedPrecondition", m.Name, err)

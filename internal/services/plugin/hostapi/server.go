@@ -3,9 +3,9 @@ package hostapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -23,6 +23,9 @@ type Server struct {
 	d     Deps
 	users *userCache
 	now   func() time.Time
+
+	restMu  sync.Mutex
+	restSem map[string]chan struct{} // per-plugin Rest slots
 }
 
 var _ hostpb.HostServer = (*Server)(nil)
@@ -49,15 +52,57 @@ type call struct {
 	note   string
 }
 
+// gate describes one call for run: the RPC, the scope and item it needs
+// (scope "" = none), a note for the audit row and whether it must run as a
+// person even when HostMethods does not say so (an Invoke method). A
+// non-nil reject fails the call right after the plugin is authenticated,
+// still audited (a malformed Rest path).
+type gate struct {
+	rpc, scope, item string
+	note             string
+	userLevel        bool
+	reject           error
+}
+
 // run is the single gate every RPC goes through: authenticated plugin,
 // permission (scope "" = no scope needed), identity for user-level RPCs,
 // the call itself, then one audit row.
 func (s *Server) run(ctx context.Context, rpc, scope, item string, fn func(c *call) error) error {
+	return s.runGate(ctx, gate{rpc: rpc, scope: scope, item: item}, fn)
+}
+
+func (s *Server) runGate(ctx context.Context, g gate, fn func(c *call) error) error {
 	start := s.now()
 	caller, ok := CallerFrom(ctx)
 	if !ok {
 		return status.Error(codes.Unauthenticated, "no plugin identity on the call")
 	}
+	c := &call{caller: caller, plugin: s.pluginInfo(caller), userID: caller.UserID, source: caller.Source, note: g.note}
+	err := func() error {
+		if g.reject != nil {
+			return g.reject
+		}
+		if g.scope != "" {
+			dec := s.d.Perms.Decide(ctx, c.plugin, g.scope, g.item)
+			if !dec.Allowed {
+				return &host.PermissionDeniedError{Scope: g.scope, Item: g.item, Plugin: c.plugin.Key, Message: dec.Reason}
+			}
+			if dec.Status == StatusUndeclared {
+				c.addNote("undeclared")
+			}
+		}
+		if m, _ := wickplugin.LookupHostMethod(g.rpc); m.UserLevel || g.userLevel {
+			if err := s.resolveUser(ctx, c); err != nil {
+				return err
+			}
+		}
+		return fn(c)
+	}()
+	s.audit(c, g.rpc, g.scope, g.item, start, err)
+	return err
+}
+
+func (s *Server) pluginInfo(caller Caller) PluginInfo {
 	info := PluginInfo{Key: caller.PluginKey, Kind: caller.Kind}
 	if s.d.Plugins != nil {
 		if p, found := s.d.Plugins.Plugin(caller.PluginKey); found {
@@ -67,26 +112,16 @@ func (s *Server) run(ctx context.Context, rpc, scope, item string, fn func(c *ca
 	if info.Kind == "" {
 		info.Kind = caller.Kind
 	}
-	c := &call{caller: caller, plugin: info, userID: caller.UserID, source: caller.Source}
-	err := func() error {
-		if scope != "" {
-			dec := s.d.Perms.Decide(ctx, info, scope, item)
-			if !dec.Allowed {
-				return &host.PermissionDeniedError{Scope: scope, Item: item, Plugin: info.Key, Message: dec.Reason}
-			}
-			if dec.Status == StatusUndeclared {
-				c.note = "undeclared"
-			}
-		}
-		if m, _ := wickplugin.LookupHostMethod(rpc); m.UserLevel {
-			if err := s.resolveUser(ctx, c); err != nil {
-				return err
-			}
-		}
-		return fn(c)
-	}()
-	s.audit(c, rpc, scope, item, start, err)
-	return err
+	return info
+}
+
+// addNote appends to the audit note.
+func (c *call) addNote(n string) {
+	if c.note == "" {
+		c.note = n
+		return
+	}
+	c.note += "; " + n
 }
 
 // resolveUser picks who a user-level call runs as: the caller the door
@@ -204,13 +239,15 @@ func (s *Server) allowedScopes(ctx context.Context, p PluginInfo) []string {
 	return out
 }
 
-// ListMethods lists the Host API methods and their scopes.
+// ListMethods lists the Host API RPCs, then the Invoke methods (built-in
+// aliases and RegisterMethod registrations), each with its scope.
 func (s *Server) ListMethods(ctx context.Context, _ *hostpb.ListMethodsRequest) (*hostpb.ListMethodsResponse, error) {
 	out := &hostpb.ListMethodsResponse{}
 	err := s.run(ctx, "ListMethods", wickplugin.ScopeHostWhoami, "", func(*call) error {
 		for _, m := range wickplugin.HostMethods {
 			out.Methods = append(out.Methods, &hostpb.MethodInfo{Name: m.Name, Scope: m.Scope, Summary: m.Summary, Destructive: m.Destructive})
 		}
+		out.Methods = append(out.Methods, invokeMethods()...)
 		return nil
 	})
 	if err != nil {
@@ -351,7 +388,7 @@ func (s *Server) GetConfig(ctx context.Context, in *hostpb.GetConfigRequest) (*h
 		case secret && !self:
 			item := wickplugin.ConfigItem(o, in.GetKey())
 			if s.d.Perms.Decide(ctx, c.plugin, wickplugin.ScopeHostConfigReadSecret, item).Allowed {
-				c.note = wickplugin.ScopeHostConfigReadSecret + " " + item
+				c.addNote(wickplugin.ScopeHostConfigReadSecret + " " + item)
 			} else {
 				v = ""
 			}
@@ -509,35 +546,4 @@ func (s *Server) AttachSession(ctx context.Context, in *hostpb.AttachSessionRequ
 		return nil, err
 	}
 	return &hostpb.Empty{}, nil
-}
-
-// ---- not served yet ----
-
-func notYet(rpc string) error {
-	return status.Error(codes.Unimplemented, fmt.Sprintf("wick host API: %s is not available on this wick yet", rpc))
-}
-
-// ListConnectorInstances is not served yet.
-func (s *Server) ListConnectorInstances(context.Context, *hostpb.ListConnectorInstancesRequest) (*hostpb.ListConnectorInstancesResponse, error) {
-	return nil, notYet("ListConnectorInstances")
-}
-
-// ExecuteConnector is not served yet.
-func (s *Server) ExecuteConnector(context.Context, *hostpb.ExecuteConnectorRequest) (*hostpb.ExecuteConnectorResponse, error) {
-	return nil, notYet("ExecuteConnector")
-}
-
-// Invoke is not served yet.
-func (s *Server) Invoke(context.Context, *hostpb.InvokeRequest) (*hostpb.InvokeResponse, error) {
-	return nil, notYet("Invoke")
-}
-
-// Rest is not served yet.
-func (s *Server) Rest(context.Context, *hostpb.RestRequest) (*hostpb.RestResponse, error) {
-	return nil, notYet("Rest")
-}
-
-// Query is not served yet.
-func (s *Server) Query(context.Context, *hostpb.QueryRequest) (*hostpb.QueryResponse, error) {
-	return nil, notYet("Query")
 }

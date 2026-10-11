@@ -19,7 +19,7 @@ func TestDecideDefaults(t *testing.T) {
 	if d := p.Decide(ctx, pl, "users.read", ""); !d.Allowed || d.Status != StatusAllowed {
 		t.Fatalf("users.read default = %+v, want allowed", d)
 	}
-	if d := p.Decide(ctx, pl, "db.read", "users"); d.Allowed || d.Status != StatusOffByDefault {
+	if d := p.Decide(ctx, pl, "db.read", "users:read"); d.Allowed || d.Status != StatusOffByDefault {
 		t.Fatalf("db.read default = %+v, want off-by-default", d)
 	}
 	if d := p.Decide(ctx, pl, "whoami", ""); !d.Allowed {
@@ -50,17 +50,17 @@ func TestDecideOverlayScopeAndItem(t *testing.T) {
 	if err := p.Set(ctx, "p", "db.read", "", true, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if d := p.Decide(ctx, pl, "db.read", "tickets"); !d.Allowed {
+	if d := p.Decide(ctx, pl, "db.read", "tickets:read"); !d.Allowed {
 		t.Fatalf("db.read after allow = %+v", d)
 	}
 	if d := p.Decide(ctx, pl, "db.read", "sessions"); d.Allowed {
 		t.Fatal("a table outside host_resources was allowed")
 	}
-	_ = p.Set(ctx, "p", "db.read", "tickets", false, "admin")
-	if d := p.Decide(ctx, pl, "db.read", "tickets"); d.Allowed || d.Status != StatusBlocked {
+	_ = p.Set(ctx, "p", "db.read", "tickets:read", false, "admin")
+	if d := p.Decide(ctx, pl, "db.read", "tickets:read"); d.Allowed || d.Status != StatusBlocked {
 		t.Fatalf("blocked item = %+v", d)
 	}
-	if d := p.Decide(ctx, pl, "db.read", "users"); !d.Allowed {
+	if d := p.Decide(ctx, pl, "db.read", "users:read"); !d.Allowed {
 		t.Fatal("blocking one item blocked another")
 	}
 	_ = p.Set(ctx, "p", "users.read", "", false, "admin")

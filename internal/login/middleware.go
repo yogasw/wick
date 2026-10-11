@@ -66,6 +66,24 @@ func IsScopedPrincipal(ctx context.Context) bool {
 	return scoped
 }
 
+type machineCallerKey struct{}
+
+// WithMachineCaller marks a request made in-process by a machine on a
+// user's behalf — today a plugin calling wick's REST API through the Host
+// API ("plugin:<key>"). Surfaces that treat token requests differently from
+// the browser UI (the per-project ticket REST toggle, the "api" actor on
+// webhooks) treat this mark like a bearer token. Only server code can set
+// it: it lives on the context, never in a header.
+func WithMachineCaller(ctx context.Context, label string) context.Context {
+	return context.WithValue(ctx, machineCallerKey{}, label)
+}
+
+// MachineCaller returns the label WithMachineCaller set, if any.
+func MachineCaller(ctx context.Context) (string, bool) {
+	l, ok := ctx.Value(machineCallerKey{}).(string)
+	return l, ok && l != ""
+}
+
 // SecretProvider is the minimal interface Middleware needs to read the
 // current session-signing secret + first-login state. configs.Service
 // satisfies it.
