@@ -19,6 +19,8 @@ import { connTabOf, type ConnTab } from "./connectionTabs.js";
      /team/<handle>?panel=scheduled      Scheduled drawer
      /team/g/<group session id>          a group chat
      /team/g/<id>?panel=group-settings   its Settings drawer
+     /team/t                             Tickets: the selected projects' board
+     /team/t/<project id>/<ticket id>    one ticket on it
      /team?panel=new                     the + Agent wizard
      /team?panel=new&project=<id>        the wizard converting that project
                                          ("Make this an agent…")
@@ -59,7 +61,12 @@ export type AgentsRoute = {
   panel: AgentsPanel | null;
   /** A group chat's session id (/team/g/<id>); then handle is null. */
   group?: string | null;
+  /** The Tickets page (/team/t…); then handle and group are null. No
+      project/ticket = the board, both = that ticket's page. */
+  tickets?: TicketsRoute | null;
 };
+
+export type TicketsRoute = { project?: string; ticket?: string };
 
 const ROOT = "/team";
 
@@ -75,12 +82,23 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
   const seg = segs[0] ?? "";
   let handle: string | null = null;
   let group: string | null = null;
-  // "g" is free to reserve: a handle has 2+ characters (HANDLE_RE).
+  let tickets: TicketsRoute | null = null;
+  // "g" and "t" are free to reserve: a handle has 2+ characters (HANDLE_RE).
   if (seg === "g" && segs[1]) {
     try {
       group = decodeURIComponent(segs[1]);
     } catch {
       group = null;
+    }
+  } else if (seg === "t") {
+    // A ticket needs both ids; half of one (or a bad escape) is the board.
+    tickets = {};
+    if (segs[1] && segs[2]) {
+      try {
+        tickets = { project: decodeURIComponent(segs[1]), ticket: decodeURIComponent(segs[2]) };
+      } catch {
+        tickets = {};
+      }
     }
   } else if (seg) {
     try {
@@ -119,16 +137,20 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
       break;
   }
   const session = handle ? q.get("session") || null : null;
+  if (tickets) return { handle, session, panel, tickets };
   return group ? { handle, session, panel, group } : { handle, session, panel };
 }
 
 /** formatAgentsRoute is the inverse of parseAgentsRoute. */
 export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   let path = base + ROOT;
-  if (r.group) path += "/g/" + encodeURIComponent(r.group);
+  if (r.tickets) {
+    path += "/t";
+    if (r.tickets.project && r.tickets.ticket) path += "/" + encodeURIComponent(r.tickets.project) + "/" + encodeURIComponent(r.tickets.ticket);
+  } else if (r.group) path += "/g/" + encodeURIComponent(r.group);
   else if (r.handle) path += "/" + encodeURIComponent(r.handle);
   const q = new URLSearchParams();
-  if (!r.group && r.handle && r.session) q.set("session", r.session);
+  if (!r.tickets && !r.group && r.handle && r.session) q.set("session", r.session);
   if (r.panel) {
     q.set("panel", r.panel.kind);
     if (r.panel.kind === "settings" || r.panel.kind === "team-settings") q.set("tab", r.panel.tab);

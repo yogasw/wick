@@ -8,6 +8,7 @@
   import { onMount, type Component } from "svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
   import TeamSettingsGeneral from "./TeamSettingsGeneral.svelte";
+  import TeamSettingsTickets from "./TeamSettingsTickets.svelte";
   import {
     getTeamSettings, saveTeamSettings, runApi, TEAM_SETTING_KEYS,
     type TeamSettings, type TeamSettingValues, type TeamSettingsWrite,
@@ -21,13 +22,20 @@
     tab: TeamSettingsTab;
     onTab: (tab: TeamSettingsTab) => void;
     onClose: () => void;
+    /** Every confirmed save, so the page can follow (the Tickets row). */
+    onSaved?: (s: TeamSettings) => void;
   };
-  let { base, tab, onTab, onClose }: Props = $props();
+  let { base, tab, onTab, onClose, onSaved }: Props = $props();
 
-  type TabView = Component<{ draft: TeamSettingValues; saved: TeamSettings }, {}, "draft">;
+  /** onSave sends a setting that is not a draft field (a list) at once. */
+  type TabView = Component<
+    { draft: TeamSettingValues; saved: TeamSettings; base?: string; onSave?: (body: TeamSettingsWrite) => void },
+    {},
+    "draft"
+  >;
   /** Each tab's view. Record over TeamSettingsTab: a tab added to the
       registry without a view here does not compile. */
-  const VIEWS: Record<TeamSettingsTab, TabView> = { general: TeamSettingsGeneral };
+  const VIEWS: Record<TeamSettingsTab, TabView> = { general: TeamSettingsGeneral, tickets: TeamSettingsTickets };
 
   let saved = $state<TeamSettings | null>(null);
   let draft = $state<TeamSettingValues | null>(null);
@@ -82,29 +90,69 @@
   }
   function retry() {
     failedKey = "";
-    flush();
+    if (listFailed && lastList) void saveList(lastList);
+    else flush();
   }
+
+  /* Lists a tab saves itself (onSave) go one at a time, latest wins: a
+     switch flipped while one is in flight waits, then the newest list is
+     sent. Each list is the tab's whole current choice, so nothing is lost. */
+  let lastList: TeamSettingsWrite | null = null;
+  let queuedList: TeamSettingsWrite | null = null;
+  let listBusy = false;
+  /** The last list save failed: Retry sends the newest list. */
+  let listFailed = false;
+  async function saveList(body: TeamSettingsWrite) {
+    lastList = queuedList = body;
+    if (listBusy) return;
+    listBusy = true;
+    try {
+      while (queuedList) {
+        const next = queuedList;
+        queuedList = null;
+        await send(next, true);
+      }
+    } finally {
+      listBusy = false;
+    }
+  }
+  /** Bumped per PUT: an answer to an older one never overwrites a newer. */
+  let seq = 0;
 
   async function save() {
     if (!dirty || invalid || saving) return;
-    const sent = $state.snapshot(patch) as TeamSettingsWrite;
+    await send($state.snapshot(patch) as TeamSettingsWrite);
+  }
+
+  /** send PUTs one patch and shows how it went in the status line.
+      list = a tab's own onSave, not the draft's diff. */
+  async function send(sent: TeamSettingsWrite, list = false) {
+    const my = ++seq;
     saving = true;
     status = "saving";
     slow = false;
     const slowTimer = setTimeout(() => (slow = true), SLOW_SAVE_MS);
     error = "";
     try {
-      saved = await runApi(saveTeamSettings(base, sent));
-      failedKey = "";
+      const r = await runApi(saveTeamSettings(base, sent));
+      if (list) listFailed = false;
+      else failedKey = "";
+      if (my !== seq) return;
+      saved = r;
+      onSaved?.(r);
       status = "saved";
     } catch (e) {
-      failedKey = patchKey(sent);
+      listFailed = list;
+      if (!list) failedKey = patchKey(sent);
+      if (my !== seq) return;
       error = e instanceof Error ? e.message : String(e);
       status = "error";
     } finally {
       clearTimeout(slowTimer);
-      saving = false;
-      slow = false;
+      if (my === seq) {
+        saving = false;
+        slow = false;
+      }
     }
   }
 
@@ -133,7 +181,7 @@
   {:else if !saved || !draft}
     <p class="text-sm text-black-800 dark:text-black-600">Loading…</p>
   {:else}
-    <View bind:draft {saved} />
+    <View bind:draft {saved} {base} onSave={(body) => void saveList(body)} />
   {/if}
   {#if error}<p class="text-sm text-neg-400">{error}</p>{/if}
 </div>

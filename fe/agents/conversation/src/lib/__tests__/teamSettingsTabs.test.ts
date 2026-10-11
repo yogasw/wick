@@ -13,6 +13,12 @@ describe("Team settings tab registry", () => {
     expect(teamSettingsTabOf("general")).toBe("general");
   });
 
+  test("Tickets has its own tab, with no typed fields", () => {
+    expect(TEAM_SETTINGS_TABS.map((t) => t.id)).toEqual(["general", "tickets"]);
+    expect(teamSettingsTabOf("tickets")).toBe("tickets");
+    expect(TEAM_SETTINGS_TABS.find((t) => t.id === "tickets")?.textKeys).toEqual([]);
+  });
+
   test("every text key is a real setting", () => {
     for (const t of TEAM_SETTINGS_TABS) for (const k of t.textKeys) expect(TEAM_SETTING_KEYS).toContain(k);
     expect(isTextKey("prompt")).toBe(true);

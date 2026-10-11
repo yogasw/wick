@@ -54,6 +54,8 @@
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
   import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
+  import TicketsPage from "./lib/components/team/TicketsPage.svelte";
+  import { projectCount, ticketsSubtitle } from "./lib/ticketProjects.js";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
@@ -162,11 +164,21 @@
      the drawer updates it on save. A failed read keeps the default (on). */
   async function loadIdleAnimations() {
     try {
-      setIdleAnimations((await runApi(getTeamSettings(base))).idle_animations !== false);
-    } catch {
-      /* keep the default */
+      const s = await runApi(getTeamSettings(base));
+      setIdleAnimations(s.idle_animations !== false);
+      ticketProjects = s.ticket_projects ?? [];
+      ticketLoadError = "";
+    } catch (e) {
+      /* keep the default; Tickets shows the reason, not an empty picker */
+      ticketLoadError = e instanceof Error ? e.message : String(e);
     }
   }
+  let ticketLoadError = $state("");
+  /** Project names for the Tickets header, once the page has read them. */
+  let ticketNames = $state<Record<string, string>>({});
+  /* Team › Tickets: the projects picked for it (Team settings), for the
+     row's count and the page; null until the settings have loaded. */
+  let ticketProjects = $state<string[] | null>(null);
 
   onMount(() => {
     load();
@@ -220,8 +232,9 @@
   const pins = $derived(query.trim() || noCaptain ? [] : mobilePins(agents));
   const pinIds = $derived(new Set(pins.map((a) => a.id)));
 
+  // Tickets is a page of the app, not a member: no agent is open on it.
   const selected = $derived(
-    route.handle ? agents.find((a) => a.handle === route.handle) : captain,
+    route.tickets ? undefined : route.handle ? agents.find((a) => a.handle === route.handle) : captain,
   );
 
   /* /team names no agent: settle on the Captain, rewriting the URL rather
@@ -241,7 +254,7 @@
       }
       return;
     }
-    if (!route.handle && captain && route.panel?.kind !== "new") {
+    if (!route.handle && !route.tickets && captain && route.panel?.kind !== "new") {
       navigate({ ...route, handle: captain.handle }, { replace: true });
     }
   });
@@ -795,6 +808,20 @@
       {/each}
     </nav>
     <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account" data-space-account>
+      <!-- Tickets: app navigation next to Team settings, not a roster row. -->
+      <button
+        type="button"
+        class="mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium {route.tickets
+          ? 'bg-green-50 text-green-700 dark:bg-navy-600 dark:text-green-400'
+          : 'text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600'}"
+        aria-current={route.tickets ? "page" : undefined}
+        data-testid="tickets-nav"
+        onclick={() => { rosterOpen = false; navigate({ handle: null, session: null, panel: null, tickets: {} }); }}
+      >
+        <svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 6a1 1 0 011-1h10a1 1 0 011 1v1.5a1.5 1.5 0 000 3V12a1 1 0 01-1 1H3a1 1 0 01-1-1v-1.5a1.5 1.5 0 000-3V6z" stroke-linejoin="round"></path><path d="M9.5 5v1.2M9.5 7.7v1.2M9.5 10.4V12" stroke-linecap="round"></path></svg>
+        <span class="min-w-0 flex-1">Tickets</span>
+        {#if ticketProjects?.length}<span class="shrink-0 text-[11px] font-normal text-black-700" data-testid="tickets-nav-count">{projectCount(ticketProjects.length)}</span>{/if}
+      </button>
       <TeamAccountMenu
         {viewerName}
         {...account}
@@ -816,6 +843,48 @@
         onSettings={() => openPanel({ kind: "group-settings" })}
       />
     {/key}
+  </section>
+  {:else if route.tickets}
+  <section class="flex min-w-0 flex-1 flex-col">
+    <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600" data-testid="tickets-header">
+      <button
+        type="button"
+        class="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+        aria-label="Agent list"
+        onclick={() => (rosterOpen = true)}
+      >
+        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+      </button>
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white-300 text-black-800 dark:bg-navy-600 dark:text-black-600"><svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 6a1 1 0 011-1h10a1 1 0 011 1v1.5a1.5 1.5 0 000 3V12a1 1 0 01-1 1H3a1 1 0 01-1-1v-1.5a1.5 1.5 0 000-3V6z" stroke-linejoin="round"></path><path d="M9.5 5v1.2M9.5 7.7v1.2M9.5 10.4V12" stroke-linecap="round"></path></svg></span>
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-sm font-semibold text-black-900 dark:text-white-100">Tickets</h1>
+        <div class="truncate text-xs text-black-800 dark:text-black-600">{ticketLoadError ? "" : ticketsSubtitle(ticketProjects ?? [], ticketNames)}</div>
+      </div>
+      {#if ticketProjects?.length}
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+          title="Team settings › Tickets"
+          aria-label="Team settings › Tickets"
+          data-testid="tickets-settings"
+          onclick={() => openPanel({ kind: "team-settings", tab: "tickets" })}
+        >
+          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2"></circle><path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3"></path></svg>
+        </button>
+      {/if}
+    </header>
+    <div class="min-h-0 flex-1">
+      <TicketsPage
+        {base}
+        selected={ticketProjects}
+        loadError={ticketLoadError}
+        onRetry={() => void loadIdleAnimations()}
+        onProjects={(ps) => (ticketNames = Object.fromEntries(ps.map((p) => [p.id, p.name])))}
+        route={route.tickets}
+        onPicked={(s) => (ticketProjects = s.ticket_projects ?? [])}
+        onRoute={(t) => go({ tickets: t })}
+      />
+    </div>
   </section>
   {:else}
   <section class="flex min-w-0 flex-1 flex-col">
@@ -965,6 +1034,7 @@
           tab={route.panel.tab}
           onTab={(tab) => go({ panel: { kind: "team-settings", tab } }, true)}
           onClose={() => openPanel(null)}
+          onSaved={(s) => (ticketProjects = s.ticket_projects ?? [])}
         />
       {:else if route.panel.kind === "new"}
         {#if firstAgent && newType !== "local" && !route.panel.project}

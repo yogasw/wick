@@ -24,6 +24,9 @@ export const TEAM_SETTINGS_TABS = [
     invalid: (d, s) =>
       promptBytes(d.prompt) > s.max_prompt_bytes ? `the prompt is over ${Math.round(s.max_prompt_bytes / 1024)} KB` : "",
   },
+  /* Which projects the Team Tickets page combines. Its one setting is a
+     list, saved by the tab itself (see TeamSettingValues.ticket_projects). */
+  { id: "tickets", label: "Tickets", textKeys: [] },
 ] as const satisfies readonly TeamSettingsTabSpec[];
 
 export type TeamSettingsTab = (typeof TEAM_SETTINGS_TABS)[number]["id"];
