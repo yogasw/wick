@@ -35,7 +35,7 @@ func grpcServerWithLimits(opts []grpc.ServerOption) *grpc.Server {
 // DumpManifest returns json.Marshal(mod) — the manifest is the module
 // itself, so the plugin.json on disk can never drift from the binary.
 func DumpManifest(mod connector.Module) ([]byte, error) {
-	return json.Marshal(mod)
+	return json.Marshal(manifestModule(mod))
 }
 
 // Serve is the entire main() of a connector plugin binary. Call it with the

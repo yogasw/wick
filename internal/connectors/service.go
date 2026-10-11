@@ -1679,6 +1679,9 @@ func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*Heal
 
 	cctx := connector.NewCtx(ctx, c.ID, cfg, nil, s.httpClient, nil, nil)
 	report, err := mod.HealthCheck(cctx)
+	if errors.Is(err, ErrNoHealthCheck) {
+		return nil, ErrNoHealthCheck
+	}
 	if err != nil {
 		return nil, fmt.Errorf("health check: %w", err)
 	}
@@ -1764,6 +1767,11 @@ func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, insta
 	}
 	cctx := connector.NewCtx(ctx, instanceID, cfg, nil, s.httpClient, nil, nil)
 	report, err := mod.HealthCheck(cctx)
+	if errors.Is(err, ErrNoHealthCheck) {
+		// A plugin hook that turned out absent: the caller falls back to
+		// running an operation, as for a module without a hook.
+		return nil, ErrNoHealthCheck
+	}
 	if err != nil {
 		return nil, fmt.Errorf("health check: %w", err)
 	}
@@ -2207,6 +2215,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// caller supplied them) so MCP-proxy ops can forward bools/numbers in
 	// their native JSON type rather than the stringified Input form.
 	cctx.SetRawInput(p.RawInput)
+	cctx.SetRequestID(run.ID)
 	// Stamp the effective caller so ops that scope data per owner (data-table
 	// ops) can gate access. Agent spawns authenticate with a shared internal
 	// token (a synthetic admin, NOT the human), so the SESSION's owner — not
@@ -2287,7 +2296,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if masker == nil || s == "" {
 			return s
 		}
-		return masker.svc.Mask(s, masker.snapshot(), p.UserID)
+		exact, folded := masker.snapshot()
+		s = masker.svc.Mask(s, exact, p.UserID)
+		if len(folded) > 0 {
+			s = masker.svc.MaskIgnoreCase(s, folded, p.UserID)
+		}
+		return s
 	}
 
 	res = &ExecuteResult{

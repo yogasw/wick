@@ -328,6 +328,11 @@ type Module struct {
 	// of group calls AllOps().
 	Operations  []Category
 	HealthCheck HealthCheckFunc `json:"-"`
+	// HasHealthCheck travels in a plugin manifest in place of HealthCheck
+	// (a func cannot be marshalled): the plugin SDK sets it when the module
+	// registers a hook, and the host wires a HealthCheck that runs it in the
+	// plugin. Module authors leave it alone.
+	HasHealthCheck bool `json:"has_health_check,omitempty"`
 	// ValidateConfig is optional. When non-nil, every instance config
 	// write (create, edit, OAuth, the manager MCP tool) runs it first.
 	ValidateConfig ConfigValidateFunc `json:"-"`

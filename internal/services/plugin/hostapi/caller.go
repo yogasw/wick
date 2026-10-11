@@ -31,6 +31,10 @@ type Caller struct {
 	// there is one. Reserved: the doors fill it in W3 so session/ticket
 	// access can apply the calling agent's own data scope.
 	SessionID string
+	// InstanceID is the connector instance the Execute behind this call
+	// runs ("" = none, e.g. a tool or job request). Instance-bound RPCs
+	// (ConnectedAccounts) answer for this instance only.
+	InstanceID string
 	// CallbackScopes are a service plugin's legacy callback_scopes, echoed
 	// as "scopes" by the HTTP whoami for plugins that predate the Host API.
 	CallbackScopes []string

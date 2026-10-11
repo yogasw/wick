@@ -204,6 +204,7 @@ func VerifyManifest(m Manifest, binaryPath string) error {
 // the binary itself (self-pack): it hashes os.Executable() and, when
 // signKeyPath is non-empty, signs that hash. mod is the connector's module.
 func BuildSelfManifest(mod connector.Module, signKeyPath string) (Manifest, error) {
+	mod = manifestModule(mod)
 	exe, err := os.Executable()
 	if err != nil {
 		return Manifest{}, fmt.Errorf("locate self: %w", err)

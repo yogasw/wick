@@ -323,15 +323,27 @@ func (s *Server) getUser(ctx context.Context, rpc, id, email string) (*hostpb.Us
 
 // ---- accounts.read ----
 
-// ConnectedAccounts lists the accounts linked to a connector instance.
+// ConnectedAccounts lists the accounts linked to a connector instance. Like
+// the in-process Ctx it answers for the instance being executed only: the
+// caller must be a connector plugin inside an Execute wick started (its
+// call id carries the instance), and instance_id must be that instance.
 func (s *Server) ConnectedAccounts(ctx context.Context, in *hostpb.ConnectedAccountsRequest) (*hostpb.ConnectedAccountsResponse, error) {
 	var out *hostpb.ConnectedAccountsResponse
-	err := s.run(ctx, "ConnectedAccounts", wickplugin.ScopeHostAccountsRead, "", func(*call) error {
+	err := s.run(ctx, "ConnectedAccounts", wickplugin.ScopeHostAccountsRead, "", func(c *call) error {
 		if s.d.Accounts == nil {
 			return unavailable("ConnectedAccounts")
 		}
 		if strings.TrimSpace(in.GetInstanceId()) == "" {
 			return status.Error(codes.InvalidArgument, "instance_id is required")
+		}
+		if c.caller.Kind != wickplugin.KindConnector || c.plugin.Kind != wickplugin.KindConnector {
+			return status.Error(codes.PermissionDenied, "ConnectedAccounts is only available to connector plugins")
+		}
+		if c.caller.InstanceID == "" {
+			return status.Error(codes.FailedPrecondition, "ConnectedAccounts needs the call id of a running Execute")
+		}
+		if in.GetInstanceId() != c.caller.InstanceID {
+			return status.Error(codes.PermissionDenied, "instance_id is not the instance being executed")
 		}
 		accs, err := s.d.Accounts.ConnectedAccounts(ctx, in.GetInstanceId())
 		if err != nil {

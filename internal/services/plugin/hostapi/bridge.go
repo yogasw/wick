@@ -186,7 +186,17 @@ func (b *Bridge) BeginCall(key, kind, userID, sessionID string) (string, func())
 // BeginCallFrom is BeginCall with the identity's source (SourceToken for a
 // service route reached with an access token).
 func (b *Bridge) BeginCallFrom(key, kind, userID, source, sessionID string) (string, func()) {
-	if key == "" || (userID == "" && sessionID == "") {
+	return b.beginCall(key, kind, userID, source, sessionID, "")
+}
+
+// BeginCallInstance is BeginCall for a connector Execute: it also records
+// the instance being executed, which instance-bound RPCs are held to.
+func (b *Bridge) BeginCallInstance(key, kind, userID, sessionID, instanceID string) (string, func()) {
+	return b.beginCall(key, kind, userID, SourceCaller, sessionID, instanceID)
+}
+
+func (b *Bridge) beginCall(key, kind, userID, source, sessionID, instanceID string) (string, func()) {
+	if key == "" || (userID == "" && sessionID == "" && instanceID == "") {
 		return "", func() {}
 	}
 	if userID == "" {
@@ -194,7 +204,7 @@ func (b *Bridge) BeginCallFrom(key, kind, userID, source, sessionID string) (str
 	}
 	id := newSecret("")
 	b.mu.Lock()
-	b.calls[id] = Caller{PluginKey: key, Kind: kind, UserID: userID, Source: source, SessionID: sessionID}
+	b.calls[id] = Caller{PluginKey: key, Kind: kind, UserID: userID, Source: source, SessionID: sessionID, InstanceID: instanceID}
 	b.mu.Unlock()
 	var once sync.Once
 	return id, func() {
@@ -226,7 +236,7 @@ func (b *Bridge) caller(key, kind, callID string) (Caller, error) {
 	if !ok || got.PluginKey != key {
 		return Caller{}, errUnknownCall
 	}
-	c.UserID, c.Source, c.SessionID = got.UserID, got.Source, got.SessionID
+	c.UserID, c.Source, c.SessionID, c.InstanceID = got.UserID, got.Source, got.SessionID, got.InstanceID
 	return c, nil
 }
 

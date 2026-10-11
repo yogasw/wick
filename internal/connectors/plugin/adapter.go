@@ -3,8 +3,11 @@ package plugin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
+	connectors "github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
@@ -26,7 +29,40 @@ func BuildModule(mod connector.Module, getConn ConnGetter) connector.Module {
 			mod.Operations[ci].Ops[oi].Execute = newExecuteClosure(key, opKey, getConn)
 		}
 	}
+	if mod.HasHealthCheck {
+		mod.HealthCheck = newHealthCheckClosure(key, getConn)
+	}
 	return mod
+}
+
+// newHealthCheckClosure runs the plugin module's HealthCheck hook in the
+// plugin. Only wired when the manifest says the hook exists; a plugin that
+// still answers no_health_check maps to connectors.ErrNoHealthCheck, so
+// "test setup" falls back to running an operation as before.
+func newHealthCheckClosure(connKey string, getConn ConnGetter) connector.HealthCheckFunc {
+	return func(c *connector.Ctx) ([]connector.OpHealth, error) {
+		lease, err := getConn(connKey)
+		if err != nil {
+			return nil, fmt.Errorf("plugin %q unavailable: %w", connKey, err)
+		}
+		defer lease.Release()
+		res, err := lease.Conn.ExecuteStream(c.Context(), wickplugin.ExecCall{
+			HealthCheck: true,
+			Creds:       c.Configs(),
+			InstanceID:  c.InstanceID(),
+		})
+		if err != nil {
+			if errors.Is(err, wickplugin.ErrPluginOp) && strings.Contains(err.Error(), "["+wickplugin.CodeNoHealthCheck+"]") {
+				return nil, connectors.ErrNoHealthCheck
+			}
+			return nil, err
+		}
+		var report []connector.OpHealth
+		if err := json.Unmarshal(res.JSON, &report); err != nil {
+			return nil, fmt.Errorf("decode health report: %w", err)
+		}
+		return report, nil
+	}
 }
 
 func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.ExecuteFunc {
@@ -40,10 +76,19 @@ func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.Exec
 			Operation:    opKey,
 			Input:        c.Inputs(),
 			Creds:        c.Configs(),
+			RequestID:    c.RequestID(),
+			SessionID:    c.SessionID(),
 			InstanceID:   c.InstanceID(),
 			CallerUserID: c.CallerUserID(),
+			AccountID:    c.AccountID(),
+			OwnerBotID:   c.OwnerBotID(),
+			RawInput:     c.RawInput(),
+			Progress:     c.ReportProgress,
 		})
 		if err != nil {
+			// Register what the op asked to mask even when it failed, so the
+			// host's sweep scrubs those values from the error message too.
+			registerPluginMasks(c, res)
 			return nil, err
 		}
 		return json.RawMessage(maskPluginResult(c, res)), nil
@@ -80,6 +125,18 @@ func maskPluginResult(c *connector.Ctx, res wickplugin.ExecResult) []byte {
 		return []byte(maskStr(string(res.JSON)))
 	}
 	return out
+}
+
+// registerPluginMasks hands the values a failed plugin op passed to c.Mask /
+// c.MaskIgnoreCase to the host masker without masking any data, so they join
+// the post-execute sweep that scrubs the error message.
+func registerPluginMasks(c *connector.Ctx, res wickplugin.ExecResult) {
+	if len(res.Mask) > 0 {
+		c.Mask("", res.Mask)
+	}
+	if len(res.MaskIgnoreCase) > 0 {
+		c.MaskIgnoreCase("", res.MaskIgnoreCase)
+	}
 }
 
 func maskJSONValue(v any, maskStr func(string) string) any {

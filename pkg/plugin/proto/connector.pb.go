@@ -82,8 +82,21 @@ type ExecuteRequest struct {
 	SessionId string                 `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// instance_id / caller_user_id let the plugin's connector.Ctx report the
 	// same InstanceID() and CallerUserID() the host sees. Empty from older hosts.
-	InstanceId    string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	CallerUserId  string `protobuf:"bytes,7,opt,name=caller_user_id,json=callerUserId,proto3" json:"caller_user_id,omitempty"`
+	InstanceId   string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	CallerUserId string `protobuf:"bytes,7,opt,name=caller_user_id,json=callerUserId,proto3" json:"caller_user_id,omitempty"`
+	// account_id / owner_bot_id mirror the host Ctx's AccountID() (the
+	// connected account the call runs as) and OwnerBotID() (the bot that owns
+	// the calling session). Empty from older hosts.
+	AccountId  string `protobuf:"bytes,8,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	OwnerBotId string `protobuf:"bytes,9,opt,name=owner_bot_id,json=ownerBotId,proto3" json:"owner_bot_id,omitempty"`
+	// raw_input_json is the caller's arguments with their JSON types kept
+	// (Ctx.RawInputValue); empty when the host recorded none.
+	RawInputJson []byte `protobuf:"bytes,10,opt,name=raw_input_json,json=rawInputJson,proto3" json:"raw_input_json,omitempty"`
+	// health_check asks the plugin to run the module's HealthCheck hook
+	// instead of an operation. A plugin without one answers Error
+	// {code:"no_health_check"}. Only sent when the manifest says
+	// has_health_check, so older plugins never see it.
+	HealthCheck   bool `protobuf:"varint,11,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -165,6 +178,34 @@ func (x *ExecuteRequest) GetCallerUserId() string {
 		return x.CallerUserId
 	}
 	return ""
+}
+
+func (x *ExecuteRequest) GetAccountId() string {
+	if x != nil {
+		return x.AccountId
+	}
+	return ""
+}
+
+func (x *ExecuteRequest) GetOwnerBotId() string {
+	if x != nil {
+		return x.OwnerBotId
+	}
+	return ""
+}
+
+func (x *ExecuteRequest) GetRawInputJson() []byte {
+	if x != nil {
+		return x.RawInputJson
+	}
+	return nil
+}
+
+func (x *ExecuteRequest) GetHealthCheck() bool {
+	if x != nil {
+		return x.HealthCheck
+	}
+	return false
 }
 
 // mask / mask_ignore_case carry the values the operation passed to c.Mask /
@@ -783,7 +824,7 @@ const file_connector_proto_rawDesc = "" +
 	"\x0fconnector.proto\x12\x11wick.connector.v1\"5\n" +
 	"\x05Error\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xce\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xd8\x03\n" +
 	"\x0eExecuteRequest\x12\x1c\n" +
 	"\toperation\x18\x01 \x01(\tR\toperation\x12\x1b\n" +
 	"\targs_json\x18\x02 \x01(\fR\bargsJson\x12B\n" +
@@ -794,7 +835,14 @@ const file_connector_proto_rawDesc = "" +
 	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vinstance_id\x18\x06 \x01(\tR\n" +
 	"instanceId\x12$\n" +
-	"\x0ecaller_user_id\x18\a \x01(\tR\fcallerUserId\x1a8\n" +
+	"\x0ecaller_user_id\x18\a \x01(\tR\fcallerUserId\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\b \x01(\tR\taccountId\x12 \n" +
+	"\fowner_bot_id\x18\t \x01(\tR\n" +
+	"ownerBotId\x12$\n" +
+	"\x0eraw_input_json\x18\n" +
+	" \x01(\fR\frawInputJson\x12!\n" +
+	"\fhealth_check\x18\v \x01(\bR\vhealthCheck\x1a8\n" +
 	"\n" +
 	"CredsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

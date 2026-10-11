@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/plugin/host"
 	"github.com/yogasw/wick/pkg/plugin/proto/hostpb"
 )
@@ -108,11 +109,27 @@ func BeginHostCall(key, kind, userID, source, sessionID string) (string, func())
 // beginHostCall stamps a call id for one request to key on ctx's outgoing
 // metadata (host side). end must be called when the request is over.
 func beginHostCall(ctx context.Context, key, kind, userID, sessionID string) (context.Context, func()) {
+	return beginHostCallFor(ctx, key, kind, userID, sessionID, "")
+}
+
+// beginHostCallFor is beginHostCall that also records the connector
+// instance the request executes, so instance-bound Host API calls
+// (ConnectedAccounts) can be held to it. A bridge without
+// BeginCallInstance records no instance.
+func beginHostCallFor(ctx context.Context, key, kind, userID, sessionID, instanceID string) (context.Context, func()) {
 	b := currentBridge()
 	if b == nil || key == "" {
 		return ctx, func() {}
 	}
-	id, end := b.BeginCall(key, kind, userID, sessionID)
+	var id string
+	var end func()
+	if bi, ok := b.(interface {
+		BeginCallInstance(key, kind, userID, sessionID, instanceID string) (string, func())
+	}); ok {
+		id, end = bi.BeginCallInstance(key, kind, userID, sessionID, instanceID)
+	} else {
+		id, end = b.BeginCall(key, kind, userID, sessionID)
+	}
 	if id == "" {
 		return ctx, end
 	}
@@ -237,5 +254,30 @@ func hostUserName(ctx context.Context) func(string) (string, bool) {
 		userNames.m[id] = e
 		userNames.Unlock()
 		return e.name, e.ok
+	}
+}
+
+// hostAccounts lists instanceID's connected accounts through the Host API,
+// for plugin-side connector.Ctx.ConnectedAccounts. Like the host, it only
+// queries when an op asks. No Host API or no instance = nil, which is what a
+// plugin got before.
+func hostAccounts(ctx context.Context, instanceID string) func() []connector.AccountRef {
+	return func() []connector.AccountRef {
+		if instanceID == "" {
+			return nil
+		}
+		h, err := Host(ctx)
+		if err != nil {
+			return nil
+		}
+		resp, err := h.ConnectedAccounts(ctx, &hostpb.ConnectedAccountsRequest{InstanceId: instanceID})
+		if err != nil {
+			return nil
+		}
+		out := make([]connector.AccountRef, 0, len(resp.GetAccounts()))
+		for _, a := range resp.GetAccounts() {
+			out = append(out, connector.AccountRef{ID: a.GetId(), DisplayName: a.GetDisplayName(), WickUserID: a.GetWickUserId()})
+		}
+		return out
 	}
 }
