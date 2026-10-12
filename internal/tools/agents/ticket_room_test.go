@@ -321,3 +321,57 @@ func TestTicketRoomHopCap(t *testing.T) {
 		t.Fatalf("no hop-limit line: %+v", last)
 	}
 }
+
+// A board card carries its room's members (for avatars and the "Agent in
+// room" filter); the room itself is not listed among the card's chats.
+func TestTicketBoardCardCarriesRoom(t *testing.T) {
+	withTeamWorld(t)
+	alice := &entity.User{ID: "alice"}
+	seedTeamProject(t, "p1", alice.ID)
+	seedTeamProject(t, "pa", alice.ID)
+	helper := seedTeamAgent(t, alice.ID, "helper", "pa")
+	tk := seedTicket(t, "p1", "With room")
+	plain := seedTicket(t, "p1", "Without room")
+	_, it := openRoom(t, alice, tk.ID)
+	if code := addRoomMembers(t, alice, tk.ID, helper.ID); code != http.StatusOK {
+		t.Fatalf("add: %d", code)
+	}
+	w, c := teamReq(t, alice, http.MethodGet, "/", nil, map[string]string{"id": "p1"})
+	apiProjectTickets(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("board: %d %s", w.Code, w.Body)
+	}
+	var board struct {
+		Tickets []TicketCard `json:"tickets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &board); err != nil {
+		t.Fatal(err)
+	}
+	var withRoom, without *TicketCard
+	for i := range board.Tickets {
+		switch board.Tickets[i].ID {
+		case tk.ID:
+			withRoom = &board.Tickets[i]
+		case plain.ID:
+			without = &board.Tickets[i]
+		}
+	}
+	if withRoom == nil || without == nil {
+		t.Fatalf("cards: %+v", board.Tickets)
+	}
+	if without.Room != nil {
+		t.Fatalf("ticket without a room has one: %+v", without.Room)
+	}
+	r := withRoom.Room
+	if r == nil || r.SessionID != it.SessionID || len(r.Members) != 2 {
+		t.Fatalf("room: %+v", r)
+	}
+	if r.Members[0].Kind != session.RoomMemberProjectDefault || r.Members[1].AgentID != helper.ID || r.Members[1].OwnerID != alice.ID || r.Members[1].Handle != "helper" {
+		t.Fatalf("members: %+v", r.Members)
+	}
+	for _, row := range withRoom.SessionRows {
+		if row.ID == it.SessionID {
+			t.Fatal("the room is listed among the card's chats")
+		}
+	}
+}

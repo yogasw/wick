@@ -361,7 +361,7 @@
   }
 
   function selectItem(item: MenuItem | undefined) {
-    if (!menuKind || !item) return;
+    if (!menuKind || !item || item.disabled) return;
     const prefix = text.slice(0, menuTriggerPos);
     const suffix = text.slice(menuTextEnd);
     if (item.run) {
@@ -1204,7 +1204,9 @@
               type="button"
               role="option"
               aria-selected={i === menuIndex}
+              aria-disabled={item.disabled ? "true" : undefined}
               class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs transition-colors
+                {item.disabled ? 'cursor-not-allowed opacity-50' : ''}
                 {i === menuIndex
                   ? 'bg-green-500/10 text-slate-800 dark:text-white-100'
                   : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"

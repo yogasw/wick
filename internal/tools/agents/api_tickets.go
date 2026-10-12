@@ -107,12 +107,16 @@ type TicketCard struct {
 	// SessionRows are the ticket's sessions, listed on the card so one can
 	// be dragged to another ticket without opening anything.
 	SessionRows []ticketSessionRow `json:"session_rows,omitempty"`
-	Sessions    int                `json:"sessions"`
-	Notes       int                `json:"notes"`
-	OpenTasks   int                `json:"open_tasks"`
-	UpdatedAt   string             `json:"updated_at"`
-	CreatedAt   string             `json:"created_at"`
-	Stale       bool               `json:"stale"`
+	// Room is the ticket's room, when it has one: its members for the
+	// card's avatars and the board's "Agent in room" filter. Its session
+	// is not among SessionRows.
+	Room      *TicketCardRoom `json:"room,omitempty"`
+	Sessions  int             `json:"sessions"`
+	Notes     int             `json:"notes"`
+	OpenTasks int             `json:"open_tasks"`
+	UpdatedAt string          `json:"updated_at"`
+	CreatedAt string          `json:"created_at"`
+	Stale     bool            `json:"stale"`
 }
 
 // ticketBoardResponse is the envelope for GET /api/projects/{id}/tickets.
@@ -337,6 +341,7 @@ func apiProjectTickets(c *tool.Ctx) {
 		}
 	}
 
+	rooms := ticketRoomsOf(id)
 	cards := make([]TicketCard, 0, len(tickets))
 	for _, t := range tickets {
 		// Every session is marked as ticketed even when its card is not
@@ -367,9 +372,17 @@ func apiProjectTickets(c *tool.Ctx) {
 		if rowsPerCard < len(shown) {
 			shown = shown[:rowsPerCard]
 		}
+		room, hasRoom := rooms[t.ID]
 		rows := make([]ticketSessionRow, 0, len(shown))
 		for _, sid := range shown {
+			if hasRoom && sid == room.ID {
+				continue
+			}
 			rows = append(rows, sessionRow(sid, live, lc, ids))
+		}
+		var cardRoom *TicketCardRoom
+		if hasRoom {
+			cardRoom = roomCardOf(c.Context(), room)
 		}
 		cards = append(cards, TicketCard{
 			ID:        t.ID,
@@ -384,6 +397,7 @@ func apiProjectTickets(c *tool.Ctx) {
 			// them (?fields=all).
 			Fields:      cardFields(cfg, t.Fields, allFields),
 			SessionRows: rows,
+			Room:        cardRoom,
 			Sessions:    len(t.Sessions),
 			Notes:       count.Visible,
 			OpenTasks:   count.OpenTasks,

@@ -709,12 +709,33 @@ export type TicketCard = {
   /** The ticket's sessions, listed on the card so one can be dragged to
       another ticket without opening anything. */
   session_rows?: TicketSessionRow[];
+  /** The ticket's room, when it has one (its session is not among
+      session_rows, though `sessions` counts it). */
+  room?: TicketCardRoom;
   sessions: number;
   notes: number;
   open_tasks: number;
   updated_at: string;
   created_at: string;
   stale: boolean;
+};
+
+/** A ticket room as a board card shows it. */
+export type TicketCardRoom = {
+  session_id: string;
+  members: TicketCardRoomAgent[];
+};
+
+/** One room member on a card; `kind` "project_default" is the project's
+    own prompt (no agent, no owner). */
+export type TicketCardRoomAgent = {
+  kind: "agent" | "project_default";
+  agent_id?: string;
+  handle: string;
+  name: string;
+  owner_id?: string;
+  owner_handle?: string;
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: unknown };
 };
 
 /** GET /api/projects/{id}/tickets response. */

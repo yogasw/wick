@@ -4,6 +4,7 @@
      The session list plus "New session" is the reason tickets exist as
      their own entity — when a conversation goes wrong you start another one
      here, and the ticket's notes carry over. */
+  import type { Snippet } from "svelte";
   import type { TicketButton, TicketDetail } from "../types/agents.js";
   import { deleteTicket, detachSession, getTicket, runTicketAction, updateTicket } from "../api/tickets.js";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -22,9 +23,14 @@
     onOpenSession: (sessionId: string) => void;
     /* Starts a new session already attached to this ticket. */
     onNewSession: (ticketId: string) => void;
+    /* Drawn between the description and the sessions — Team › Tickets puts
+       the ticket's room there. Absent elsewhere. */
+    room?: Snippet;
+    /* A session hidden from Sessions (the room's own, shown by `room`). */
+    hideSession?: string;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, room, hideSession }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
   let error = $state("");
@@ -141,8 +147,9 @@
      contract as the fields. */
   const SESSIONS_SHOWN = 5;
   let showAllSessions = $state(false);
+  const listedSessions = $derived((data?.sessions ?? []).filter((s) => s.id !== hideSession));
   const visibleSessions = $derived(
-    showAllSessions ? (data?.sessions ?? []) : (data?.sessions ?? []).slice(0, SESSIONS_SHOWN),
+    showAllSessions ? listedSessions : listedSessions.slice(0, SESSIONS_SHOWN),
   );
 
   /* ── custom buttons ──
@@ -334,6 +341,8 @@
           >+ Add a description</button>
         {/if}
       </div>
+
+    {#if room}{@render room()}{/if}
 
     <!-- Sessions. Several per ticket is the normal case, not an edge one. -->
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">

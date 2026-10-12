@@ -283,4 +283,36 @@ describe("KanbanBoard — several projects", () => {
     await fireEvent.drop(screen.getByTestId("ticket-card-T-A1"), { dataTransfer: transfer });
     await waitFor(() => expect(onEmptied).toHaveBeenCalledWith({ id: "T-OLD", title: "Old" }, "p-a"));
   });
+
+  test("a card with a room shows its members and Room · N members; Agent in room narrows the board", async () => {
+    const withRoom = {
+      ...card("T-R1", "Roomy", "open"),
+      sessions: 2,
+      room: {
+        session_id: "room-1",
+        members: [
+          { kind: "project_default" as const, handle: "project", name: "Alpha" },
+          { kind: "agent" as const, agent_id: "c-h", handle: "captain", name: "Captain", owner_id: "hana", owner_handle: "hana" },
+        ],
+      },
+      session_rows: [{ id: "room-1", label: "Room · Roomy" }, { id: "chat-1", label: "One chat" }],
+    };
+    const ps = projects();
+    ps[0] = { ...ps[0], board: { ...ps[0].board, tickets: [...ps[0].board.tickets, withRoom] } };
+    renderMulti({ projects: ps });
+    const row = screen.getByTestId("ticket-room-T-R1");
+    expect(row.textContent).toContain("Room · 2 members");
+    expect(screen.queryByTestId("session-row-room-1")).toBeNull();
+    expect(screen.getByTestId("session-row-chat-1")).toBeTruthy();
+    const sel = screen.getByTestId("board-room-agent") as HTMLSelectElement;
+    expect([...sel.options].map((o) => o.textContent)).toEqual(["Agent in room: Any", "Agent in room: Alpha (project)", "Agent in room: Captain · @hana"]);
+    await fireEvent.change(sel, { target: { value: "hana:c-h" } });
+    await waitFor(() => expect(screen.queryByTestId("ticket-card-T-A1")).toBeNull());
+    expect(screen.getByTestId("ticket-card-T-R1")).toBeTruthy();
+  });
+
+  test("no rooms on the board: no Agent in room select", () => {
+    renderMulti();
+    expect(screen.queryByTestId("board-room-agent")).toBeNull();
+  });
 });

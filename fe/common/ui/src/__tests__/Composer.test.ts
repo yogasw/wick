@@ -753,6 +753,22 @@ describe("Composer — @ mention groups", () => {
     expect(textarea.value.startsWith("@anton")).toBe(true);
   });
 
+  test("someone else's agent is listed greyed and never inserted", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        mentionAgents: [{ handle: "hana/captain", label: "Captain · @hana", hint: "only takes instructions from @hana", group: "others" as const }],
+      },
+    });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@" } });
+    const row = screen.getByText("Captain · @hana").closest("button")!;
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("In this room · others")).toBeDefined();
+    await fireEvent.mouseDown(row);
+    expect(textarea.value).toBe("@");
+  });
+
   test("a files-only menu keeps no section title", async () => {
     render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
     await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@" } });

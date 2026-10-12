@@ -20,6 +20,7 @@
   import KanbanBoard from "../KanbanBoard.svelte";
   import TicketDetail from "../TicketDetail.svelte";
   import EmptyTicketOffer from "../EmptyTicketOffer.svelte";
+  import TicketRoom from "./TicketRoom.svelte";
 
   type Props = {
     base: string;
@@ -321,6 +322,10 @@
      own board. */
   let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
 
+  /* The room's own session, kept out of the ticket's Sessions list: the
+     room block above it is where that conversation is read. */
+  let roomSession = $state("");
+
   const muted = "text-black-800 dark:text-black-600";
 </script>
 
@@ -337,7 +342,12 @@
           onBack={() => onRoute({})}
           onOpenSession={(sid) => openSession(sid, route.project)}
           onNewSession={(tid) => newSessionOn(route.project ?? "", tid)}
-        />
+          hideSession={roomSession}
+        >
+          {#snippet room()}
+            <TicketRoom {base} ticketId={route.ticket ?? ""} projectName={nameOf(route.project ?? "")} onSession={(sid) => (roomSession = sid)} />
+          {/snippet}
+        </TicketDetail>
       {/key}
     </div>
   {:else if settingsError}

@@ -5,6 +5,8 @@ const saveTeamSettings = vi.fn();
 vi.mock("../../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../../api/team.js")>()),
   saveTeamSettings: (...a: unknown[]) => saveTeamSettings(...a),
+  // The ticket page's room block: no room, no Team agents.
+  listAgentRoster: () => Promise.resolve({ agents: [], captain_id: "" }),
   runApi: <T,>(p: Promise<T>) => p,
 }));
 const getProjectOptions = vi.fn();
@@ -22,6 +24,7 @@ const getTicket = vi.fn();
 vi.mock("../../../api/tickets.js", async (orig) => ({
   ...(await orig<typeof import("../../../api/tickets.js")>()),
   getTicket: (...a: unknown[]) => getTicket(...a),
+  getTicketRoom: () => Promise.resolve({ room: null }),
   getProjectTickets: (...a: unknown[]) => getProjectTickets(...a),
   getTicketFilter: (...a: unknown[]) => getTicketFilter(...a),
   saveTicketFilter: (...a: unknown[]) => saveTicketFilter(...a),
@@ -255,6 +258,12 @@ describe("TicketsPage", () => {
     expect(getTicket.mock.calls[0][1]).toBe("T-7");
     await fireEvent.click(screen.getByRole("button", { name: /Back to board/ }));
     expect(onRoute).toHaveBeenCalledWith({});
+  });
+
+  test("the ticket page holds the room block next to its sessions", async () => {
+    mount(["p1"], { project: "p1", ticket: "T-7" });
+    expect((await screen.findByTestId("room-empty")).textContent).toContain("No room yet");
+    expect(screen.getByText("First chat")).toBeTruthy();
   });
 
   test("a chat row on the ticket page goes to onOpenSession with its project", async () => {

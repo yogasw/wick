@@ -467,6 +467,65 @@ func roomItem(ctx context.Context, sess session.Session, caller string) TicketRo
 	return it
 }
 
+// TicketCardRoom is a room as a board card shows it: who is in it.
+type TicketCardRoom struct {
+	SessionID string                `json:"session_id"`
+	Members   []TicketCardRoomAgent `json:"members"`
+}
+
+// TicketCardRoomAgent is one member on a card.
+type TicketCardRoomAgent struct {
+	Kind        string       `json:"kind"`
+	AgentID     string       `json:"agent_id,omitempty"`
+	Handle      string       `json:"handle"`
+	Name        string       `json:"name"`
+	OwnerID     string       `json:"owner_id,omitempty"`
+	OwnerHandle string       `json:"owner_handle,omitempty"`
+	Avatar      *team.Avatar `json:"avatar,omitempty"`
+}
+
+// ticketRoomsOf maps each ticket of projectID that has a room to it, in
+// one pass over the sessions (the board asks for all its cards at once).
+func ticketRoomsOf(projectID string) map[string]session.Session {
+	out := map[string]session.Session{}
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.TicketRoom != nil && s.Meta.ProjectID == projectID {
+			out[s.Meta.TicketRoom.TicketID] = s
+		}
+	}
+	return out
+}
+
+// roomCardOf is sess's members for a board card, in room order. The same
+// for every viewer: a card shows who is in the room, not who answers whom.
+func roomCardOf(ctx context.Context, sess session.Session) *TicketCardRoom {
+	out := &TicketCardRoom{SessionID: sess.ID, Members: []TicketCardRoomAgent{}}
+	owners := map[string]string{}
+	for _, m := range sess.Meta.TicketRoom.Members {
+		if m.Kind == session.RoomMemberProjectDefault {
+			home := roomHomePeer(sess.Meta.ProjectID)
+			out.Members = append(out.Members, TicketCardRoomAgent{Kind: m.Kind, Handle: home.Handle, Name: home.Name})
+			continue
+		}
+		if globalTeam == nil {
+			continue
+		}
+		a, err := globalTeam.Get(ctx, m.AgentID)
+		if err != nil {
+			continue // the agent was deleted
+		}
+		if _, ok := owners[m.OwnerID]; !ok {
+			owners[m.OwnerID] = personHandle(ctx, m.OwnerID)
+		}
+		av := team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID)
+		out.Members = append(out.Members, TicketCardRoomAgent{
+			Kind: m.Kind, AgentID: a.ID, Handle: a.Handle, Name: globalTeam.MemberOf(a).Name,
+			OwnerID: m.OwnerID, OwnerHandle: owners[m.OwnerID], Avatar: &av,
+		})
+	}
+	return out
+}
+
 /* ── HTTP ────────────────────────────────────────────────────────────── */
 
 // roomCreateMu keeps two quick "open room" calls from making two rooms.

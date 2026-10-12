@@ -19,6 +19,8 @@ export type ComposerCommand = {
       duplicate the WHOLE menu rendered empty rather than merely showing the
       row twice. Callers should pass the server-side id (`skill:<folder>`). */
   key?: string;
+  /** Shown greyed and never inserted (an `@` row that cannot be asked). */
+  disabled?: boolean;
   /** `@` menu Team rows only: the agent's avatar spec, drawn by the
       Composer's mentionAvatar snippet (unset spec → the avatar defaults). */
   avatar?: { kind?: string; shape?: string; color?: string; expression?: string };
@@ -31,7 +33,11 @@ export type ComposerMentionAgent = {
   handle: string;
   label: string;
   hint?: string;
-  group?: "team" | "subagent";
+  /** "others": someone else's agent, listed for who is there but not
+      pickable (a ticket room's "In this room · others"). */
+  group?: "team" | "subagent" | "others";
+  /** Overrides the section title of the agent's group ("Your Team"). */
+  section?: string;
   avatar?: { kind?: string; shape?: string; color?: string; expression?: string };
 };
 

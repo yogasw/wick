@@ -287,3 +287,50 @@ export const getRailPrefs = (base: string) =>
 
 export const saveRailPrefs = (base: string, prefs: RailPrefsWire) =>
   apiPutE<{ status: string }>(`${base}/api/me/rail`, prefs);
+
+/* ── the ticket's room (Team › Tickets) ─────────────────────────────── */
+
+export type TicketRoomMember = {
+  kind: "agent" | "project_default";
+  agent_id?: string;
+  handle: string;
+  name: string;
+  /** Whom it works for; absent on the project default (works for anyone). */
+  owner_id?: string;
+  owner_handle?: string;
+  owner_name?: string;
+  home?: boolean;
+  is_captain?: boolean;
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: unknown };
+  /** The caller can ask it (their own agent, or the project default). */
+  mine: boolean;
+};
+
+export type TicketRoom = {
+  session_id: string;
+  ticket_id: string;
+  project_id: string;
+  members: TicketRoomMember[];
+  /** The caller's own "share the full thread" toggle. */
+  share_full: boolean;
+  /** Who a message of the caller's with no @ goes to ("" = nobody). */
+  responder: string;
+};
+
+export const getTicketRoom = (base: string, ticketId: string) =>
+  apiGetE<{ room: TicketRoom | null }>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room`);
+
+/** Create the ticket's room, or return the one it has. */
+export const openTicketRoom = (base: string, ticketId: string) =>
+  apiPostE<TicketRoom>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room`, {});
+
+export const setRoomShareFull = (base: string, ticketId: string, shareFull: boolean) =>
+  apiPatchE<TicketRoom>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room`, { share_full: shareFull });
+
+export const addRoomMembers = (base: string, ticketId: string, agentIds: string[]) =>
+  apiPostE<TicketRoom>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room/members`, { agent_ids: agentIds });
+
+export const removeRoomMember = (base: string, ticketId: string, agentId: string) =>
+  apiDeleteE<TicketRoom>(
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/room/members/${encodeURIComponent(agentId)}`,
+  );

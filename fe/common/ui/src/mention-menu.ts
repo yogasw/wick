@@ -6,7 +6,7 @@ import type { ComposerCommand, ComposerMentionAgent } from "./composer-types.js"
 /** Section titles of the `@` menu, in the order they are listed: a Team
     agent is a named colleague, a sub-agent is a helper spun up for this
     chat, a file only supplies context — the more consequential pick first. */
-export const MENTION_GROUPS = { team: "Team", subagent: "Sub-agents", files: "Files" } as const;
+export const MENTION_GROUPS = { team: "Team", others: "In this room · others", subagent: "Sub-agents", files: "Files" } as const;
 
 /** agentMentionRows filters agents by query and orders them Team first,
     then Sub-agents. A handle is a short exact token, so a plain substring
@@ -17,15 +17,27 @@ export function agentMentionRows(agents: ComposerMentionAgent[], query: string):
   const hit = (a: ComposerMentionAgent) =>
     !q || a.handle.toLowerCase().includes(q) || (a.group === "team" && a.label.toLowerCase().includes(q));
   const team = agents.filter((a) => a.group === "team" && hit(a));
-  const sub = agents.filter((a) => a.group !== "team" && hit(a));
+  const others = agents.filter((a) => a.group === "others" && hit(a));
+  const sub = agents.filter((a) => a.group !== "team" && a.group !== "others" && hit(a));
   return [
     ...team.map((a) => ({
       key: `team:${a.handle}`,
       value: a.handle,
       label: a.label,
       hint: a.hint ? `@${a.handle} · ${a.hint}` : `@${a.handle}`,
-      category: MENTION_GROUPS.team,
+      category: a.section ?? MENTION_GROUPS.team,
       avatar: a.avatar ?? {},
+    })),
+    // Someone else's agents: listed so the room's people are known, never
+    // inserted (only their owner can ask them).
+    ...others.map((a) => ({
+      key: `others:${a.handle}`,
+      value: a.handle,
+      label: a.label,
+      hint: a.hint,
+      category: a.section ?? MENTION_GROUPS.others,
+      avatar: a.avatar ?? {},
+      disabled: true,
     })),
     ...sub.map((a) => ({
       key: `agent:${a.handle}`,

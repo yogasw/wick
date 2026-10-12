@@ -20,6 +20,24 @@ describe("agentMentionRows", () => {
   });
 });
 
+describe("agentMentionRows — a ticket room", () => {
+  test("your agents under their own title, others' greyed under 'In this room · others'", () => {
+    const rows = agentMentionRows(
+      [
+        { handle: "captain", label: "Captain", group: "team" as const, section: "Your Team" },
+        { handle: "hana/captain", label: "Captain · @hana", hint: "only takes instructions from @hana", group: "others" as const },
+        { handle: "helper", label: "helper" },
+      ],
+      "",
+    );
+    expect(rows.map((r) => [r.value, r.category, !!r.disabled])).toEqual([
+      ["captain", "Your Team", false],
+      ["hana/captain", "In this room · others", true],
+      ["helper", "Sub-agents", false],
+    ]);
+  });
+});
+
 describe("fileMentionRows", () => {
   test("titles files only when asked", () => {
     expect(fileMentionRows(["a"], true)[0].category).toBe("Files");
