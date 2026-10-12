@@ -154,6 +154,16 @@ func TestLayoutAttachSession(t *testing.T) {
 	codeIs(t, err, codes.NotFound, "other user's session")
 	// A ticket room stays on its ticket, and a member's backing session is
 	// not filed anywhere.
+	for _, id := range []string{"room-x", "group-x"} {
+		if _, err := session.Create(ctx, l.Layout, session.CreateOptions{ID: id, ProjectID: "a", UserID: "ada"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roomMeta, _ := session.Load(l.Layout, "room-x")
+	roomMeta.Meta.TicketRoom = &session.TicketRoom{TicketID: "dupe-1"}
+	if err := session.SaveMeta(l.Layout, "room-x", roomMeta.Meta); err != nil {
+		t.Fatal(err)
+	}
 	for _, m := range []func(*session.Meta){
 		func(m *session.Meta) { m.TicketRoom = &session.TicketRoom{TicketID: "dupe-1"} },
 		func(m *session.Meta) { m.GroupSessionID = "room-x" },
@@ -169,6 +179,15 @@ func TestLayoutAttachSession(t *testing.T) {
 	}
 	if tk, _ := ticket.Load(l.Layout, "a", "one-1"); len(tk.Sessions) != 0 {
 		t.Fatalf("room session moved onto one-1: %v", tk.Sessions)
+	}
+	// An ordinary group chat's backing session is not a room's: it files.
+	sess, _ := session.Load(l.Layout, "s-ada")
+	sess.Meta.TicketRoom, sess.Meta.GroupSessionID = nil, "group-x"
+	if err := session.SaveMeta(l.Layout, "s-ada", sess.Meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.AttachSession(ctx, "ada", &hostpb.AttachSessionRequest{TicketId: "one-1", ProjectId: "a", SessionId: "s-ada"}); err != nil {
+		t.Fatalf("group backing: %v", err)
 	}
 }
 

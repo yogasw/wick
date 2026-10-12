@@ -141,6 +141,14 @@ describe("TicketRoom", () => {
     await waitFor(() => expect(screen.queryByTestId("room-ask-captain")).toBeNull());
   });
 
+  test("Ask Captain starts the message with your Captain's own handle", async () => {
+    api.listAgentRoster = () => ({ ...roster, agents: roster.agents.map((a) => (a.id === "a-cap" ? { ...a, handle: "skipper" } : a)) });
+    mount();
+    await fireEvent.click(await screen.findByTestId("room-ask-captain"));
+    const box = screen.getByPlaceholderText("Message the room · @ to bring in an agent") as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toBe("@skipper "));
+  });
+
   test("Context: the share toggle sets your own entry", async () => {
     mount();
     const box = (await screen.findByTestId("room-share")) as HTMLInputElement;

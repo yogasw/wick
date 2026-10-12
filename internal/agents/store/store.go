@@ -254,6 +254,8 @@ const (
 	// change in a group chat (extras: agent_id, handle, by).
 	KindGroupMemberAdded   = "group_member_added"
 	KindGroupMemberRemoved = "group_member_removed"
+	// KindTicketRoomOpened is a ticket room's first line; nobody joined.
+	KindTicketRoomOpened = "ticket_room_opened"
 )
 
 // KindCompaction marks the point where the CLI folded older turns into

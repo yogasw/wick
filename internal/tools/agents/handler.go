@@ -2346,16 +2346,49 @@ func dequeueAgent(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	// Remove every queued entry for this session (any agent) + clear its
-	// buffered input so it won't execute. Preserve the rest of meta.
-	removed := globalPool.DequeueSession(id)
+	// A ticket room queues nothing itself: the caller's own members queue
+	// in their backing sessions, so that is what gets dropped.
+	if sess.Meta.TicketRoom != nil {
+		removed := 0
+		for _, b := range roomOwnBackings(c, id) {
+			removed += dequeueSession(b)
+		}
+		c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": dequeueSession(sess)})
+}
+
+// dequeueSession removes every queued entry for sess (any agent) and
+// clears its buffered input so it won't execute, preserving the rest of
+// its meta. Returns how many queue entries went.
+func dequeueSession(sess session.Session) int {
+	removed := globalPool.DequeueSession(sess.ID)
 	meta := sess.Meta
 	meta.Status = session.StatusIdle
 	meta.PendingInput = nil
 	meta.LastActive = time.Now().UTC()
-	_ = session.SaveMeta(globalLayout, id, meta)
+	_ = session.SaveMeta(globalLayout, sess.ID, meta)
 	globalMgr.Register(sessionWithMeta(sess, meta))
-	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
+	return removed
+}
+
+// roomOwnBackings is the caller's own backing sessions in ticket room
+// roomID — where that person's members actually run. Another member's
+// backing is never in it: every member passes ownsSession on the room,
+// and stopping the room must not reach into someone else's work.
+func roomOwnBackings(c *tool.Ctx, roomID string) []session.Session {
+	caller := actorID(c)
+	if caller == "" {
+		return nil
+	}
+	var out []session.Session
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.GroupSessionID == roomID && s.Meta.UserID == caller {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // sessionWithMeta returns a copy of sess with replaced meta, for
@@ -2594,6 +2627,32 @@ func killAgent(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
+	// A ticket room never runs a provider: the caller's own members run in
+	// their backing sessions, so stopping the room stops those — and only
+	// those, never another member's.
+	if sess.Meta.TicketRoom != nil {
+		stopped := []string{}
+		for _, b := range roomOwnBackings(c, id) {
+			if code, body := stopSessionRun(c, b); code != http.StatusOK {
+				c.JSON(code, body)
+				return
+			}
+			stopped = append(stopped, b.ID)
+		}
+		c.JSON(http.StatusOK, map[string]any{"status": "killed", "sessions": stopped})
+		return
+	}
+	code, body := stopSessionRun(c, sess)
+	c.JSON(code, body)
+}
+
+// stopSessionRun stops sess's leader and its sub-agents, returning what
+// killAgent answers. A var so tests can watch which sessions get stopped
+// without real processes behind them.
+var stopSessionRun = killSessionRun
+
+func killSessionRun(c *tool.Ctx, sess session.Session) (int, any) {
+	id := sess.ID
 	agentName := sess.Meta.ActiveAgent
 	if agentName == "" && len(sess.Agents) > 0 {
 		agentName = sess.Agents[0].Name
@@ -2617,8 +2676,7 @@ func killAgent(c *tool.Ctx) {
 	pids := sessionPIDs(id)
 	if err := globalPool.KillBy(id, agentName, "user", stoppedByNote(c)); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
 	}
 	if !owned {
 		if killed := killOrphanSpawns(id); len(killed) > 0 {
@@ -2626,8 +2684,7 @@ func killAgent(c *tool.Ctx) {
 				Ints("pids", killed).
 				Str("session", id).
 				Msg("kill agent: ended orphaned spawns this pool did not own")
-			c.JSON(http.StatusOK, map[string]any{"status": "killed", "orphans": killed})
-			return
+			return http.StatusOK, map[string]any{"status": "killed", "orphans": killed}
 		}
 	}
 	if survivors := enforceStop(pids); len(survivors) > 0 {
@@ -2635,10 +2692,9 @@ func killAgent(c *tool.Ctx) {
 			Ints("pids", survivors).
 			Str("session", id).
 			Msg("kill agent: agent.Stop left the process running — signalled it directly")
-		c.JSON(http.StatusOK, map[string]any{"status": "killed", "forced": survivors})
-		return
+		return http.StatusOK, map[string]any{"status": "killed", "forced": survivors}
 	}
-	c.JSON(http.StatusOK, map[string]string{"status": "killed"})
+	return http.StatusOK, map[string]string{"status": "killed"}
 }
 
 // cancelSessionRun aborts one in-flight connector run belonging to this session
@@ -2666,7 +2722,7 @@ func cancelSessionRun(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}
-	if run.SessionID != id {
+	if run.SessionID != id && !runInOwnRoomBacking(c, sess, run.SessionID) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "run does not belong to this session"})
 		return
 	}
@@ -2676,6 +2732,20 @@ func cancelSessionRun(c *tool.Ctx) {
 		_ = globalConnectors.FinalizeStaleRun(c.Context(), runID)
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// runInOwnRoomBacking reports whether runSession is one of the caller's
+// own backing sessions in ticket room sess — a room's runs live there.
+func runInOwnRoomBacking(c *tool.Ctx, sess session.Session, runSession string) bool {
+	if sess.Meta.TicketRoom == nil || runSession == "" {
+		return false
+	}
+	for _, b := range roomOwnBackings(c, sess.ID) {
+		if b.ID == runSession {
+			return true
+		}
+	}
+	return false
 }
 
 func deleteSession(c *tool.Ctx) {

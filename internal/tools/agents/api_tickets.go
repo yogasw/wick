@@ -920,12 +920,23 @@ func ticketSessionWritable(c *tool.Ctx, sid string) bool {
 		return false
 	}
 	// A room stays on the ticket it was opened for, and a member's backing
-	// session is not a chat to file anywhere.
-	if sess.Meta.TicketRoom != nil || sess.Meta.GroupSessionID != "" {
+	// session in one is not a chat to file anywhere (team.RefuseRoomSession).
+	if sess.Meta.TicketRoom != nil || backsTicketRoom(sess) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": errRoomSession})
 		return false
 	}
 	return true
+}
+
+// backsTicketRoom reports whether sess is a member's backing session in a
+// ticket room — not in an ordinary group chat, whose backing sessions
+// file like any chat.
+func backsTicketRoom(sess session.Session) bool {
+	if sess.Meta.GroupSessionID == "" {
+		return false
+	}
+	g, ok := globalMgr.Registry().Session(sess.Meta.GroupSessionID)
+	return ok && g.Meta.TicketRoom != nil
 }
 
 // apiTicketAttachSession handles PUT /api/tickets/{ticketID}/sessions/{sid}.

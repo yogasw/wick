@@ -516,6 +516,11 @@ func TestTicketRoomGenericSessionRoutes(t *testing.T) {
 		subs = append(subs, sub.ID)
 		parent = sub.ID
 	}
+	// A session outside the room, in the same project, is not its.
+	control, err := globalMgr.CreateSession(context.Background(), session.CreateOptions{ID: "control", ProjectID: "p1", UserID: alice.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	w, c = teamReq(t, alice, http.MethodDelete, "/", nil, map[string]string{"ticketID": tk.ID})
 	apiTicketDelete(c)
 	if w.Code != http.StatusOK {
@@ -525,6 +530,65 @@ func TestTicketRoomGenericSessionRoutes(t *testing.T) {
 		if _, ok := globalMgr.Registry().Session(sid); ok {
 			t.Fatalf("session %s outlived its ticket", sid)
 		}
+	}
+	if _, ok := globalMgr.Registry().Session(control.ID); !ok {
+		t.Fatal("a session outside the room went with the ticket")
+	}
+}
+
+// Stopping a room stops the caller's own members — their backing
+// sessions, where the runs are — and never another member's.
+func TestTicketRoomStopReachesOnlyTheCallersBacking(t *testing.T) {
+	withTeamWorld(t)
+	alice, bob := &entity.User{ID: "alice", Role: entity.RoleAdmin}, &entity.User{ID: "bob", Role: entity.RoleAdmin}
+	seedTeamProject(t, "p1", "")
+	tk := seedTicket(t, "p1", "Room")
+	_, it := openRoom(t, alice, tk.ID)
+	backingOf := func(u *entity.User) string {
+		_, c := teamReq(t, u, http.MethodPost, "/", nil, nil)
+		id, err := roomDefaultBacking(c, it.SessionID, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Busy: a turn waiting to run.
+		if err := saveGroupMeta(id, func(m *session.Meta) { m.Status = session.StatusQueued }); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	mine, theirs := backingOf(alice), backingOf(bob)
+
+	var stopped []string
+	prev := stopSessionRun
+	stopSessionRun = func(_ *tool.Ctx, s session.Session) (int, any) {
+		stopped = append(stopped, s.ID)
+		return http.StatusOK, map[string]string{"status": "killed"}
+	}
+	t.Cleanup(func() { stopSessionRun = prev })
+	w, c := teamReq(t, alice, http.MethodPost, "/api/sessions/"+it.SessionID+"/kill", nil, map[string]string{"id": it.SessionID})
+	killAgent(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("kill room: %d %s", w.Code, w.Body)
+	}
+	if len(stopped) != 1 || stopped[0] != mine {
+		t.Fatalf("stopped %v, want only alice's backing %s", stopped, mine)
+	}
+
+	w, c = teamReq(t, alice, http.MethodPost, "/api/sessions/"+it.SessionID+"/dequeue", nil, map[string]string{"id": it.SessionID})
+	dequeueAgent(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dequeue room: %d %s", w.Code, w.Body)
+	}
+	if s, _ := globalMgr.Registry().Session(mine); s.Meta.Status != session.StatusIdle {
+		t.Fatalf("alice's backing still %q", s.Meta.Status)
+	}
+	if s, _ := globalMgr.Registry().Session(theirs); s.Meta.Status != session.StatusQueued {
+		t.Fatalf("bob's backing touched: %q", s.Meta.Status)
+	}
+	// A connector run of bob's backing is not alice's to cancel from the room.
+	_, c = teamReq(t, alice, http.MethodPost, "/", nil, nil)
+	if room, _ := globalMgr.Registry().Session(it.SessionID); !runInOwnRoomBacking(c, room, mine) || runInOwnRoomBacking(c, room, theirs) {
+		t.Fatal("run ownership in the room")
 	}
 }
 
@@ -611,5 +675,23 @@ func TestTicketRoomForeignMentionRunsNothing(t *testing.T) {
 		if s.Meta.GroupSessionID == it.SessionID {
 			t.Fatalf("a backing session was made: %s", s.ID)
 		}
+	}
+}
+
+// A refused foreign mention names the agent the way the room shows it,
+// and points the sender at their own Captain by its real handle.
+func TestTicketRoomForeignLabelAndCaptainHint(t *testing.T) {
+	f := foreignMention{Owner: "hana", Handle: "scout"}
+	if got := foreignLabel(f, ""); got != "@scout" {
+		t.Fatalf("unresolved label = %q", got)
+	}
+	if got := foreignLabel(f, "Scout"); got != "Scout" {
+		t.Fatalf("member label = %q", got)
+	}
+	if got := ownCaptainHint([]teamlink.Peer{{Handle: "ops"}, {Handle: "skipper", IsCaptain: true}}); got != "mention your own @skipper" {
+		t.Fatalf("hint = %q", got)
+	}
+	if got := ownCaptainHint(nil); got != "mention one of your own agents" {
+		t.Fatalf("hint without a Captain = %q", got)
 	}
 }

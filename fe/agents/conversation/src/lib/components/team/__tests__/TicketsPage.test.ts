@@ -281,7 +281,10 @@ describe("TicketsPage", () => {
     const err = await screen.findByTestId("ticket-detail-error");
     expect(err.textContent).toContain("Couldn't open this ticket");
     expect(err.textContent).toContain("project not accessible");
-    await fireEvent.click(screen.getByRole("button", { name: "Tickets" }));
+    const back = screen.getByRole("button", { name: "Tickets" });
+    // "← Tickets", as on a ticket that opened.
+    expect(back.querySelector("svg")).not.toBeNull();
+    await fireEvent.click(back);
     expect(onRoute).toHaveBeenCalledWith({});
   });
 

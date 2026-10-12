@@ -391,6 +391,9 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 		if sid == "" {
 			return nil, fmt.Errorf("attach_current_session was set but there is no calling session")
 		}
+		if err := team.RefuseRoomSession(h.layout, sid); err != nil {
+			return nil, err
+		}
 		seed = []string{sid}
 	}
 	// An agent creating a ticket does so on somebody's behalf, so the ticket

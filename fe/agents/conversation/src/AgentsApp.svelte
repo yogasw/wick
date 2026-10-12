@@ -872,6 +872,16 @@
       />
     {/key}
   </section>
+  {:else if route.tickets && (!loaded || loadError)}
+  <!-- /team/t opened before the roster is in (or when it failed): say so
+       rather than leave the page blank until the redirect decides. -->
+  <section class="flex min-w-0 flex-1 items-center justify-center p-6" data-testid="tickets-roster-state">
+    {#if loadError}
+      <p class="text-sm text-neg-400">Couldn't load your Team: {loadError}</p>
+    {:else}
+      <p class="text-sm text-black-700 dark:text-black-600">Loading tickets…</p>
+    {/if}
+  </section>
   {:else if route.tickets && hasTickets}
   <section class="flex min-w-0 flex-1 flex-col">
     <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600" data-testid="tickets-header">

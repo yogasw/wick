@@ -124,6 +124,32 @@ func TestRoomSessionCannotBeMovedOrDetached(t *testing.T) {
 	}
 	// An ordinary chat still files as before.
 	mustDispatch(t, h.attach, ctxFor("chat-1", map[string]string{"ticket_id": other.ID}))
+
+	// tickets.create cannot seed a new ticket with a room session either.
+	before, _ := ticket.List(l, "p1")
+	for _, sid := range []string{room, backing} {
+		if _, err := h.create(ctxFor(sid, map[string]string{"title": "From the room", "attach_current_session": "true", "project_id": "p1"})); err == nil {
+			t.Fatalf("create from %s attached it", sid)
+		}
+	}
+	if after, _ := ticket.List(l, "p1"); len(after) != len(before) {
+		t.Fatalf("create from a room session made a ticket: %d -> %d", len(before), len(after))
+	}
+
+	// An ordinary group chat's backing session is not a room's: it files.
+	mkSession(t, l, "group-1", "p1")
+	if _, err := session.Create(context.Background(), l, session.CreateOptions{ID: "gbacking-1", ProjectID: "p1", UserID: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	gb, _ := session.Load(l, "gbacking-1")
+	gb.Meta.GroupSessionID = "group-1"
+	if err := session.SaveMeta(l, "gbacking-1", gb.Meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.RefuseRoomSession(l, "gbacking-1"); err != nil {
+		t.Fatalf("group backing refused: %v", err)
+	}
+	mustDispatch(t, h.attach, ctxFor("chat-1", map[string]string{"ticket_id": other.ID, "session_id": "gbacking-1"}))
 }
 
 // RoomTicket grants nothing once the ticket no longer lists the room, or

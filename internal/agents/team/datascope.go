@@ -247,15 +247,22 @@ func listsSession(tk ticket.Ticket, sid string) bool {
 var ErrRoomSession = errors.New("not supported in a ticket room")
 
 // RefuseRoomSession is the guard every attach/detach path (connector, host
-// API, HTTP) runs on the session it would move. An id with no session on
+// API, tickets.create) runs on the session it would move: a ticket room,
+// or a member's backing session in one. An ordinary group chat's backing
+// session is not a room's and files as before. An id with no session on
 // disk is left to the ticket store, as before.
 func RefuseRoomSession(layout config.Layout, sid string) error {
 	sess, err := session.Load(layout, sid)
 	if err != nil {
 		return nil
 	}
-	if sess.Meta.TicketRoom != nil || sess.Meta.GroupSessionID != "" {
+	if sess.Meta.TicketRoom != nil {
 		return ErrRoomSession
+	}
+	if g := sess.Meta.GroupSessionID; g != "" {
+		if room, err := session.Load(layout, g); err == nil && room.Meta.TicketRoom != nil {
+			return ErrRoomSession
+		}
 	}
 	return nil
 }

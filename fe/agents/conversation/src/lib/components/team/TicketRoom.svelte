@@ -191,7 +191,7 @@
   let composer = $state<{ prefill: (text: string) => void }>();
   const askCaptain = () => {
     if (!captain) return;
-    composer?.prefill("@captain ");
+    composer?.prefill(`@${captain.handle} `);
     return addAgents([captain.id]);
   };
   const removeMember = (m: TicketRoomMember) =>

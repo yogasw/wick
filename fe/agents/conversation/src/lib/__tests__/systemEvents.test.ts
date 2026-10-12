@@ -7,6 +7,8 @@ describe("system event registry", () => {
     expect(getSystemEvent("hop_limit").tone).toBe("warn");
     expect(getSystemEvent("scheduled_fired").icon).toBe("clock");
     expect(getSystemEvent("routine_fired").icon).toBe("clock");
+    // A room opening is not someone joining.
+    expect(getSystemEvent("ticket_room_opened").icon).toBe("info");
     expect(isSystemEventKind("access_changed")).toBe(true);
     expect(isSystemEventKind("persona_changed")).toBe(true);
     expect(isSystemEventKind("access_change_declined")).toBe(true);

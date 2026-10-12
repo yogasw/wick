@@ -145,13 +145,44 @@ func roomRemoveMember(tr *session.TicketRoom, agentID, owner string) error {
 // foreignMention is "@owner/handle" at a line start: another person's agent.
 type foreignMention struct{ Owner, Handle string }
 
-// foreignLabel names another person's agent in a system line: "Captain"
-// for anyone's Captain (they all share the name), else its @handle.
-func foreignLabel(f foreignMention) string {
-	if f.Handle == "captain" {
-		return "Captain"
+// foreignLabel names another person's agent in a system line: its name
+// when it is already in the room (roomForeignAgent), else its @handle —
+// a handle names no agent until its owner is known.
+func foreignLabel(f foreignMention, name string) string {
+	if name = strings.TrimSpace(name); name != "" {
+		return name
 	}
 	return "@" + f.Handle
+}
+
+// roomForeignAgent is the display name of the member of tr that f names
+// — another person's agent already in the room — or "". Only the room's
+// own members are looked up: resolving any person's Team from a handle
+// would cost a user scan per mention.
+func roomForeignAgent(ctx context.Context, tr *session.TicketRoom, f foreignMention, rc *roomCards) string {
+	if tr == nil || globalTeam == nil {
+		return ""
+	}
+	for _, m := range tr.Members {
+		if m.Kind != session.RoomMemberAgent || m.OwnerID == "" || rc.handle(ctx, m.OwnerID) != f.Owner {
+			continue
+		}
+		if a := rc.agent(ctx, m.AgentID); a != nil && teamlink.NormalizeHandle(a.Handle) == f.Handle {
+			return globalTeam.MemberOf(*a).Name
+		}
+	}
+	return ""
+}
+
+// ownCaptainHint is how a refused mention points the sender back to
+// their own agents: their Captain by its handle, when they have one.
+func ownCaptainHint(own []teamlink.Peer) string {
+	for _, p := range own {
+		if p.IsCaptain && !p.Disabled {
+			return "mention your own @" + p.Handle
+		}
+	}
+	return "mention one of your own agents"
 }
 
 // foreignMentions lists, once each, the "@owner/handle" mentions at line
@@ -445,11 +476,25 @@ func endTicketRooms(ctx context.Context, projectID, ticketID string) {
 			}
 		}
 		for i := len(doomed) - 1; i >= 0; i-- {
+			stopRoomSession(ctx, doomed[i])
 			_ = globalMgr.DeleteSession(ctx, doomed[i])
 		}
 		if err := globalMgr.DeleteSession(ctx, s.ID); err != nil {
 			log.Ctx(ctx).Warn().Err(err).Str("session", s.ID).Msg("ticket room: delete with its ticket failed")
 		}
+	}
+}
+
+// stopRoomSession ends whatever sid still has queued or running before
+// its files go: a backing session or sub-agent can be mid-turn when its
+// ticket is deleted. Best effort — the delete goes ahead either way.
+func stopRoomSession(ctx context.Context, sid string) {
+	if globalPool == nil {
+		return
+	}
+	globalPool.DequeueSession(sid)
+	if err := globalPool.KillBy(sid, "", "wick", "its ticket was deleted"); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("session", sid).Msg("ticket room: stop before delete failed")
 	}
 }
 
@@ -688,7 +733,7 @@ func apiTicketRoomCreate(c *tool.Ctx) {
 		return
 	}
 	writeSessionTicketPointer(id, tk.ID)
-	emitSystemEvent(id, store.KindGroupMemberAdded, fmt.Sprintf("Room opened in %s · the ticket stays in this project", roomHomePeer(projectID).Name),
+	emitSystemEvent(id, store.KindTicketRoomOpened, fmt.Sprintf("Room opened in %s · the ticket stays in this project", roomHomePeer(projectID).Name),
 		map[string]string{"ticket_id": tk.ID, "project_id": projectID})
 	sess, _ := globalMgr.Registry().Session(id)
 	c.JSON(http.StatusCreated, roomItem(c.Context(), sess, creator))
@@ -899,8 +944,9 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 		return
 	}
 	announceRoomJoin(c, sess.ID, added)
+	rc := newRoomCards()
 	for _, f := range foreign {
-		emitSystemEvent(sess.ID, store.KindMentionRefused, fmt.Sprintf("%s · @%s only takes instructions from @%s. Ask them, or mention your own @captain.", foreignLabel(f), f.Owner, f.Owner),
+		emitSystemEvent(sess.ID, store.KindMentionRefused, fmt.Sprintf("%s · @%s only takes instructions from @%s. Ask them, or %s.", foreignLabel(f, roomForeignAgent(c.Context(), tr, f, rc)), f.Owner, f.Owner, ownCaptainHint(own)),
 			map[string]string{"from": "user", "to": f.Owner + "/" + f.Handle, "reason": "another person's agent"})
 	}
 	for _, h := range unknown {
