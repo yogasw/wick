@@ -64,10 +64,15 @@ func TestIdleKillBeforeAnyOutputRebuffersMessages(t *testing.T) {
 	if !strings.Contains(got[1], "not answered") {
 		t.Fatalf("notice not buffered after it: %q", got)
 	}
-	mu.Lock()
-	n := len(notices)
-	mu.Unlock()
-	if n != 1 {
+	// noticeNotify buffers the notice before it calls OnSpawnError, so the
+	// inline notice can land just after PendingInput shows both entries.
+	noticeCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(notices)
+	}
+	waitFor(t, func() bool { return noticeCount() >= 1 }, 2*time.Second)
+	if n := noticeCount(); n != 1 {
 		t.Fatalf("inline notices: %d, want 1", n)
 	}
 	// The notice does not spawn on its own.
