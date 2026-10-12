@@ -258,7 +258,10 @@ func NewServer() *Server {
 	// Tool plugins (plugins/tools/<key>) register like built-in tools whose
 	// routes reverse-proxy to the plugin process (spawned on first use).
 	toolPlugins := toolplugin.NewPool()
-	if n := toolPlugins.Load(connplugin.KindDir(wickplugin.KindTool), jobPluginStore.Enabled, jobPluginStore.Record, tools.Register); n > 0 {
+	// validatePluginModule is the live path's check: a plugin it refuses
+	// (key of a built-in, bad meta, bad routes) shows Error and is skipped,
+	// it never stops the boot.
+	if n := toolPlugins.Load(connplugin.KindDir(wickplugin.KindTool), jobPluginStore.EnabledErr, jobPluginStore.Record, tools.Register, validatePluginModule); n > 0 {
 		log.Info().Int("plugins", n).Msg("tool plugins: loaded")
 	}
 	// toolPlugins.Start (keep_warm spawns) waits for startHostAPI below so
@@ -269,6 +272,9 @@ func NewServer() *Server {
 	// takes over the old key: the old module is unregistered and its config,
 	// schedule and access are migrated once — before the bootstraps below
 	// seed rows, so the new key starts with the old data.
+	// toolsBeforeReplace keeps the replaced tools so disabling the plugin
+	// that replaced one brings it back live (liveToolSink).
+	toolsBeforeReplace := tools.All()
 	replacePairs := pluginreplace.Prepare(jobs.All(), tools.All(), jobs.Unregister, tools.Unregister)
 	pluginreplace.New(db).ApplyAll(context.Background(), replacePairs)
 
@@ -1842,6 +1848,9 @@ func NewServer() *Server {
 		meta.Path = "/tools/" + meta.Key
 		allItems = append(allItems, meta)
 	}
+	// Jobs and connectors are appended after the tools; liveItems below
+	// rebuilds the tool part per call and keeps this tail.
+	bootToolItems := len(allItems)
 
 	// workflow is a built-in single-instance connector that exposes the
 	// workflow engine's full Tier 1/2/3 MCP surface. Lets any AI client
@@ -1882,6 +1891,7 @@ func NewServer() *Server {
 		Jobs:       jobsSvc,
 		Login:      authSvc,
 		Tools:      allItems,
+		ToolsFn:    liveToolItems,
 		AppName:    appname.Resolve(),
 	}))
 	connectors.Register(notifications.Module(notifications.Deps{
@@ -2613,6 +2623,10 @@ func NewServer() *Server {
 	toolsMux := http.NewServeMux()
 	tr := newToolRouter(configsSvc)
 	for _, m := range modules {
+		// Tool plugins mount on pluginTools below so they can come and go.
+		if toolPlugins.Owns(m.Meta.Key) {
+			continue
+		}
 		meta := m.Meta
 		meta.Path = "/tools/" + meta.Key
 		tr.withScope(meta, len(m.Configs) > 0, m.Register)
@@ -2621,6 +2635,20 @@ func NewServer() *Server {
 		log.Fatal().Msgf("%s", err.Error())
 	}
 	tr.mount(toolsMux)
+	// Tool plugins: one dispatcher over the live set, same Ctx and the same
+	// RequireToolAccess check as the built-ins above. Plugins loaded at boot
+	// are mounted now; installs, updates, enables and disables while wick
+	// runs go through toolPlugins.Reconcile → liveToolSink.
+	pluginTools := newPluginToolRoutes(configsSvc, func(meta login.ToolMeta, next http.Handler) http.Handler {
+		return authMidd.RequireToolAccess([]login.ToolMeta{meta})(next)
+	})
+	for _, m := range toolPlugins.Modules() {
+		if err := pluginTools.set(m); err != nil {
+			log.Warn().Str("tool", m.Meta.Key).Err(err).Msg("tool plugin: not mounted")
+			tools.Unregister(m.Meta.Key)
+			toolPlugins.Reject(m.Meta.Key, err)
+		}
+	}
 	// Log the unauthenticated surface at boot. A webhook group answers
 	// without a login, so which prefixes are open should be visible in the
 	// startup log rather than discoverable only by reading module source.
@@ -2731,6 +2759,7 @@ func NewServer() *Server {
 	}()
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems).
 		WithWebhookRoutes(tr.WebhookRoutes())
+	managerHandler.SetWebhookRoutesSource(pluginTools.WebhookRoutes)
 	managerHandler.SetCustomConnectors(customConnSvc)
 	if pluginMgr != nil {
 		managerHandler.SetPluginResolver(pluginMgr)
@@ -2873,6 +2902,13 @@ func NewServer() *Server {
 		})
 	}
 
+	// Every tool list (manager, admin, home grid) reads the registry per call:
+	// tool plugins are loaded and unloaded while wick runs.
+	liveItems := func() []tool.Tool {
+		return append(liveToolItems(), allItems[bootToolItems:]...)
+	}
+	managerHandler.SetToolsSource(liveItems)
+
 	// ── Self-updater (web System page) ──────────────────────────
 	// Build the updater + its web coordinator from the release info set
 	// by app.main. The updater persists staged-update state into the
@@ -2914,6 +2950,7 @@ func NewServer() *Server {
 		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
+	adminHandler.SetToolsSource(liveItems)
 	// The People & usage page reads the session store. Handed the SAME
 	// resolved layout the agents tool uses — resolving that path twice is how
 	// two parts of one binary end up reading two different directories.
@@ -2968,13 +3005,6 @@ func NewServer() *Server {
 	// /manager/connectors inside the Agents shell). Connectors are an
 	// Agents-domain concern UX-wise, so the launcher tile is a shortcut
 	// into Agents rather than the raw /manager surface.
-	homeItems := make([]tool.Tool, 0, len(allItems)+1)
-	for _, t := range allItems {
-		if t.Category == "connector" {
-			continue
-		}
-		homeItems = append(homeItems, t)
-	}
 	connectorsTile := tool.Tool{
 		Name:              "Connectors",
 		Description:       "Browse and manage LLM-callable connectors that wrap external APIs.",
@@ -2984,13 +3014,23 @@ func NewServer() *Server {
 		DefaultVisibility: entity.VisibilityPrivate,
 		DefaultTags:       []tool.DefaultTag{tags.AI},
 	}
-	homeItems = append(homeItems, connectorsTile)
 	// Seed the AI group tag on the launcher path so it lands in the AI
 	// card next to Agents (the generic loop above only walks allItems).
 	if err := tagsSvc.EnsureToolDefaultTags(context.Background(), connectorsTile.Path, connectorsTile.DefaultTags); err != nil {
 		log.Error().Msgf("seed connectors launcher tag: %s", err.Error())
 	}
-	homeHandler := home.NewHandler(homeItems, authSvc, tagsSvc, bookmarkSvc)
+	homeItems := func() []tool.Tool {
+		all := liveItems()
+		out := make([]tool.Tool, 0, len(all)+1)
+		for _, t := range all {
+			if t.Category == "connector" {
+				continue
+			}
+			out = append(out, t)
+		}
+		return append(out, connectorsTile)
+	}
+	homeHandler := home.NewHandler(homeItems(), authSvc, tagsSvc, bookmarkSvc).SetItemsSource(homeItems)
 
 	// ── Router ───────────────────────────────────────────────────
 	r := http.NewServeMux()
@@ -3133,9 +3173,25 @@ func NewServer() *Server {
 	// disable / remove reconcile immediately. Guard the typed-nil: passing a nil
 	// *Reloader into the interface would make it non-nil (and panic on Reload).
 	pluginsHandler := manager.NewPluginsHandler(db).SetReplaceRefresh(configsSvc.EnsureOwned)
-	if pluginReloader != nil {
-		pluginsHandler.SetReloader(pluginReloader)
-	}
+	// Install / enable / disable reconcile connectors and tool plugins at once.
+	pluginsHandler.SetReloader(pluginReloaders{conn: pluginReloader, tools: toolPlugins})
+	// Admin → Plugins shows what this process serves, not just the stored flag.
+	pluginsHandler.SetLoadState(func(kind, key string) (string, string) {
+		switch kind {
+		case wickplugin.KindTool:
+			return toolPlugins.State(key)
+		case wickplugin.KindJob:
+			// Job plugins still load only at start (the worker schedules
+			// them); say so instead of showing an unloaded job as Active.
+			for _, m := range jobs.All() {
+				if m.Meta.Key == key {
+					return toolplugin.StateActive, ""
+				}
+			}
+			return toolplugin.StateError, "job plugins load at start: restart wick to load it"
+		}
+		return "", ""
+	})
 	pluginsHandler.RegisterRoutes(r, authMidd)
 
 	// Service plugins (plugins/services/<key>) are supervised with restart
@@ -3174,6 +3230,12 @@ func NewServer() *Server {
 	hostAPISvc.RegisterAdmin(r, authMidd.RequireAdmin)
 	// Plugin processes spawned from here on carry the Host API; keep_warm
 	// tools and the connector warm-up start only now (see TestHostAPIStartsBeforePluginSpawns).
+	toolSink := newLiveToolSink(pluginTools)
+	toolSink.ensureConfigs = configsSvc.EnsureOwned
+	toolSink.ensureTags = tagsSvc.EnsureToolDefaultTags
+	toolSink.migrate = pluginreplace.New(db).ApplyAll
+	toolSink.rememberBootReplaced(toolsBeforeReplace, replacePairs)
+	toolPlugins.Attach(toolSink)
 	toolPlugins.Start()
 	if pluginMgr != nil {
 		go pluginMgr.WarmUp()
@@ -3193,8 +3255,8 @@ func NewServer() *Server {
 		case wickplugin.KindService:
 			servicePlugins.Remove(key)
 		case wickplugin.KindTool:
+			// Stops the runner and drops routes + registry entry via the sink.
 			toolPlugins.Remove(key)
-			tools.Unregister(key)
 		case wickplugin.KindJob:
 			jobs.Unregister(key)
 		}
@@ -3220,7 +3282,8 @@ func NewServer() *Server {
 	// Plugin sources (url / GitHub releases): Admin → Plugins → Sources,
 	// Available, Add (upload / link / GitHub). Installs land in the kind
 	// folder; connectors reconcile through the reloader, a service plugin is
-	// reloaded from its new manifest and started, tools and jobs pick it up on next spawn.
+	// reloaded from its new manifest and started, a tool is loaded live (an update
+	// swaps to the new version), jobs pick it up on next start.
 	pluginSources := &pluginsource.Manager{
 		DB:      db,
 		Client:  pluginsource.NewClient(configsSvc.DecryptSecret),
@@ -3233,12 +3296,27 @@ func NewServer() *Server {
 				}
 			case wickplugin.KindService:
 				servicePlugins.Install(connplugin.KindDir(wickplugin.KindService), key, jobPluginStore.Enabled, jobPluginStore.Record)
+			case wickplugin.KindTool:
+				toolPlugins.Reconcile()
 			}
 		},
 	}
 	pluginSourcesHandler := &manager.PluginSourcesHandler{
 		Sources: pluginSources,
 		Health: manager.InstalledHealth(func(kind, key string) (bool, string) {
+			if kind == wickplugin.KindTool {
+				if !jobPluginStore.Enabled(key) {
+					return true, "disabled"
+				}
+				switch state, reason := toolPlugins.State(key); state {
+				case toolplugin.StateActive:
+					return true, "loaded"
+				case toolplugin.StateError:
+					return false, reason
+				default:
+					return false, "not loaded"
+				}
+			}
 			if kind != wickplugin.KindService {
 				return true, "verified"
 			}
@@ -3261,6 +3339,11 @@ func NewServer() *Server {
 	// approval and (when set) matching tags.
 	toolMetas := make([]login.ToolMeta, 0, len(allItems))
 	for _, t := range allItems {
+		// Tool plugins carry their own access check (pluginTools); leaving
+		// them out here makes a disabled plugin's path a plain 404.
+		if toolPlugins.Owns(t.Key) && t.Path == "/tools/"+t.Key {
+			continue
+		}
 		toolMetas = append(toolMetas, login.ToolMeta{Path: t.Path, DefaultVisibility: t.DefaultVisibility})
 	}
 	// Webhook groups declared via Router.WebhookGroup are exempt: a webhook
@@ -3270,11 +3353,11 @@ func NewServer() *Server {
 	// gated chain. Authentication for an exempt route is the module's job —
 	// see tool.WebhookGroup's contract.
 	gatedTools := authMidd.RequireToolAccess(toolMetas)(toolsMux)
-	r.Handle("/tools/", webhookBypass(
+	r.Handle("/tools/", pluginTools.wrap(webhookBypass(
 		tr.WebhookPrefixes(),
 		toolsMux,
 		gatedTools,
-	))
+	)))
 
 	// Machine-facing REST APIs live at the wick root under /api — short,
 	// stable, and one base URL for every integration. This catch-all serves

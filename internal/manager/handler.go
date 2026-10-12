@@ -33,6 +33,10 @@ type Handler struct {
 	// tool's settings page so an operator can see what answers without a
 	// login without having to read the module source.
 	webhooks []tool.WebhookRoute
+	// toolsFn / webhooksFn, when set, are read per request (see
+	// SetToolsSource / SetWebhookRoutesSource).
+	toolsFn    func() []tool.Tool
+	webhooksFn func() []tool.WebhookRoute
 	// custom is the custom-connector service (nil until SetCustomConnectors
 	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
 	custom *customconn.Service
@@ -295,8 +299,37 @@ func (h *Handler) regenerateToolConfig(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "regenerate is only available on app-level variables", http.StatusBadRequest)
 }
 
+// SetToolsSource makes the handler read its tool list from fn on every use
+// instead of the slice given to NewHandler, so a tool plugin loaded or
+// unloaded while wick runs is found (or not) without a restart.
+func (h *Handler) SetToolsSource(fn func() []tool.Tool) *Handler {
+	h.toolsFn = fn
+	return h
+}
+
+// SetWebhookRoutesSource adds fn's routes (tool plugins, which come and go
+// at runtime) to the boot-time ones given to WithWebhookRoutes.
+func (h *Handler) SetWebhookRoutesSource(fn func() []tool.WebhookRoute) *Handler {
+	h.webhooksFn = fn
+	return h
+}
+
+func (h *Handler) toolsNow() []tool.Tool {
+	if h.toolsFn != nil {
+		return h.toolsFn()
+	}
+	return h.tools
+}
+
+func (h *Handler) webhooksNow() []tool.WebhookRoute {
+	if h.webhooksFn == nil {
+		return h.webhooks
+	}
+	return append(append([]tool.WebhookRoute(nil), h.webhooks...), h.webhooksFn()...)
+}
+
 func (h *Handler) findTool(key string) (tool.Tool, bool) {
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if t.Key == key {
 			return t, true
 		}

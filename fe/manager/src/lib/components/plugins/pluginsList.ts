@@ -81,15 +81,20 @@ export function queryString(q: ListQuery): string {
 
 export const originGroup = (o: PluginOrigin): OriginFilter => (o === "url-zip" ? "source" : o);
 export const hasError = (p: InstalledPlugin) => !!p.last_health_at && !p.last_health_ok;
+// isActive: loaded by the running wick. Falls back to the enabled flag when
+// the server does not report a status.
+export const isActive = (p: InstalledPlugin) => (p.status ? p.status === "active" : p.enabled);
+export const loadFailed = (p: InstalledPlugin) => p.status === "error";
+export const loadPending = (p: InstalledPlugin) => p.status === "pending";
 export const canUpdate = (p: InstalledPlugin) => p.update_available && p.origin !== "upload" && p.origin !== "local";
 export const hasUpdateSource = (p: InstalledPlugin) => p.origin !== "upload" && p.origin !== "local";
 
 export function matchesStatus(p: InstalledPlugin, s: StatusFilter): boolean {
   switch (s) {
-    case "active": return p.enabled;
+    case "active": return isActive(p);
     case "disabled": return !p.enabled;
     case "update": return p.update_available;
-    case "error": return hasError(p);
+    case "error": return hasError(p) || loadFailed(p);
     default: return true;
   }
 }

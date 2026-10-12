@@ -30,6 +30,9 @@ type Deps struct {
 	// process, populated alongside the manager.Handler in api/server.go.
 	// Used by tool_list to enumerate visible tools.
 	Tools []tool.Tool
+	// ToolsFn, when set, is read on every tool_* op instead of Tools, so a
+	// tool plugin loaded or unloaded while wick runs is seen immediately.
+	ToolsFn func() []tool.Tool
 	// AppName is the per-binary basename used to resolve userconfig
 	// paths (~/.<appName>/config.json). Filled from app.BuildAppName.
 	AppName string
@@ -472,8 +475,9 @@ func (h *handlers) toolList(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]map[string]any, 0, len(h.deps.Tools))
-	for _, t := range h.deps.Tools {
+	all := h.tools()
+	out := make([]map[string]any, 0, len(all))
+	for _, t := range all {
 		// Tool-category items only — jobs/connectors enumerate elsewhere.
 		if t.Category == "job" || t.Category == "connector" {
 			continue
@@ -573,8 +577,15 @@ func (h *handlers) toolSetConfig(c *connector.Ctx) (any, error) {
 	return map[string]any{"ok": true, "key": key, "config_key": configKey, "before": before, "after": after}, nil
 }
 
+func (h *handlers) tools() []tool.Tool {
+	if h.deps.ToolsFn != nil {
+		return h.deps.ToolsFn()
+	}
+	return h.deps.Tools
+}
+
 func (h *handlers) findTool(key string) (tool.Tool, bool) {
-	for _, t := range h.deps.Tools {
+	for _, t := range h.tools() {
 		if t.Key == key {
 			return t, true
 		}

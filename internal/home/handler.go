@@ -15,6 +15,7 @@ import (
 
 type Handler struct {
 	allItems []tool.Tool
+	itemsFn  func() []tool.Tool
 	authSvc  *login.Service
 	tagsSvc  *tags.Service
 	bookmark *bookmark.Service
@@ -22,6 +23,21 @@ type Handler struct {
 
 func NewHandler(items []tool.Tool, authSvc *login.Service, tagsSvc *tags.Service, bookmarkSvc *bookmark.Service) *Handler {
 	return &Handler{allItems: items, authSvc: authSvc, tagsSvc: tagsSvc, bookmark: bookmarkSvc}
+}
+
+// SetItemsSource makes the grid read its items from fn on every request
+// instead of the slice given to NewHandler, so a tool plugin loaded or
+// unloaded while wick runs appears (or goes) without a restart.
+func (h *Handler) SetItemsSource(fn func() []tool.Tool) *Handler {
+	h.itemsFn = fn
+	return h
+}
+
+func (h *Handler) items() []tool.Tool {
+	if h.itemsFn != nil {
+		return h.itemsFn()
+	}
+	return h.allItems
 }
 
 const guestViewCookie = "_st_view"
@@ -153,7 +169,7 @@ func (h *Handler) ItemMeta(ctx context.Context, user *entity.User, visible []too
 // VisibleItems returns the items the user can see on the home grid.
 func (h *Handler) VisibleItems(r *http.Request, user *entity.User) []tool.Tool {
 	var result []tool.Tool
-	for _, t := range h.allItems {
+	for _, t := range h.items() {
 		defaultVis := t.DefaultVisibility
 		if defaultVis == "" {
 			defaultVis = entity.VisibilityPrivate

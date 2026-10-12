@@ -354,7 +354,7 @@ func TestLoadSkipsUnverified(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "demo"), 0o755)
 	os.WriteFile(filepath.Join(dir, "demo", "plugin.json"), []byte(`{"kind":"tool","version":"1","entry":"demo","module":{"meta":{"key":"demo"}}}`), 0o644)
 	os.WriteFile(filepath.Join(dir, "demo", "demo"), []byte("x"), 0o755)
-	n := NewPool().Load(dir, nil, nil, func(tool.Module) { t.Fatal("unverified plugin registered") })
+	n := NewPool().Load(dir, nil, nil, func(tool.Module) { t.Fatal("unverified plugin registered") }, nil)
 	if n != 0 {
 		t.Fatalf("loaded %d", n)
 	}

@@ -545,3 +545,20 @@ func migrateAccess(tx *gorm.DB, oldPath, newPath string, write bool) (AccessRepo
 	}
 	return ar, nil
 }
+
+// Forget drops the active pairs whose new key is newKey — the replacing
+// module was unloaded while wick runs — and returns them, so the caller can
+// bring the old modules back.
+func Forget(newKey string) []Pair {
+	active.Lock()
+	defer active.Unlock()
+	var out []Pair
+	for k, p := range active.byOld {
+		if p.New == newKey {
+			out = append(out, p)
+			delete(active.byOld, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Old < out[j].Old })
+	return out
+}

@@ -108,6 +108,7 @@ type Handler struct {
 
 	repo       *repo
 	tools      []tool.Tool
+	toolsFn    func() []tool.Tool
 	configs    *configs.Service
 	sso        *sso.Service
 	svc        JobListProvider
@@ -416,7 +417,7 @@ func (h *Handler) dashboardPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) countTools() int {
 	n := 0
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if strings.HasPrefix(t.Path, "/tools/") {
 			n++
 		}
@@ -440,7 +441,7 @@ func (h *Handler) gatherMissing(ctx context.Context, jobs []entity.Job) (total i
 	}
 
 	// Tools — link to manager for config editing
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if !strings.HasPrefix(t.Path, "/tools/") {
 			continue
 		}
@@ -663,7 +664,7 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 	currentUser := login.GetUser(r.Context())
 
 	var toolsOnly []tool.Tool
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if strings.HasPrefix(t.Path, "/tools/") {
 			toolsOnly = append(toolsOnly, t)
 		}
@@ -1032,4 +1033,19 @@ const channelPlaceholderDomain = "@channel.local"
 // an unidentifiable channel sender, rather than a real contact address.
 func isChannelPlaceholderEmail(email string) bool {
 	return strings.HasSuffix(email, channelPlaceholderDomain)
+}
+
+// SetToolsSource makes the handler read its tool list from fn on every use
+// instead of the slice given to NewHandler, so a tool plugin loaded or
+// unloaded while wick runs is listed (or not) without a restart.
+func (h *Handler) SetToolsSource(fn func() []tool.Tool) *Handler {
+	h.toolsFn = fn
+	return h
+}
+
+func (h *Handler) toolsNow() []tool.Tool {
+	if h.toolsFn != nil {
+		return h.toolsFn()
+	}
+	return h.tools
 }

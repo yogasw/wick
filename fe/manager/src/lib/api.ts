@@ -585,6 +585,11 @@ export interface InstalledPlugin {
   last_health_at?: string;
   last_health_ok: boolean;
   last_health_detail?: string;
+  // What the running wick does with it: active = loaded, pending = installed
+  // moments ago and about to load, error = enabled but not loaded
+  // (status_detail says why). Absent on older servers.
+  status?: "active" | "disabled" | "error" | "pending";
+  status_detail?: string;
 }
 export interface OfficialCatalog {
   url: string;
