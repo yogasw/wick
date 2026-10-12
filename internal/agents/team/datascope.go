@@ -172,6 +172,59 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	return CheckAgentProject(ctx, projectID)
 }
 
+// RoomTicket is the one ticket a ticket room's member may reach from its
+// backing session (callingSID): the room's ticket, in the room's project.
+// ok only while the session is the backing session of a current member
+// — the agent and the person it works for both still listed — and that
+// person may open the project. Removing the member or losing the project
+// ends it on the next call; nothing is cached.
+func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (projectID, ticketID string, ok bool) {
+	if callingSID == "" {
+		return "", "", false
+	}
+	sess, err := session.Load(layout, callingSID)
+	if err != nil || sess.Meta.GroupSessionID == "" {
+		return "", "", false
+	}
+	room, err := session.Load(layout, sess.Meta.GroupSessionID)
+	if err != nil || room.Meta.TicketRoom == nil || room.Meta.ProjectID == "" {
+		return "", "", false
+	}
+	tr := room.Meta.TicketRoom
+	owner := sess.Meta.UserID
+	if sess.Meta.AgentID != "" {
+		if _, member := tr.Member(sess.Meta.AgentID, owner); !member {
+			return "", "", false
+		}
+	} else if home, has := tr.Home(); !has || home.Kind != session.RoomMemberProjectDefault {
+		// A backing session with no agent is the project default's.
+		return "", "", false
+	}
+	p, err := project.Load(layout, room.Meta.ProjectID)
+	if err != nil || owner == "" {
+		return "", "", false
+	}
+	acc := project.Access{UserID: owner}
+	if u := login.GetUser(ctx); u != nil && u.ID == owner {
+		acc.TagIDs = login.GetUserTagIDs(ctx)
+	}
+	if !project.CanAccess(p.Meta, acc) {
+		return "", "", false
+	}
+	return room.Meta.ProjectID, tr.TicketID, true
+}
+
+// CheckTicketTarget allows callingSID to act on one ticket's data: a
+// ticket room member's backing session reaches its room's ticket
+// (RoomTicket) and nothing else of that project; anything else is
+// CheckProjectTarget.
+func CheckTicketTarget(ctx context.Context, layout config.Layout, callerUID, callingSID, projectID, ticketID string) error {
+	if rp, rt, ok := RoomTicket(ctx, layout, callingSID); ok && rp == projectID && rt == ticketID {
+		return nil
+	}
+	return CheckProjectTarget(ctx, layout, callerUID, callingSID, projectID)
+}
+
 // CheckAgentProject refuses an ordinary agent any project but its own
 // (the calling session's, which CheckProjectTarget already let through).
 func CheckAgentProject(ctx context.Context, projectID string) error {

@@ -19,6 +19,14 @@ import (
 // arguments at all, so "note this down" just works and lands somewhere the
 // next session will look.
 func resolveScope(layout agentconfig.Layout, c *connector.Ctx) (notestore.Scope, error) {
+	// A ticket room member's backing session: its room's ticket, implicit
+	// or named, and only that one (team.RoomTicket).
+	if rp, rt, ok := team.RoomTicket(c.Context(), layout, c.SessionID()); ok {
+		tid, pid := strings.TrimSpace(c.Input("ticket_id")), strings.TrimSpace(c.Input("project_id"))
+		if strings.TrimSpace(c.Input("session_id")) == "" && (tid == "" || tid == rt) && (pid == "" || pid == rp) {
+			return notestore.Scope{ProjectID: rp, TicketID: rt}, nil
+		}
+	}
 	if tid := strings.TrimSpace(c.Input("ticket_id")); tid != "" {
 		projectID, err := resolveProject(layout, c, c.Input("project_id"))
 		if err != nil {

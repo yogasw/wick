@@ -205,6 +205,11 @@ type Meta struct {
 	// its own backing session (GroupSessionID) with its own access, and
 	// the replies are copied into this thread. nil = not a group.
 	AgentGroup *AgentGroup `json:"agent_group,omitempty"`
+	// TicketRoom makes this session the room of one ticket: a group chat
+	// that lives in the ticket's project, whose members work for the
+	// people who brought them in. Kept apart from AgentGroup, whose
+	// single-owner rules do not fit a room. nil = not a ticket room.
+	TicketRoom *TicketRoom `json:"ticket_room,omitempty"`
 	// GroupSessionID marks a member's backing session: the group chat it
 	// answers for. Hidden from the agent's own chat list.
 	GroupSessionID string `json:"group_session_id,omitempty"`
@@ -229,6 +234,62 @@ type AgentGroup struct {
 	MaxHopsOverride int `json:"max_hops_override,omitempty"`
 	// LastReadAt is when the owner last opened the group.
 	LastReadAt *time.Time `json:"last_read_at,omitempty"`
+}
+
+// Kinds of a ticket room member (RoomMember.Kind).
+const (
+	// RoomMemberAgent is a Team agent working for OwnerID.
+	RoomMemberAgent = "agent"
+	// RoomMemberProjectDefault is the project's own prompt and provider,
+	// running as whoever sends the message.
+	RoomMemberProjectDefault = "project_default"
+)
+
+// TicketRoom is a ticket room's settings (Meta.TicketRoom).
+type TicketRoom struct {
+	TicketID string       `json:"ticket_id"`
+	Members  []RoomMember `json:"members"`
+	// ShareFull is, per user id, whether that person's agents read the
+	// whole thread — other people's messages and agents included — or
+	// only that person's own part of it (the default).
+	ShareFull map[string]bool `json:"share_full,omitempty"`
+}
+
+// RoomMember is one member of a ticket room. Identity is (AgentID,
+// OwnerID), never the handle: everyone's Captain is "captain".
+type RoomMember struct {
+	Kind    string `json:"kind"`
+	AgentID string `json:"agent_id,omitempty"`
+	// OwnerID is the person the member works for ("" for a project
+	// default, which works for whoever sends).
+	OwnerID string `json:"owner_id"`
+	// Home marks the member every room starts with; it cannot be removed.
+	Home bool `json:"home,omitempty"`
+}
+
+// Member returns the agent member agentID working for ownerID.
+func (r *TicketRoom) Member(agentID, ownerID string) (RoomMember, bool) {
+	if r == nil || agentID == "" {
+		return RoomMember{}, false
+	}
+	for _, m := range r.Members {
+		if m.Kind == RoomMemberAgent && m.AgentID == agentID && m.OwnerID == ownerID {
+			return m, true
+		}
+	}
+	return RoomMember{}, false
+}
+
+// Home returns the room's home member.
+func (r *TicketRoom) Home() (RoomMember, bool) {
+	if r != nil {
+		for _, m := range r.Members {
+			if m.Home {
+				return m, true
+			}
+		}
+	}
+	return RoomMember{}, false
 }
 
 // ChannelRef is where a session's replies belong: a chat channel and the

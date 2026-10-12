@@ -61,6 +61,29 @@ func resolveTicket(layout agentconfig.Layout, c *connector.Ctx, projectID, expli
 	return tk, nil
 }
 
+// resolveRoomOrTicket is resolveProject + resolveTicket for the ops on one
+// ticket, with the ticket room's narrow branch first: a room member's
+// backing session reaches its room's ticket — implicitly, or named — and
+// only that one (team.RoomTicket). Any other ticket goes the usual way.
+func resolveRoomOrTicket(layout agentconfig.Layout, c *connector.Ctx, explicitProject, explicitTicket string) (string, ticket.Ticket, error) {
+	if rp, rt, ok := team.RoomTicket(c.Context(), layout, c.SessionID()); ok {
+		p, t := strings.TrimSpace(explicitProject), strings.TrimSpace(explicitTicket)
+		if (p == "" || p == rp) && (t == "" || t == rt) {
+			tk, err := ticket.Load(layout, rp, rt)
+			if err != nil {
+				return "", ticket.Ticket{}, fmt.Errorf("ticket %q not found in project %s", rt, rp)
+			}
+			return rp, tk, nil
+		}
+	}
+	projectID, err := resolveProject(layout, c, explicitProject)
+	if err != nil {
+		return "", ticket.Ticket{}, err
+	}
+	tk, err := resolveTicket(layout, c, projectID, explicitTicket)
+	return projectID, tk, err
+}
+
 // resolveSession returns the session id to attach/detach.
 func resolveSession(layout agentconfig.Layout, c *connector.Ctx, explicit string) (string, error) {
 	if s := strings.TrimSpace(explicit); s != "" {
@@ -343,11 +366,7 @@ func matchRank(where []string) int {
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {
-	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
-	if err != nil {
-		return nil, err
-	}
-	tk, err := resolveTicket(h.layout, c, projectID, c.Input("ticket_id"))
+	_, tk, err := resolveRoomOrTicket(h.layout, c, c.Input("project_id"), c.Input("ticket_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -411,11 +430,7 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) update(c *connector.Ctx) (any, error) {
-	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
-	if err != nil {
-		return nil, err
-	}
-	tk, err := resolveTicket(h.layout, c, projectID, c.Input("ticket_id"))
+	projectID, tk, err := resolveRoomOrTicket(h.layout, c, c.Input("project_id"), c.Input("ticket_id"))
 	if err != nil {
 		return nil, err
 	}

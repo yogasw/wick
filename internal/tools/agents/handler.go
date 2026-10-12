@@ -479,6 +479,12 @@ func Register(r tool.Router) {
 	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
 	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
 	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
+	// The ticket's room (ticket_room.go).
+	r.GET("/api/tickets/{ticketID}/room", apiTicketRoomGet)
+	r.POST("/api/tickets/{ticketID}/room", apiTicketRoomCreate)
+	r.PATCH("/api/tickets/{ticketID}/room", apiTicketRoomUpdate)
+	r.POST("/api/tickets/{ticketID}/room/members", apiTicketRoomAddMembers)
+	r.DELETE("/api/tickets/{ticketID}/room/members/{agentID}", apiTicketRoomRemoveMember)
 	// A custom ticket button was clicked — POST the ticket to that button's
 	// URL and report the outcome to the clicker.
 	r.POST("/api/tickets/{ticketID}/actions/{buttonID}", apiTicketAction)
@@ -2113,6 +2119,11 @@ func sendMessage(c *tool.Ctx) {
 		sendGroupMessage(c, sess, req.Text)
 		return
 	}
+	// Nor does a ticket room: the sender's agents answer in theirs.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sess.Meta.TicketRoom != nil {
+		sendRoomMessage(c, sess, req.Text)
+		return
+	}
 
 	// #<provider> prefix → switch provider before sending.
 	if r := agentchannels.ParseProviderTag(req.Text); r.HasTag {
@@ -2238,7 +2249,7 @@ func validateReply(c *tool.Ctx, id, raw, text string) (*store.ReplyTo, bool) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return nil, false
 	}
-	if sess.Meta.AgentGroup != nil {
+	if sess.Meta.AgentGroup != nil || sess.Meta.TicketRoom != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "reply_to: not supported in group chats"})
 		return nil, false
 	}

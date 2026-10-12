@@ -609,6 +609,9 @@ type groupRun struct {
 	record  func(store.ConversationTurn)
 	typing  func(p teamlink.Peer, on bool)
 	now     func() time.Time
+	// prompt builds a member's turn; nil = groupPrompt (a ticket room
+	// builds its own, per the person the member works for).
+	prompt func(self teamlink.Peer, from string, history []store.ConversationTurn) string
 }
 
 type groupJob struct {
@@ -666,7 +669,12 @@ func (r *groupRun) answer(ctx context.Context, j groupJob) string {
 		r.typing(j.to, true)
 		defer r.typing(j.to, false)
 	}
-	prompt := groupPrompt(r.group, r.members, j.to, j.from, r.history())
+	var prompt string
+	if r.prompt != nil {
+		prompt = r.prompt(j.to, j.from, r.history())
+	} else {
+		prompt = groupPrompt(r.group, r.members, j.to, j.from, r.history())
+	}
 	reply, err := r.turn(ctx, j.to, prompt)
 	now := r.clock()
 	if err != nil {
