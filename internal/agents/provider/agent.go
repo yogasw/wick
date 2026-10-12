@@ -1259,8 +1259,7 @@ func (a *Agent) run(ctx context.Context) {
 			if ev.Type == event.TextDelta {
 				ev.Text = joiner.breakBefore(ev.Text) + ev.Text
 			}
-			switch ev.Type {
-			case event.TextDelta, event.ToolUse, event.ToolResult:
+			if countsAsProduced(ev) {
 				produced = true
 			}
 
@@ -1710,4 +1709,18 @@ func (a *Agent) idleKill() {
 		_ = proc.Kill()
 	}
 	a.exitReason(ExitIdle)
+}
+
+// countsAsProduced reports whether ev is output the turn really made: text
+// from the model or a tool that ran. A Synthetic TextDelta is the CLI's
+// own notice (claude's "You've hit your session limit"), not the model's
+// work, so a turn that only got that far has produced nothing.
+func countsAsProduced(ev event.AgentEvent) bool {
+	switch ev.Type {
+	case event.TextDelta:
+		return !ev.Synthetic
+	case event.ToolUse, event.ToolResult:
+		return true
+	}
+	return false
 }

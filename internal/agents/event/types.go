@@ -12,6 +12,8 @@
 // Codex and Gemini parsers land in phase 6.
 package event
 
+import "time"
+
 // EventType is the normalized event taxonomy used across all CLIs.
 //
 // `Thinking` is optional — only Claude exposes thinking deltas; other
@@ -131,6 +133,19 @@ type AgentEvent struct {
 	IsError   bool   // ToolResult: true when the tool returned an error
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
+	// ErrKind is what an Error says about the ACCOUNT (limit, auth,
+	// vendor down) — see limit.go. Also set on a Synthetic TextDelta,
+	// which is how claude announces a limit before its error result.
+	// ErrNone everywhere else.
+	ErrKind ErrKind
+	// ResetAt is when an ErrLimit lifts, zero when the message did not
+	// say.
+	ResetAt time.Time
+	// Synthetic marks a TextDelta the CLI wrote itself rather than the
+	// model — claude's "You've hit your session limit · resets …". It is
+	// shown like any text but is not the model's output: the turn has
+	// not produced anything because of it.
+	Synthetic bool
 	Raw       string // verbatim source line
 	// RemoteNote labels how a remote agent's turn ended (Done only):
 	// "ended without marker", "follow-up", "late reply".

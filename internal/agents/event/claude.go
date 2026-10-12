@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -66,6 +67,89 @@ type ClaudeParser struct {
 	// result said 134,763 where the window actually held 34,673. Read
 	// as a level, that sum climbs past 100% and keeps going.
 	lastLevel int
+
+	// synthKind / synthReset carry what this turn's synthetic message
+	// (see isSyntheticText) said about the account, for the result frame
+	// that ends the turn: claude's error result does not always repeat
+	// the wording — error_during_execution leaves .result empty.
+	synthKind  ErrKind
+	synthReset time.Time
+	// synthCoded: that message carried claude's own error code, which
+	// then outranks whatever the result's wording suggests.
+	synthCoded bool
+}
+
+// claudeSyntheticModel is the model id claude stamps on an assistant
+// message it wrote itself instead of calling the API — the limit notice,
+// an API error it is relaying, "No response requested.".
+const claudeSyntheticModel = "<synthetic>"
+
+// claudeErrorKinds maps the error code claude puts on a message it wrote
+// itself (`"error":"rate_limit"` next to `"isApiErrorMessage":true`) to
+// what it says about the account. A code not listed — invalid_request
+// (an image it could not read), max_output_tokens, unknown — is about
+// the request, not the account: ErrNone.
+var claudeErrorKinds = map[string]ErrKind{
+	"rate_limit":            ErrLimit,
+	"rate_limit_error":      ErrLimit,
+	"billing_error":         ErrLimit,
+	"authentication_failed": ErrAuth,
+	"authentication_error":  ErrAuth,
+	"oauth_org_not_allowed": ErrAuth,
+	"permission_error":      ErrAuth,
+	"overloaded":            ErrUnavailable,
+	"overloaded_error":      ErrUnavailable,
+	"server_error":          ErrUnavailable,
+	"api_error":             ErrUnavailable,
+}
+
+// errorCode reads an `error` field that is either the bare code
+// ("rate_limit") or an API error object ({"type":"rate_limit_error"}).
+func errorCode(b json.RawMessage) string {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return ""
+	}
+	var code string
+	if b[0] == '"' {
+		_ = json.Unmarshal(b, &code)
+		return code
+	}
+	var obj struct {
+		Type  string `json:"type"`
+		Error *struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(b, &obj) == nil {
+		if obj.Error != nil && obj.Error.Type != "" {
+			return obj.Error.Type
+		}
+		return obj.Type
+	}
+	return ""
+}
+
+// claudeSyntheticMarkers are the notices claude writes itself on an
+// account problem, matched only when a frame carries neither the
+// synthetic model id nor an error code (an older CLI).
+// Narrower than ClassifyError's markers on purpose: this runs on assistant
+// text, where the model may well be talking ABOUT a 429. Lower-case.
+var claudeSyntheticMarkers = []string{
+	"you've hit your", "you have hit your", "usage limit reached",
+	"invalid api key", "please run /login", "oauth token has expired",
+	"api error: 4", "api error: 5", "credit balance is too low",
+	"failed to authenticate",
+}
+
+// isSyntheticText reports whether an un-streamed assistant frame's text
+// is claude's own notice rather than the model's: short, and worded the
+// way claude words its limit/auth/API-error messages.
+func isSyntheticText(text string) bool {
+	if len(text) > 500 {
+		return false
+	}
+	return containsAny(strings.ToLower(text), claudeSyntheticMarkers)
 }
 
 // NewClaudeParser returns a fresh parser ready to consume Claude
@@ -94,6 +178,12 @@ type claudeRaw struct {
 	Text       string `json:"text,omitempty"`
 	// LinkURL is a system remote_link line's URL.
 	LinkURL string `json:"url,omitempty"`
+
+	// APIError is the error code on an assistant message claude wrote
+	// itself ("rate_limit", "authentication_failed", …), and
+	// IsAPIErrorMessage the flag that comes with it. See claudeErrorKinds.
+	APIError          json.RawMessage `json:"error,omitempty"`
+	IsAPIErrorMessage bool            `json:"isApiErrorMessage,omitempty"`
 
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
@@ -240,6 +330,14 @@ type claudeMessage struct {
 	// Usage is the per-request accounting on an `assistant` frame — the
 	// only place the true context level is reported. See lastLevel.
 	Usage *claudeUsage `json:"usage,omitempty"`
+
+	// Model is the model that wrote the message; claudeSyntheticModel
+	// when claude wrote it itself.
+	Model string `json:"model,omitempty"`
+
+	// Error is the same code as claudeRaw.APIError, when a CLI puts it on
+	// the message instead of the line.
+	Error json.RawMessage `json:"error,omitempty"`
 }
 
 // UnmarshalJSON tolerates two string-shaped frames that would otherwise
@@ -270,12 +368,16 @@ func (m *claudeMessage) UnmarshalJSON(b []byte) error {
 	var probe struct {
 		Content json.RawMessage `json:"content"`
 		Usage   *claudeUsage    `json:"usage"`
+		Model   string          `json:"model"`
+		Error   json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(b, &probe); err != nil {
 		return err
 	}
 	// Usage is decoded normally — only .content needs the two shapes.
 	m.Usage = probe.Usage
+	m.Model = probe.Model
+	m.Error = probe.Error
 	trimmed := bytes.TrimSpace(probe.Content)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil
@@ -495,12 +597,19 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 				}
 			}
 		}
+		// A message claude wrote itself is never streamed as deltas, so
+		// the suppression below must not swallow it.
+		code := errorCode(raw.APIError)
+		if code == "" {
+			code = errorCode(raw.Message.Error)
+		}
+		synthModel := raw.Message.Model == claudeSyntheticModel || code != "" || raw.IsAPIErrorMessage
 		// If --include-partial-messages already streamed the text via
 		// stream_event content_block_delta, suppress the trailing
 		// `assistant` frame's text — it's the same content concatenated,
 		// emitting it again would double-render in the UI bubble and
 		// double the assistant turn body in conversation.jsonl.
-		if p.partialTextEmitted {
+		if p.partialTextEmitted && !synthModel {
 			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
 		// No tool_use/thinking — return concatenated text as TextDelta.
@@ -513,11 +622,39 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		if buf.Len() == 0 {
 			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
-		return live(AgentEvent{
+		ev := AgentEvent{
 			Type: TextDelta,
 			Text: buf.String(),
 			Raw:  trimmed,
-		})
+		}
+		// claude announces a limit as an assistant message of its own
+		// before the error result: shown as text, but not output the
+		// model produced.
+		// The wording alone counts only on a frame that names no model:
+		// a real reply may well talk about a 401 or a quota.
+		if synthModel || (raw.Message.Model == "" && isSyntheticText(ev.Text)) {
+			if code != "" {
+				// claude's own code decides; the wording only dates it.
+				ev.ErrKind = claudeErrorKinds[code]
+				if ev.ErrKind == ErrLimit {
+					if at, ok := ParseResetAt(ev.Text, nowFunc()); ok {
+						ev.ResetAt = at
+					}
+				}
+				// A code that says nothing about the account (invalid_request:
+				// claude carries on) must not mask how the turn ends.
+				if ev.ErrKind != ErrNone {
+					p.synthCoded = true
+				}
+			} else {
+				ev = classifyErr(ev, ev.Text)
+			}
+			ev.Synthetic = true
+			if ev.ErrKind != ErrNone {
+				p.synthKind, p.synthReset = ev.ErrKind, ev.ResetAt
+			}
+		}
+		return live(ev)
 
 	case "user":
 		// In headless stream-json mode claude wraps tool_result blocks
@@ -551,6 +688,8 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// for short replies — claude can batch them).
 		p.partialTextEmitted = false
 		p.partialThinkingEmitted = false
+		synthKind, synthReset, synthCoded := p.synthKind, p.synthReset, p.synthCoded
+		p.synthKind, p.synthReset, p.synthCoded = ErrNone, time.Time{}, false
 		if raw.IsError {
 			p.lastLevel = 0
 			// error_during_execution puts the detail on stderr, leaving
@@ -559,11 +698,23 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 			if msg == "" {
 				msg = raw.Subtype
 			}
-			return AgentEvent{
+			ev := classifyErr(AgentEvent{
 				Type:     Error,
 				ErrorMsg: msg,
 				Raw:      trimmed,
-			}, nil
+			}, msg)
+			// The result may say less than the notice before it did, and
+			// a coded notice outranks the wording either way.
+			if synthCoded || ev.ErrKind == ErrNone {
+				ev.ErrKind = synthKind
+			}
+			if ev.ResetAt.IsZero() && ev.ErrKind == synthKind {
+				ev.ResetAt = synthReset
+			}
+			if ev.ErrKind != ErrLimit {
+				ev.ResetAt = time.Time{}
+			}
+			return ev, nil
 		}
 		u := raw.tokenUsage()
 		if u != nil && p.lastLevel > 0 {
@@ -572,12 +723,17 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// The next turn measures itself; carrying this one's level over
 		// would report a stale window if that turn reports none.
 		p.lastLevel = 0
+		// A turn whose only reply was a limit notice can still end in a
+		// "success" result; carry the notice's kind so the end of the
+		// turn says what stopped it.
 		return AgentEvent{
 			Type:       Done,
 			SessionID:  p.sessionID,
 			Raw:        trimmed,
 			Usage:      u,
 			RemoteNote: raw.RemoteNote,
+			ErrKind:    synthKind,
+			ResetAt:    synthReset,
 		}, nil
 	}
 
