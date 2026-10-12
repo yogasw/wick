@@ -220,16 +220,18 @@ describe("P48 helpers", () => {
     expect(chipElapsed(task({ started_at: "2026-10-10T08:00:00Z" }), now)).toBe("2h 5m");
     expect(chipElapsed(task({ state: "input_required", needs_you: true, updated_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
     const end = "2026-10-10T10:08:00Z";
-    // Started 10:00 (the helper), ended 10:08: the duration.
-    expect(chipElapsed(task({ state: "completed", updated_at: end }), now)).toBe("8m 00s");
+    // Delegated block: started 10:00 (the helper), ended 10:08 — the duration.
+    expect(chipElapsed(task({ state: "completed", updated_at: end }), now, "duration")).toBe("8m 00s");
     // No start known: the clock time it ended.
-    expect(chipElapsed(task({ state: "completed", started_at: "", updated_at: end }), now)).toBe(clockTime(Date.parse(end)));
+    expect(chipElapsed(task({ state: "completed", started_at: "", updated_at: end }), now, "duration")).toBe(clockTime(Date.parse(end)));
+    // Tasks panel (default): the clock time it ended.
+    expect(chipElapsed(task({ state: "completed", updated_at: end }), now)).toBe(clockTime(Date.parse(end)));
     // The sender answering a question: timed from the ask, like needs input.
     expect(chipElapsed(task({ state: "input_required", started_at: "2026-10-10T09:00:00Z", asked_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
     // asked_at / ended_at win over updated_at, which moves with every touch.
     expect(chipElapsed(task({ state: "input_required", needs_you: true, asked_at: "2026-10-10T10:03:00Z", updated_at: "2026-10-10T10:05:00Z" }), now)).toBe("2m 10s");
-    expect(chipElapsed(task({ state: "completed", ended_at: end, updated_at: "2026-10-10T10:09:30Z" }), now)).toBe("8m 00s");
-    expect(chipElapsed(task({ state: "rejected", ended_at: end }), now)).toBe("8m 00s");
+    expect(chipElapsed(task({ state: "completed", ended_at: end, updated_at: "2026-10-10T10:09:30Z" }), now, "duration")).toBe("8m 00s");
+    expect(chipElapsed(task({ state: "rejected", ended_at: end }), now, "duration")).toBe("8m 00s");
     expect(clockTime(new Date(2026, 9, 10, 9, 7).getTime())).toBe("09:07");
     expect(clockTime(NaN)).toBe("");
   });

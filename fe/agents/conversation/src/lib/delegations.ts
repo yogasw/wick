@@ -286,9 +286,11 @@ export function endedDay(t: TeamTaskItem, now: number): string {
 
 /** The chip's time: a running timer while the teammate works, how long
     a question has waited (the sender answering it or the person), how
-    long an ended task took (mockup T16: "replied 2m 21s"); the clock time
-    it ended when its start is unknown. */
-export function chipElapsed(t: TeamTaskItem, now: number): string {
+    an ended task reads by `ended`: "duration" (the Delegated block,
+    mockup T16: "replied 2m 21s") is how long it took, falling back to the
+    clock time when its start is unknown; "clock" (the Tasks panel) is the
+    clock time it ended. */
+export function chipElapsed(t: TeamTaskItem, now: number, ended: "duration" | "clock" = "clock"): string {
   const s = taskStatus(t);
   if (s === "working") {
     const at = ms(t.started_at);
@@ -298,9 +300,10 @@ export function chipElapsed(t: TeamTaskItem, now: number): string {
     const at = askedMs(t);
     return Number.isFinite(at) ? formatTimer(now - at) : "";
   }
-  const start = ms(t.started_at);
   const end = endedMs(t);
-  return Number.isFinite(start) && Number.isFinite(end) ? formatTimer(end - start) : clockTime(end);
+  const start = ms(t.started_at);
+  if (ended === "duration" && Number.isFinite(start) && Number.isFinite(end)) return formatTimer(end - start);
+  return clockTime(end);
 }
 
 /** One teammate in the folded line's avatar stack. */

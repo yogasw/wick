@@ -284,7 +284,7 @@
       {#each tasks as t (t.task_id)}
         {@const s = taskStatus(t)}
         {@const open = chipOpen(t)}
-        {@const el = chipElapsed(t, now)}
+        {@const el = chipElapsed(t, now, "duration")}
         <span class="inline-flex items-center gap-1">
           <button
             type="button"
