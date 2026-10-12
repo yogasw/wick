@@ -14,6 +14,7 @@
   import { attachSession } from "../api/tickets.js";
   import { Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
+  import { TICKET_COMPOSER_NUDGE } from "../ticketComposerNudge.js";
 
   type Props = {
     base: string;
@@ -27,12 +28,16 @@
         (resolved by the server), named here. */
     teamCaptain?: boolean;
     captainName?: string;
+    /** Several projects to start in (Team › Tickets' board): a picker in
+        the footer, `project` being the one picked. */
+    projectChoices?: ProjectOption[];
+    onProjectChange?: (projectId: string) => void;
     /** "Start without a ticket"; absent = not offered. */
     onClearTicket?: () => void;
     /** The session exists (and is on the ticket). Absent = open its page. */
     onCreated?: (sessionId: string, url: string) => void;
   };
-  let { base, project, providers, ticketId, ticketLabel = "", teamCaptain = false, captainName = "", onClearTicket, onCreated }: Props = $props();
+  let { base, project, providers, ticketId, ticketLabel = "", teamCaptain = false, captainName = "", projectChoices, onProjectChange, onClearTicket, onCreated }: Props = $props();
 
   let selectedProvider = $state<string>("");
 
@@ -144,6 +149,31 @@
   const labelShort = $derived(label.length > 32 ? label.slice(0, 32).trimEnd() + "…" : label);
   const labelBanner = $derived(label.length > 60 ? label.slice(0, 60).trimEnd() + "…" : label);
 
+  /* "+ New session" points here (ticketComposerNudge): into view, cursor
+     in, and a slide-and-glow with a hint for a moment. */
+  const NUDGE_MS = 2600;
+  let root = $state<HTMLDivElement>();
+  let nudging = $state(false);
+  let nudgeTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const onNudge = () => {
+      root?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+      root?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+      nudging = false;
+      clearTimeout(nudgeTimer);
+      // Next frame, so a second click restarts the animation.
+      requestAnimationFrame(() => {
+        nudging = true;
+        nudgeTimer = setTimeout(() => { nudging = false; }, NUDGE_MS);
+      });
+    };
+    window.addEventListener(TICKET_COMPOSER_NUDGE, onNudge);
+    return () => {
+      window.removeEventListener(TICKET_COMPOSER_NUDGE, onNudge);
+      clearTimeout(nudgeTimer);
+    };
+  });
+
   async function handleSend({ text, files }: { text: string; files: File[] }) {
     try {
       const url = await createSessionInProject(base, text, files, selectedProvider, project.id, selectedPreset, teamCaptain);
@@ -166,8 +196,15 @@
 
 <!-- The floating composer: bottom-centre like a helpdesk's. Sticky, so a
      long page never scrolls it away. -->
-<div class="sticky bottom-0 z-10 mx-auto w-full max-w-3xl pb-1" data-testid="ticket-composer">
-  <div class="rounded-xl border border-white-300 bg-white-100 p-3 shadow-lg dark:border-navy-600 dark:bg-navy-700">
+<div bind:this={root} class="sticky bottom-0 z-10 mx-auto w-full max-w-3xl pb-1" data-testid="ticket-composer">
+  {#if nudging && ticketId}
+    <div class="composer-hint mb-2 flex justify-center" data-testid="ticket-composer-hint" role="status">
+      <span class="rounded-full bg-green-500 px-3 py-1 text-xs font-semibold text-white-100 shadow-lg">
+        ↓ Type your first message here — it starts a new session on this ticket
+      </span>
+    </div>
+  {/if}
+  <div class="rounded-xl border bg-white-100 p-3 shadow-lg dark:bg-navy-700 {nudging ? 'composer-nudge border-green-500' : 'border-white-300 dark:border-navy-600'}">
     <Composer
       onSend={handleSend}
       placeholder={ticketId
@@ -197,9 +234,54 @@
             >Start without a ticket</button
           >
         {/if}
+      {:else if projectChoices && projectChoices.length > 1}
+        New session in
+        <select
+          class="mx-0.5 rounded border border-white-300 bg-white-100 px-1 py-0.5 text-[11px] font-medium text-black-800 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+          aria-label="Project for the new session"
+          data-testid="ticket-composer-project"
+          value={project.id}
+          onchange={(e) => onProjectChange?.(e.currentTarget.value)}
+        >
+          {#each projectChoices as p (p.id)}
+            <option value={p.id}>📁 {p.name}</option>
+          {/each}
+        </select>
+        {#if teamCaptain}
+          <span class="font-medium text-black-800 dark:text-black-600">→ {captainName || "Captain"} (your Captain)</span>
+        {/if}
       {:else}
         New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override.
       {/if}
     </p>
   </div>
 </div>
+
+<style>
+  /* The nudge: the box slides up into place with a green glow that fades;
+     the hint drops in above it. Reduced motion keeps the glow only. */
+  .composer-nudge {
+    animation:
+      composer-slide 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2),
+      composer-glow 1.3s ease-out 2;
+  }
+  .composer-hint {
+    animation: composer-hint 320ms ease-out;
+  }
+  @keyframes composer-slide {
+    from { transform: translateY(24px); }
+    to { transform: translateY(0); }
+  }
+  @keyframes composer-glow {
+    0% { box-shadow: 0 0 0 0 rgb(34 197 94 / 0.55); }
+    100% { box-shadow: 0 0 0 12px rgb(34 197 94 / 0); }
+  }
+  @keyframes composer-hint {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .composer-nudge { animation: composer-glow 1.3s ease-out 1; }
+    .composer-hint { animation: none; }
+  }
+</style>

@@ -23,6 +23,7 @@
   import { connectSessionsStream } from "../stores/sessionsStream.js";
   import OwnerTabs from "./OwnerTabs.svelte";
   import ProjectMenu from "./ProjectMenu.svelte";
+  import { nudgeTicketComposer } from "../ticketComposerNudge.js";
 
   type Props = {
     base: string;
@@ -351,22 +352,16 @@
   let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
   const handleEmptied = (t: EmptiedTicket) => emptyOffer?.offer(t, project.id);
 
-  /* Starting a session on a ticket is a two-step: create it in this
-     project, then attach. The composer owns creation, so the ticket id is
-     stashed and applied once the new session exists. */
-  function newSessionInTicket(ticketId: string) {
-    pendingTicketId = ticketId;
-    gotoTicket(null);
+  /* "+ New session" on a ticket's page stays on it: the composer below
+     already starts a session on the open ticket, so the button only points
+     at it (scroll, cursor, a short animation and a hint). */
+  function newSessionInTicket(_ticketId: string) {
+    nudgeTicketComposer();
   }
-  let pendingTicketId = $state<string | null>(null);
   /* The ticket the next message lands on. SELECTING one is enough — having
      a ticket open on screen and typing into the composer above it can only
-     mean the new chat belongs to it, and requiring "+ New session" first
-     made the obvious path the one that silently did nothing. The stash
-     still exists for that button, which closes the detail on its way out.
-     Cleared explicitly, so "Start without a ticket" also drops the open
-     one rather than being undone by it on the next render. */
-  const activeTicketId = $derived(pendingTicketId ?? openTicketId);
+     mean the new chat belongs to it. "Start without a ticket" closes it. */
+  const activeTicketId = $derived(openTicketId);
   /* Resolved to its card so the composer can name it; a ticket picked
      before the board finished loading still has its id to fall back on. */
   const activeTicket = $derived(
@@ -515,7 +510,7 @@
         {providers}
         ticketId={activeTicketId}
         ticketLabel={activeTicketLabel}
-        onClearTicket={() => { pendingTicketId = null; gotoTicket(null); }}
+        onClearTicket={() => { gotoTicket(null); }}
       />
     </div>
   </div>

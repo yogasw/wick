@@ -36,6 +36,7 @@
   import EmptyTicketOffer from "../EmptyTicketOffer.svelte";
   import TicketComposer from "../TicketComposer.svelte";
   import { getProviderOptions } from "../../api/options.js";
+  import { nudgeTicketComposer } from "../../ticketComposerNudge.js";
   import type { ProviderOption } from "../../types/agents.js";
 
   type Props = {
@@ -79,12 +80,12 @@
   });
   const nameOf = (id: string) => projects?.find((p) => p.id === id)?.name ?? id;
 
-  /* The ticket page's composer: the same one as Agents › Projects, with
-     the project's providers. Read once a ticket page is open. */
+  /* The composer (ticket page and board): the same one as Agents ›
+     Projects, with the project's providers. Read once one is shown. */
   let providers = $state<ProviderOption[]>([]);
   let providersRead = false;
   $effect(() => {
-    if (!(route.project && route.ticket) || providersRead) return;
+    if (!((route.project && route.ticket) || selected?.length) || providersRead) return;
     providersRead = true;
     Effect.runPromise(getProviderOptions(base).pipe(Effect.provide(WickClientLayer)))
       .then((p) => { providers = p ?? []; })
@@ -99,6 +100,16 @@
   });
   const ticketProject = $derived(
     projects?.find((p) => p.id === route.project) ?? (route.project ? ({ id: route.project, name: route.project } as ProjectOption) : null),
+  );
+
+  /* The board's composer starts a plain session (no ticket) in one of the
+     picked projects, the first by default; the footer switches it. */
+  let boardComposerPick = $state("");
+  const boardComposerChoices = $derived(
+    (selected ?? []).map((id) => projects?.find((p) => p.id === id) ?? ({ id, name: id } as ProjectOption)),
+  );
+  const boardComposerProject = $derived(
+    boardComposerChoices.find((p) => p.id === boardComposerPick) ?? boardComposerChoices[0] ?? null,
   );
 
   /* Picker */
@@ -414,9 +425,10 @@
   }
 
   /* "+ New session" on a ticket page: the composer below already starts
-     one on this ticket, so the button puts the cursor there. */
+     one on this ticket, so the button points at it (scroll, cursor, a
+     short animation and a hint) and the page stays. */
   function newSessionOn() {
-    document.querySelector<HTMLTextAreaElement>('[data-testid="ticket-composer"] textarea')?.focus();
+    nudgeTicketComposer();
   }
 
   /* A ticket a move just emptied: offered for deletion as on a project's
@@ -548,6 +560,23 @@
             onOpenSession={openSession}
             onReload={reload}
             onEmptied={(t, pid) => emptyOffer?.offer(t, pid)}
+          />
+        </div>
+      {/if}
+      <!-- The same floating composer as a project's own board: a new
+           session in one of the picked projects, answered by the Captain. -->
+      {#if boardComposerProject}
+        <div class="shrink-0" data-testid="tickets-board-composer">
+          <TicketComposer
+            {base}
+            project={boardComposerProject}
+            {providers}
+            ticketId={null}
+            teamCaptain
+            {captainName}
+            projectChoices={boardComposerChoices}
+            onProjectChange={(id) => { boardComposerPick = id; }}
+            onCreated={(sid) => openSession(sid, boardComposerProject?.id)}
           />
         </div>
       {/if}

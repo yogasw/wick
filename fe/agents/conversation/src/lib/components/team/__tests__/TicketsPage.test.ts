@@ -433,4 +433,30 @@ describe("TicketsPage", () => {
     expect((await screen.findByTestId("tickets-ticket")).dataset.ticket).toBe("T-7");
     expect(screen.queryByTestId("tickets-picker")).toBeNull();
   });
+  test("+ New session stays on the ticket and points at the composer with a hint", async () => {
+    const { onRoute } = mount(["p1"], { project: "p1", ticket: "T-7" });
+    await screen.findByText("First chat");
+    await fireEvent.click(screen.getByRole("button", { name: "+ New session" }));
+    expect(await screen.findByTestId("ticket-composer-hint")).toBeTruthy();
+    expect(onRoute).not.toHaveBeenCalled();
+    expect(screen.getByTestId("tickets-ticket")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByTestId("ticket-composer").querySelector("textarea"));
+  });
+
+  test("the board has the composer too: a Captain session in the picked project, no ticket", async () => {
+    createSessionInProject.mockResolvedValue("http://x/tools/agents/sessions/s-board");
+    getProjectOptions.mockResolvedValue(options());
+    const { onOpenSession } = mount(["p1", "p2"]);
+    await screen.findByText("Alpha ticket");
+    const wrap = screen.getByTestId("tickets-board-composer");
+    const pick = within(wrap).getByTestId("ticket-composer-project") as HTMLSelectElement;
+    expect(pick.value).toBe("p1");
+    await fireEvent.change(pick, { target: { value: "p2" } });
+    const box = wrap.querySelector("textarea")!;
+    await fireEvent.input(box, { target: { value: "hello" } });
+    await fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith("s-board", "p2"));
+    expect(createSessionInProject.mock.calls.at(-1)?.[4]).toBe("p2");
+    expect(createSessionInProject.mock.calls.at(-1)?.[6]).toBe(true);
+  });
 });

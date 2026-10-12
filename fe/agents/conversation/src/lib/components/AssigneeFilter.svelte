@@ -86,6 +86,17 @@
     }
   }
 
+  /* The panel opens to the button's right unless that would run past the
+     window: when the filter row wraps, the button lands at the left edge
+     of the board, and a right-aligned panel would slide under the rail. */
+  const PANEL_W = 256;
+  let alignRight = $state(false);
+  $effect(() => {
+    if (!open || !button) return;
+    const r = button.getBoundingClientRect();
+    alignRight = r.left + PANEL_W > window.innerWidth - 8 && r.right - PANEL_W >= 8;
+  });
+
   // Opening puts the cursor in the search box, so typing narrows at once.
   $effect(() => {
     if (open) panel?.querySelector<HTMLInputElement>("input")?.focus();
@@ -129,7 +140,7 @@
       aria-label="Filter by assignee"
       tabindex="-1"
       onkeydown={onPanelKeydown}
-      class="absolute right-0 z-30 mt-1 w-64 rounded-lg border border-white-400 bg-white-100 p-2 text-xs text-black-800 shadow-lg dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+      class="absolute {alignRight ? 'right-0' : 'left-0'} z-30 mt-1 w-64 rounded-lg border border-white-400 bg-white-100 p-2 text-xs text-black-800 shadow-lg dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
     >
       <input
         bind:value={query}
