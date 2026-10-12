@@ -13,6 +13,9 @@ export type TeamPeer = {
   disabled: boolean;
   /** "off" = takes no mention from another agent; hidden from `@`. */
   mention_from?: string;
+  /** Set on an agent someone else shared with the viewer: never offered
+      in the `@` menu, which lists the viewer's own agents only. */
+  shared_by?: string;
   avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null } | null;
 };
 
@@ -22,7 +25,7 @@ export type TeamPeer = {
     description. */
 export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: string): ComposerMentionAgent[] {
   return (peers ?? [])
-    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle)
+    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle && !p.shared_by)
     .map((p) => ({
       handle: p.handle,
       label: p.name || p.handle,

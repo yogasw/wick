@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { speakerLabel } from "../ticketSession.js";
   import TraceNote from "./TraceNote.svelte";
   import type { TraceFiles } from "../api/files.js";
   import type { ConversationTurn, ThreadBlock, TurnEvent, TurnEventPayload } from "../types/agents.js";
@@ -45,7 +46,7 @@
     loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
     traceFiles?: TraceFiles;
     /** Team agents by handle, for a teammate's avatar on its messages. */
-    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
+    teamAgents?: Record<string, { id?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     /** Opens a Team agent's chat; unset (outside the Team app) the
         handoff row's target is plain text. */
     onOpenAgent?: (handle: string) => void;
@@ -81,9 +82,14 @@
      guessed from the text. A turn answering a teammate's mention is nested
      under a "via @x" label so it reads as part of that exchange. */
   const speaker = $derived(turn.role === "assistant" ? turn.speaker : undefined);
+  /* A ticket session's turn carries its owner (T12b): someone else's
+     agent shares a handle with yours ("captain"), so it is matched by id
+     and named "Name · @owner" instead of borrowing your agent's look. */
+  const speakerMine = $derived(!speaker?.owner_id || teamAgents[speaker.handle]?.id === speaker.agent_id);
   const speakerAgent = $derived(
-    speaker ? (teamAgents[speaker.handle] ?? (agent && agent.handle === speaker.handle ? agent : undefined)) : undefined,
+    speaker && speakerMine ? (teamAgents[speaker.handle] ?? (agent && agent.handle === speaker.handle ? agent : undefined)) : undefined,
   );
+  const speakerName = $derived(speaker ? (speaker.owner_id ? (speakerMine && speakerAgent?.name) || speakerLabel(speaker, speakerMine) : speakerAgent?.name || "@" + speaker.handle) : "");
   const viaMention = $derived(speaker?.via === "mention");
 
   /* Only an agent's reply can hold a live actioncard; the server's `cards`
@@ -245,7 +251,7 @@
   const canReply = $derived(!!onReply && replyable(turn));
   function replyAuthor(): string {
     if (turn.role === "assistant") {
-      return speakerAgent?.name || (speaker?.handle ? "@" + speaker.handle : "") || agent?.name || turn.agent || "Assistant";
+      return speakerName || agent?.name || turn.agent || "Assistant";
     }
     if (teamFrom) return teamFromAgent?.name || teamFrom.name;
     if (fromSomeoneElse && sourceBadge?.who) return sourceBadge.who;
@@ -811,7 +817,7 @@
         <span data-testid="speaker-chip" class="inline-flex items-center gap-1.5 self-start text-[11px] leading-4 text-black-800 dark:text-black-600">
           <AgentAvatar kind={speakerAgent?.kind} image={speakerAgent?.image} shape={speakerAgent?.shape} expression={speakerAgent?.expression} color={speakerAgent?.color} size={20} />
           <span class="min-w-0 truncate"
-            ><span class="font-medium text-black-900 dark:text-white-100">{speakerAgent?.name || "@" + speaker.handle}</span
+            ><span class="font-medium text-black-900 dark:text-white-100">{speakerName}</span
             >{#if viaMention}<span class="opacity-70">{via ? " · via @" + via : " · via mention"}</span>{/if}</span
           >
         </span>

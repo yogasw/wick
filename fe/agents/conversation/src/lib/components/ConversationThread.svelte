@@ -52,7 +52,7 @@
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
-    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
+    teamAgents?: Record<string, { id?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     /** History has not arrived yet: a loading state, not "no messages". */
     loading?: boolean;
     onOpenAgent?: (handle: string) => void;

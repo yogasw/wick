@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -164,6 +166,18 @@ type ticketSessionRow struct {
 	Status     string `json:"status"`
 	Lifecycle  string `json:"lifecycle,omitempty"`
 	LastActive string `json:"last_active"`
+	// Group is set when the session is a Team group chat discussing the
+	// ticket ("Discuss in a group"): the row shows 👥 and its members.
+	Group *ticketSessionGroup `json:"group,omitempty"`
+}
+
+// ticketSessionGroup is a group chat row's name and member chips; the
+// members are its owner's agents, so OwnerHandle labels them for others.
+type ticketSessionGroup struct {
+	Name        string            `json:"name"`
+	OwnerID     string            `json:"owner_id,omitempty"`
+	OwnerHandle string            `json:"owner_handle,omitempty"`
+	Members     []TeamGroupMember `json:"members"`
 }
 
 // ticketDetailResponse is the envelope for GET /api/tickets/{ticketID}.
@@ -285,8 +299,34 @@ func sessionRow(
 		if ids != nil {
 			ids[s.Meta.UserID] = true
 		}
+		if g := s.Meta.AgentGroup; g != nil {
+			row.Group = groupRowOf(g, s.Meta.UserID)
+		}
 	}
 	return row
+}
+
+// groupRowOf is a group chat's ticketSessionGroup. A member the owner no
+// longer has drops out.
+func groupRowOf(g *session.AgentGroup, owner string) *ticketSessionGroup {
+	out := &ticketSessionGroup{Name: g.Name, OwnerID: owner, Members: make([]TeamGroupMember, 0, len(g.Members))}
+	if globalTeam == nil {
+		return out
+	}
+	ctx := context.Background()
+	out.OwnerHandle = personHandle(ctx, owner)
+	for _, id := range g.Members {
+		a, err := globalTeam.Get(ctx, id)
+		if err != nil || a.OwnerUserID != owner {
+			continue
+		}
+		m := globalTeam.MemberOf(a)
+		out.Members = append(out.Members, TeamGroupMember{
+			ID: a.ID, Handle: a.Handle, Name: m.Name, IsCaptain: a.IsCaptain, Disabled: a.Disabled,
+			Avatar: team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID),
+		})
+	}
+	return out
 }
 
 /* ── board + ticket CRUD ─────────────────────────────────────────────────── */

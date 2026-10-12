@@ -158,23 +158,28 @@ describe("convert route", () => {
 });
 
 describe("group routes", () => {
-  test("/team/g/<id> opens a group, never an agent", () => {
-    const r = parseAgentsRoute("/tools/agents/team/g/abc-123", "", B);
+  test("/team/group/<id> opens a group, never an agent", () => {
+    const r = parseAgentsRoute("/tools/agents/team/group/abc-123", "", B);
     expect(r).toEqual({ handle: null, session: null, panel: null, group: "abc-123" });
   });
   test("group settings panel only on a group", () => {
-    expect(parseAgentsRoute("/tools/agents/team/g/abc", "?panel=group-settings", B).panel).toEqual({ kind: "group-settings" });
+    expect(parseAgentsRoute("/tools/agents/team/group/abc", "?panel=group-settings", B).panel).toEqual({ kind: "group-settings" });
     expect(parseAgentsRoute("/tools/agents/team/anton", "?panel=group-settings", B).panel).toBeNull();
   });
   test("round trip", () => {
     const r: AgentsRoute = { handle: null, session: null, panel: { kind: "group-settings" }, group: "abc" };
     const url = formatAgentsRoute(r, B);
-    expect(url).toBe("/tools/agents/team/g/abc?panel=group-settings");
+    expect(url).toBe("/tools/agents/team/group/abc?panel=group-settings");
     const [path, qs] = url.split("?");
     expect(parseAgentsRoute(path, "?" + qs, B)).toEqual(r);
   });
-  test("a bare /team/g is not a group", () => {
-    expect(parseAgentsRoute("/tools/agents/team/g", "", B).group).toBeUndefined();
+  test("a bare /team/group is not a group", () => {
+    expect(parseAgentsRoute("/tools/agents/team/group", "", B).group).toBeUndefined();
+  });
+  test("the old /team/g/<id> is gone: no group, no alias", () => {
+    const r = parseAgentsRoute("/tools/agents/team/g/abc", "", B);
+    expect(r.group).toBeUndefined();
+    expect(r.handle).toBe("g");
   });
 });
 
@@ -195,6 +200,8 @@ describe("tickets routes", () => {
   test("tickets is a reserved handle", () => {
     expect(isReservedHandle("tickets")).toBe(true);
     expect(isReservedHandle("ticket")).toBe(false);
+    expect(isReservedHandle("group")).toBe(true);
+    expect(isReservedHandle("groups")).toBe(false);
   });
   test("a two-letter handle is still an agent", () => {
     const r = parseAgentsRoute("/tools/agents/team/tt", "", B);

@@ -118,6 +118,8 @@
   import SessionFieldChips from "./SessionFieldChips.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
+  import { alsoReplied } from "../ticketSession.js";
+  import GroupPickerDialog from "./GroupPickerDialog.svelte";
   import { navigate as navigateAgents } from "../agentsRouter.js";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
@@ -1498,7 +1500,8 @@
      plain /sessions chat has no agentMode.agent and never asks. */
   let teamPeers = $state<TeamPeer[]>([]);
   $effect(() => {
-    const selfId = agentMode?.agent?.id;
+    // A ticket session lists the viewer's own agents too (T12b).
+    const selfId = agentMode?.agent?.id || (notesInfo?.ticket ? "ticket" : "");
     if (!selfId) { teamPeers = []; return; }
     let stale = false;
     runApi(listAgentRoster(base))
@@ -1509,8 +1512,12 @@
   });
 
   const teamAgentsByHandle = $derived(
-    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image }])),
+    Object.fromEntries(teamPeers.map((p) => [p.handle, { id: p.id, name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image }])),
   );
+  /* Ticket session header (T12b): agents other than the home one that
+     answered here; identity is (agent, owner). */
+  const repliers = $derived(notesInfo?.ticket ? alsoReplied(turns, (id, handle) => teamAgentsByHandle[handle]?.id === id) : []);
+  let groupPickerOpen = $state(false);
   function openTeamAgent(handle: string) {
     navigateAgents({ handle, session: null, panel: null });
   }
@@ -2226,6 +2233,11 @@
       } else if (ev.type === "delivery") {
         // A reply's trip to Slack settled (sending → sent / failed). The
         // status is stamped on the turn server-side, so reload to show it.
+        void loadConversation();
+      } else if (ev.type === "group_turn") {
+        // A ticket session's mention or another person's message is
+        // answered by their own agent off this session's run (T12b): the
+        // turn is stored, so reload to show it.
         void loadConversation();
       } else if (ev.type === "done" || ev.type === "error") {
         cancelSettleReload();
@@ -3118,6 +3130,22 @@
       onDelete={handleDelete}
       onTabChange={handleTabChange}
     />
+    {/if}
+
+    <!-- Ticket session (T12b): its home agent, a read-only list of the
+         agents that also answered (mentions, other people's Captains),
+         and "Discuss in a group". -->
+    {#if activeView === "conversation" && notesInfo?.ticket}
+      <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-white-300 bg-white-100 px-4 py-1.5 text-[11px] text-black-700 dark:border-navy-600 dark:bg-navy-900 dark:text-black-600" data-testid="ticket-session-strip">
+        <span class="rounded-full bg-white-200 px-2 py-0.5 font-medium text-black-900 dark:bg-navy-700 dark:text-white-100" data-testid="ticket-session-home">{agentMode?.agent?.name || "Project agent"}</span>
+        {#if repliers.length}
+          <span data-testid="ticket-session-also">also replied: {repliers.map((r) => r.label).join(" · ")}</span>
+        {/if}
+        <button type="button" class="ml-auto rounded-lg px-2 py-0.5 hover:text-green-600" data-testid="session-discuss-in-group" onclick={() => (groupPickerOpen = true)}>👥 Discuss in a group</button>
+      </div>
+    {/if}
+    {#if groupPickerOpen && notesInfo?.ticket}
+      <GroupPickerDialog {base} ticketId={notesInfo.ticket.id} projectId={activeProjectId ?? undefined} onClose={() => (groupPickerOpen = false)} onAttached={() => { groupPickerOpen = false; toastOk("Ticket attached to the group chat"); }} />
     {/if}
 
     <!-- Zone 2: main content area — switches by activeView -->

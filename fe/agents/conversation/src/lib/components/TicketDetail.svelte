@@ -14,6 +14,8 @@
   import { renderMarkdown } from "../markdown.js";
   import NotesPanel from "./NotesPanel.svelte";
   import AssigneePicker from "./AssigneePicker.svelte";
+  import GroupPickerDialog from "./GroupPickerDialog.svelte";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
 
   type Props = {
     base: string;
@@ -34,6 +36,7 @@
   let { base, ticketId, onBack, onOpenSession, onNewSession, projectId, backLabel = "Back to board", projectName }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
+  let groupPickerOpen = $state(false);
   let error = $state("");
 
   function load() {
@@ -235,7 +238,8 @@
   </div>
 {:else if data}
   {@const t = data.ticket}
-  <div class="flex flex-col gap-4">
+  <!-- pb: the last card never sits under the floating composer. -->
+  <div class="flex flex-col gap-4 pb-24">
     <button
       type="button"
       onclick={onBack}
@@ -364,6 +368,12 @@
         </div>
         <button
           type="button"
+          data-testid="discuss-in-group"
+          onclick={() => (groupPickerOpen = true)}
+          class="shrink-0 rounded-lg border border-white-300 px-3 py-1.5 text-xs font-semibold text-black-800 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600"
+        >👥 Discuss in a group</button>
+        <button
+          type="button"
           onclick={() => onNewSession(t.id)}
           class="shrink-0 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-green-700"
         >+ New session</button>
@@ -381,8 +391,18 @@
                 class="min-w-0 flex-1 text-left"
               >
                 <span class="block truncate text-sm text-black-900 dark:text-white-100">
-                  {s.label || s.id}
+                  {#if s.group}<span aria-hidden="true">👥 </span><span class="font-medium">{s.group.name}</span>{#if s.label} · {/if}{/if}{s.label || (s.group ? "" : s.id)}
                 </span>
+                {#if s.group && s.group.members.length}
+                  <span class="mt-1 flex flex-wrap items-center gap-1" data-testid="ticket-session-group-members">
+                    {#each s.group.members as m (m.id)}
+                      <span class="inline-flex items-center gap-1 rounded-full bg-white-200 px-1.5 py-0.5 text-[11px] text-black-800 dark:bg-navy-700 dark:text-black-600">
+                        <AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} color={m.avatar?.color} expression={m.avatar?.expression} image={m.avatar?.image} size={14} />
+                        {m.name || m.handle}{#if s.group.owner_handle && s.group.owner_id !== data.me} · @{s.group.owner_handle}{/if}
+                      </span>
+                    {/each}
+                  </span>
+                {/if}
                 <span class="mt-0.5 flex items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
                   <span class="font-mono">#{s.id.slice(0, 8)}</span>
                   {#if s.lifecycle}<span class="rounded bg-pos-100 px-1.5 py-0.5 text-pos-400">{s.lifecycle}</span>{/if}
@@ -613,4 +633,8 @@
   {/if}
 {:else}
   <p class="py-12 text-center text-sm text-black-700 dark:text-black-600">Loading…</p>
+{/if}
+
+{#if groupPickerOpen && data}
+  <GroupPickerDialog {base} ticketId={data.ticket.id} {projectId} onClose={() => (groupPickerOpen = false)} onAttached={() => { groupPickerOpen = false; toastOk("Ticket attached to the group chat"); load(); }} />
 {/if}

@@ -27,8 +27,9 @@ var ErrHandleTaken = errors.New("handle already used by another agent")
 var handleRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}$`)
 
 // reservedHandles are mention words that address a group, not an agent,
-// and "tickets", the Team app's own page (/team/tickets).
-var reservedHandles = map[string]bool{"all": true, "here": true, "channel": true, "tickets": true}
+// and the Team app's own pages: "tickets" (/team/tickets) and "group"
+// (/team/group/<id>).
+var reservedHandles = map[string]bool{"all": true, "here": true, "channel": true, "tickets": true, "group": true}
 
 // NormalizeHandle trims and lowercases a typed handle and drops a leading
 // "@", so "@Captain " and "captain" save as the same thing.

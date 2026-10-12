@@ -103,7 +103,7 @@
   // Below lg the roster is a drawer over the chat, opened from the header.
   let rosterOpen = $state(false);
 
-  /* Group chats: listed under the agents; the open one (/team/g/<id>)
+  /* Group chats: listed under the agents; the open one (/team/group/<id>)
      replaces the agent chat. */
   let groups = $state<GroupItem[]>([]);
   let groupsLoaded = $state(false);

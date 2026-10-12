@@ -17,8 +17,9 @@ import { connTabOf, type ConnTab } from "./connectionTabs.js";
      /team/<handle>?panel=connections&conn=a2a
                                          …on that tab (slack|telegram|a2a|rest)
      /team/<handle>?panel=scheduled      Scheduled drawer
-     /team/g/<group session id>          a group chat
-     /team/g/<id>?panel=group-settings   its Settings drawer
+     /team/group/<group session id>      a group chat
+     /team/group/<id>?panel=group-settings
+                                         its Settings drawer
      /team/tickets                       Tickets: the selected projects' board
      /team/tickets/<project id>/<ticket id>
                                          one ticket on it
@@ -60,7 +61,7 @@ export type AgentsRoute = {
   /** A non-main conversation of that agent; null = its main chat. */
   session: string | null;
   panel: AgentsPanel | null;
-  /** A group chat's session id (/team/g/<id>); then handle is null. */
+  /** A group chat's session id (/team/group/<id>); then handle is null. */
   group?: string | null;
   /** The Tickets page (/team/tickets…); then handle and group are null. No
       project/ticket = the board, both = that ticket's page. */
@@ -72,9 +73,8 @@ export type TicketsRoute = { project?: string; ticket?: string };
 const ROOT = "/team";
 
 /** Path words the app owns under /team, which no agent handle may take.
-    "g" never could (a handle has 2+ characters,
-    HANDLE_RE); "tickets" is also reserved by the server (team.ValidateHandle). */
-export const RESERVED_HANDLES: readonly string[] = ["tickets", "all", "here", "channel"];
+    "tickets" and "group" are also reserved by the server (team.ValidateHandle). */
+export const RESERVED_HANDLES: readonly string[] = ["tickets", "group", "all", "here", "channel"];
 
 /** isReservedHandle says whether h is taken by the app or a group mention. */
 export function isReservedHandle(h: string): boolean {
@@ -94,9 +94,8 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
   let handle: string | null = null;
   let group: string | null = null;
   let tickets: TicketsRoute | null = null;
-  // "g" is free to reserve: a handle has 2+ characters (HANDLE_RE);
-  // "tickets" is a reserved handle (isReservedHandle).
-  if (seg === "g" && segs[1]) {
+  // "group" and "tickets" are reserved handles (isReservedHandle).
+  if (seg === "group" && segs[1]) {
     try {
       group = decodeURIComponent(segs[1]);
     } catch {
@@ -159,7 +158,7 @@ export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   if (r.tickets) {
     path += "/tickets";
     if (r.tickets.project && r.tickets.ticket) path += "/" + encodeURIComponent(r.tickets.project) + "/" + encodeURIComponent(r.tickets.ticket);
-  } else if (r.group) path += "/g/" + encodeURIComponent(r.group);
+  } else if (r.group) path += "/group/" + encodeURIComponent(r.group);
   else if (r.handle) path += "/" + encodeURIComponent(r.handle);
   const q = new URLSearchParams();
   if (!r.tickets && !r.group && r.handle && r.session) q.set("session", r.session);

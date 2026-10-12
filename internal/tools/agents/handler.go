@@ -2198,6 +2198,11 @@ func sendMessage(c *tool.Ctx) {
 		sendRoomMessage(c, sess, req.Text)
 		return
 	}
+	// An ordinary ticket session's home agent answers only its owner: a
+	// mention, or anyone else's message, goes to the sender's own agent.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sendTicketSessionMessage(c, sess, req.Text, len(atts) > 0) {
+		return
+	}
 
 	// #<provider> prefix → switch provider before sending.
 	if r := agentchannels.ParseProviderTag(req.Text); r.HasTag {

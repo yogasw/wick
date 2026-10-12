@@ -177,6 +177,11 @@ type Speaker struct {
 	// several people's agents share one thread there, under one handle
 	// ("captain"). Empty elsewhere.
 	OwnerID string `json:"owner_id,omitempty"`
+	// OwnerHandle and Name label another person's agent for viewers who
+	// do not have it ("Captain · @hana"); set where OwnerID is, in an
+	// ordinary ticket session. Empty elsewhere.
+	OwnerHandle string `json:"owner_handle,omitempty"`
+	Name        string `json:"name,omitempty"`
 }
 
 // Speaker.Via values.

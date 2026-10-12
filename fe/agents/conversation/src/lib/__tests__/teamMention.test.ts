@@ -68,3 +68,13 @@ describe("speakerVia", () => {
     expect(speakerVia(turns, 1)).toBe("");
   });
 });
+
+describe("the @ menu lists the viewer's own agents only", () => {
+  test("an agent shared with the viewer is never offered", () => {
+    const peers = [
+      { id: "a", handle: "research", name: "Research", description: "", disabled: false },
+      { id: "b", handle: "writer", name: "Writer", description: "", disabled: false, shared_by: "Hana" },
+    ];
+    expect(teamMentionAgents(peers, "").map((a) => a.handle)).toEqual(["research"]);
+  });
+});

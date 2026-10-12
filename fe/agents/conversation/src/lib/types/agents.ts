@@ -243,7 +243,16 @@ export type ConversationTurn = {
 
 export type ReplyTo = { turn_id: string; role?: string; author?: string; excerpt?: string };
 
-export type TurnSpeaker = { agent_id: string; handle: string; via: "direct" | "mention" | "group" | string };
+export type TurnSpeaker = {
+  agent_id: string;
+  handle: string;
+  via: "direct" | "mention" | "group" | string;
+  /** Ticket sessions: whom the agent works for, and the labels a viewer
+      who does not have it needs ("Captain · @hana"). */
+  owner_id?: string;
+  owner_handle?: string;
+  name?: string;
+};
 
 export type CardPostback = { card_id: string; value: string; label: string };
 
@@ -767,6 +776,13 @@ export type TicketSessionRow = {
   status?: string;
   lifecycle?: string;
   last_active?: string;
+  /** A Team group chat discussing the ticket: 👥 and its member chips. */
+  group?: {
+    name: string;
+    owner_id?: string;
+    owner_handle?: string;
+    members: { id: string; handle: string; name: string; avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: string } }[];
+  };
 };
 
 /** The full ticket, as stored. */
