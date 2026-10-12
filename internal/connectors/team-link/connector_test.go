@@ -197,3 +197,36 @@ func TestToolsRefuseTicketRoomSession(t *testing.T) {
 		}
 	}
 }
+
+// T16: message passes fan_in and group through and returns group_id; a
+// group this session never got is refused, as is an unknown fan_in.
+func TestMessageFanInAndGroup(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, &notify{})
+	hub.BatchResults = func() bool { return true }
+	hub.SetQuickWait(10 * time.Millisecond)
+	d := deps(hub)
+	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "a", "fan_in": "each"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := out.(*teamlink.Result)
+	if res.GroupID == "" || res.State != "working" {
+		t.Fatalf("result = %+v", res)
+	}
+	out, err = call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "b", "group": res.GroupID})
+	if err != nil || out.(*teamlink.Result).GroupID != res.GroupID {
+		t.Fatalf("join = %+v, %v", out, err)
+	}
+	out, err = call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "c", "group": "none"})
+	if err != nil || out.(*teamlink.Result).GroupID != "" {
+		t.Fatalf("group none = %+v, %v", out, err)
+	}
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "d", "group": "g_nope"}); !errors.Is(err, teamlink.ErrUnknownGroup) {
+		t.Fatalf("unknown group: %v", err)
+	}
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "e", "fan_in": "quorum"}); !errors.Is(err, teamlink.ErrBadFanIn) {
+		t.Fatalf("bad fan_in: %v", err)
+	}
+}

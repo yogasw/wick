@@ -82,23 +82,25 @@ type GeneralConfig struct {
 
 	// Usage history. Independent of the guard mode: measuring is how an
 	// operator learns what to set, so it must work while the guard is off.
-	ResourceHistoryEnabled    bool   `wick:"bool;group=Usage History|Record memory, CPU, and disk use per agent over time so the Resources page can show trends instead of a single instant. Works with the resource guard switched off — this is how you learn what to set.;desc=Record usage samples. Off = no sampling and the Resources page shows only a live snapshot."`
-	ResourceSampleIntervalSec int    `wick:"number;group=Usage History;desc=Seconds between samples. Shorter shows brief spikes (a browser opening) but stores more points, 15 is a good balance. Default: 15."`
-	ResourceRetentionMinutes  int    `wick:"number;group=Usage History;desc=How long to keep samples, in minutes. Anything older is discarded automatically. 360 = 6 hours (default), 1440 = one day. Lowering this frees memory immediately."`
-	ResourceHistoryMaxPoints  int    `wick:"number;group=Usage History;desc=Hard ceiling on stored samples, whatever the retention window says. Protects against a very short interval filling memory. Default: 4096."`
-	SystemPrompt              string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
-	SystemPromptTeam          string `wick:"textarea;desc=Team agents system prompt — replaces system_prompt for Team agent sessions, leave empty for none"`
-	WorkflowGuardMode         string `wick:"dropdown=off|warn|block;group=Workflow|Workflow guard policy, parallelism, and run-event export.;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
-	WorkflowMaxParallelGlobal int    `wick:"number;group=Workflow;desc=Global parallel cap. 0 = parallel disabled, all workflows serial (default). N > 0 = parallel enabled, at most N runs execute simultaneously across all workflows. Per-workflow concurrency.max is honoured as an inner cap."`
-	WorkflowRunKeepMax        int    `wick:"number;group=Workflow;desc=Finished runs kept per workflow, newest first. History is trimmed back to this number once it reaches twice as many (50 keeps 50-100 runs). Runs still in progress are never touched. 0 = default 50."`
-	WorkflowRunRetentionDays  int    `wick:"number;group=Workflow;desc=Days a finished run is kept, even inside the keep-max count. 0 = default 1."`
-	WorkflowLokiURL           string `wick:"url;group=Workflow;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
-	WorkflowLokiLabels        string `wick:"text;group=Workflow;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
-	MCPUninstalledClients     string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
-	AirouterEnabled           bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
-	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
-	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
-	TraceBlobMaxMB            int    `wick:"number;group=Tracing;desc=Max MB for one binary trace payload (image/pdf/audio/video a tool returned). Binaries are never truncated: up to this size they are kept whole as a separate blob the trace can open, above it the trace keeps only the type and size. 0 = default 10."`
+	ResourceHistoryEnabled      bool   `wick:"bool;group=Usage History|Record memory, CPU, and disk use per agent over time so the Resources page can show trends instead of a single instant. Works with the resource guard switched off — this is how you learn what to set.;desc=Record usage samples. Off = no sampling and the Resources page shows only a live snapshot."`
+	ResourceSampleIntervalSec   int    `wick:"number;group=Usage History;desc=Seconds between samples. Shorter shows brief spikes (a browser opening) but stores more points, 15 is a good balance. Default: 15."`
+	ResourceRetentionMinutes    int    `wick:"number;group=Usage History;desc=How long to keep samples, in minutes. Anything older is discarded automatically. 360 = 6 hours (default), 1440 = one day. Lowering this frees memory immediately."`
+	ResourceHistoryMaxPoints    int    `wick:"number;group=Usage History;desc=Hard ceiling on stored samples, whatever the retention window says. Protects against a very short interval filling memory. Default: 4096."`
+	SystemPrompt                string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
+	SystemPromptTeam            string `wick:"textarea;desc=Team agents system prompt — replaces system_prompt for Team agent sessions, leave empty for none"`
+	TeamBatchResults            bool   `wick:"bool;desc=Team fan-in: the replies of the teammates an agent asked in one turn reach it together in ONE message instead of one wake per reply. Off = every reply is delivered on its own (the behaviour before batches). Default on."`
+	TeamBatchSoftTimeoutMinutes int    `wick:"number;desc=Optional soft timeout of a Team batch, in minutes: after it, the replies that arrived are delivered while the others keep working (nothing is canceled, later replies come as an update). 0 = none (default): a batch waits as long as its teammates work, with a safety net for a teammate with no progress for 30 minutes."`
+	WorkflowGuardMode           string `wick:"dropdown=off|warn|block;group=Workflow|Workflow guard policy, parallelism, and run-event export.;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
+	WorkflowMaxParallelGlobal   int    `wick:"number;group=Workflow;desc=Global parallel cap. 0 = parallel disabled, all workflows serial (default). N > 0 = parallel enabled, at most N runs execute simultaneously across all workflows. Per-workflow concurrency.max is honoured as an inner cap."`
+	WorkflowRunKeepMax          int    `wick:"number;group=Workflow;desc=Finished runs kept per workflow, newest first. History is trimmed back to this number once it reaches twice as many (50 keeps 50-100 runs). Runs still in progress are never touched. 0 = default 50."`
+	WorkflowRunRetentionDays    int    `wick:"number;group=Workflow;desc=Days a finished run is kept, even inside the keep-max count. 0 = default 1."`
+	WorkflowLokiURL             string `wick:"url;group=Workflow;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
+	WorkflowLokiLabels          string `wick:"text;group=Workflow;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
+	MCPUninstalledClients       string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
+	AirouterEnabled             bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
+	TraceEventInlineKB          int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
+	TraceEventMaxKB             int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
+	TraceBlobMaxMB              int    `wick:"number;group=Tracing;desc=Max MB for one binary trace payload (image/pdf/audio/video a tool returned). Binaries are never truncated: up to this size they are kept whole as a separate blob the trace can open, above it the trace keeps only the type and size. 0 = default 10."`
 	// The Access knobs below are read through internal/pkg/adminscope,
 	// which every surface shares so "how far does an admin see" has exactly
 	// one answer per question. Field name = config key.
@@ -202,6 +204,7 @@ func DefaultGeneralConfig() GeneralConfig {
 		TraceEventMaxKB:          512,
 		TraceBlobMaxMB:           10,
 		AirouterEnabled:          true,
+		TeamBatchResults:         true,
 		// Memory guard ships OFF: an install that never opts in must behave
 		// byte-identically to one built before the feature existed. The four
 		// numeric limits stay zero here on purpose — their correct values

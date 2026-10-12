@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,8 +60,18 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// "Needs you" also turns on when the chat goes idle without its agent
 	// answering: once its turn ended (and the pool settled), the chat's
 	// waiting questions go out again.
+	// Fan-in (team_batch_results): the replies of the tasks one turn sent
+	// reach the sender once. Read live, so the switch needs no restart.
+	hub.BatchResults = TeamBatchResultsEnabled
+	hub.SoftTimeout = teamBatchSoftTimeout
 	if globalBcast != nil {
+		// Every turn end reaches SealTurn, so a batch waits for the turn
+		// that sent it before it delivers.
+		hub.TurnSeals = true
 		globalBcast.OnTurnEnd(func(sessionID string) {
+			// The tasks of the turn that ended form one batch; the next
+			// turn's open a new one unless they name its group.
+			hub.SealTurn(sessionID)
 			time.AfterFunc(needsYouSettle, func() { hub.RefreshNeedsYou(sessionID) })
 		})
 		// A teammate's turn on a task feeds the task's live progress line
@@ -297,6 +308,42 @@ func sessionTeamTaskCancel(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTasksSummarize handles POST /api/sessions/{id}/team-tasks/summarize
+// ("Summarize now"): the replies the session's open batches hold go to
+// its agent now, without waiting for the teammates still working (they
+// are not canceled; their replies come as an update).
+func sessionTeamTasksSummarize(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"delivered": h.FlushSession(c.Context(), id)})
+}
+
+// TeamBatchResultsEnabled reports the team_batch_results switch. Absent
+// row = ON (DefaultGeneralConfig); off = every teammate reply wakes the
+// sender on its own, as before batches.
+func TeamBatchResultsEnabled() bool {
+	if globalConfigs == nil {
+		return true
+	}
+	v := globalConfigs.GetOwned("agents", "team_batch_results")
+	return v == "" || v == "true"
+}
+
+// teamBatchSoftTimeout is the optional soft timeout of a batch
+// (team_batch_soft_timeout_minutes); 0 = none, the default.
+func teamBatchSoftTimeout() time.Duration {
+	if globalConfigs == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(globalConfigs.GetOwned("agents", "team_batch_soft_timeout_minutes")))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Minute
 }
 
 // sessionTeamTaskRetry handles POST /api/sessions/{id}/team-tasks/{task}/retry:
@@ -568,6 +615,13 @@ func (poolTurns) StopTask(_ context.Context, _ teamlink.Peer, sessionID string, 
 // a person's message reached (TurnGate.NoteMessage). It blocks while a
 // task's turn is being stopped in that session.
 func NoteSessionMessage(ctx context.Context, sessionID, role string) (func(delivered bool), error) {
+	// A person writing in the chat opens the fan-in barrier: what the
+	// session's teammates replied so far is delivered now.
+	if role == "user" && teamlink.IsPersonMessage(ctx) && globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			go h.FlushSession(context.Background(), sessionID)
+		}
+	}
 	return teamTurnGate.NoteMessage(ctx, sessionID, role)
 }
 
@@ -811,6 +865,18 @@ func (n teamNotifier) Deliver(ctx context.Context, sessionID, text string) error
 		return nil
 	}
 	return n.deliver(ctx, sessionID, text)
+}
+
+// SessionGone reports whether sessionID no longer exists
+// (teamlink.SessionChecker): the Hub does not wake a deleted session,
+// which the pool would create again, empty; the task store keeps the
+// result.
+func (teamNotifier) SessionGone(sessionID string) bool {
+	if globalMgr == nil {
+		return false
+	}
+	_, ok := globalMgr.Registry().Session(sessionID)
+	return !ok
 }
 
 // Audit logs one mention_handoff per side, records it in that thread as

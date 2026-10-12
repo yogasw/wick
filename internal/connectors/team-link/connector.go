@@ -74,6 +74,8 @@ type messageInput struct {
 	Chat      string `wick:"desc=Resume one of the teammate's older chats: a session_id the chats op listed. ONLY when the user asks to continue that chat, never pick one on your own. Omit to use the chat paired with this conversation."`
 	NewChat   bool   `wick:"desc=true starts a NEW chat with the teammate (a clean context) instead of the one paired with this conversation, and pairs that new chat with it: later messages from this conversation go there. A Slack remote agent gets a new Slack thread — except one whose Remote target is a specific thread, which always posts in that thread."`
 	TaskID    string `wick:"desc=Answer a task that came back state=input_required: pass its task_id (to and context_id may be omitted, and if given they must match that task)."`
+	FanIn     string `wick:"dropdown=all|each|first;desc=How the replies of this message's group reach you. all (default): wait for every teammate of the group, then get ONE message with every reply — for one question to several teammates whose answers you combine. each: every reply on its own as it lands — for independent checks. first: the first answer only, the others are canceled — for the same question to several teammates when any one answer will do. Set by the group's first message; later ones keep it."`
+	Group     string `wick:"desc=Keep a discussion across several teammates in one result: pass the group_id an earlier message of this conversation returned to join that group (also in a later turn, while it is still open). none = this task is independent and its reply comes on its own. Omit: the messages you send in one turn form one group."`
 }
 
 type chatsInput struct {
@@ -92,9 +94,10 @@ func Operations(deps Deps) []connector.Category {
 		connector.Cat("Team", "Talk to the other agents of your Team.",
 			connector.Op("message", "Message a Teammate",
 				"Send a message to another agent of your Team. It returns within about 15 seconds: "+
-					"{task_id, context_id, state, reply_text, reason, chat}; chat is the teammate's session this conversation is paired with (+ slack_thread for a Slack remote). "+
+					"{task_id, context_id, state, reply_text, reason, chat, group_id}; chat is the teammate's session this conversation is paired with (+ slack_thread for a Slack remote). "+
 					"state=completed carries the reply (an empty reply_text means the teammate had nothing to add). "+
-					"state=working means it is still on it: end your turn — the reply is delivered into this conversation when it lands; do not poll or resend. To ask several teammates, send all the messages first, then end your turn. "+
+					"state=working means it is still on it: end your turn — the reply is delivered into this conversation when it lands; do not poll or resend. To ask several teammates, send all the messages first, then end your turn: the messages of one turn form a group (group_id), and its replies arrive together in ONE message (fan_in=all), so answer the user once with all of them. "+
+					"fan_in=each gets every reply on its own (independent checks); fan_in=first takes the first answer and cancels the rest. group=<group_id> adds a later message to an open group; group=none keeps a message out of any group. "+
 					"state=input_required means the teammate asks you something (reply_text): answer with message task_id=<that task_id>, or ask the user when only they can answer. "+
 					"state=failed, rejected (refused: no access, not shared, mentions off) or canceled carries the reason. Pass context_id to continue the same exchange. "+
 					"Each conversation of yours gets its own chat at the teammate, opened on your first message and reused after; set new_chat=true only when the user asks for a new/separate chat or session with the teammate, and chat=<session_id> only when the user asks to continue an older one — never on your own. "+
@@ -156,6 +159,8 @@ func (d Deps) message(c *connector.Ctx) (any, error) {
 		TaskID:        strings.TrimSpace(c.Input("task_id")),
 		NewChat:       c.InputBool("new_chat"),
 		Chat:          strings.TrimSpace(c.Input("chat")),
+		FanIn:         strings.ToLower(strings.TrimSpace(c.Input("fan_in"))),
+		Group:         strings.TrimSpace(c.Input("group")),
 	})
 }
 

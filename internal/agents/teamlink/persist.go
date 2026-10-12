@@ -54,6 +54,8 @@ type taskRecord struct {
 	Delivered     bool   `json:"delivered,omitempty"`
 	Canceled      bool   `json:"canceled,omitempty"`
 	Interrupted   bool   `json:"interrupted,omitempty"`
+	FirstCanceled bool   `json:"first_canceled,omitempty"`
+	Undelivered   bool   `json:"undelivered,omitempty"`
 	// Origin and OriginUser are taskRef.origin/originUser; a record
 	// written before they existed reads as the agent's task.
 	Origin     string `json:"origin,omitempty"`
@@ -123,6 +125,10 @@ func (h *Hub) Persist(dir string) error {
 			go h.watchOrphans()
 			break
 		}
+	}
+	// Batches and undelivered prompts survive the restart (batch.go).
+	if h.loadFaninLocked(dir) {
+		go h.resumeFanin(h.orphanPoll)
 	}
 	return nil
 }
@@ -221,6 +227,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		to:         Peer{ID: rec.AgentID, OwnerID: rec.ToOwner, Handle: rec.ToHandle, Name: rec.ToName, ChatUser: rec.ToChatUser, Remote: rec.ToRemote},
 		waiterGone: rec.WaiterGone, finished: rec.Finished, delivered: rec.Delivered, canceled: rec.Canceled,
 		reply: rec.Reply, options: rec.Options, state: a2a.TaskState(rec.State), interrupted: rec.Interrupted, fromDisk: true,
+		firstCanceled: rec.FirstCanceled, undelivered: rec.Undelivered,
 		touched: rec.Touched, contextID: rec.ContextID, title: rec.Title, started: rec.Started,
 		asked: rec.Asked, ended: rec.Ended,
 		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
@@ -259,6 +266,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		CallerAgentID: r.callerAgentID, CallerOwner: r.callerOwner, CallerSession: r.callerSession,
 		Title: r.title, State: string(r.state),
 		Finished: r.finished, WaiterGone: r.waiterGone, Delivered: r.delivered, Canceled: r.canceled, Interrupted: r.interrupted,
+		FirstCanceled: r.firstCanceled, Undelivered: r.undelivered,
 		Reply: r.reply, Options: append([]string(nil), r.options...), Chat: r.chat, Answered: r.answered,
 		ChatPicked: r.chatPicked, SupersededBy: string(r.supersededBy),
 		Started: r.started, Touched: r.touched, Asked: r.asked, Ended: r.ended,

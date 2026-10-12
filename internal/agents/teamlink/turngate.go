@@ -85,6 +85,10 @@ func WithPersonMessage(ctx context.Context) context.Context {
 	return context.WithValue(ctx, personMessageKey{}, true)
 }
 
+// IsPersonMessage reports whether ctx carries a message a person sent
+// (WithPersonMessage).
+func IsPersonMessage(ctx context.Context) bool { return personMessage(ctx) }
+
 func personMessage(ctx context.Context) bool {
 	v, _ := ctx.Value(personMessageKey{}).(bool)
 	return v

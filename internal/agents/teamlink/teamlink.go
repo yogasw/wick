@@ -392,6 +392,8 @@ type Hub struct {
 	orphanPoll time.Duration
 	// progressHub holds the live progress of working tasks (progress.go).
 	progressHub
+	// batchHub holds the fan-in batches and the delivery outbox (batch.go).
+	batchHub
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -451,6 +453,11 @@ type taskRef struct {
 	// interrupted: the task was settled failed because the process
 	// running it went away (settleOrphans).
 	interrupted bool
+	// firstCanceled: fan_in first canceled the task when another member
+	// answered; a reply it still sends is delivered as a follow-up.
+	firstCanceled bool
+	// undelivered: the outbox gave up on the prompt with its reply.
+	undelivered bool
 	// origin is OriginUser for a task a person's @mention started in the
 	// caller's chat (SendInput.Human), set by Send and never from model
 	// input; "" = the agent's own task. Only that person answers or
@@ -582,6 +589,7 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 		answered:   map[string]a2a.TaskID{},
 
 		fileSession: map[a2a.TaskID]string{},
+		batchHub:    batchHub{batches: map[string]*batch{}, byTask: map[a2a.TaskID]*batch{}},
 	}
 }
 
@@ -748,6 +756,14 @@ type SendInput struct {
 	// Reassign), set as the task is registered, so the link is on disk
 	// with the task's first record.
 	retryOf a2a.TaskID
+	// FanIn is how the replies of the task's batch reach the sender
+	// (FanInAll, FanInEach, FanInFirst; "" = all). A batch keeps the mode
+	// its first task set.
+	FanIn string
+	// Group joins the open batch with this id (Result.GroupID) of the same
+	// session; GroupNone keeps the task out of every batch; "" = the
+	// turn's batch.
+	Group string
 }
 
 // Result is what a caller gets back.
@@ -766,6 +782,9 @@ type Result struct {
 	// the caller's conversation — with its Slack thread for a Slack
 	// remote; nil for the main chat or when not known yet.
 	Chat *ChatInfo `json:"chat,omitempty"`
+	// GroupID is the batch the task belongs to (pass it as group to join
+	// a later task to it); "" = none.
+	GroupID string `json:"group_id,omitempty"`
 }
 
 // Send delivers in.Text to the teammate named in.To and waits up to
@@ -841,6 +860,16 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
+	}
+	// The switch is read once, outside h.mu (it may read the config).
+	batchOn := h.batching()
+	if answer == "" {
+		h.mu.Lock()
+		err := h.checkGroupLocked(in, batchOn)
+		h.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if _, ok := h.Turns.(ChatOpener); in.NewChat && !ok {
 		return nil, ErrNewChatUnsupported
@@ -973,12 +1002,30 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if wait == 0 && h.fanningOutLocked(in.CallerSession, task.ID) {
 		wait = -1
 	}
+	// The task joins its batch (fan-in); an answer keeps the batch of the
+	// task it answers.
+	var group, groupNote string
+	switch {
+	case lost != "":
+		group = h.supersedeBatchLocked(lost, task.ID)
+	case in.TaskID == "" && !userOrigin:
+		group, groupNote = h.joinBatchLocked(task.ID, in, batchOn)
+	case h.byTask[task.ID] != nil:
+		group = h.byTask[task.ID].ID
+	}
 	h.mu.Unlock()
 	h.persist(task.ID)
+	if group != "" {
+		h.saveBatches()
+	}
 
 	out, err := h.wait(ctx, cl, task.ID, contextID, target, wait)
 	if out != nil && note != "" {
 		out.Note = note + out.Note
+	}
+	if out != nil {
+		out.GroupID = group
+		out.Note = groupNote + out.Note
 	}
 	return out, err
 }
@@ -1337,6 +1384,7 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 			chat := ref.chat
 			h.mu.Unlock()
 			h.persist(id)
+			h.batchSettled(ctx, id, false)
 			out.Chat = h.chatView(ctx, to, chat)
 			return out, nil
 		}
@@ -1521,6 +1569,7 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 		h.mu.Unlock()
 	}
 	h.persist(id)
+	h.batchSettled(ctx, id, false)
 	// The task store takes the cancellation once the execution lets go of
 	// the task, which can outlast this call: the Hub already says canceled.
 	go func() {
@@ -1559,8 +1608,28 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 		h.tasks[id] = ref
 	}
 	if ref.canceled {
-		// cancel_task already settled it and told the caller.
+		// cancel_task already settled it and told the caller. A reply to
+		// a task fan_in first canceled still reaches the sender, as a
+		// follow-up: nothing is dropped.
+		late := ref.firstCanceled && !orphan && state == a2a.TaskStateCompleted && strings.TrimSpace(reply) != "" && !ref.alreadySent(reply)
+		if !late {
+			h.mu.Unlock()
+			return
+		}
+		ref.markSent(textKey(reply))
+		ref.touched = h.now()
+		ref.logTeammateLocked(reply, ref.touched)
+		session, to := ref.callerSession, ref.to
+		group := ""
+		if b := h.byTask[id]; b != nil {
+			group = ", group " + b.ID
+		}
 		h.mu.Unlock()
+		h.persist(id)
+		msg := framedFollowUp(fmt.Sprintf("Follow-up from %s [task %s%s, after the first answer; the task had been canceled]", to.Label(), id, group), reply)
+		if !h.rideAlong(session, msg) {
+			h.deliver(ctx, session, msg, id)
+		}
 		return
 	}
 	// again: the same settle delivered once more (handBack after the
@@ -1603,23 +1672,32 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 		}
 	}
 	session, to, opts := ref.callerSession, ref.to, ref.options
+	inBatch := h.byTask[id] != nil
 	h.mu.Unlock()
+	text := ""
+	// [silent]: nothing to hand back.
+	if deliver && h.Notify != nil && !(state == a2a.TaskStateCompleted && reply == "") {
+		text = fmt.Sprintf("Reply from %s [task %s, %s]:\n\n%s", to.Label(), id, stateName(state), reply)
+		if state == a2a.TaskStateInputRequired {
+			if len(opts) > 0 {
+				text += "\n\nOptions: " + strings.Join(opts, " | ")
+			}
+			text += fmt.Sprintf("\n\n(%s asks you this. Answer with team_message task_id=%s; ask the user first if only they can answer.)", to.Label(), id)
+		}
+	}
+	// The prompt is in the outbox before the record says delivered: a
+	// crash between the two re-delivers rather than loses it.
+	queued := !inBatch && text != "" && h.queue(session, text, id)
 	h.persist(id)
-	if !deliver || h.Notify == nil {
+	if inBatch {
+		// A task of a batch is delivered with its batch (fan-in).
+		if !h.batchSettled(ctx, id, deliver) && text != "" {
+			h.deliver(ctx, session, text, id)
+		}
 		return
 	}
-	if state == a2a.TaskStateCompleted && reply == "" {
-		return // [silent]: nothing to hand back
-	}
-	text := fmt.Sprintf("Reply from %s [task %s, %s]:\n\n%s", to.Label(), id, stateName(state), reply)
-	if state == a2a.TaskStateInputRequired {
-		if len(opts) > 0 {
-			text += "\n\nOptions: " + strings.Join(opts, " | ")
-		}
-		text += fmt.Sprintf("\n\n(%s asks you this. Answer with team_message task_id=%s; ask the user first if only they can answer.)", to.Label(), id)
-	}
-	if err := h.Notify.Deliver(context.WithoutCancel(ctx), session, text); err != nil {
-		_ = err // best-effort: the task store still holds the result
+	if queued {
+		h.drain(session)
 	}
 }
 
@@ -1639,9 +1717,10 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	if ok && ref == nil {
 		ref = h.loadLocked(id)
 	}
-	if ok && ref != nil && ref.canceled {
+	if ok && ref != nil && ref.canceled && !ref.firstCanceled {
 		// The sender canceled the task: what its turn still says is not
-		// theirs to read any more.
+		// theirs to read any more. A task fan_in first canceled is not the
+		// sender's call: its follow-up still comes.
 		h.mu.Unlock()
 		return true
 	}
@@ -1685,7 +1764,12 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 		return true
 	}
 	msg := fmt.Sprintf("Follow-up from %s [task %s]:\n\n%s", to.Label(), id, text)
-	return h.Notify.Deliver(context.WithoutCancel(ctx), session, msg) == nil
+	// While a batch still waits on a teammate, the follow-up rides along
+	// with its delivery instead of waking the sender alone.
+	if h.rideAlong(session, msg) {
+		return true
+	}
+	return h.deliver(ctx, session, msg, id)
 }
 
 // TaskView is one task a session sent, as the Sub-agents panel and
@@ -1726,6 +1810,9 @@ type TaskView struct {
 	// Interrupted: wick restarted while the task was working, so it
 	// failed (settleOrphans); sending it again is safe.
 	Interrupted bool `json:"interrupted,omitempty"`
+	// Undelivered: wick gave up handing this task's reply to the sender
+	// (the session kept refusing it); the reply is still here.
+	Undelivered bool `json:"undelivered,omitempty"`
 	// Origin is OriginUser for a task the person sent with an @mention
 	// in this chat ("" = the agent's): its question always waits for the
 	// person, whatever the agent is doing.
@@ -1930,6 +2017,7 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	}
 	v.ChatID = ref.chat
 	v.Interrupted = ref.interrupted
+	v.Undelivered = ref.undelivered
 	v.Origin = ref.origin
 	v.MessageCount = len(ref.log)
 	v.RetryOf, v.ReplacedBy, v.ReplacedHow = string(ref.retryOf), string(ref.replacedBy), ref.replacedHow

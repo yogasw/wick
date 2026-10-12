@@ -265,7 +265,10 @@ func (h *Hub) replaceFromUser(ctx context.Context, sessionID, taskID, to, how st
 			verb = "reassigned"
 		}
 		note := fmt.Sprintf("The user %s the task to %s [task %s]: it went to %s as task %s. Its reply comes back here; do not resend it yourself.", verb, from.Label(), id, target.Label(), next)
-		_ = h.Notify.Deliver(context.WithoutCancel(ctx), sessionID, note) // best-effort: the new task itself went out
+		// Through the outbox, riding along with a batch that still waits.
+		if !h.rideAlong(sessionID, note) {
+			h.deliver(ctx, sessionID, note, id)
+		}
 	}
 	return out, nil
 }
