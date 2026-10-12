@@ -51,7 +51,7 @@ func NewGORM(c config.Database) *gorm.DB {
 		// Postgres-only: the error is specific to its plan cache, and
 		// SQLite never reports it. See staleplan.go for why one retry
 		// on the same connection is the right shape.
-		db.ConnPool = stalePlanPool{ConnPool: db.ConnPool}
+		wrapStalePlan(db)
 	} else {
 		// SQLite: WAL mode for concurrent tray + MCP stdio access,
 		// busy_timeout so writers wait instead of returning SQLITE_BUSY.
