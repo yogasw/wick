@@ -46,7 +46,7 @@
 {#if creating}
   <NewGroupDialog {base} {agents} onClose={() => (creating = false)} onCreated={(g) => { creating = false; void pick(g); }} />
 {:else}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4" role="dialog" aria-modal="true" aria-label="Pick a Team group" data-testid="group-picker">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black-900/40 p-4" role="dialog" aria-modal="true" aria-label="Pick a Team group" data-testid="group-picker">
     <div class="flex max-h-full w-full max-w-md flex-col rounded-2xl bg-white-100 shadow-xl dark:bg-navy-800">
       <div class="flex items-center border-b border-white-300 px-5 py-4 dark:border-navy-600">
         <h2 class="flex-1 text-sm font-semibold text-black-900 dark:text-white-100">Pick a Team group</h2>

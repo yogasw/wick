@@ -18,19 +18,40 @@ function themedTokens(source: string): string[] {
   return source.match(/\b[a-z-]*(?:navy|black|white)-\d{3}\b/g) ?? [];
 }
 
-describe("SubAgentModal theme tokens", () => {
-  test("uses only palette-backed navy/black/white shades", () => {
-    const src = readFileSync(
-      resolve(process.cwd(), "src/lib/components/SubAgentModal.svelte"),
-      "utf8",
-    );
-    const offenders = themedTokens(src).filter((cls) => {
-      const m = /(navy|black|white)-(\d{3})$/.exec(cls);
-      if (!m) return false;
-      const [lo, hi] = PALETTE[m[1]];
-      const shade = Number(m[2]);
-      return shade < lo || shade > hi;
-    });
-    expect(offenders).toEqual([]);
+/* SubAgentModal first; then the ticket surfaces, where the same bug left
+   the ticket session strip white in dark mode and the dialog overlays
+   (bg-navy-900/40) with no backdrop at all — an opacity variant of a
+   missing shade is not generated either. */
+const FILES = [
+  "SubAgentModal.svelte",
+  "DetailView.svelte",
+  "TicketDetail.svelte",
+  "TicketComposer.svelte",
+  "TicketPanel.svelte",
+  "GroupPickerDialog.svelte",
+  "team/TicketsPage.svelte",
+  "KanbanBoard.svelte",
+  "SessionPanel.svelte",
+  "AssigneeFilter.svelte",
+];
+
+function offendersIn(src: string): string[] {
+  return themedTokens(src).filter((cls) => {
+    const m = /(navy|black|white)-(\d{3})$/.exec(cls);
+    if (!m) return false;
+    const [lo, hi] = PALETTE[m[1]];
+    const shade = Number(m[2]);
+    return shade < lo || shade > hi;
+  });
+}
+
+describe("theme tokens", () => {
+  test.each(FILES)("%s uses only palette-backed navy/black/white shades", (file) => {
+    const src = readFileSync(resolve(process.cwd(), "src/lib/components", file), "utf8");
+    expect(offendersIn(src)).toEqual([]);
+  });
+
+  test("an opacity variant of a missing shade is caught", () => {
+    expect(offendersIn('class="bg-navy-900/40 dark:bg-navy-700"')).toEqual(["bg-navy-900"]);
   });
 });

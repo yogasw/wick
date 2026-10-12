@@ -45,6 +45,8 @@
   } from "../ticketBoardMerge.js";
   import { roomAgentOptions, withRoomAgent } from "../ticketRoom.js";
   import { activeStatusKeys, terminalKeys, toggledStatuses } from "../ticketBoardStatuses.js";
+  import { assigneeParam, assigneesOf, withAssignees } from "../ticketAssigneeFilter.js";
+  import AssigneeFilter from "./AssigneeFilter.svelte";
 
   type Props = {
     base: string;
@@ -255,6 +257,8 @@
      than the cards: with an assignee filter applied only one person's cards
      arrive, and a dropdown that forgot the others could never be reset from
      within itself. */
+  /* The ticked people (an old single `assignee` reads as one of them). */
+  const assignees = $derived(assigneesOf(filter));
   const assigneeOptions = $derived.by(() => {
     const me = view.me ?? "";
     return Object.entries(view.users ?? {})
@@ -291,15 +295,15 @@
     actionBusy = b.id;
     Effect.runPromise(
       runBoardAction(base, projectId!, b.id, {
-        /* The saved filter, not the derived list: "" and "me" are the
-           toolbar's own words, and the server resolves "me" against the
-           clicker. activeStatuses is sent instead of filter.statuses so an
+        /* The saved filter, not the derived list: "", "me" and "none" are
+           the toolbar's own words (several picks go as a comma list), and
+           the server resolves "me" against the clicker. activeStatuses is sent instead of filter.statuses so an
            empty saved filter goes out as the columns it actually means
            (never the collapsed Done) —
            and every-chip-off keeps the sentinel, because an empty list
            reads as "no filter" on the wire and would send the whole board
            while the clicker is looking at nothing. */
-        assignee: filter.assignee ?? "",
+        assignee: assigneeParam(assignees) ?? "",
         statuses: activeStatuses.length > 0 ? activeStatuses : [NONE],
       }).pipe(Effect.provide(WickClientLayer)),
     )
@@ -339,7 +343,7 @@
         };
         return Effect.runPromise(
           runBoardAction(base, r.projectId, r.button.id!, {
-            assignee: filter.assignee ?? "",
+            assignee: assigneeParam(assignees) ?? "",
             statuses: activeStatuses.length > 0 && p ? statusesFor(activeStatuses, p, NONE) : [NONE],
           }).pipe(Effect.provide(WickClientLayer)),
         )
@@ -687,17 +691,12 @@
       </select>
     {/if}
 
-    <select
-      value={filter.assignee ?? ""}
-      onchange={(e) => onFilter({ ...filter, assignee: (e.target as HTMLSelectElement).value })}
-      class="rounded-lg border border-white-400 bg-white-100 px-3 py-1.5 text-xs text-black-800 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
-    >
-      <option value="">Assignee: All</option>
-      {#if view.me}<option value="me">Assignee: Me</option>{/if}
-      {#each assigneeOptions as u (u.id)}
-        <option value={u.id}>Assignee: {u.name}</option>
-      {/each}
-    </select>
+    <AssigneeFilter
+      selected={assignees}
+      people={assigneeOptions}
+      me={view.me}
+      onChange={(next) => onFilter(withAssignees(filter, next))}
+    />
 
     <!-- Custom list buttons, between the filter they act on and the one
          control that makes a ticket instead of acting on the ones there. -->

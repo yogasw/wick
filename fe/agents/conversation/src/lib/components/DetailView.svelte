@@ -118,7 +118,8 @@
   import SessionFieldChips from "./SessionFieldChips.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
-  import { alsoReplied } from "../ticketSession.js";
+  import { sessionAgents } from "../ticketSession.js";
+  import SessionPanel from "./SessionPanel.svelte";
   import GroupPickerDialog from "./GroupPickerDialog.svelte";
   import { navigate as navigateAgents } from "../agentsRouter.js";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
@@ -1524,7 +1525,11 @@
         : (notesInfo.users?.[notesInfo.session_owner] ?? "")
       : "",
   );
-  const repliers = $derived(notesInfo?.ticket ? alsoReplied(turns, (id, handle) => teamAgentsByHandle[handle]?.id === id) : []);
+  /* The Session tab's agents other than the home one (its badge counts
+     them) and the Ticket tab's "In this session" line. */
+  // The server's whole-history count, topped up by the turns loaded since.
+  const repliers = $derived(sessionAgents(turns, (id, handle) => teamAgentsByHandle[handle]?.id === id, notesInfo?.session_agents ?? []));
+  const homeName = $derived(agentMode?.agent?.name || "Project agent");
   let groupPickerOpen = $state(false);
   function openTeamAgent(handle: string) {
     navigateAgents({ handle, session: null, panel: null });
@@ -1782,9 +1787,13 @@
       .catch(() => { providerOptions = []; });
   }
 
-  function loadProjectOptions() {
-    run(getProjectOptions(base).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { projectOptions = res; })
+  /* The pickers' list is the caller's own projects; the chat's project is
+     asked for by id on top, so a chat in a project reached through see-all
+     or a tag still knows its board (ticketEnabled) and shows it as the
+     current one. A project the caller cannot open stays out. */
+  function loadProjectOptions(include: string | null) {
+    run(getProjectOptions(base, include ? { include: [include] } : undefined).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { projectOptions = res.filter((p) => !p.no_access); })
       .catch(() => { projectOptions = []; });
   }
 
@@ -2676,6 +2685,7 @@
         activeModelID = res.model_id || "";
         activeProjectId = res.project_id || null;
         readOnly = !!res.read_only;
+        loadProjectOptions(activeProjectId);
         // The widget CSP arrives with meta, which can land AFTER the first
         // artifacts have mounted under the blocked fallback. Artifacts
         // subscribe to this policy and rebuild their srcdoc when it changes,
@@ -2689,6 +2699,7 @@
         // server's 403 refuses a send to someone else's chat. Failing
         // closed would lock the caller's OWN chat on a passing error.
         readOnly = false;
+        loadProjectOptions(null);
       });
 
     // A bookmarked sub-agent URL redirects here as
@@ -2713,7 +2724,7 @@
     loadTicket();
     loadTodos();
     loadProviderOptions();
-    loadProjectOptions();
+    // loadProjectOptions runs once meta names the chat's project.
     loadPendingAsk();
     // The Browser rail tab only appears if there's an enabled playwright_browser
     // instance to drive. Best-effort: on any error, leave it hidden.
@@ -2777,6 +2788,12 @@
       id: "subagents",
       label: "Sub-agents",
       icon: '<circle cx="8" cy="4" r="2.5"></circle><circle cx="3.5" cy="12" r="2"></circle><circle cx="12.5" cy="12" r="2"></circle><path d="M8 6.5v2M8 8.5H4.5a1 1 0 00-1 1v.5M8 8.5h3.5a1 1 0 011 1v.5" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
+      // Every session: where it lives, which agents answer, who wrote.
+      id: "session",
+      label: "Session",
+      icon: '<circle cx="6" cy="5.5" r="2.25"></circle><path d="M2 13c0-2.2 1.8-3.75 4-3.75S10 10.8 10 13" stroke-linecap="round"></path><circle cx="11.25" cy="6" r="1.75"></circle><path d="M11 9.4c1.7.1 3 1.4 3 3.1" stroke-linecap="round"></path>',
     },
     {
       id: "ticket",
@@ -2877,7 +2894,9 @@
         // no board will ever show. A session already ON a ticket keeps the
         // tab whatever the setting says — tickets can be switched off after
         // the fact, and that must not strand the ones already filed.
-        (t.id !== "ticket" || ticketTabShown),
+        (t.id !== "ticket" || ticketTabShown) &&
+        // The Session tab reads the session's info off the notes reply.
+        (t.id !== "session" || notesInfo !== null),
     ),
   );
 
@@ -3109,12 +3128,46 @@
     if (id === "scheduled") return scheduledCount;
     if (id === "subagents") return subAgentCount;
     if (id === "tasks") return tasksBadge.count;
+    if (id === "session") return repliers.length;
     return 0;
   }
 </script>
 
 {#snippet lockedSessionFields()}
   {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
+{/snippet}
+
+{#snippet sessionPanel()}
+  <SessionPanel
+    info={notesInfo}
+    {homeName}
+    homeOwner={homeOwnerLabel}
+    agents={repliers}
+    onOpenTicket={openTicketPage}
+    onDiscuss={notesInfo?.ticket ? () => (groupPickerOpen = true) : undefined}
+  />
+{/snippet}
+
+{#snippet inThisSession()}
+  <!-- Ticket tab: who answers here, in one line; the full list is the
+       Session tab. -->
+  <div class="rounded-lg border border-white-300 bg-white-100 p-3 text-xs dark:border-navy-600 dark:bg-navy-700">
+    <div class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">In this session</div>
+    <div class="flex items-center gap-2">
+      <span class="flex shrink-0" aria-hidden="true">
+        {#each [homeName, ...repliers.map((r) => r.name)].slice(0, 3) as n, i (i)}
+          <span class="flex h-5 w-5 items-center justify-center rounded-full border border-white-100 text-[10px] font-semibold text-white-100 dark:border-navy-700 {i === 0 ? 'bg-green-500' : 'bg-navy-400 -ml-1.5'}">{(n.replace(/^@/, "")[0] ?? "?").toUpperCase()}</span>
+        {/each}
+      </span>
+      <div class="min-w-0">
+        <div class="truncate text-black-900 dark:text-white-100" data-testid="in-this-session-line">
+          <span class="font-semibold">{homeName}</span>{#if homeOwnerLabel}<span class="text-black-700 dark:text-black-600"> · {homeOwnerLabel}</span>{/if}{#if repliers.length}<span class="text-black-700 dark:text-black-600"> +{repliers.length} replied</span>{/if}
+        </div>
+        <button type="button" class="text-green-600 hover:underline dark:text-green-400" data-testid="open-session-info" onclick={() => (railTab = "session")}>Open session info →</button>
+      </div>
+    </div>
+    <button type="button" class="mt-2 w-full rounded-lg border border-white-300 px-3 py-1 font-medium text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-800" data-testid="session-discuss-in-group" onclick={() => (groupPickerOpen = true)}>👥 Discuss in a group</button>
+  </div>
 {/snippet}
 
 {#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null })}
@@ -3144,18 +3197,6 @@
     />
     {/if}
 
-    <!-- Ticket session (T12b): its home agent, a read-only list of the
-         agents that also answered (mentions, other people's Captains),
-         and "Discuss in a group". -->
-    {#if activeView === "conversation" && notesInfo?.ticket}
-      <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-white-300 bg-white-100 px-4 py-1.5 text-[11px] text-black-700 dark:border-navy-600 dark:bg-navy-900 dark:text-black-600" data-testid="ticket-session-strip">
-        <span class="rounded-full bg-white-200 px-2 py-0.5 font-medium text-black-900 dark:bg-navy-700 dark:text-white-100" data-testid="ticket-session-home">{agentMode?.agent?.name || "Project agent"}{#if homeOwnerLabel}<span class="font-normal text-black-700 dark:text-black-600" data-testid="ticket-session-home-owner"> · {homeOwnerLabel}</span>{/if}</span>
-        {#if repliers.length}
-          <span data-testid="ticket-session-also">also replied: {repliers.map((r) => r.label).join(" · ")}</span>
-        {/if}
-        <button type="button" class="ml-auto rounded-lg px-2 py-0.5 hover:text-green-600" data-testid="session-discuss-in-group" onclick={() => (groupPickerOpen = true)}>👥 Discuss in a group</button>
-      </div>
-    {/if}
     {#if groupPickerOpen && notesInfo?.ticket}
       <GroupPickerDialog {base} ticketId={notesInfo.ticket.id} projectId={activeProjectId ?? undefined} onClose={() => (groupPickerOpen = false)} onAttached={() => { groupPickerOpen = false; toastOk("Ticket attached to the group chat"); }} />
     {/if}
@@ -3179,7 +3220,7 @@
               <button
                 type="button"
                 onclick={loadOlderHistory}
-                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-500 transition-colors"
+                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-600 transition-colors"
               >Load older messages</button>
             </div>
           {/if}
@@ -3194,7 +3235,7 @@
               <button
                 type="button"
                 onclick={loadNewerHistory}
-                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-500 transition-colors"
+                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-600 transition-colors"
               >Load newer messages</button>
             </div>
           {/if}
@@ -3326,7 +3367,7 @@
                 aria-label="Cancel reply"
                 title="Cancel reply (Esc)"
                 onclick={() => (replyTarget = null)}
-                class="shrink-0 rounded p-0.5 text-black-600 hover:text-black-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-500 dark:hover:text-white-100"
+                class="shrink-0 rounded p-0.5 text-black-600 hover:text-black-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:text-white-100"
               >
                 <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path></svg>
               </button>
@@ -3533,7 +3574,10 @@
           onOpenTicket={openTicketPage}
           openLabel={agentMode ? "Open in Team › Tickets ↗" : undefined}
           onChanged={loadTicket}
+          sessionSummary={inThisSession}
         />
+      {:else if railTab === "session" && notesInfo}
+        {@render sessionPanel()}
       {:else if railTab === "notes" && notesInfo}
         <NotesRail
           {base}
@@ -3755,7 +3799,10 @@
               onOpenTicket={openTicketPage}
               openLabel={agentMode ? "Open in Team › Tickets ↗" : undefined}
               onChanged={loadTicket}
+              sessionSummary={inThisSession}
             />
+          {:else if railTab === "session" && notesInfo}
+            {@render sessionPanel()}
           {:else if railTab === "notes" && notesInfo}
             <NotesRail
               {base}

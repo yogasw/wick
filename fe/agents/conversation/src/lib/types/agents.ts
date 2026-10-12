@@ -637,6 +637,9 @@ export type ProjectOption = {
   /** Someone else owns it; the caller sees it through a tag or sharing. */
   shared?: boolean;
   owner_name?: string;
+  /** Returned only because it was asked for by id (`include`) and the
+      caller cannot open it: shown to name a saved choice, never offered. */
+  no_access?: boolean;
 };
 
 /** One column on a project's board. Statuses are per project: a team names
@@ -834,7 +837,12 @@ export type Note = {
 /** Per-user saved board filter for one project. */
 export type TicketFilter = {
   statuses?: string[];
-  assignee?: string; // "" = all, "me", or a user id
+  /** The old single pick ("" = all, "me", or a user id). Read only: a
+      filter saved before multi-select is migrated into `assignees`. */
+  assignee?: string;
+  /** The people ticked: user ids, "me" and "none" (no assignee). A ticket
+      shows when ANY of its assignees is ticked; empty/absent = everyone. */
+  assignees?: string[];
   view_mode?: string; // "list" | "card"
   /** Adds the untracked chats to the board — and only then does the server
       send that list, which is what keeps a project with hundreds of loose
@@ -866,9 +874,43 @@ export type NotesResponse = {
       agent answers them only, so other viewers see whose it is. */
   session_owner?: string;
   session_owner_handle?: string;
+  /** The rail's Session tab (every session read through session_id): where
+      it lives and who started it. Absent on an older server. */
+  session_info?: {
+    started_by?: string;
+    started_by_name?: string;
+    project_id?: string;
+    project_name?: string;
+    origin?: string;
+    created_at?: string;
+  };
+  /** Humans who wrote in the session, most messages first. */
+  session_people?: SessionPerson[];
+  /** Other people's agents that answered, counted over the whole history
+      (the rail only holds the pages it loaded). Absent on an older server. */
+  session_agents?: ServerSessionAgent[];
   /** The ticket's project board columns, so the rail's status select offers
       the same choices as the board. */
   statuses?: TicketStatus[];
+};
+
+export type ServerSessionAgent = {
+  agent_id: string;
+  handle?: string;
+  name?: string;
+  owner_id: string;
+  owner_handle?: string;
+  via?: string;
+  replies: number;
+};
+
+export type SessionPerson = {
+  id: string;
+  name?: string;
+  handle?: string;
+  channel?: string;
+  messages: number;
+  owner?: boolean;
 };
 
 /** One message between two agents inside a delegation tree. */

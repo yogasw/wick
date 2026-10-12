@@ -217,7 +217,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		Name:            p.Meta.Name,
 		Icon:            p.Meta.Icon,
 		Description:     p.Meta.Description,
-		CustomPath:      p.Meta.CustomPath,
+		CustomPath:      projectPathFor(c, p.Meta.OwnerUserID, p.Meta.CustomPath),
 		Managed:         p.Meta.CustomPath == "",
 		IsProtected:     project.IsProtected(p.Meta),
 		DefaultPreset:   p.Meta.Defaults.Preset,
@@ -314,11 +314,16 @@ func apiProjectUpdate(c *tool.Ctx) {
 	meta.Defaults.Model = modelWithProvider(req.Provider, req.Model)
 	meta.Defaults.SystemAddon = req.SystemAddon
 
-	customPath := strings.TrimSpace(req.CustomPath)
-	if req.FolderMode == "managed" {
-		customPath = ""
+	// The path is only shown to the owner or an admin (projectPathFor), so
+	// anyone else's form comes back without it; their save keeps the folder
+	// as it is instead of quietly moving the project to a managed one.
+	if canSeeProjectPath(c, meta.OwnerUserID) {
+		customPath := strings.TrimSpace(req.CustomPath)
+		if req.FolderMode == "managed" {
+			customPath = ""
+		}
+		meta.CustomPath = customPath
 	}
-	meta.CustomPath = customPath
 
 	// Rejected before anything is persisted: a half-applied security policy
 	// is worse than a refused edit.

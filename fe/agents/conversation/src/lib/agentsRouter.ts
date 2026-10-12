@@ -23,6 +23,11 @@ import { connTabOf, type ConnTab } from "./connectionTabs.js";
      /team/tickets                       Tickets: the selected projects' board
      /team/tickets/<project id>/<ticket id>
                                          one ticket on it
+     /team/tickets/<project id>/<ticket id>/s/<session id>
+                                         one of that ticket's chats, opened
+                                         inside Team (a project chat too)
+     /team/tickets/<project id>/s/<session id>
+                                         a chat from the board's rail
      /team?panel=new                     the + Agent wizard
      /team?panel=new&project=<id>        the wizard converting that project
                                          ("Make this an agent…")
@@ -68,7 +73,9 @@ export type AgentsRoute = {
   tickets?: TicketsRoute | null;
 };
 
-export type TicketsRoute = { project?: string; ticket?: string };
+/** session: a chat opened from the Tickets page, drawn in place; back goes
+    to its ticket (both ids) or to the board (project only). */
+export type TicketsRoute = { project?: string; ticket?: string; session?: string };
 
 const ROOT = "/team";
 
@@ -103,13 +110,18 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
     }
   } else if (seg === "tickets") {
     // A ticket needs both ids; half of one (or a bad escape) is the board.
+    // A chat rides after "s": <project>/<ticket>/s/<id> or <project>/s/<id>.
     tickets = {};
-    if (segs[1] && segs[2]) {
-      try {
+    try {
+      if (segs.length === 5 && segs[3] === "s") {
+        tickets = { project: decodeURIComponent(segs[1]), ticket: decodeURIComponent(segs[2]), session: decodeURIComponent(segs[4]) };
+      } else if (segs.length === 4 && segs[2] === "s") {
+        tickets = { project: decodeURIComponent(segs[1]), session: decodeURIComponent(segs[3]) };
+      } else if (segs[1] && segs[2]) {
         tickets = { project: decodeURIComponent(segs[1]), ticket: decodeURIComponent(segs[2]) };
-      } catch {
-        tickets = {};
       }
+    } catch {
+      tickets = {};
     }
   } else if (seg) {
     try {
@@ -157,7 +169,10 @@ export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   let path = base + ROOT;
   if (r.tickets) {
     path += "/tickets";
-    if (r.tickets.project && r.tickets.ticket) path += "/" + encodeURIComponent(r.tickets.project) + "/" + encodeURIComponent(r.tickets.ticket);
+    const t = r.tickets;
+    if (t.project && (t.ticket || t.session)) path += "/" + encodeURIComponent(t.project);
+    if (t.project && t.ticket) path += "/" + encodeURIComponent(t.ticket);
+    if (t.project && t.session) path += "/s/" + encodeURIComponent(t.session);
   } else if (r.group) path += "/group/" + encodeURIComponent(r.group);
   else if (r.handle) path += "/" + encodeURIComponent(r.handle);
   const q = new URLSearchParams();

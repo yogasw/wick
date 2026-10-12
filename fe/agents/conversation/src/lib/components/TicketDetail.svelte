@@ -31,9 +31,12 @@
        the ticket's project (📁). Elsewhere the defaults stand. */
     backLabel?: string;
     projectName?: string;
+    /* The ticket was read: its title, for a composer outside this page
+       that names the ticket. */
+    onTitle?: (title: string) => void;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession, projectId, backLabel = "Back to board", projectName }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, projectId, backLabel = "Back to board", projectName, onTitle }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
   let groupPickerOpen = $state(false);
@@ -44,6 +47,7 @@
       .then((d) => {
         data = d;
         error = "";
+        onTitle?.(d.ticket.title || d.ticket.id);
       })
       .catch((e: unknown) => {
         error = e instanceof Error ? e.message : "Failed to load ticket";
@@ -255,7 +259,7 @@
          conversations, then the notes as the comment thread (notes are long
          and wide by nature, so they get the width). The ticket's state sits
          in the properties rail on the right; on a phone it drops below. -->
-    <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+    <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
     <div class="flex min-w-0 flex-col gap-4">
     <!-- Header. Identity first (code + status), then the title with room to
          be a sentence — the layout every ticketing tool converged on. -->
@@ -559,7 +563,7 @@
        is spelled out rather than implied. -->
   {#if confirmDelete}
     {@const n = data.sessions.length}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black-900/40 p-4">
       <div class="w-full max-w-md rounded-xl border border-white-300 bg-white-100 p-5 shadow-xl dark:border-navy-600 dark:bg-navy-700">
         <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
           Delete ticket {t.id}?

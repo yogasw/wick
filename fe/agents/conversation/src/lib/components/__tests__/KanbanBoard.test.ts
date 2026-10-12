@@ -397,19 +397,55 @@ describe("KanbanBoard", () => {
   // hide nothing and would mask a request that asked for the wrong person.
   test("picking an assignee emits it for the next request", async () => {
     const { onFilter } = renderBoard();
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    await fireEvent.change(select, { target: { value: "me" } });
-    expect(onFilter).toHaveBeenCalledWith({ assignee: "me" });
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    expect(onFilter).toHaveBeenCalledWith({ assignees: ["me"] });
+  });
+
+  // Several people at once: the pick grows, the old single key goes.
+  test("ticking a second person adds to the pick", async () => {
+    const { onFilter } = renderBoard({ filter: { assignee: "me" } });
+    expect(screen.getByTestId("assignee-filter-button").textContent).toContain("Assignee: Me");
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Other Person" }));
+    expect(onFilter).toHaveBeenCalledWith({ assignees: ["me", "u-2"] });
+  });
+
+  test("Everyone clears the pick", async () => {
+    const { onFilter } = renderBoard({ filter: { assignees: ["u-2", "none"], view_mode: "card" } });
+    expect(screen.getByTestId("assignee-filter-button").textContent).toContain("Assignee: Other, Unassigned");
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    await fireEvent.click(screen.getByRole("checkbox", { name: /Everyone/ }));
+    expect(onFilter).toHaveBeenCalledWith({ view_mode: "card" });
   });
 
   // Everyone the project names stays listed even while their cards are
   // filtered out — otherwise the dropdown could not be reset from itself.
-  test("the assignee list survives a filter that excluded those people", () => {
+  test("the assignee list survives a filter that excluded those people", async () => {
     renderBoard({
-      filter: { assignee: "u-me" },
+      filter: { assignees: ["u-me"] },
       board: { ...board, tickets: [board.tickets[0]] },
     });
-    expect(screen.getByRole("option", { name: "Assignee: Other Person" })).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    expect(screen.getByRole("checkbox", { name: "Other Person" })).toBeTruthy();
+  });
+
+  // A board button sends what the toolbar shows: several picks as the
+  // board's own comma list.
+  test("a board button sends the ticked assignees as a comma list", async () => {
+    renderBoard({
+      filter: { assignees: ["me", "none"] },
+      board: {
+        ...board,
+        config: {
+          ...board.config,
+          integrations: { buttons: [{ id: "b1", label: "Sync", url: "https://x.test/hook", placement: "board" }] },
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+    const sent = calls.find((c) => c.url.includes("/board-actions/b1"));
+    expect((sent?.body as { assignee: string }).assignee).toBe("me,none");
   });
 
   // Statuses are per project, so a renamed board must draw ITS columns —

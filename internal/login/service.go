@@ -113,6 +113,13 @@ func (s *Service) GetUserByID(ctx context.Context, id string) (*entity.User, err
 	return s.repo.GetUserByID(ctx, id)
 }
 
+// GetUsersByIDs resolves many accounts in a single query — for lists that
+// put a name on each row, where one lookup per id would cost a DB round
+// trip apiece.
+func (s *Service) GetUsersByIDs(ctx context.Context, ids []string) ([]*entity.User, error) {
+	return s.repo.GetUsersByIDs(ctx, ids)
+}
+
 // FirstAdmin returns the oldest admin user, or nil when no admin exists.
 // Stdio MCP uses this to bind its synthetic context to a real admin so
 // wick_enc_ tokens minted from MCP can be decrypted by that admin in
@@ -203,7 +210,8 @@ func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string,
 		return err
 	}
 	meta := u.Metadata
-	empty := len(f.Statuses) == 0 && f.Assignee == "" && f.ViewMode == ""
+	empty := len(f.Statuses) == 0 && f.Assignee == "" && len(f.Assignees) == 0 &&
+		f.ViewMode == "" && !f.ShowUntracked
 	if empty {
 		delete(meta.TicketFilters, projectID)
 	} else {

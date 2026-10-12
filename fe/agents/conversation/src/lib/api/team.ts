@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { apiGetE, apiPostE, apiPatchE, apiPutE, apiDeleteE, WickClientLayer, type APIError } from "@wick-fe/common-api";
 import type { HttpClient } from "@effect/platform";
 import type { AgentFeatures } from "../agentMode.js";
+import { invalidateProjectOptions } from "./projectOptionsCache.js";
 
 /* The Agents app API (api_team.go). Every route is scoped to the
    caller as owner server-side, so nothing here passes a user id. */
@@ -483,8 +484,12 @@ export const listAgents = (base: string) =>
 export const listAgentRoster = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents?ensure=0`);
 
+/* Agent create, edit and delete add, rename or remove the agent's own
+   project, so each drops the cached project options. */
+const dropsProjectOptions = Effect.tap(() => invalidateProjectOptions());
+
 export const createAgent = (base: string, body: AgentWrite) =>
-  apiPostE<AgentItem>(`${base}/api/team/agents`, body);
+  apiPostE<AgentItem>(`${base}/api/team/agents`, body).pipe(dropsProjectOptions);
 
 /** getAgent is one agent as the Settings drawer edits it: features
     resolved against the owner's connector catalog and old access switches
@@ -494,7 +499,7 @@ export const getAgent = (base: string, id: string) =>
   apiGetE<AgentItem>(`${base}/api/team/agents/${enc(id)}`);
 
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
-  apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
+  apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body).pipe(dropsProjectOptions);
 
 /** makeCaptain moves the Captain role to agent id (one transaction
     server-side); previous_id is the agent that held it, "" if none. */
@@ -512,7 +517,7 @@ export const getAgentSkills = (base: string, id: string) =>
 /** chats="delete" takes the agent's own project with it (chats, files,
     memory); "keep" leaves it as an ordinary project in the sidebar. */
 export const deleteAgent = (base: string, id: string, chats: "delete" | "keep") =>
-  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}?chats=${chats}`);
+  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}?chats=${chats}`).pipe(dropsProjectOptions);
 
 /** The persona half an agent reads from its project (same fields
     teamAgentToItem fills from project meta), for the Settings project

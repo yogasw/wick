@@ -158,6 +158,17 @@ func (r *repo) GetUserByID(ctx context.Context, id string) (*entity.User, error)
 	return &u, nil
 }
 
+// GetUsersByIDs loads every user whose id is in ids in one query. Ids
+// with no row are simply absent; an empty ids slice skips the DB.
+func (r *repo) GetUsersByIDs(ctx context.Context, ids []string) ([]*entity.User, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var users []*entity.User
+	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error
+	return users, err
+}
+
 func (r *repo) SetMetadata(ctx context.Context, userID string, meta entity.UserMetadata) error {
 	return r.db.WithContext(ctx).Model(&entity.User{}).
 		Where("id = ?", userID).

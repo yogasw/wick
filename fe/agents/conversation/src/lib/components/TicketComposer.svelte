@@ -193,7 +193,7 @@
           <button
             type="button"
             onclick={onClearTicket}
-            class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
+            class="underline transition-colors hover:text-black-800 dark:hover:text-black-600"
             >Start without a ticket</button
           >
         {/if}

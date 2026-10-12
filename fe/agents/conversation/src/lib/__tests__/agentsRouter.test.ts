@@ -184,6 +184,33 @@ describe("group routes", () => {
 });
 
 describe("tickets routes", () => {
+  test("a chat opened on the Tickets page rides after /s/: under its ticket, or the board", () => {
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p%201/T-12/s/abc%2F1", "", B)).toEqual({
+      handle: null,
+      session: null,
+      panel: null,
+      tickets: { project: "p 1", ticket: "T-12", session: "abc/1" },
+    });
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/s/abc", "", B).tickets).toEqual({ project: "p1", session: "abc" });
+    // A ticket id that happens to be "s" is still a ticket.
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/s", "", B).tickets).toEqual({ project: "p1", ticket: "s" });
+    // A bad escape is the board, not a half-read chat.
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/T-1/s/%E0%A4", "", B).tickets).toEqual({});
+    // The session query stays an agent-chat thing.
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/s/abc", "?session=x", B).session).toBeNull();
+  });
+  test("a Tickets chat formats back to the path it was read from", () => {
+    const routes = [
+      { handle: null, session: null, panel: null, tickets: { project: "p 1", ticket: "T-12", session: "abc/1" } },
+      { handle: null, session: null, panel: null, tickets: { project: "p1", session: "abc" } },
+    ];
+    for (const r of routes) {
+      const url = formatAgentsRoute(r, B);
+      expect(parseAgentsRoute(url, "", B)).toEqual(r);
+    }
+    expect(formatAgentsRoute(routes[0], B)).toBe("/tools/agents/team/tickets/p%201/T-12/s/abc%2F1");
+    expect(formatAgentsRoute(routes[1], B)).toBe("/tools/agents/team/tickets/p1/s/abc");
+  });
   test("/team/tickets is the board; no agent, no group", () => {
     expect(parseAgentsRoute("/tools/agents/team/tickets", "", B)).toEqual({ handle: null, session: null, panel: null, tickets: {} });
     expect(parseAgentsRoute("/tools/agents/team/tickets/", "", B).tickets).toEqual({});

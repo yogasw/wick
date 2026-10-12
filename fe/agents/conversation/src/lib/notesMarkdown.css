@@ -16,6 +16,20 @@
 .wick-note-md p {
   margin: 0;
 }
+/* A long path or inline `code` has no break point, and `break-words` alone
+   still lets it set the card's minimum width — the page then scrolls
+   sideways. These break anywhere instead; fenced blocks keep their own
+   horizontal scroll (`pre` never wraps), and table cells are left to their
+   overflow-x wrapper. */
+.wick-note-md p,
+.wick-note-md li,
+.wick-note-md h1,
+.wick-note-md h2,
+.wick-note-md h3,
+.wick-note-md h4,
+.wick-note-md :not(pre) > code {
+  overflow-wrap: anywhere;
+}
 /* Monospace for anything code-ish the renderer did not already class. The
    size is left alone: a fenced block's own `text-xs` would otherwise be
    scaled again by this, and the two together read a step too small. */

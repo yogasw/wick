@@ -12,6 +12,7 @@
   } from "../api/tickets.js";
   import { boardGen, cachedBoard, cachedFilter, rememberBoard, rememberFilter } from "../ticketBoardCache.js";
   import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
+  import { assigneeParam, assigneesOf } from "../ticketAssigneeFilter.js";
   import TicketComposer from "./TicketComposer.svelte";
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
@@ -101,7 +102,7 @@
     return {
       rows: 3,
       statuses,
-      assignee: ticketFilter.assignee || undefined,
+      assignee: assigneeParam(assigneesOf(ticketFilter)),
       untracked: ticketFilter.show_untracked === true,
       untrackedLimit: UNTRACKED_PAGE,
       /* Your own loose chats by default — "all" is an explicit choice, and
@@ -503,15 +504,21 @@
 
   <!-- The floating composer: every view's reply box. Starting a chat from
        a ticket page joins that ticket; from the list or board it is a
-       plain new session in the project. -->
-  <TicketComposer
-    {base}
-    {project}
-    {providers}
-    ticketId={activeTicketId}
-    ticketLabel={activeTicketLabel}
-    onClearTicket={() => { pendingTicketId = null; gotoTicket(null); }}
-  />
+       plain new session in the project. On a ticket's page it sits in the
+       main column — the same grid as TicketDetail — so it is centred on
+       the work, never under the fields rail. -->
+  <div class={ticketEnabled && openTicketId ? "mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[minmax(0,1fr)_300px]" : "contents"} data-testid="composer-column">
+    <div class="min-w-0">
+      <TicketComposer
+        {base}
+        {project}
+        {providers}
+        ticketId={activeTicketId}
+        ticketLabel={activeTicketLabel}
+        onClearTicket={() => { pendingTicketId = null; gotoTicket(null); }}
+      />
+    </div>
+  </div>
 </div>
 
 <EmptyTicketOffer bind:this={emptyOffer} {base} onChanged={reloadBoard} />

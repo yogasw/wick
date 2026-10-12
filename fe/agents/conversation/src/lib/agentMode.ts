@@ -11,6 +11,7 @@ export type RailTab =
   | "source"
   | "subagents"
   | "tasks"
+  | "session"
   | "ticket"
   | "notes"
   | "todos";

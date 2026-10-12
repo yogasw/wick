@@ -3031,8 +3031,13 @@ func projectSettingsPage(c *tool.Ctx) {
 	}))
 }
 
-// projectOptionsJSON returns [{id, name, path}] for every project —
-// consumed by the allowed_cmds scope dropdown in the settings UI.
+// projectOptionsJSON returns [{id, name, path}] for the projects the caller
+// is actually in — owned, or reached through a tag grant or sharing —
+// for every project picker in the SPAs. It is a picker list, not an admin
+// inventory: the admin see-all knob never widens it, so an admin is offered
+// their own projects rather than everyone's. A Team agent project is listed
+// only for the agent's owner. path is sent only where the caller owns the
+// project (or is an admin): it is a host filesystem path.
 func projectOptionsJSON(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -3063,7 +3068,19 @@ func projectOptionsJSON(c *tool.Ctx) {
 		Shared    bool   `json:"shared,omitempty"`
 		OwnerName string `json:"owner_name,omitempty"`
 	}
-	access := callerProjectAccess(c)
+	// No user = internal / MCP caller: unrestricted, as everywhere else.
+	// A person gets the scoped set with no see-all bypass.
+	u := login.GetUser(c.Context())
+	access := projectAccess{seeAll: true}
+	if u != nil {
+		access = scopedProjectAccess(c.Context(), u)
+	}
+	// full is what the caller may actually OPEN (see-all and tag grants
+	// included). The scoped set above only decides what is LISTED as a
+	// pick; a project asked for by id is flagged no_access against this,
+	// so a project page reached through see-all or a tag still resolves.
+	full := callerProjectAccess(c)
+	me := actorID(c)
 	// include=<id,...> names projects that must come back even when the
 	// caller cannot reach them. A workflow's saved workspace is the case:
 	// dropping it from the options left the picker showing "(use run
@@ -3080,32 +3097,45 @@ func projectOptionsJSON(c *tool.Ctx) {
 	// hide_team=1 drops the Team app's agent projects (the agent wizard
 	// and Settings pickers); the agent's own project comes back via include.
 	hideTeam := c.Query("hide_team") == "1"
-	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
+	// Filter first, so owner names are resolved for the rows sent and not
+	// for every project on the host.
 	ids := make([]string, 0, len(projects))
-	for id := range projects {
-		ids = append(ids, id)
-	}
-	shared := sharedProjectOwners(c, projects, ids)
-	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
 		_, wanted := forced[id]
-		if !access.allowProject(id) && !wanted {
+		if wanted {
+			ids = append(ids, id)
 			continue
 		}
-		if hideTeam && !wanted && project.IsAgentProject(p.Meta) {
+		if !access.allowProject(id) {
 			continue
 		}
+		if project.IsAgentProject(p.Meta) && (hideTeam || (u != nil && p.Meta.OwnerUserID != me)) {
+			// An agent's persona project belongs to the agent's owner; a
+			// tag that happens to reach it does not make it a pick for
+			// anyone else.
+			continue
+		}
+		ids = append(ids, id)
+	}
+	pinned := pinnedProjectID(c)
+	shared := sharedProjectOwners(c, projects, ids)
+	opts := make([]option, 0, len(ids))
+	for _, id := range ids {
+		p := projects[id]
 		managed := p.Meta.CustomPath == ""
-		path := p.Meta.CustomPath
-		if path == "" {
-			path = globalLayout.ProjectManagedPath(id)
+		path := ""
+		if canSeeProjectPath(c, p.Meta.OwnerUserID) {
+			path = p.Meta.CustomPath
+			if path == "" {
+				path = globalLayout.ProjectManagedPath(id)
+			}
 		}
 		opts = append(opts, option{
 			ID:              id,
 			Name:            p.Meta.Name,
 			Path:            path,
-			NoAccess:        !access.allowProject(id),
+			NoAccess:        !full.allowProject(id),
 			Managed:         managed,
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,
@@ -3117,6 +3147,28 @@ func projectOptionsJSON(c *tool.Ctx) {
 		})
 	}
 	c.JSON(http.StatusOK, opts)
+}
+
+// canSeeProjectPath reports whether the caller may see a project's host
+// folder: an internal caller, an admin, or the project's owner. Everyone
+// else who reaches the project (a tag, a share) works in it without
+// learning where it lives on disk. The session view's working directory is
+// the same folder and is shown to anyone who opens that session, on purpose:
+// it is the chat's own context, not a list of projects.
+func canSeeProjectPath(c *tool.Ctx, ownerUserID string) bool {
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsAdmin() {
+		return true
+	}
+	return ownerUserID != "" && ownerUserID == u.ID
+}
+
+// projectPathFor is customPath when the caller may see it, "" otherwise.
+func projectPathFor(c *tool.Ctx, ownerUserID, customPath string) string {
+	if canSeeProjectPath(c, ownerUserID) {
+		return customPath
+	}
+	return ""
 }
 
 // providerOptionsJSON returns [{type, name, version}] for every healthy

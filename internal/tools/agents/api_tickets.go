@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -260,18 +261,31 @@ func lookupTicketProject(c *tool.Ctx, ticketID string) (projectID string, ambigu
 	return found, false, true
 }
 
-// userNames resolves display names for a set of user ids, best effort.
+// userNames resolves display names for a set of user ids, best effort, in
+// one batched query (the users table sits behind a remote round trip, so a
+// lookup per id made every name-carrying list pay N of them).
 func userNames(c *tool.Ctx, ids map[string]bool) map[string]string {
 	out := map[string]string{}
 	if globalAuth == nil {
 		return out
 	}
+	want := make([]string, 0, len(ids))
 	for id := range ids {
-		if id == "" {
-			continue
+		if id != "" {
+			want = append(want, id)
 		}
-		if u, err := globalAuth.GetUserByID(c.Context(), id); err == nil && u != nil {
-			out[id] = u.Name
+	}
+	if len(want) == 0 {
+		return out
+	}
+	users, err := globalAuth.GetUsersByIDs(c.Context(), want)
+	if err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Msg("resolve user names")
+		return out
+	}
+	for _, u := range users {
+		if u != nil {
+			out[u.ID] = u.Name
 		}
 	}
 	return out
@@ -410,7 +424,9 @@ func apiProjectTickets(c *tool.Ctx) {
 	//   ?fields=all      the full field map per card, not just show_on_card
 	//   ?rows=N          session rows per card (0 = none, just the count)
 	//   ?statuses=a,b    only these columns; absent = all, `?statuses=` = none
-	//   ?assignee=ID|me  only this person's tickets; absent/empty = everyone
+	//   ?assignee=a,b    only these people's tickets: user ids, "me" (the
+	//                    caller) and "none" (no assignee), any of them;
+	//                    absent/empty = everyone. A single value still works.
 	//   ?untracked=1     ask for the untracked list at all (default: no)
 	//   ?untracked_limit=N
 	//   ?untracked_after=C    the rail's next page: rows strictly after the
@@ -457,14 +473,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	wantStatus, statusFiltered := queryCSV(c, "statuses")
 	// "me" resolves against the caller, so the client can save a filter that
 	// keeps meaning the right person.
-	wantAssignee := strings.TrimSpace(c.Query("assignee"))
-	if wantAssignee == "me" {
-		if u := login.GetUser(c.Context()); u != nil {
-			wantAssignee = u.ID
-		} else {
-			wantAssignee = ""
-		}
-	}
+	wantAssignee := parseAssigneeFilter(c.Query("assignee"), actorID(c))
 
 	rooms := ticketRoomsOf(id)
 	roomCardsOf := newRoomCards()
@@ -489,7 +498,7 @@ func apiProjectTickets(c *tool.Ctx) {
 		}
 		// Anyone on the ticket counts: filtering to a person must not hide
 		// the work they share with somebody else.
-		if wantAssignee != "" && !t.HasAssignee(wantAssignee) {
+		if !wantAssignee.matches(t) {
 			continue
 		}
 		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
@@ -1250,6 +1259,13 @@ func apiNotesList(c *tool.Ctx) {
 		out["session_owner"] = owner
 		out["session_owner_handle"] = personHandle(c.Context(), owner)
 	}
+	// Every session's rail has a Session tab (who started it, who wrote,
+	// which agents answered); same rule as above: only off a checked session.
+	if sid := strings.TrimSpace(c.Query("session_id")); sid != "" && strings.TrimSpace(c.Query("ticket_id")) == "" {
+		if sess, sok := globalMgr.Registry().Session(sid); sok {
+			addSessionInfo(c, out, sess)
+		}
+	}
 	// Whether this project runs tickets at all. The rail hides its Ticket
 	// tab when it does not: offering to file a ticket on a board that was
 	// never turned on produces one nobody will ever look at. Sent
@@ -1588,6 +1604,64 @@ func apiSidebarWidthSave(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "ok", "width": entity.ClampSidebarWidth(body.Width)})
 }
 
+// assigneeFilter is a board's ?assignee= parsed: the people whose tickets
+// to keep. A ticket is kept when ANY of its assignees is one of them, or
+// when it has none and "none" was asked for. Nothing asked = everyone.
+type assigneeFilter struct {
+	ids  map[string]bool
+	none bool
+}
+
+// parseAssigneeFilter reads a comma list of user ids, "me" and "none". "me"
+// becomes me; with nobody logged in it is dropped, which — like the single
+// value always did — leaves an "only me" filter showing everyone.
+func parseAssigneeFilter(raw, me string) assigneeFilter {
+	f := assigneeFilter{ids: map[string]bool{}}
+	for _, v := range strings.Split(raw, ",") {
+		switch v = strings.TrimSpace(v); v {
+		case "":
+		case "none":
+			f.none = true
+		case "me":
+			if me != "" {
+				f.ids[me] = true
+			}
+		default:
+			f.ids[v] = true
+		}
+	}
+	return f
+}
+
+func (f assigneeFilter) active() bool { return f.none || len(f.ids) > 0 }
+
+// sortedIDs are the people asked for, in a stable order.
+func (f assigneeFilter) sortedIDs() []string {
+	out := make([]string, 0, len(f.ids))
+	for id := range f.ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// matches reports whether t is one of the tickets the filter keeps.
+func (f assigneeFilter) matches(t ticket.Ticket) bool {
+	if !f.active() {
+		return true
+	}
+	people := t.AssigneeList()
+	if len(people) == 0 {
+		return f.none
+	}
+	for _, a := range people {
+		if f.ids[a] {
+			return true
+		}
+	}
+	return false
+}
+
 // apiTicketFilterGet handles GET /api/me/ticket-filters/{projectID}.
 func apiTicketFilterGet(c *tool.Ctx) {
 	u := login.GetUser(c.Context())
@@ -1595,7 +1669,9 @@ func apiTicketFilterGet(c *tool.Ctx) {
 		c.JSON(http.StatusOK, entity.TicketFilter{})
 		return
 	}
-	c.JSON(http.StatusOK, u.Metadata.TicketFilters[c.PathValue("projectID")])
+	// Migrated on the way out, so a filter saved as one `assignee` reaches
+	// the board as the list it now reads.
+	c.JSON(http.StatusOK, u.Metadata.TicketFilters[c.PathValue("projectID")].Migrated())
 }
 
 // apiTicketFilterSave handles PUT /api/me/ticket-filters/{projectID}.
@@ -1614,7 +1690,7 @@ func apiTicketFilterSave(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": "auth service unavailable"})
 		return
 	}
-	if err := globalAuth.SetTicketFilter(c.Context(), u.ID, c.PathValue("projectID"), f); err != nil {
+	if err := globalAuth.SetTicketFilter(c.Context(), u.ID, c.PathValue("projectID"), f.Migrated()); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

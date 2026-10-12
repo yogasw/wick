@@ -1,7 +1,10 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
 import { withModelListMeta, optionModelsWithMeta } from "@wick-fe/common-ui";
-import type { ProviderOption, ProviderModelOption, ProjectOption } from "../types/agents.js";
+import type { ProviderOption, ProviderModelOption } from "../types/agents.js";
+import { cachedProjectRows, invalidateProjectOptions, type ProjectOptionRow } from "./projectOptionsCache.js";
+
+export { invalidateProjectOptions, PROJECT_OPTIONS_TTL_MS } from "./projectOptionsCache.js";
 
 export const getProviderOptions = (base: string) =>
   apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
@@ -69,15 +72,12 @@ export const getPresetOptions = (base: string) =>
   );
 
 /** opts.hideTeam leaves out the Team app's agent projects; opts.include
-    names ids that come back regardless (an agent's own project). */
-export const getProjectOptions = (base: string, opts?: { hideTeam?: boolean; include?: string[] }) =>
-  apiGetE<
-    (ProjectOption & {
-      default_provider?: string;
-      default_model?: string;
-      ticket_enabled?: boolean;
-    })[] | null
-  >(`${base}/projects/options${projectOptionsQuery(opts)}`).pipe(
+    names ids that come back regardless (an agent's own project). Answers
+    are cached per URL — see invalidateProjectOptions. */
+export const getProjectOptions = (base: string, opts?: { hideTeam?: boolean; include?: string[] }) => {
+  const url = `${base}/projects/options${projectOptionsQuery(opts)}`;
+  return cachedProjectRows(url, apiGetE<ProjectOptionRow[] | null>(url)).pipe(
+    // Mapped per call, so each caller gets its own objects to keep.
     Effect.map((r) =>
       (r ?? []).map((p) => ({
         ...p,
@@ -91,6 +91,7 @@ export const getProjectOptions = (base: string, opts?: { hideTeam?: boolean; inc
       })),
     ),
   );
+};
 
 export const switchProvider = (base: string, sessionId: string, provider: string, modelId?: string) =>
   apiPostE<{ status: string; provider?: string }>(
@@ -108,7 +109,7 @@ export const pinProject = (base: string, projectId: string) =>
   apiPostE<{ status: string; pinned: boolean; project_id: string }>(
     `${base}/projects/${encodeURIComponent(projectId)}/pin`,
     {},
-  );
+  ).pipe(Effect.tap(() => invalidateProjectOptions()));
 
 export async function createSessionInProject(
   base: string,

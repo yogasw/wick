@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/svelte";
 
 const saveTeamSettings = vi.fn();
 vi.mock("../../../api/team.js", async (orig) => ({
@@ -320,7 +320,8 @@ describe("TicketsPage", () => {
     const { onRoute } = mount(["p1"], { project: "p1", ticket: "T-7" });
     const page = await screen.findByTestId("tickets-ticket");
     expect(page.dataset.ticket).toBe("T-7");
-    expect(await screen.findByText("Seven")).toBeTruthy();
+    // The title is on the page (and, once read, in the composer's footer).
+    expect(await within(screen.getByTestId("tickets-ticket-scroll")).findByText("Seven")).toBeTruthy();
     expect(getTicket.mock.calls[0][1]).toBe("T-7");
     // The route's project travels with the ticket id (ids are per project).
     expect(getTicket.mock.calls[0][2]).toBe("p1");
@@ -336,6 +337,17 @@ describe("TicketsPage", () => {
     expect(screen.queryByTestId("ticket-room-note")).toBeNull();
     expect(screen.getByTestId("ticket-composer")).toBeTruthy();
     expect(screen.getByTestId("ticket-composer-responder").textContent).toContain("your Captain");
+  });
+
+  test("the composer floats under the ticket's own scroll and names the ticket by its title", async () => {
+    mount(["p1"], { project: "p1", ticket: "T-7" });
+    await within(screen.getByTestId("tickets-ticket-scroll")).findByText("Seven");
+    const composer = screen.getByTestId("ticket-composer");
+    // Outside the scrolling column, so a long ticket never scrolls it away.
+    expect(screen.getByTestId("tickets-ticket-scroll").contains(composer)).toBe(false);
+    const box = composer.querySelector("textarea")!;
+    await waitFor(() => expect(box.getAttribute("placeholder")).toContain("Ask anything on Seven…"));
+    expect(box.getAttribute("placeholder")).not.toContain("T-7");
   });
 
   test("sending starts a Captain session on the ticket and opens it", async () => {

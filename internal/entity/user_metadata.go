@@ -158,12 +158,17 @@ const (
 )
 
 // TicketFilter is one saved ticket-board filter: which statuses to show,
-// whose tickets ("" = everyone, "me", or a user ID), and the last view
-// mode ("list" | "card") the user picked on that project page.
+// whose tickets, and the last view mode ("list" | "card") the user picked
+// on that project page.
 type TicketFilter struct {
 	Statuses []string `json:"statuses,omitempty"`
-	Assignee string   `json:"assignee,omitempty"`
-	ViewMode string   `json:"view_mode,omitempty"`
+	// Assignee is the old single pick ("" = everyone, "me", or a user ID).
+	// Only read now: Migrated folds it into Assignees.
+	Assignee string `json:"assignee,omitempty"`
+	// Assignees are the people ticked: user IDs, "me" and "none" (no
+	// assignee). Empty = everyone.
+	Assignees []string `json:"assignees,omitempty"`
+	ViewMode  string   `json:"view_mode,omitempty"`
 	// ShowUntracked adds the board's untracked chats to what is fetched.
 	// Load-bearing, not cosmetic: without it the client never asks for that
 	// list, so a project with hundreds of loose chats costs nothing extra to
@@ -171,6 +176,22 @@ type TicketFilter struct {
 	// chats is something one opts into looking at. The zero value being
 	// "don't fetch" is why this is spelled Show rather than Hide.
 	ShowUntracked bool `json:"show_untracked,omitempty"`
+}
+
+// Migrated is f in the current shape: a filter saved before Assignees
+// existed comes back with its single Assignee as a one-entry list, so an
+// old saved "only me" keeps filtering to me. A single pick an older build
+// can read ("me" or an id, never "none") is mirrored back into Assignee,
+// so rolling back does not turn every filter saved since into "Everyone".
+func (f TicketFilter) Migrated() TicketFilter {
+	if len(f.Assignees) == 0 && f.Assignee != "" {
+		f.Assignees = []string{f.Assignee}
+	}
+	f.Assignee = ""
+	if len(f.Assignees) == 1 && f.Assignees[0] != "none" {
+		f.Assignee = f.Assignees[0]
+	}
+	return f
 }
 
 const (

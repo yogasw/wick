@@ -10,6 +10,8 @@ import type {
   TicketFilter,
 } from "../types/agents.js";
 import { forgetBoards } from "../ticketBoardCache.js";
+import { migrateTicketFilter } from "../ticketAssigneeFilter.js";
+import { invalidateProjectOptions } from "./projectOptionsCache.js";
 
 /* A write that can change a project's board drops its cached boards
    (ticketBoardCache), once it has succeeded. No project named = every
@@ -31,7 +33,8 @@ export type BoardOptions = {
   rows?: number;
   /** Only these statuses. Omitted = every column; `[]` = no cards at all. */
   statuses?: string[];
-  /** Only this person's tickets. "" = everyone, "me" resolves server-side. */
+  /** Only these people's tickets: a comma list of user ids, "me" (resolved
+      server-side) and "none" (unassigned). ""/absent = everyone. */
   assignee?: string;
   /** Ask for the untracked rows. Off unless switched on — the rail is the
       board's most expensive part and stays unbuilt until wanted. Its COUNT
@@ -285,15 +288,18 @@ export const deleteNote = (base: string, scope: NotesScope, noteId: string) =>
 
 /* ── project config + saved board filter ─────────────────────────────── */
 
+/* ticket_enabled rides on every project-options row (a chat's board jump
+   keys off it), so a saved config drops those cached rows. */
 export const saveTicketConfig = (base: string, projectId: string, cfg: TicketConfig) =>
   apiPutE<{ status: string }>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/ticket-config`,
     cfg,
-  );
+  ).pipe(Effect.tap(() => invalidateProjectOptions()));
 
 export const getTicketFilter = (base: string, projectId: string) =>
   apiGetE<TicketFilter>(`${base}/api/me/ticket-filters/${encodeURIComponent(projectId)}`).pipe(
-    Effect.map((f) => f ?? {}),
+    // An older server still answers with the single `assignee`.
+    Effect.map((f) => migrateTicketFilter(f ?? {})),
   );
 
 export const saveTicketFilter = (base: string, projectId: string, f: TicketFilter) =>

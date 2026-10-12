@@ -35,8 +35,8 @@
   import { sendMessage } from "./lib/api/messages.js";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
-  import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
-  import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
+  import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel, type TicketsRoute } from "./lib/agentsRouter.js";
+  import { connectorCaption, hiddenTabsFor, type AgentMode } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, makeCaptain, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
@@ -366,12 +366,31 @@
   }
 
   /* Team › Tickets: a ticket's chat opens in its agent's Team chat when it
-     is a chat with one of the roster's agents, else in Agents › Projects. */
-  async function openTicketSession(id: string) {
+     is a chat with one of the roster's agents, else right here on the
+     Tickets page (/team/tickets/…/s/<id>) — never out to Agents › Projects.
+     Who may open it is the server's call, as everywhere else. */
+  async function openTicketSession(id: string, project?: string) {
     const t = await sessionTarget(base, id, agents);
     if (t.kind === "team") navigate({ handle: t.handle, session: t.session, panel: null });
+    else if (project) navigate({ handle: null, session: null, panel: null, tickets: { project, ticket: route.tickets?.ticket, session: id } });
     else window.location.href = t.href;
   }
+  /* Ticket titles seen on the Tickets page, "<project>/<ticket>" → title,
+     so the back link from a chat names the ticket; the id stands in after
+     a reload straight onto the chat. */
+  let ticketTitles = $state<Record<string, string>>({});
+  /* Back from a chat opened on the Tickets page: to its ticket, or to the
+     board when it came from the board's rail. */
+  const ticketsBack = $derived<TicketsRoute>(
+    route.tickets?.project && route.tickets.ticket ? { project: route.tickets.project, ticket: route.tickets.ticket } : {},
+  );
+  /* A project chat opened in Team: the session view as on /sessions (its
+     own header), but a ticket jump stays in Team and a delete comes back
+     here instead of to the /sessions list. */
+  const ticketSessionMode = $derived<AgentMode>({
+    onDeleted: () => go({ tickets: ticketsBack }),
+    onOpenTicket: openTicketInTeam,
+  });
 
   /* The rail's jump from a chat: Team › Tickets in place, and the project
      put on the Tickets selection when missing. Saving is best-effort and
@@ -888,6 +907,34 @@
   <!-- Drawn before the roster is in, so the page's own reads start at
        once; a roster with no Captain then sends the page to /team. -->
   <section class="flex min-w-0 flex-1 flex-col">
+    {#if route.tickets.session}
+    <!-- A chat opened from the Tickets page, drawn here so Team stays put;
+         its back link returns to the ticket (or the board). -->
+    <div class="flex shrink-0 items-center gap-2 border-b border-white-300 px-2 py-1.5 dark:border-navy-600" data-testid="tickets-session-bar">
+      <button
+        type="button"
+        class="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+        aria-label="Agent list"
+        onclick={() => (rosterOpen = true)}
+      >
+        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+      </button>
+      <button
+        type="button"
+        class="inline-flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+        data-testid="tickets-session-back"
+        onclick={() => go({ tickets: ticketsBack })}
+      >
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <span class="truncate">{ticketsBack.ticket ? (ticketTitles[`${ticketsBack.project}/${ticketsBack.ticket}`] ?? ticketsBack.ticket) : "Tickets"}</span>
+      </button>
+    </div>
+    <div class="relative min-h-0 flex-1">
+      {#key route.tickets.session}
+        <DetailView {base} sessionId={route.tickets.session} agentMode={ticketSessionMode} />
+      {/key}
+    </div>
+    {:else}
     <!-- The board has the Tickets header; a ticket's page has its own
          "← Tickets · id · 📁 project" row instead (mockup renderHeader). -->
     {#if !(route.tickets.project && route.tickets.ticket)}
@@ -938,10 +985,12 @@
         route={route.tickets}
         onPicked={(s) => (ticketProjects = s.ticket_projects ?? [])}
         onRoute={(t) => go({ tickets: t })}
-        onOpenSession={(id) => void openTicketSession(id)}
+        onOpenSession={(id, project) => void openTicketSession(id, project)}
         captainName={agents.find((a) => a.is_captain)?.name ?? ""}
+        onTicketTitle={(p, t, title) => { ticketTitles[`${p}/${t}`] = title; }}
       />
     </div>
+    {/if}
   </section>
   {:else}
   <section class="flex min-w-0 flex-1 flex-col">

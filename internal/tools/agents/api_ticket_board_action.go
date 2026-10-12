@@ -10,7 +10,6 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/ticket"
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -24,7 +23,8 @@ const maxBoardActionTickets = 500
 // was clicked. Same vocabulary as the board's own query params, so a client
 // sends back exactly what it asked the board for.
 type boardActionRequest struct {
-	// Assignee is "" (everyone), "me", or a user id.
+	// Assignee is "" (everyone), "me", or a user id — or a comma list of
+	// those plus "none", as the board's own ?assignee= takes.
 	Assignee string `json:"assignee"`
 	// Statuses are the selected columns; empty means all of them.
 	Statuses []string `json:"statuses"`
@@ -220,12 +220,14 @@ func buildBoardContext(
 	req boardActionRequest,
 ) ticket.BoardContext {
 	out := ticket.BoardContext{Assignee: strings.TrimSpace(req.Assignee)}
-	out.AssigneeID = out.Assignee
-	if out.Assignee == "me" {
-		out.AssigneeID = ""
-		if u := login.GetUser(c.Context()); u != nil {
-			out.AssigneeID = u.ID
-		}
+	filter := parseAssigneeFilter(out.Assignee, actorID(c))
+	out.AssigneeFiltered = filter.active()
+	out.AssigneeNone = filter.none
+	out.AssigneeIDs = filter.sortedIDs()
+	// AssigneeID names one person; a list of several (or "none") has no
+	// one id to give — AssigneeFiltered and AssigneeIDs say what it was.
+	if !filter.none && len(out.AssigneeIDs) == 1 {
+		out.AssigneeID = out.AssigneeIDs[0]
 	}
 	if out.AssigneeID != "" {
 		// Name AND email: a receiver matching people by hand-kept ids needs
@@ -255,7 +257,7 @@ func buildBoardContext(
 	if err != nil {
 		return out
 	}
-	out.Tickets, out.MatchCount, out.Truncated = selectBoardTickets(tickets, want, out.AssigneeID)
+	out.Tickets, out.MatchCount, out.Truncated = selectBoardTickets(tickets, want, filter)
 	return out
 }
 
@@ -268,14 +270,14 @@ func buildBoardContext(
 func selectBoardTickets(
 	tickets []ticket.Ticket,
 	wantStatus map[string]bool,
-	assigneeID string,
+	assignees assigneeFilter,
 ) (rows []ticket.BoardTicket, matched int, truncated bool) {
 	rows = make([]ticket.BoardTicket, 0, len(tickets))
 	for _, t := range tickets {
 		if len(wantStatus) > 0 && !wantStatus[t.Status] {
 			continue
 		}
-		if assigneeID != "" && !t.HasAssignee(assigneeID) {
+		if !assignees.matches(t) {
 			continue
 		}
 		matched++

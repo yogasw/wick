@@ -1,7 +1,7 @@
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, beforeEach } from "vitest";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform";
-import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../options.js";
+import { getProviderOptions, getProjectOptions, switchProvider, moveProject, invalidateProjectOptions } from "../options.js";
 import type { ProviderOption, ProjectOption } from "../../types/agents.js";
 
 /* ProviderOption and ProjectOption are used as type annotations in fixture constants below */
@@ -58,6 +58,9 @@ describe("getProviderOptions", () => {
 });
 
 describe("getProjectOptions", () => {
+  // Answers are cached per URL; each case brings its own response.
+  beforeEach(() => invalidateProjectOptions());
+
   test("parses project options array from response", async () => {
     const result = await Effect.runPromise(
       getProjectOptions("/tools/agents").pipe(

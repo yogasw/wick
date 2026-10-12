@@ -8,6 +8,7 @@
        moved to a different ticket or taken off tickets entirely.
      - On nothing: offers to create a ticket from this chat, or attach it to
        an existing one. */
+  import type { Snippet } from "svelte";
   import type { Note, TicketCard, TicketField, TicketStatus } from "../types/agents.js";
   import NotesPanel from "./NotesPanel.svelte";
   import TicketFields from "./TicketFields.svelte";
@@ -64,6 +65,9 @@
        IS both, and a link to a tab that is not in the strip is a dead end. */
     onOpenNotes?: () => void;
     onChanged?: () => void;
+    /* "In this session": who answers here, drawn by the host (it owns the
+       turns and the Session tab this links to). Shown on a ticket only. */
+    sessionSummary?: Snippet;
   };
 
   let {
@@ -81,6 +85,7 @@
     openLabel,
     onOpenNotes,
     onChanged,
+    sessionSummary,
   }: Props = $props();
 
   /* The rail does not fetch the board, so its status choices arrive with
@@ -356,6 +361,10 @@
 
 <div class="flex h-full flex-col overflow-y-auto p-4">
   <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Ticket</h3>
+
+  {#if ticket && sessionSummary}
+    <div class="mt-2" data-testid="ticket-session-summary">{@render sessionSummary()}</div>
+  {/if}
 
   {#if ticket}
     <div class="mt-2 rounded-lg border border-white-300 bg-white-200 p-3 dark:border-navy-600 dark:bg-navy-800">

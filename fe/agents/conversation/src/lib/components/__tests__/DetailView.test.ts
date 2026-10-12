@@ -36,6 +36,8 @@ vi.mock("effect", () => ({
     runPromise: vi.fn().mockReturnValue(new Promise(() => {})),
     provide: vi.fn((eff: unknown) => eff),
     map: vi.fn(() => (eff: unknown) => eff),
+    // api/team.ts builds a tap at import time (cache invalidation).
+    tap: vi.fn(() => (eff: unknown) => eff),
     either: vi.fn((eff: unknown) => ({ either: eff })),
   },
   Either: { isRight: (r: { _tag?: string }) => r?._tag === "Right" },
