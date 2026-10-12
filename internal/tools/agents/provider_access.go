@@ -249,6 +249,7 @@ const (
 	ownerPermStorage         = "storage_sync"
 	ownerPermRescan          = "rescan"
 	ownerPermSessions        = "view_sessions"
+	ownerPermFailover        = "failover"
 )
 
 // ownerPermKeys is every owner permission, in the order the detail page
@@ -258,6 +259,7 @@ var ownerPermKeys = []string{
 	ownerPermBinary, ownerPermExtraMCP, ownerPermExternalSkills, ownerPermSandbox,
 	ownerPermAIRouter, ownerPermAIRouterRawConf, ownerPermAuthFrom,
 	ownerPermRename, ownerPermDelete, ownerPermStorage, ownerPermRescan, ownerPermSessions,
+	ownerPermFailover,
 }
 
 // ownerPermDefaults is what a permission the instance does not store reads
@@ -280,6 +282,9 @@ var ownerPermDefaults = map[string]bool{
 	ownerPermStorage:         true,
 	ownerPermRescan:          true,
 	ownerPermSessions:        true,
+	// Failover only moves turns between instances the session could pick
+	// anyway; the save handler refuses a target the owner may not use.
+	ownerPermFailover: true,
 }
 
 // isOwnerPerm reports whether perm names a known owner permission.

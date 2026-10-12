@@ -250,7 +250,8 @@ func stubProviderInstances(t *testing.T, store map[string]provider.Instance) {
 // default, and an instance's stored value wins over it.
 func TestOwnerPermDefaults(t *testing.T) {
 	on := []string{ownerPermConfigure, ownerPermModels, ownerPermEnv, ownerPermExtraArgs,
-		ownerPermRename, ownerPermDelete, ownerPermAIRouter, ownerPermStorage, ownerPermRescan, ownerPermSessions}
+		ownerPermRename, ownerPermDelete, ownerPermAIRouter, ownerPermStorage, ownerPermRescan, ownerPermSessions,
+		ownerPermFailover}
 	off := []string{ownerPermBinary, ownerPermExtraMCP, ownerPermExternalSkills, ownerPermSandbox,
 		ownerPermAIRouterRawConf, ownerPermAuthFrom}
 	eff := effectiveOwnerPerms(nil)

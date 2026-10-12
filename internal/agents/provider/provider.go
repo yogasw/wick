@@ -205,6 +205,11 @@ type Instance struct {
 	// WickConfig holds wick's instance-level settings (tools, context
 	// budget, generation defaults). nil = defaults / other types.
 	WickConfig *WickConfig
+
+	// Failover is where a turn moves when this instance hits a usage
+	// limit, an auth error or an outage. nil = never configured; read it
+	// through EffectiveFailover. See failover_config.go.
+	Failover *FailoverConfig
 }
 
 // WickModel mirrors userconfig.WickModel in-memory — one registered
@@ -683,6 +688,8 @@ func Rename(t Type, oldName, newName string) error {
 					(*list)[j].AuthFrom = newName
 				}
 			}
+			// So do failover chains pointing at it, on every type.
+			renameFailoverTargets(&cfg.Providers, InstanceTag(t, oldName), InstanceTag(t, newName))
 			if err := userconfig.Save(AppName(), cfg); err != nil {
 				return err
 			}
@@ -703,6 +710,7 @@ func Rename(t Type, oldName, newName string) error {
 			seeded.OMPProfile, seeded.OpencodeDataDir = accountConfigToUser(ins)
 		}
 		*list = append(*list, seeded)
+		renameFailoverTargets(&cfg.Providers, InstanceTag(t, oldName), InstanceTag(t, newName))
 		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
@@ -783,6 +791,8 @@ func Delete(t Type, name string) error {
 	for i := range *list {
 		if (*list)[i].Name == name {
 			*list = append((*list)[:i], (*list)[i+1:]...)
+			// Chains pointing at it, on every type, lose that target.
+			pruneFailoverTargets(&cfg.Providers, InstanceTag(t, name))
 			if err := userconfig.Save(AppName(), cfg); err != nil {
 				return err
 			}
@@ -1090,6 +1100,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			ins.IdleCompactMatch = raw.IdleCompactMatch
 			ins.AuthFrom = raw.AuthFrom
 			ins.OwnerPerms = raw.OwnerPerms
+			ins.Failover = failoverFromUser(raw.Failover)
 			if t == TypeOpencode && ins.OpencodeConfig == nil {
 				ins.OpencodeConfig = &OpencodeConfig{}
 			}
@@ -1181,6 +1192,7 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw.IdleCompactMatch = ins.IdleCompactMatch
 	raw.AuthFrom = ins.AuthFrom
 	raw.OwnerPerms = ins.OwnerPerms
+	raw.Failover = failoverToUser(ins.Failover)
 	if ins.OpencodeConfig != nil {
 		raw.OpencodeModel = ins.OpencodeConfig.Model
 		raw.OpencodeAllowHosted = boolPtr(ins.OpencodeConfig.AllowHosted)

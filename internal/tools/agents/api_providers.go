@@ -52,6 +52,9 @@ type ProviderInstanceDTO struct {
 	// IdleCompact is the instance's compact-when-idle policy, nil when it
 	// is off, so the list can show it without opening the detail page.
 	IdleCompact *IdleCompactDTO `json:"idle_compact,omitempty"`
+	// Failover summarizes the instance's failover chain, nil when it
+	// never saved one (the default: off).
+	Failover *FailoverSummaryDTO `json:"failover,omitempty"`
 }
 
 // IdleCompactDTO is an enabled idle-compact policy with defaults filled in.
@@ -100,6 +103,9 @@ type ProviderStatusDTO struct {
 	// it and force a usage re-check?" — admins always, everyone else by
 	// manage tag. Never implies permission to edit configuration.
 	CanManage bool `json:"can_manage"`
+	// Health is the instance's login health for failover (healthy,
+	// limited, auth_failed, …). Empty while nothing reports it.
+	Health string `json:"health,omitempty"`
 }
 
 // SpawnLogFileDTO is a parsed spawn log file entry.
@@ -365,6 +371,7 @@ type ProviderCapsDTO struct {
 	StorageSync       bool `json:"storage_sync"`
 	Rescan            bool `json:"rescan"`
 	ViewSessions      bool `json:"view_sessions"`
+	Failover          bool `json:"failover"`
 }
 
 // ProviderDetailResponse is the JSON envelope for GET /api/providers/{type}/{name}.
@@ -521,6 +528,7 @@ func providerStatusDTO(st provider.Status, caps map[string]view.ProviderCapVM) P
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
 			IdleCompact:   idleCompactDTO(st.Instance),
+			Failover:      failoverSummaryDTO(st.Instance),
 		},
 		Path:        st.Path,
 		PathFound:   st.PathFound,
@@ -803,6 +811,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		StorageSync:       canProviderDo(c, t, name, ownerPermStorage),
 		Rescan:            canProviderDo(c, t, name, ownerPermRescan),
 		ViewSessions:      canProviderDo(c, t, name, ownerPermSessions),
+		Failover:          canProviderDo(c, t, name, ownerPermFailover),
 	}
 	airouterDTO := aiRouterDetailDTO(st.Instance)
 	if !isAdmin {

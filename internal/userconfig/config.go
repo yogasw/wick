@@ -352,6 +352,30 @@ type ProviderInstance struct {
 	// WickConfig holds the wick provider's instance-level settings
 	// (tools, context budget, generation defaults). nil = defaults.
 	WickConfig *WickConfig `json:"wick_config,omitempty"`
+
+	// Failover is this instance's failover chain: where a turn moves when
+	// the instance hits a usage limit, an auth error or an outage. nil =
+	// never configured (provider.DefaultFailover, which is off).
+	Failover *FailoverConfig `json:"failover,omitempty"`
+}
+
+// FailoverConfig is the persisted form of provider.FailoverConfig. Once
+// stored it is read as-is: an explicit false / empty list is kept, the
+// defaults only apply while the whole block is absent.
+type FailoverConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Triggers: "limit", "auth", "unavailable".
+	Triggers       []string         `json:"triggers,omitempty"`
+	Chain          []FailoverTarget `json:"chain,omitempty"`
+	RecheckMinutes int              `json:"recheck_minutes,omitempty"`
+	ReturnHome     bool             `json:"return_home,omitempty"`
+}
+
+// FailoverTarget is one step of a failover chain: an instance tag
+// ("type/name") and the model pin it runs with ("" = its default).
+type FailoverTarget struct {
+	Instance string `json:"instance"`
+	ModelID  string `json:"model_id,omitempty"`
 }
 
 // WickModel is one registered custom model on the wick provider.
