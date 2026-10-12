@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/pkg/tool"
@@ -27,8 +29,28 @@ import (
 // isTicketSession reports whether sess is an ordinary ticket session:
 // on a ticket, and neither a room, a group chat nor a backing session.
 func isTicketSession(sess session.Session) bool {
-	m := sess.Meta
-	return m.TicketID != "" && m.ProjectID != "" && m.TicketRoom == nil && m.AgentGroup == nil && m.GroupSessionID == ""
+	return team.IsTicketSession(sess.Meta)
+}
+
+// errTicketSessionFiles refuses files from anyone but a ticket session's
+// owner: only the home agent takes them.
+const errTicketSessionFiles = "files go to this session's own agent only — send the text alone to reach your agent"
+
+// ticketSessionOwner reports whether the caller is ticket session sess's
+// owner — the one person its home agent answers, and whose Stop reaches
+// its run. An ownerless session has none.
+func ticketSessionOwner(c *tool.Ctx, sess session.Session) bool {
+	actor := actorID(c)
+	return actor != "" && actor == sess.Meta.UserID
+}
+
+// ticketSessionRefusesFiles reports whether files sent to session id must
+// be refused before they are saved: an ordinary ticket session, and the
+// sender not its owner (anything they send reaches their own agent, which
+// takes no files).
+func ticketSessionRefusesFiles(c *tool.Ctx, id string) bool {
+	sess, ok := globalMgr.Registry().Session(id)
+	return ok && isTicketSession(sess) && !ticketSessionOwner(c, sess)
 }
 
 // ticketSessionPlan is who a message in a ticket session reaches.
@@ -53,10 +75,15 @@ type ticketSessionPlan struct {
 }
 
 // planTicketSessionMessage routes text from sender in a ticket session
-// owned by owner whose home agent is homeAgentID ("" = the project
-// default). own is the sender's own Team agents; senderHandle their
+// owned by owner ("" = nobody: everyone is answered by their own). own is the sender's own Team agents; senderHandle their
 // person handle, so "@yoga/research" from yoga is their own @research.
-func planTicketSessionMessage(text, owner, homeAgentID, sender, senderHandle string, own []teamlink.Peer) ticketSessionPlan {
+func planTicketSessionMessage(text, owner, sender, senderHandle string, own []teamlink.Peer) ticketSessionPlan {
+	if owner != "" && sender == owner {
+		// The owner talks to their own agent as in any session: its
+		// @mentions — their own agents, sub-agent roles, anyone else's —
+		// go through the existing Team hand-off (TeamMentionRouter).
+		return ticketSessionPlan{Home: true}
+	}
 	var plan ticketSessionPlan
 	hit, unknown := teamlink.LeadMentions(text, own, false)
 	plan.Unknown = unknown
@@ -92,21 +119,13 @@ func planTicketSessionMessage(text, owner, homeAgentID, sender, senderHandle str
 		}
 	}
 	if plan.HasTarget {
-		// The owner naming the home agent is the home agent answering.
-		if sender == owner && homeAgentID != "" && plan.Target.ID == homeAgentID && len(plan.Extra) == 0 && len(plan.Foreign) == 0 {
-			return ticketSessionPlan{Home: true}
-		}
 		return plan
-	}
-	if sender == owner && len(hit) == 0 && len(plan.Foreign) == 0 {
-		// The owner's other @words (sub-agent roles, running instances)
-		// are the home agent's to route, as in any session.
-		return ticketSessionPlan{Home: true}
 	}
 	if len(hit) > 0 || len(plan.Foreign) > 0 || len(plan.Unknown) > 0 {
 		return plan // only refusals: nobody runs
 	}
-	// Someone else, no @: their own Captain answers; nobody is left
+	// Someone else (or anyone, in a session with no owner), no @: their
+	// own Captain answers; nobody is left
 	// without an answer, so with no Captain the project default does, run
 	// as them.
 	for _, p := range own {
@@ -158,12 +177,12 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 		return false
 	}
 	_, own := ownTeamPeers(c.Context(), sender)
-	plan := planTicketSessionMessage(text, sess.Meta.UserID, sess.Meta.AgentID, sender, personHandle(c.Context(), sender), own)
+	plan := planTicketSessionMessage(text, sess.Meta.UserID, sender, personHandle(c.Context(), sender), own)
 	if plan.Home {
 		return false
 	}
 	if hasFiles {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "files go to this session's own agent only — send the text alone to reach your agent"})
+		c.JSON(http.StatusBadRequest, map[string]string{"error": errTicketSessionFiles})
 		return true
 	}
 	if len(text) > roomTextMax {
@@ -203,11 +222,23 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 		} else {
 			id, err = groupBacking(c, sess.ID, plan.Target.ID)
 		}
+		if errors.Is(err, errNoProjectAgent) {
+			c.JSON(http.StatusForbidden, map[string]string{"error": err.Error()})
+			return true
+		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return true
 		}
 		backing[plan.Target.ID] = id
+		// The session may have been deleted meanwhile: a backing session
+		// just made for it would be an orphan.
+		if _, ok := globalMgr.Registry().Session(sess.ID); !ok {
+			stopRoomSession(c.Context(), id, "its ticket session was deleted")
+			_ = globalMgr.DeleteSession(c.Context(), id)
+			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+			return true
+		}
 	}
 
 	history, _ := loadConversation(globalLayout, sess.ID)
@@ -222,10 +253,7 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 	}
 	by := roomActorHandle(c)
 	if plan.Captain && !spokeIn(history, plan.Target.ID, sender) {
-		name := plan.Target.Name
-		if name == "" {
-			name = "@" + plan.Target.Handle
-		}
+		name := systemLineName(plan.Target.Name, plan.Target.Handle)
 		emitSystemEvent(sess.ID, store.KindGroupMemberAdded, fmt.Sprintf("%s · %s joined · by %s", name, by, by),
 			map[string]string{"agent_id": plan.Target.ID, "handle": plan.Target.Handle, "owner_id": sender})
 	}

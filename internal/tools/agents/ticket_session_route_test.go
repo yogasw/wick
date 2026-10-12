@@ -12,83 +12,80 @@ import (
 func TestPlanTicketSessionMessage(t *testing.T) {
 	yogaCap := teamlink.Peer{ID: "yc", OwnerID: "yoga", Handle: "captain", Name: "Captain", IsCaptain: true}
 	research := teamlink.Peer{ID: "yr", OwnerID: "yoga", Handle: "research", Name: "Research"}
-	writer := teamlink.Peer{ID: "yw", OwnerID: "yoga", Handle: "writer", Name: "Writer"}
-	off := teamlink.Peer{ID: "yo", OwnerID: "yoga", Handle: "off", Disabled: true}
-	yoga := []teamlink.Peer{yogaCap, research, writer, off}
+	yoga := []teamlink.Peer{yogaCap, research}
 	hanaCap := teamlink.Peer{ID: "hc", OwnerID: "hana", Handle: "captain", Name: "Captain", IsCaptain: true}
-	hana := []teamlink.Peer{hanaCap}
+	hanaRes := teamlink.Peer{ID: "hr", OwnerID: "hana", Handle: "research", Name: "Research"}
+	hanaWriter := teamlink.Peer{ID: "hw", OwnerID: "hana", Handle: "writer", Name: "Writer"}
+	hanaOff := teamlink.Peer{ID: "ho", OwnerID: "hana", Handle: "off", Disabled: true}
+	hana := []teamlink.Peer{hanaCap, hanaRes, hanaWriter, hanaOff}
 
-	t.Run("owner, no @: the home agent", func(t *testing.T) {
-		p := planTicketSessionMessage("check this", "yoga", "yc", "yoga", "yoga", yoga)
-		if !p.Home || p.HasTarget {
+	t.Run("owner: always the home agent, whatever is named", func(t *testing.T) {
+		// Their @mentions go through the existing Team hand-off.
+		for _, text := range []string{"check this", "@captain check", "@research dig", "@yoga/research dig", "@hana/captain hi", "@nobody hi"} {
+			if p := planTicketSessionMessage(text, "yoga", "yoga", "yoga", yoga); !p.Home || p.HasTarget || len(p.Unknown)+len(p.Foreign) != 0 {
+				t.Fatalf("%q: %+v", text, p)
+			}
+		}
+	})
+	t.Run("owner naming a sub-agent role and an own agent: nothing refused", func(t *testing.T) {
+		p := planTicketSessionMessage("@investigator check\n@research dig", "yoga", "yoga", "yoga", yoga)
+		if !p.Home || len(p.Unknown) != 0 || len(p.Refused) != 0 {
 			t.Fatalf("%+v", p)
 		}
 	})
-	t.Run("owner naming the home agent: still the home agent", func(t *testing.T) {
-		if p := planTicketSessionMessage("@captain check", "yoga", "yc", "yoga", "yoga", yoga); !p.Home {
-			t.Fatalf("%+v", p)
-		}
-	})
-	t.Run("owner naming another own agent: only that one", func(t *testing.T) {
-		p := planTicketSessionMessage("@research dig", "yoga", "yc", "yoga", "yoga", yoga)
-		if p.Home || !p.HasTarget || p.Target.ID != "yr" || p.Captain {
+	t.Run("someone else naming an own agent: only that one", func(t *testing.T) {
+		p := planTicketSessionMessage("@research dig", "yoga", "hana", "hana", hana)
+		if p.Home || !p.HasTarget || p.Target.ID != "hr" || p.Captain {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("own owner/handle form is an own mention", func(t *testing.T) {
-		p := planTicketSessionMessage("@yoga/research dig", "yoga", "yc", "yoga", "yoga", yoga)
-		if !p.HasTarget || p.Target.ID != "yr" || len(p.Foreign) != 0 {
+		p := planTicketSessionMessage("@hana/research dig", "yoga", "hana", "hana", hana)
+		if !p.HasTarget || p.Target.ID != "hr" || len(p.Foreign) != 0 {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("two agents named: one answers, never a broadcast", func(t *testing.T) {
-		p := planTicketSessionMessage("@research dig\n@writer draft", "yoga", "yc", "yoga", "yoga", yoga)
-		if !p.HasTarget || p.Target.ID != "yr" || len(p.Extra) != 1 || p.Extra[0] != "writer" {
+		p := planTicketSessionMessage("@research dig\n@writer draft", "yoga", "hana", "hana", hana)
+		if !p.HasTarget || p.Target.ID != "hr" || len(p.Extra) != 1 || p.Extra[0] != "writer" {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("someone else, no @: their own Captain, flagged to join", func(t *testing.T) {
-		p := planTicketSessionMessage("hi", "yoga", "yc", "hana", "hana", hana)
+		p := planTicketSessionMessage("hi", "yoga", "hana", "hana", hana)
 		if p.Home || !p.HasTarget || p.Target.ID != "hc" || !p.Captain {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("someone else with no Captain: the project default, as them", func(t *testing.T) {
-		p := planTicketSessionMessage("hi", "yoga", "yc", "ana", "ana", nil)
+		p := planTicketSessionMessage("hi", "yoga", "ana", "ana", nil)
 		if p.Home || !p.HasTarget || !p.Default {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("someone else naming the owner's agent: refused, nobody runs", func(t *testing.T) {
-		p := planTicketSessionMessage("@yoga/research dig", "yoga", "yc", "hana", "hana", hana)
+		p := planTicketSessionMessage("@yoga/research dig", "yoga", "hana", "hana", hana)
 		if p.Home || p.HasTarget || len(p.Foreign) != 1 || p.Foreign[0].Owner != "yoga" {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("someone else's @captain is their own Captain", func(t *testing.T) {
-		p := planTicketSessionMessage("@captain look", "yoga", "yc", "hana", "hana", hana)
+		p := planTicketSessionMessage("@captain look", "yoga", "hana", "hana", hana)
 		if !p.HasTarget || p.Target.ID != "hc" || p.Captain {
 			t.Fatalf("%+v", p)
 		}
 	})
 	t.Run("unknown or disabled names run nobody", func(t *testing.T) {
-		if p := planTicketSessionMessage("@nobody hi", "yoga", "yc", "hana", "hana", hana); p.Home || p.HasTarget || len(p.Unknown) != 1 {
+		if p := planTicketSessionMessage("@nobody hi", "yoga", "hana", "hana", hana); p.Home || p.HasTarget || len(p.Unknown) != 1 {
 			t.Fatalf("%+v", p)
 		}
-		if p := planTicketSessionMessage("@off hi", "yoga", "yc", "yoga", "yoga", yoga); p.Home || p.HasTarget || len(p.Refused) != 1 {
-			t.Fatalf("%+v", p)
-		}
-	})
-	t.Run("the owner's other @words stay with the home agent (sub-agent roles)", func(t *testing.T) {
-		if p := planTicketSessionMessage("@investigator check", "yoga", "yc", "yoga", "yoga", yoga); !p.Home {
+		if p := planTicketSessionMessage("@off hi", "yoga", "hana", "hana", hana); p.Home || p.HasTarget || len(p.Refused) != 1 {
 			t.Fatalf("%+v", p)
 		}
 	})
-	t.Run("Agents side: a project-default home answers its owner only", func(t *testing.T) {
-		if p := planTicketSessionMessage("hi", "yoga", "", "yoga", "yoga", yoga); !p.Home {
-			t.Fatalf("%+v", p)
-		}
-		if p := planTicketSessionMessage("hi", "yoga", "", "hana", "hana", hana); p.Home || p.Target.ID != "hc" {
+	t.Run("a session with no owner: everyone is answered by their own Captain", func(t *testing.T) {
+		p := planTicketSessionMessage("hi", "", "hana", "hana", hana)
+		if p.Home || !p.HasTarget || p.Target.ID != "hc" || !p.Captain {
 			t.Fatalf("%+v", p)
 		}
 	})
@@ -127,7 +124,7 @@ func TestTicketSessionTurnOwnerAndRefusal(t *testing.T) {
 	hist := []store.ConversationTurn{{Role: "assistant", Speaker: &store.Speaker{AgentID: "yr", Handle: "research", Name: "Research", OwnerID: "yoga", OwnerHandle: "yoga"}}}
 	own := []teamlink.Peer{{ID: "hc", Handle: "captain", IsCaptain: true}}
 	got := foreignRefusal(foreignMention{Owner: "yoga", Handle: "research"}, own, hist)
-	if got != "Research only takes instructions from @yoga. Ask them, or mention your own @captain." {
+	if got != `"Research" only takes instructions from @yoga. Ask them, or mention your own @captain.` {
 		t.Fatalf("refusal %q", got)
 	}
 	if got := foreignRefusal(foreignMention{Owner: "yoga", Handle: "writer"}, own, hist); !strings.HasPrefix(got, "@writer only takes instructions from @yoga.") {

@@ -685,7 +685,7 @@ func TestTicketRoomForeignLabelAndCaptainHint(t *testing.T) {
 	if got := foreignLabel(f, ""); got != "@scout" {
 		t.Fatalf("unresolved label = %q", got)
 	}
-	if got := foreignLabel(f, "Scout"); got != "Scout" {
+	if got := foreignLabel(f, "Scout"); got != `"Scout"` {
 		t.Fatalf("member label = %q", got)
 	}
 	if got := ownCaptainHint([]teamlink.Peer{{Handle: "ops"}, {Handle: "skipper", IsCaptain: true}}); got != "mention your own @skipper" {

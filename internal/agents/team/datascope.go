@@ -190,6 +190,9 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 // person may open the project, and the ticket still exists with the room
 // on it. Removing the member, losing the project, deleting the ticket or
 // moving the room off it ends it on the next call; nothing is cached.
+// A backing session under an ordinary ticket session (IsTicketSession)
+// reaches that session's ticket the same way, with no member list to
+// check.
 func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (projectID, ticketID string, ok bool) {
 	if callingSID == "" {
 		return "", "", false
@@ -199,17 +202,27 @@ func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (p
 		return "", "", false
 	}
 	room, err := session.Load(layout, sess.Meta.GroupSessionID)
-	if err != nil || room.Meta.TicketRoom == nil || room.Meta.ProjectID == "" {
+	if err != nil || room.Meta.ProjectID == "" {
 		return "", "", false
 	}
-	tr := room.Meta.TicketRoom
 	owner := sess.Meta.UserID
-	if sess.Meta.AgentID != "" {
-		if _, member := tr.Member(sess.Meta.AgentID, owner); !member {
+	tid := room.Meta.TicketID
+	switch tr := room.Meta.TicketRoom; {
+	case tr != nil:
+		tid = tr.TicketID
+		if sess.Meta.AgentID != "" {
+			if _, member := tr.Member(sess.Meta.AgentID, owner); !member {
+				return "", "", false
+			}
+		} else if home, has := tr.Home(); !has || home.Kind != session.RoomMemberProjectDefault {
+			// A backing session with no agent is the project default's.
 			return "", "", false
 		}
-	} else if home, has := tr.Home(); !has || home.Kind != session.RoomMemberProjectDefault {
-		// A backing session with no agent is the project default's.
+	case IsTicketSession(room.Meta):
+		// An ordinary ticket session has no member list: whoever's agent
+		// answered in it reaches its ticket, as long as they may open the
+		// project and the ticket still lists the session.
+	default:
 		return "", "", false
 	}
 	p, err := project.Load(layout, room.Meta.ProjectID)
@@ -225,11 +238,27 @@ func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (p
 	}
 	// The ticket is the record: a room it no longer lists (moved, or the
 	// ticket gone by any path) grants nothing.
-	tk, err := ticket.Load(layout, room.Meta.ProjectID, tr.TicketID)
+	tk, err := ticket.Load(layout, room.Meta.ProjectID, tid)
 	if err != nil || !listsSession(tk, room.ID) {
 		return "", "", false
 	}
-	return room.Meta.ProjectID, tr.TicketID, true
+	return room.Meta.ProjectID, tid, true
+}
+
+// IsTicketSession reports whether m is an ordinary ticket session's
+// (PLAN-team-tickets T12b): on a ticket, and neither a room, a group chat
+// nor a backing session. Its owner's own agent answers in it as in any
+// chat; a backing session under it answers another person there, reading
+// other people's text, and is held to a room's rules (InTicketRoom).
+func IsTicketSession(m session.Meta) bool {
+	return m.TicketID != "" && m.ProjectID != "" && m.TicketRoom == nil && m.AgentGroup == nil && m.GroupSessionID == ""
+}
+
+// ticketPlace reports whether a backing session under m answers in a
+// ticket room or an ordinary ticket session — the places held to a
+// room's rules.
+func ticketPlace(m session.Meta) bool {
+	return m.TicketRoom != nil || IsTicketSession(m)
 }
 
 func listsSession(tk ticket.Ticket, sid string) bool {
@@ -267,7 +296,7 @@ func RefuseRoomSession(layout config.Layout, sid string) error {
 		return ErrRoomSession
 	}
 	if g := sess.Meta.GroupSessionID; g != "" {
-		if room, err := session.Load(layout, g); err == nil && room.Meta.TicketRoom != nil {
+		if room, err := session.Load(layout, g); err == nil && ticketPlace(room.Meta) {
 			return ErrRoomSession
 		}
 	}
@@ -275,7 +304,9 @@ func RefuseRoomSession(layout config.Layout, sid string) error {
 }
 
 // InTicketRoom reports whether sid answers in a ticket room — a member's
-// backing session, or a sub-agent under one at any depth. Such a session
+// backing session, or a sub-agent under one at any depth. A backing
+// session under an ordinary ticket session counts too: it answers another
+// person there and reads everyone's text. Such a session
 // reaches its room's ticket (RoomTicket) and nothing else: not the rest of
 // the project it runs in, not other sessions.
 func InTicketRoom(layout config.Layout, sid string) bool {
@@ -310,7 +341,7 @@ func SessionInTicketRoom(layout config.Layout, sess session.Session) bool {
 		}
 		if sess.Meta.GroupSessionID != "" {
 			room, err := session.Load(layout, sess.Meta.GroupSessionID)
-			return err == nil && room.Meta.TicketRoom != nil
+			return err == nil && ticketPlace(room.Meta)
 		}
 		parent := sess.Meta.ParentSessionID
 		if parent == "" {

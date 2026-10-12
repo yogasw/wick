@@ -862,6 +862,10 @@ export type NotesResponse = {
       which is why it is optional rather than defaulted to false: the rail
       hides its Ticket tab on an explicit `false` and shows it otherwise. */
   ticket_enabled?: boolean;
+  /** An ordinary ticket session's owner (id, and person handle): its home
+      agent answers them only, so other viewers see whose it is. */
+  session_owner?: string;
+  session_owner_handle?: string;
   /** The ticket's project board columns, so the rail's status select offers
       the same choices as the board. */
   statuses?: TicketStatus[];

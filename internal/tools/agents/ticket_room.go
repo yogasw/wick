@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -20,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -161,10 +163,42 @@ type foreignMention struct {
 // when it is already in the room (roomForeignAgent), else its @handle —
 // a handle names no agent until its owner is known.
 func foreignLabel(f foreignMention, name string) string {
-	if name = strings.TrimSpace(name); name != "" {
-		return name
+	return systemLineName(name, f.Handle)
+}
+
+// systemLineNameMax caps an agent's display name in a system line.
+const systemLineNameMax = 40
+
+// systemLineName is an agent's free-text display name made safe for a
+// system line every agent reads: control and format characters (newlines,
+// bidi overrides) become spaces, runs of space collapse, the length is
+// capped, and the result is quoted so it reads as a name, never as an
+// instruction. A name with nothing left falls back to @handle.
+func systemLineName(name, handle string) string {
+	var b strings.Builder
+	space := false
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) || r == '\u2028' || r == '\u2029' {
+			space = true
+			continue
+		}
+		if r == '"' {
+			r = '\''
+		}
+		if space && b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		space = false
+		b.WriteRune(r)
 	}
-	return "@" + f.Handle
+	clean := []rune(b.String())
+	if len(clean) == 0 {
+		return "@" + handle
+	}
+	if len(clean) > systemLineNameMax {
+		clean = append(clean[:systemLineNameMax-1], '…')
+	}
+	return `"` + string(clean) + `"`
 }
 
 // roomForeignAgent is the display name of the member of tr that f names
@@ -514,28 +548,7 @@ func endTicketRooms(ctx context.Context, projectID, ticketID string) {
 		if tr == nil || tr.TicketID != ticketID || s.Meta.ProjectID != projectID {
 			continue
 		}
-		// Breadth-first from the backing sessions down the parent links,
-		// then deleted deepest first so no child outlives its parent.
-		var doomed []string
-		seen := map[string]bool{}
-		for _, b := range all {
-			if b.Meta.GroupSessionID == s.ID && !seen[b.ID] {
-				seen[b.ID] = true
-				doomed = append(doomed, b.ID)
-			}
-		}
-		for i := 0; i < len(doomed); i++ {
-			for _, c := range all {
-				if c.Meta.ParentSessionID == doomed[i] && !seen[c.ID] {
-					seen[c.ID] = true
-					doomed = append(doomed, c.ID)
-				}
-			}
-		}
-		for i := len(doomed) - 1; i >= 0; i-- {
-			stopRoomSession(ctx, doomed[i], "its ticket was deleted")
-			_ = globalMgr.DeleteSession(ctx, doomed[i])
-		}
+		deleteBackings(ctx, all, s.ID, "its ticket was deleted")
 		if err := globalMgr.DeleteSession(ctx, s.ID); err != nil {
 			log.Ctx(ctx).Warn().Err(err).Str("session", s.ID).Msg("ticket room: delete with its ticket failed")
 		}
@@ -543,6 +556,37 @@ func endTicketRooms(ctx context.Context, projectID, ticketID string) {
 			cancelRoomRuns(s.ID, k, false)
 		}
 		forgetRoom(s.ID)
+	}
+}
+
+// errNoProjectAgent refuses running a project's default agent for someone
+// who may not open the project.
+var errNoProjectAgent = errors.New("you have no access to this project's agent")
+
+// deleteBackings stops and deletes the backing sessions under parentID (a
+// ticket room or an ordinary ticket session) and every sub-agent session
+// under those: breadth-first down the parent links, then deleted deepest
+// first so no child outlives its parent.
+func deleteBackings(ctx context.Context, all map[string]session.Session, parentID, reason string) {
+	var doomed []string
+	seen := map[string]bool{}
+	for _, b := range all {
+		if b.Meta.GroupSessionID == parentID && !seen[b.ID] {
+			seen[b.ID] = true
+			doomed = append(doomed, b.ID)
+		}
+	}
+	for i := 0; i < len(doomed); i++ {
+		for _, c := range all {
+			if c.Meta.ParentSessionID == doomed[i] && !seen[c.ID] {
+				seen[c.ID] = true
+				doomed = append(doomed, c.ID)
+			}
+		}
+	}
+	for i := len(doomed) - 1; i >= 0; i-- {
+		stopRoomSession(ctx, doomed[i], reason)
+		_ = globalMgr.DeleteSession(ctx, doomed[i])
 	}
 }
 
@@ -1117,6 +1161,10 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 		} else {
 			id, err = groupBacking(c, sess.ID, p.ID)
 		}
+		if errors.Is(err, errNoProjectAgent) {
+			c.JSON(http.StatusForbidden, map[string]string{"error": err.Error()})
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1299,6 +1347,12 @@ func roomTurnOwner(t store.ConversationTurn) string {
 // caller, created on first use.
 func roomDefaultBacking(c *tool.Ctx, roomID, projectID string) (string, error) {
 	owner := actorID(c)
+	// It runs in the project as owner: never for someone who may not
+	// open it — having spoken in the thread, or an admin's see-all,
+	// grants no project.
+	if u := login.GetUser(c.Context()); u != nil && !scopedProjectAccess(c.Context(), u).allowProject(projectID) {
+		return "", errNoProjectAgent
+	}
 	defer lockBacking(roomID, owner)()
 	for _, s := range globalMgr.Registry().Sessions() {
 		if s.Meta.GroupSessionID == roomID && s.Meta.AgentID == "" && s.Meta.UserID == owner {

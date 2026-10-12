@@ -13,8 +13,9 @@ export type TeamPeer = {
   disabled: boolean;
   /** "off" = takes no mention from another agent; hidden from `@`. */
   mention_from?: string;
-  /** Set on an agent someone else shared with the viewer: never offered
-      in the `@` menu, which lists the viewer's own agents only. */
+  /** Set on an agent someone else shared with the viewer: left out of the
+      `@` menu in a ticket session (ownOnly), where a mention reaches the
+      sender's own agents only. */
   shared_by?: string;
   avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null } | null;
 };
@@ -22,10 +23,10 @@ export type TeamPeer = {
 /** teamMentionAgents lists the owner's agents an agent's chat can @-mention:
     every agent but itself, the disabled ones and the ones whose mentions
     are off (the router refuses those), with a one-line tagline from the
-    description. */
-export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: string): ComposerMentionAgent[] {
+    description. ownOnly also leaves out agents shared with the viewer. */
+export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: string, ownOnly = false): ComposerMentionAgent[] {
   return (peers ?? [])
-    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle && !p.shared_by)
+    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle && !(ownOnly && p.shared_by))
     .map((p) => ({
       handle: p.handle,
       label: p.name || p.handle,

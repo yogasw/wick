@@ -6,7 +6,7 @@ outline: deep
 
 ## @mentions and handoff
 
-Type `@handle` in a chat to bring another Team agent in. The teammate's reply comes back into the thread. Group chats (`/tools/agents/team/g/<id>`) hold several agents in one conversation.
+Type `@handle` in a chat to bring another Team agent in. The teammate's reply comes back into the thread. Group chats (`/tools/agents/team/group/<id>`) hold several agents in one conversation.
 
 Agents reach each other with the built-in **Team** connector:
 

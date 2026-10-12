@@ -513,9 +513,41 @@ func agentChatViewer(ctx context.Context, uid string, sess session.Session, p en
 	case uid == sess.Meta.UserID:
 		return agentChatMember(ctx, p, uid)
 	case uid == p.OwnerUserID:
-		return agentChatMember(ctx, p, sess.Meta.UserID)
+		return agentChatMember(ctx, p, sess.Meta.UserID) && shareReachesProject(ctx, uid, sess, p)
+	}
+	if !shareReachesProject(ctx, uid, sess, p) {
+		return false
 	}
 	return chatHistoryOpen(ctx, p, uid) && chatHistoryOpen(ctx, p, sess.Meta.UserID)
+}
+
+// shareCrossesProject reports whether sess holds more than the agent's
+// own chat: a chat on a ticket, or outside the agent's project, carries
+// that project's work and other people's text (a ticket session).
+func shareCrossesProject(sess session.Session, p entity.AgentPersona) bool {
+	return sess.Meta.TicketID != "" || sess.Meta.ProjectID != p.ProjectID
+}
+
+// shareReachesProject reports whether a share may open sess to uid, who
+// is not its owner: a share hands over the agent's conversation, never a
+// project, so a chat that crosses into one (shareCrossesProject) opens
+// only to someone who may open that project themselves.
+func shareReachesProject(ctx context.Context, uid string, sess session.Session, p entity.AgentPersona) bool {
+	if uid == sess.Meta.UserID || !shareCrossesProject(sess, p) {
+		return true
+	}
+	u := login.GetUser(ctx)
+	if u == nil || u.ID != uid {
+		if globalAuth == nil {
+			return false
+		}
+		got, err := globalAuth.GetUserByID(ctx, uid)
+		if err != nil || got == nil {
+			return false
+		}
+		u = got
+	}
+	return projectAccessForUserCtx(ctx, u).allowProject(sess.Meta.ProjectID)
 }
 
 // errSharedReadOnly answers a change to another person's chat that the

@@ -970,7 +970,7 @@ var grantCache sync.Map
 // grants, tag-shared projects, tag-shared data tables — through a short
 // per-user cache. The returned map is SHARED: callers must copy before
 // adding to it.
-func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
+func cachedGrantSet(ctx context.Context, u *entity.User) map[string]struct{} {
 	if e, ok := grantCache.Load(u.ID); ok {
 		if ent := e.(grantCacheEntry); time.Now().Before(ent.expiry) {
 			return ent.set
@@ -978,9 +978,9 @@ func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
 	}
 	set := make(map[string]struct{})
 	if globalTagsSvc != nil {
-		got, err := globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
+		got, err := globalTagsSvc.AccessibleResourceIDs(ctx, u.ID)
 		if err != nil {
-			log.Ctx(c.Context()).Warn().Err(err).Msg("resolve accessible projects")
+			log.Ctx(ctx).Warn().Err(err).Msg("resolve accessible projects")
 		} else {
 			set = got
 		}
@@ -1000,7 +1000,7 @@ func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
 		// untagged project stays private to its owner instead of leaking to
 		// every authenticated user.
 		if globalAuth != nil &&
-			globalAuth.CanAccessSharedResource(c.Context(), u, "/projects/"+pid) {
+			globalAuth.CanAccessSharedResource(ctx, u, "/projects/"+pid) {
 			set[pid] = struct{}{}
 		}
 	}
@@ -1015,7 +1015,7 @@ func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
 			if _, ok := set[slug]; ok {
 				continue
 			}
-			if globalAuth.CanAccessSharedResource(c.Context(), u, "/data-tables/"+slug) {
+			if globalAuth.CanAccessSharedResource(ctx, u, "/data-tables/"+slug) {
 				set[slug] = struct{}{}
 			}
 		}
@@ -1050,6 +1050,13 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 // A nil user reaches nothing — unlike the caller path, where nil means an
 // internal call with no human to scope to.
 func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
+	return projectAccessForUserCtx(c.Context(), u)
+}
+
+// projectAccessForUserCtx is projectAccessForUser off a bare context, for
+// callers that ask about someone other than the request's user with no
+// request at hand (the share checks).
+func projectAccessForUserCtx(ctx context.Context, u *entity.User) projectAccess {
 	if u == nil {
 		return projectAccess{}
 	}
@@ -1060,7 +1067,14 @@ func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
 	if u.IsAdmin() && adminSeeAll() {
 		return projectAccess{seeAll: true}
 	}
-	grants := cachedGrantSet(c, u)
+	return scopedProjectAccess(ctx, u)
+}
+
+// scopedProjectAccess is the projects u reaches with no see-all bypass:
+// owned, tag-granted, or (for an admin) ownerless. Anything made to run
+// IN a project for u — not merely shown to them — is held to it.
+func scopedProjectAccess(ctx context.Context, u *entity.User) projectAccess {
+	grants := cachedGrantSet(ctx, u)
 	// Copied before the ownership union below: the cached map is shared
 	// across requests and must never be written to.
 	set := make(map[string]struct{}, len(grants)+8)
@@ -2166,6 +2180,12 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		reply = r
+		// Nor may anyone but its owner leave files in an ordinary ticket
+		// session: refused before they touch the disk.
+		if c.R.MultipartForm != nil && len(c.R.MultipartForm.File) > 0 && ticketSessionRefusesFiles(c, id) {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": errTicketSessionFiles})
+			return
+		}
 		saved, err := saveUploadsFromMultipart(c, id, c.Base())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -2372,11 +2392,16 @@ func dequeueAgent(c *tool.Ctx) {
 		return
 	}
 	// A ticket room queues nothing itself: the caller's own members queue
-	// in their backing sessions, so that is what gets dropped.
-	if sess.Meta.TicketRoom != nil {
+	// in their backing sessions, so that is what gets dropped. In an
+	// ordinary ticket session the same goes for anyone but its owner,
+	// whose own queue is the session's.
+	if sess.Meta.TicketRoom != nil || isTicketSession(sess) {
 		removed := cancelRoomRuns(id, actorID(c), true)
 		for _, b := range roomOwnBackings(c, id) {
 			removed += dequeueSession(b)
+		}
+		if isTicketSession(sess) && ticketSessionOwner(c, sess) {
+			removed += dequeueSession(sess)
 		}
 		c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
 		return
@@ -2655,11 +2680,20 @@ func killAgent(c *tool.Ctx) {
 	// A ticket room never runs a provider: the caller's own members run in
 	// their backing sessions, so stopping the room stops those — and only
 	// those, never another member's.
-	if sess.Meta.TicketRoom != nil {
+	// An ordinary ticket session is the same for anyone but its owner:
+	// their Stop never reaches the owner's own run.
+	if sess.Meta.TicketRoom != nil || isTicketSession(sess) {
 		// Runs of the caller's still waiting behind the room's lock have
 		// no backing turn yet to stop: cancel them first.
 		cancelRoomRuns(id, actorID(c), false)
 		stopped := []string{}
+		if isTicketSession(sess) && ticketSessionOwner(c, sess) {
+			if code, body := stopSessionRun(c, sess); code != http.StatusOK {
+				c.JSON(code, body)
+				return
+			}
+			stopped = append(stopped, sess.ID)
+		}
 		for _, b := range roomOwnBackings(c, id) {
 			if code, body := stopSessionRun(c, b); code != http.StatusOK {
 				c.JSON(code, body)
@@ -2750,7 +2784,8 @@ func cancelSessionRun(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}
-	if run.SessionID != id && !runInOwnRoomBacking(c, sess, run.SessionID) {
+	ownRun := run.SessionID == id && (!isTicketSession(sess) || ticketSessionOwner(c, sess))
+	if !ownRun && !runInOwnRoomBacking(c, sess, run.SessionID) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "run does not belong to this session"})
 		return
 	}
@@ -2763,9 +2798,10 @@ func cancelSessionRun(c *tool.Ctx) {
 }
 
 // runInOwnRoomBacking reports whether runSession is one of the caller's
-// own backing sessions in ticket room sess — a room's runs live there.
+// own backing sessions in ticket room sess, or in an ordinary ticket
+// session — their runs live there.
 func runInOwnRoomBacking(c *tool.Ctx, sess session.Session, runSession string) bool {
-	if sess.Meta.TicketRoom == nil || runSession == "" {
+	if (sess.Meta.TicketRoom == nil && !isTicketSession(sess)) || runSession == "" {
 		return false
 	}
 	for _, b := range roomOwnBackings(c, sess.ID) {
@@ -2785,6 +2821,15 @@ func deleteSession(c *tool.Ctx) {
 	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
+	}
+	// An ordinary ticket session's backing sessions — other people's
+	// agents answering in it — and their sub-agents go with it.
+	if isTicketSession(sess) {
+		all := globalMgr.Registry().Sessions()
+		deleteBackings(c.Context(), all, id, "its ticket session was deleted")
+		for k := range roomOwnersOf(all, id) {
+			cancelRoomRuns(id, k, false)
+		}
 	}
 	if err := globalMgr.DeleteSession(c.Context(), id); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())

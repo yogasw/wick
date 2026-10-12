@@ -1516,6 +1516,14 @@
   );
   /* Ticket session header (T12b): agents other than the home one that
      answered here; identity is (agent, owner). */
+  /* The home agent answers its owner only: anyone else sees whose it is. */
+  const homeOwnerLabel = $derived(
+    notesInfo?.session_owner && notesInfo.session_owner !== notesInfo.me
+      ? notesInfo.session_owner_handle
+        ? `@${notesInfo.session_owner_handle}`
+        : (notesInfo.users?.[notesInfo.session_owner] ?? "")
+      : "",
+  );
   const repliers = $derived(notesInfo?.ticket ? alsoReplied(turns, (id, handle) => teamAgentsByHandle[handle]?.id === id) : []);
   let groupPickerOpen = $state(false);
   function openTeamAgent(handle: string) {
@@ -1530,7 +1538,9 @@
   // talks to the one that already has context; mentioning a role starts a
   // new one, so the cheaper, better-informed target is offered first.
   const mentionableAgents = $derived.by(() => {
-    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "");
+    // In a ticket session a mention reaches the sender's own agents only;
+    // elsewhere agents shared with them are offered as before.
+    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "", !!notesInfo?.ticket);
     if (!subAgentsAllowed) return out;
     const seen = new Set<string>(out.map((a) => a.handle));
     for (const s of subAgents) {
@@ -3137,7 +3147,7 @@
          and "Discuss in a group". -->
     {#if activeView === "conversation" && notesInfo?.ticket}
       <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-white-300 bg-white-100 px-4 py-1.5 text-[11px] text-black-700 dark:border-navy-600 dark:bg-navy-900 dark:text-black-600" data-testid="ticket-session-strip">
-        <span class="rounded-full bg-white-200 px-2 py-0.5 font-medium text-black-900 dark:bg-navy-700 dark:text-white-100" data-testid="ticket-session-home">{agentMode?.agent?.name || "Project agent"}</span>
+        <span class="rounded-full bg-white-200 px-2 py-0.5 font-medium text-black-900 dark:bg-navy-700 dark:text-white-100" data-testid="ticket-session-home">{agentMode?.agent?.name || "Project agent"}{#if homeOwnerLabel}<span class="font-normal text-black-700 dark:text-black-600" data-testid="ticket-session-home-owner"> · {homeOwnerLabel}</span>{/if}</span>
         {#if repliers.length}
           <span data-testid="ticket-session-also">also replied: {repliers.map((r) => r.label).join(" · ")}</span>
         {/if}

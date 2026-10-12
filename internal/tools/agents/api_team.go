@@ -1948,6 +1948,15 @@ func apiTeamAgentSessions(c *tool.Ctx) {
 		if s.Meta.UserID != uid && s.Meta.Origin != session.OriginUI {
 			continue
 		}
+		if s.Meta.UserID != uid && shareCrossesProject(s, p) {
+			// Decided per chat: a ticket chat in a project the caller
+			// cannot open stays out, without hiding the person's others.
+			if shared && agentChatViewer(c.Context(), uid, s, p) {
+				member[s.Meta.UserID] = true
+				chats = append(chats, s)
+			}
+			continue
+		}
 		m, seen := member[s.Meta.UserID]
 		if !seen {
 			m = shared && agentChatViewer(c.Context(), uid, s, p)

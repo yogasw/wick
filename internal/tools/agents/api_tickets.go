@@ -278,12 +278,14 @@ func userNames(c *tool.Ctx, ids map[string]bool) map[string]string {
 }
 
 // sessionRow renders one session for the board or a ticket's detail, and
-// records its owner so names can be resolved in one pass.
+// records its owner so names can be resolved in one pass. groups renders
+// group chat rows (nil: one lookup each, for callers with a single row).
 func sessionRow(
 	sid string,
 	live map[string]session.Session,
 	lc map[string]view.SessionLifecycleVM,
 	ids map[string]bool,
+	groups *groupRows,
 ) ticketSessionRow {
 	row := ticketSessionRow{ID: sid, Label: loadFirstUserMessage(globalLayout, sid, 60), Lifecycle: lc[sid].Lifecycle}
 	if s, ok := live[sid]; ok {
@@ -300,27 +302,67 @@ func sessionRow(
 			ids[s.Meta.UserID] = true
 		}
 		if g := s.Meta.AgentGroup; g != nil {
-			row.Group = groupRowOf(g, s.Meta.UserID)
+			if groups == nil {
+				groups = newGroupRows(context.Background())
+			}
+			row.Group = groups.rowOf(g, s.Meta.UserID)
 		}
 	}
 	return row
 }
 
-// groupRowOf is a group chat's ticketSessionGroup. A member the owner no
+// ticketRowHidden reports whether a ticket's session sid stays off the
+// ticket for the caller: a group chat is its owner's private thread, so
+// a project member who cannot open it never sees its name, agents or
+// first message — the row is left out, not just made unclickable.
+func ticketRowHidden(c *tool.Ctx, sid string, live map[string]session.Session) bool {
+	s, ok := live[sid]
+	return ok && s.Meta.AgentGroup != nil && !ownsSession(c, s)
+}
+
+// groupRows renders the group chat rows of one request: each agent and
+// owner handle is looked up once however many rows name them.
+type groupRows struct {
+	ctx     context.Context
+	agents  map[string]*entity.AgentPersona // nil: gone
+	handles map[string]string
+}
+
+func newGroupRows(ctx context.Context) *groupRows {
+	return &groupRows{ctx: ctx, agents: map[string]*entity.AgentPersona{}, handles: map[string]string{}}
+}
+
+func (r *groupRows) agent(id string) *entity.AgentPersona {
+	if a, ok := r.agents[id]; ok {
+		return a
+	}
+	var out *entity.AgentPersona
+	if a, err := globalTeam.Get(r.ctx, id); err == nil {
+		out = &a
+	}
+	r.agents[id] = out
+	return out
+}
+
+// rowOf is a group chat's ticketSessionGroup. A member the owner no
 // longer has drops out.
-func groupRowOf(g *session.AgentGroup, owner string) *ticketSessionGroup {
+func (r *groupRows) rowOf(g *session.AgentGroup, owner string) *ticketSessionGroup {
 	out := &ticketSessionGroup{Name: g.Name, OwnerID: owner, Members: make([]TeamGroupMember, 0, len(g.Members))}
 	if globalTeam == nil {
 		return out
 	}
-	ctx := context.Background()
-	out.OwnerHandle = personHandle(ctx, owner)
+	h, ok := r.handles[owner]
+	if !ok {
+		h = personHandle(r.ctx, owner)
+		r.handles[owner] = h
+	}
+	out.OwnerHandle = h
 	for _, id := range g.Members {
-		a, err := globalTeam.Get(ctx, id)
-		if err != nil || a.OwnerUserID != owner {
+		a := r.agent(id)
+		if a == nil || a.OwnerUserID != owner {
 			continue
 		}
-		m := globalTeam.MemberOf(a)
+		m := globalTeam.MemberOf(*a)
 		out.Members = append(out.Members, TeamGroupMember{
 			ID: a.ID, Handle: a.Handle, Name: m.Name, IsCaptain: a.IsCaptain, Disabled: a.Disabled,
 			Avatar: team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID),
@@ -427,6 +469,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	rooms := ticketRoomsOf(id)
 	roomCardsOf := newRoomCards()
 	cards := make([]TicketCard, 0, len(tickets))
+	groups := newGroupRows(c.Context())
 	for _, t := range tickets {
 		// Every session is marked as ticketed even when its card is not
 		// sent: the untracked list is "has no ticket", and neither
@@ -460,10 +503,10 @@ func apiProjectTickets(c *tool.Ctx) {
 		hasRoom = hasRoom && roomOnTicket(room.ID, t)
 		rows := make([]ticketSessionRow, 0, len(shown))
 		for _, sid := range shown {
-			if hasRoom && sid == room.ID {
+			if (hasRoom && sid == room.ID) || ticketRowHidden(c, sid, live) {
 				continue
 			}
-			rows = append(rows, sessionRow(sid, live, lc, ids))
+			rows = append(rows, sessionRow(sid, live, lc, ids, groups))
 		}
 		var cardRoom *TicketCardRoom
 		if hasRoom {
@@ -512,7 +555,7 @@ func apiProjectTickets(c *tool.Ctx) {
 		untrackedAfter, untrackedLimit, wantUntracked,
 	)
 	for _, sid := range page {
-		untracked = append(untracked, sessionRow(sid, live, lc, ids))
+		untracked = append(untracked, sessionRow(sid, live, lc, ids, groups))
 	}
 
 	resp := ticketBoardResponse{
@@ -671,8 +714,12 @@ func apiTicketDetail(c *tool.Ctx) {
 		resp.Room = newRoomCards().cardOf(c.Context(), room)
 	}
 	resp.Sessions = make([]ticketSessionRow, 0, len(tk.Sessions))
+	groups := newGroupRows(c.Context())
 	for _, sid := range orderSidebarIDs(tk.Sessions, live, lc) {
-		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
+		if ticketRowHidden(c, sid, live) {
+			continue
+		}
+		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids, groups))
 	}
 
 	// The UI view includes hidden notes (rendered blurred); only the MCP
@@ -1167,9 +1214,22 @@ func apiNotesList(c *tool.Ctx) {
 	for _, n := range list {
 		ids[n.Author] = true
 	}
+	// A ticket session's owner, so the strip can say whose home agent it
+	// is to everyone else (their own Captain answers them).
+	var owner string
+	if sid := strings.TrimSpace(c.Query("session_id")); sid != "" {
+		if sess, sok := globalMgr.Registry().Session(sid); sok && isTicketSession(sess) && sess.Meta.UserID != "" {
+			owner = sess.Meta.UserID
+			ids[owner] = true
+		}
+	}
 	out := map[string]any{"notes": list, "users": userNames(c, ids)}
 	if u := login.GetUser(c.Context()); u != nil {
 		out["me"] = u.ID
+	}
+	if owner != "" {
+		out["session_owner"] = owner
+		out["session_owner_handle"] = personHandle(c.Context(), owner)
 	}
 	// Whether this project runs tickets at all. The rail hides its Ticket
 	// tab when it does not: offering to file a ticket on a board that was

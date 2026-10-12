@@ -69,12 +69,15 @@ describe("speakerVia", () => {
   });
 });
 
-describe("the @ menu lists the viewer's own agents only", () => {
-  test("an agent shared with the viewer is never offered", () => {
-    const peers = [
-      { id: "a", handle: "research", name: "Research", description: "", disabled: false },
-      { id: "b", handle: "writer", name: "Writer", description: "", disabled: false, shared_by: "Hana" },
-    ];
-    expect(teamMentionAgents(peers, "").map((a) => a.handle)).toEqual(["research"]);
+describe("agents shared with the viewer in the @ menu", () => {
+  const peers = [
+    { id: "a", handle: "research", name: "Research", description: "", disabled: false },
+    { id: "b", handle: "writer", name: "Writer", description: "", disabled: false, shared_by: "Hana" },
+  ];
+  test("are offered in an ordinary chat", () => {
+    expect(teamMentionAgents(peers, "").map((a) => a.handle)).toEqual(["research", "writer"]);
+  });
+  test("are left out in a ticket session (own agents only)", () => {
+    expect(teamMentionAgents(peers, "", true).map((a) => a.handle)).toEqual(["research"]);
   });
 });
