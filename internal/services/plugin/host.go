@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -377,7 +378,7 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, s *Service, sub str
 		Transport:     rt,
 		FlushInterval: -1,
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			setForwarded(pr)
+			setForwarded(pr, h.baseURL())
 			pr.Out.URL.Scheme, pr.Out.URL.Host, pr.Out.Host = "http", "plugin", "plugin"
 			pr.Out.URL.Path, pr.Out.URL.RawPath = sub, ""
 			injectHeaders(pr.Out.Header, base, u)
@@ -402,13 +403,36 @@ const HeaderTokenOwnerID = "X-Wick-Token-Owner-Id"
 
 // setForwarded sets X-Forwarded-For/-Host/-Proto for service.BaseURL.
 // SetXForwarded alone says "http" behind wick's TLS-terminating proxy, so an
-// inbound X-Forwarded-Proto wins.
-func setForwarded(pr *httputil.ProxyRequest) {
+// inbound X-Forwarded-Proto wins; without one, a request for publicBase's
+// own host takes publicBase's scheme.
+func setForwarded(pr *httputil.ProxyRequest, publicBase string) {
 	proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
 	pr.SetXForwarded()
-	if proto = strings.TrimSpace(proto); proto != "" {
+	if proto = strings.TrimSpace(proto); proto == "" && pr.In.TLS == nil {
+		proto = publicScheme(publicBase, pr.In.Host)
+	}
+	if proto != "" {
 		pr.Out.Header.Set("X-Forwarded-Proto", proto)
 	}
+}
+
+// publicScheme is publicBase's scheme when host is publicBase's host, else "".
+func publicScheme(publicBase, host string) string {
+	u, err := url.Parse(strings.TrimSpace(publicBase))
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Host, host) {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.Scheme
+}
+
+func (h *Host) baseURL() string {
+	if h.BaseURL == nil {
+		return ""
+	}
+	return h.BaseURL()
 }
 
 // injectHeaders drops client X-Wick-* headers and sets the trusted ones.

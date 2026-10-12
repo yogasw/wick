@@ -288,6 +288,7 @@ func NewServer() *Server {
 	// module carries its pre-reflected Configs (Owner = meta.Key is
 	// stamped here) so per-module rows are seeded in the same pass.
 	configsSvc := configs.NewService(db)
+	toolPlugins.PublicBase = func() string { return strings.TrimRight(configsSvc.AppURL(), "/") }
 	var extraConfigs []entity.Config
 	for _, m := range modules {
 		for _, row := range m.Configs {

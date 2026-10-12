@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,8 @@ import (
 type Proxy struct {
 	key, base, version string
 	runner             *Runner
+	// publicBase returns wick's public base URL (app_url); "" = unknown.
+	publicBase func() string
 	// hookGroups are the webhook group prefixes (absolute). Only the exact
 	// webhook routes from the manifest are mounted without a session; any
 	// other path under a group lands on the catch-all and must 404, because
@@ -110,7 +113,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 		Transport:     rt,
 		FlushInterval: -1, // SSE / streamed output goes through per write
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			setForwarded(pr)
+			setForwarded(pr, p.publicBaseURL())
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = "plugin"
 			pr.Out.Host = "plugin"
@@ -132,13 +135,36 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 // setForwarded hands the plugin the public origin of the request: Out.Host
 // is "plugin", so a URL built from it (a poll_url) would point nowhere.
 // SetXForwarded alone says "http" behind wick's TLS-terminating proxy, so an
-// inbound X-Forwarded-Proto wins.
-func setForwarded(pr *httputil.ProxyRequest) {
+// inbound X-Forwarded-Proto wins; without one, a request for publicBase's
+// own host takes publicBase's scheme.
+func setForwarded(pr *httputil.ProxyRequest, publicBase string) {
 	proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
 	pr.SetXForwarded()
-	if proto = strings.TrimSpace(proto); proto != "" {
+	if proto = strings.TrimSpace(proto); proto == "" && pr.In.TLS == nil {
+		proto = publicScheme(publicBase, pr.In.Host)
+	}
+	if proto != "" {
 		pr.Out.Header.Set("X-Forwarded-Proto", proto)
 	}
+}
+
+// publicScheme is publicBase's scheme when host is publicBase's host, else "".
+func publicScheme(publicBase, host string) string {
+	u, err := url.Parse(strings.TrimSpace(publicBase))
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Host, host) {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.Scheme
+}
+
+func (p *Proxy) publicBaseURL() string {
+	if p.publicBase == nil {
+		return ""
+	}
+	return p.publicBase()
 }
 
 // deliveryHeaders are the X-Wick-* headers wick's own outgoing webhooks

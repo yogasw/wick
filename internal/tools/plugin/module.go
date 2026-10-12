@@ -44,11 +44,21 @@ type Pool struct {
 	ttl      time.Duration
 	stop     chan struct{}
 	once     sync.Once
+	// PublicBase returns wick's public base URL (app_url); set once at
+	// startup, read per request so an app_url edit applies without reload.
+	PublicBase func() string
 }
 
 // NewPool returns an empty pool; call Start once tools are loaded.
 func NewPool() *Pool {
 	return &Pool{runners: map[string]*Runner{}, versions: map[string]string{}, ttl: idleTTL(), stop: make(chan struct{})}
+}
+
+func (p *Pool) publicBase() string {
+	if p.PublicBase == nil {
+		return ""
+	}
+	return p.PublicBase()
 }
 
 func (p *Pool) add(key, version string, r *Runner) {
@@ -195,7 +205,7 @@ func (p *Pool) buildModule(f connplugin.Found, spawn spawnFn, sockDir string) to
 	}
 	base := "/tools/" + f.Key
 	runner := newRunner(f.Key, f.BinaryPath, sockDir, tm.KeepWarm, spawn)
-	px := &Proxy{key: f.Key, base: base, version: f.Manifest.Version, runner: runner}
+	px := &Proxy{key: f.Key, base: base, version: f.Manifest.Version, runner: runner, publicBase: p.publicBase}
 	for _, h := range tm.Webhooks {
 		g := base + h.Group
 		dup := false

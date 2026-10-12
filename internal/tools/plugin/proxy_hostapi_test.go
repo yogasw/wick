@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"net/url"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -141,13 +142,18 @@ func TestProxyTokenUserSourceAndSystem(t *testing.T) {
 // from X-Forwarded-Proto/-Host (a poll_url) must pass wick's same-origin check.
 func TestProxyForwardsPublicOrigin(t *testing.T) {
 	cases := []struct {
-		name, inProto, wantProto string
-		tls                      bool
+		name, inProto, publicBase, wantProto string
+		tls                                  bool
 	}{
-		{"behind TLS proxy", "https", "https", false},
-		{"first of a list", "https, http", "https", false},
-		{"plain http", "", "http", false},
-		{"direct TLS", "", "https", true},
+		{"behind TLS proxy", "https", "", "https", false},
+		{"first of a list", "https, http", "", "https", false},
+		{"plain http", "", "", "http", false},
+		{"direct TLS", "", "", "https", true},
+		// The proxy in front of wick sends no X-Forwarded-Proto: app_url's
+		// scheme is the public one for app_url's own host.
+		{"no proto, app_url host", "", "https://EXAMPLE.test", "https", false},
+		{"no proto, other host", "", "https://other.test", "http", false},
+		{"inbound proto beats app_url", "http", "https://example.test", "http", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -161,7 +167,7 @@ func TestProxyForwardsPublicOrigin(t *testing.T) {
 			}
 			pr := &httputil.ProxyRequest{In: in, Out: in.Clone(in.Context())}
 			pr.Out.Header.Del("X-Forwarded-Proto") // ReverseProxy strips it before Rewrite
-			setForwarded(pr)
+			setForwarded(pr, c.publicBase)
 			if got := pr.Out.Header.Get("X-Forwarded-Host"); got != "example.test" {
 				t.Fatalf("X-Forwarded-Host = %q", got)
 			}
@@ -172,5 +178,28 @@ func TestProxyForwardsPublicOrigin(t *testing.T) {
 				t.Fatalf("X-Forwarded-For = %q", got)
 			}
 		})
+	}
+}
+
+// A board action's poll_url, built by the plugin from X-Forwarded-Proto/-Host
+// behind a proxy that sends no X-Forwarded-Proto, keeps the https of the
+// button URL (app_url) instead of turning into http and failing same-origin.
+func TestProxyPollURLKeepsAppURLScheme(t *testing.T) {
+	var got string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Forwarded-Proto") + "://" + r.Header.Get("X-Forwarded-Host") + r.URL.Path
+	}))
+	defer ts.Close()
+	target, _ := url.Parse(ts.URL)
+	px := &Proxy{publicBase: func() string { return "https://support.example.test" }}
+	rp := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		setForwarded(pr, px.publicBaseURL())
+		pr.SetURL(target)
+	}}
+	in := httptest.NewRequest(http.MethodPost, "http://support.example.test/tools/sync/webhook/board/status", nil)
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, in)
+	if want := "https://support.example.test/tools/sync/webhook/board/status"; got != want {
+		t.Fatalf("plugin built %q, want %q", got, want)
 	}
 }
