@@ -921,6 +921,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		entry = nil
 	}
 
+	// A session on a failover stand-in goes back to its home (or up the
+	// home's chain) before a new message, when that is usable again.
+	// Re-read either way: a concurrent send may have switched, stopped or
+	// spawned meanwhile, and a stale entry would write into a dead process.
+	if role == "user" {
+		p.maybeReturnHome(sessionID, agentName)
+		p.mu.Lock()
+		entry, alive = p.active[key]
+		p.mu.Unlock()
+	}
+
 	// The agent is being moved to another provider: the message waits in
 	// the buffer and goes out after the turn it interrupted.
 	if held, err := p.holdForFailover(key, sessionID, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); held {
@@ -965,7 +976,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		// to the agent's pending queue, which fires no lifecycle event on
 		// its own.
 		p.notifyLifecycle(ctx, entry, sessionID, agentName)
-		if err != nil && err.Error() == "agent not running" {
+		if err != nil && (err.Error() == "agent not running" || err.Error() == "agent stopped") {
 			// Race: subprocess exited between the active-map lookup and
 			// Send — onAgentExit hasn't released the slot yet. Evict the
 			// stale entry and fall through to the buffer+spawn path so
@@ -975,7 +986,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 				Str("session", sessionID).
 				Str("agent", agentName).
 				Msg("pool.send: stale active entry (race), evicting and respawning")
-			p.releaseSlot(key)
+			p.releaseSlotIf(key, entry.agent)
 			alive = false
 		} else {
 			return err
@@ -1056,6 +1067,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // is free, and queues it otherwise. Caller already buffered the message.
 func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source string) error {
 	key := sessionKey(sessionID, agentName)
+	// A failover or return-home is moving the agent right now: a spawn
+	// here could read agents.json before the switch lands and start on the
+	// instance being left. The message stays buffered; whoever ends the
+	// move (Resend, endFailingOver, the return's own send) delivers it.
+	// Every one of them clears foActive before calling here.
+	p.foMu.Lock()
+	moving := p.foActive[key]
+	p.foMu.Unlock()
+	if moving {
+		return nil
+	}
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
 	pType, pName := p.providerForSession(sessionID, agentName)
@@ -1065,6 +1087,25 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	// will pick up the buffered message — nothing more to do here.
 	if _, spawning := p.spawningKeys[key]; spawning {
 		p.mu.Unlock()
+		return nil
+	}
+	// A process came up meanwhile (a concurrent send spawned it after
+	// this caller saw none): hand it the buffer rather than spawning a
+	// second one over it, which would orphan the first.
+	if e, ok := p.active[key]; ok {
+		p.mu.Unlock()
+		buf, err := p.bufferFor(sessionID)
+		if err != nil || buf.Len() == 0 {
+			return err
+		}
+		text, err := buf.Drain()
+		if err != nil || text == "" {
+			return err
+		}
+		if err := e.agent.Send(text); err != nil {
+			_ = buf.Prepend(text)
+			return err
+		}
 		return nil
 	}
 	// Spawn only when both the global and per-provider caps allow it;
@@ -1674,6 +1715,18 @@ func (p *Pool) releaseSlot(key string) {
 		delete(p.buffers, e.sessID)
 	}
 	delete(p.active, key)
+	p.mu.Unlock()
+}
+
+// releaseSlotIf is releaseSlot only while key's entry still holds agent:
+// a caller holding a stale entry must not evict the process that
+// replaced it.
+func (p *Pool) releaseSlotIf(key string, agent *provider.Agent) {
+	p.mu.Lock()
+	if e, ok := p.active[key]; ok && e.agent == agent {
+		delete(p.buffers, e.sessID)
+		delete(p.active, key)
+	}
 	p.mu.Unlock()
 }
 

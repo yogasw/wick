@@ -84,6 +84,15 @@ type PickInput struct {
 	// now, the current one included. Tried, the hop cap and the shared
 	// login check do not apply.
 	ReturnHome bool
+	// StopAtCurrent (ReturnHome mode) only considers candidates ABOVE
+	// Current in the home's chain: a session never moves down it at a
+	// turn boundary — a current instance gone bad is the failover's
+	// business. Current missing from the chain (it was edited) leaves the
+	// home as the only candidate.
+	StopAtCurrent bool
+	// HomeOnly limits the candidates to the home itself (ReturnHome mode
+	// with the home's failover switched off).
+	HomeOnly bool
 	// Healthy reports whether an account is usable now; nil = HealthyNow.
 	Healthy func(key string, now time.Time) (bool, Health)
 	// Key names the account behind an instance; nil = HealthKey.
@@ -182,6 +191,20 @@ func PickTarget(in PickInput) (Target, bool) {
 	}
 
 	candidates := append([]FailoverTarget{{Instance: InstanceTag(home.Type, home.Name), ModelID: in.HomeModelID}}, cfg.Chain...)
+	if in.ReturnHome && in.StopAtCurrent {
+		limit := 1
+		for i, c := range candidates {
+			typ, name := SplitInstanceTag(c.Instance)
+			if in.Current != "" && InstanceTag(typ, name) == current {
+				limit = i
+				break
+			}
+		}
+		candidates = candidates[:limit]
+	}
+	if in.ReturnHome && in.HomeOnly && len(candidates) > 1 {
+		candidates = candidates[:1]
+	}
 	for i, c := range candidates {
 		typ, name := SplitInstanceTag(c.Instance)
 		tag := InstanceTag(typ, name)

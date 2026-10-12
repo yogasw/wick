@@ -266,6 +266,10 @@ func TestApplySwitchFailover(t *testing.T) {
 		if last := turns[len(turns)-1]; !strings.HasPrefix(last.Events[0].Text, "Back to home claude") || last.Extras["home"] != "claude/claude" {
 			t.Fatalf("return notice = %+v", last)
 		}
+		// codex → claude: the home resumes its own transcript only.
+		if note := turns[len(turns)-1].Extras["note"]; !strings.Contains(note, "turns answered on codex/codex while it stood in are not part of claude") {
+			t.Fatalf("return note = %q, want the stand-in's turns called out", note)
+		}
 		if !strings.HasPrefix(turns[2].Events[0].Text, "Moved back up the failover chain of claude/claude") {
 			t.Fatalf("chain notice = %q", turns[2].Events[0].Text)
 		}

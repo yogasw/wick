@@ -494,6 +494,12 @@ func recordReturnTurn(layout config.Layout, sessionID, source string, res Switch
 	if res.Home != "" && res.To != res.Home {
 		head = "Moved back up the failover chain of " + res.Home + " to " + tag
 	}
+	// The target resumes its own transcript, not the stand-in's: what was
+	// said there is out of its sight. Say so rather than let the next
+	// answer look forgetful.
+	if !res.HistoryCarries && res.From != "" {
+		contextNote = "Note: the turns answered on " + res.From + " while it stood in are not part of " + tag + "'s history. " + contextNote
+	}
 	steps := []string{
 		head + " (" + res.From + " was a stand-in)",
 		"Saved provider to agents.json",

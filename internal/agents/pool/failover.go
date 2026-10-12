@@ -12,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
 )
 
@@ -529,6 +530,193 @@ func (p *Pool) turnOK(sessionID, agentName, tag string, sentAt time.Time) {
 	if inRun {
 		_ = session.EndFailoverRun(p.cfg.Layout, sessionID, agentName)
 	}
+}
+
+// maybeReturnHome moves sessionID's agent back up its home's failover
+// chain at a turn boundary: right before a new user message goes out,
+// while nothing runs. A session on a stand-in whose home (or a target
+// above the current one in the home's chain — never below it) is usable
+// again has its idle process stopped and switches there (ApplySwitch,
+// ReturnHome, conditional on the agent still being on the stand-in); the
+// message then spawns on the instance it moved to. true = it switched.
+// Either way the caller re-reads the live entry before sending.
+//
+// Usable is HealthyNow, which reads the usage file first: a limit
+// someone reset by hand counts as cleared before its Until. A limited
+// account whose file is stale gets a paced refresh (RequestRefresh,
+// non-blocking) — this send stays where it is and a later one sees the
+// answer. A home whose failover was switched off is still returned to
+// (when ReturnHome is on), but only the home, never another target.
+//
+// Never cuts a turn short: a busy agent, a spawn in flight or a failover
+// in progress skip the check, and the stop itself is Agent.StopIfIdle —
+// a message that reached the process after the first look keeps it, and
+// the session stays on the stand-in. Cheap when there is nothing to
+// return from: one agents.json read, no provider registry load. When it
+// does switch, the switch and the stop run on the sender's goroutine:
+// that send waits for them.
+func (p *Pool) maybeReturnHome(sessionID, agentName string) bool {
+	key := sessionKey(sessionID, agentName)
+	if p.FailingOver(sessionID, agentName) {
+		return false
+	}
+	p.mu.Lock()
+	entry, alive := p.active[key]
+	_, spawning := p.spawningKeys[key]
+	p.mu.Unlock()
+	if spawning || (alive && !entryIdle(entry)) {
+		return false
+	}
+	a, ok := p.agentEntry(sessionID, agentName)
+	if !ok || a.Failover == nil || a.Failover.HomeProvider == "" {
+		return false
+	}
+	cur, home := normProviderKey(a.Provider), normProviderKey(a.Failover.HomeProvider)
+	if cur == "" || cur == home {
+		return false
+	}
+	instances, err := provider.Load()
+	if err != nil {
+		return false
+	}
+	homeIns, ok := instanceByTag(instances, home)
+	if !ok {
+		return false
+	}
+	l := log.With().Str("component", "pool").Str("session", sessionID).Str("agent", agentName).Logger()
+	t, ok := provider.PickTarget(provider.PickInput{
+		HomeProvider:  home,
+		HomeModelID:   a.Failover.HomeModelID,
+		Current:       cur,
+		Instances:     instances,
+		ReturnHome:    true,
+		StopAtCurrent: true,
+		// Failover off for the home: nothing but the home to go back to.
+		HomeOnly: !provider.EffectiveFailover(homeIns).Enabled,
+		Healthy:  healthyOrRefresh,
+		Guard:    provider.GuardFor(context.Background(), sessionID),
+		OnSkip: func(tag, why string) {
+			l.Debug().Str("candidate", tag).Str("reason", why).Msg("pool.failover: return candidate skipped")
+		},
+	})
+	if !ok || t.Instance == cur {
+		return false
+	}
+	p.failoverStage("return-picked")
+	var old *provider.Agent
+	if alive {
+		old = entry.agent
+	}
+	// Failing over for the length of the switch: a message sent meanwhile
+	// is held in the buffer instead of reaching the process about to stop,
+	// and that process's exit is recognised as retired. Held messages end
+	// up in the same prompt as the caller's, AHEAD of it (they were
+	// buffered first) — in conversation.jsonl too, so the transcript and
+	// the prompt agree; only the arrival order is lost.
+	if !p.setFailingOver(key, old) {
+		return false
+	}
+	// The first look was a while ago (agents.json, the registry, usage
+	// files, the switch guard): the agent must still be the one seen,
+	// idle, and nothing may be spawning it.
+	p.mu.Lock()
+	e, live := p.active[key]
+	_, spawning = p.spawningKeys[key]
+	same := !spawning && ((old == nil && !live) || (old != nil && live && e.agent == old && entryIdle(e)))
+	p.mu.Unlock()
+	if !same || (old != nil && !old.StopIfIdle()) {
+		l.Debug().Bool("same", same).Msg("pool.failover: agent moved on before the return, staying")
+		p.abortReturn(key, sessionID, agentName, old)
+		return false
+	}
+	if old != nil {
+		p.releaseSlotIf(key, old)
+	}
+	_, err = provider.ApplySwitch(p.cfg.Layout, sessionID, agentName, t.Instance, provider.SwitchOptions{
+		Source:     "failover",
+		ModelID:    t.ModelID,
+		ReturnHome: true,
+		ExpectFrom: cur,
+		Notify: func(tag string, steps []string) {
+			if p.cfg.OnFailoverNotify != nil {
+				p.cfg.OnFailoverNotify(sessionID, agentName, provider.ReturnChipText(tag, t.ModelID), steps)
+			}
+		},
+		Reply: func(text string) {
+			if p.cfg.OnFailoverReply != nil {
+				p.cfg.OnFailoverReply(sessionID, agentName, text)
+			}
+		},
+	})
+	switch {
+	case errors.Is(err, provider.ErrSwitchedMeanwhile):
+		// A person (or a concurrent return) switched meanwhile: that
+		// stands. Their switch left the process alone while this one held
+		// the agent; it is stopped already, the next spawn uses theirs.
+		l.Info().Str("to", t.Instance).Msg("pool.failover: switched meanwhile, not returning")
+	case err != nil:
+		// The stand-in process is gone but agents.json still names it:
+		// the message respawns it.
+		l.Warn().Err(err).Str("to", t.Instance).Msg("pool.failover: return switch failed, staying")
+	default:
+		l.Info().Str("from", cur).Str("to", t.Instance).Bool("home", t.Home).Msg("pool.failover: back up the chain")
+		p.foMu.Lock()
+		delete(p.foRuns, key)
+		delete(p.foResendKey, key)
+		p.foMu.Unlock()
+	}
+	// Held messages stay buffered: the caller's own spawn drains them.
+	p.endFailingOver(context.Background(), sessionID, agentName, false)
+	return err == nil
+}
+
+// abortReturn undoes maybeReturnHome's hold when the agent moved on
+// before the stop: the process was not retired, and messages held
+// meanwhile go to it (or to the spawn in flight) as they would have.
+func (p *Pool) abortReturn(key, sessionID, agentName string, old *provider.Agent) {
+	p.foMu.Lock()
+	if old != nil && p.foRetired[key] == old {
+		delete(p.foRetired, key)
+	}
+	p.foMu.Unlock()
+	p.mu.Lock()
+	e, live := p.active[key]
+	p.mu.Unlock()
+	if !live {
+		// Not running (or spawning): endFailingOver's spawnOrQueue
+		// delivers what was held, joining a spawn in flight.
+		p.endFailingOver(context.Background(), sessionID, agentName, true)
+		return
+	}
+	p.endFailingOver(context.Background(), sessionID, agentName, false)
+	buf, err := p.bufferFor(sessionID)
+	if err != nil || buf.Len() == 0 {
+		return
+	}
+	if text, err := buf.Drain(); err == nil && text != "" {
+		if err := e.agent.Send(text); err != nil {
+			_ = buf.Prepend(text)
+		}
+	}
+}
+
+// entryIdle: a live agent between turns, nothing queued on it.
+func entryIdle(e *runEntry) bool {
+	if e == nil || e.state == nil || e.state.Lifecycle() != state.LifecycleIdle {
+		return false
+	}
+	return e.agent == nil || e.agent.QueuedCount() == 0
+}
+
+// healthyOrRefresh is HealthyNow for a return-home pick, asking for a
+// fresh usage reading of a limited account it turns down (RequestRefresh
+// itself skips a fresh file).
+func healthyOrRefresh(key string, now time.Time) (bool, provider.Health) {
+	ok, h := provider.HealthyNow(key, now)
+	if !ok && h.Kind == event.ErrLimit {
+		provider.RequestRefresh(key)
+	}
+	return ok, h
 }
 
 // agentEntry reads one agent's entry from the session's agents.json.

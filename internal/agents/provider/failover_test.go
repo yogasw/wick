@@ -41,6 +41,8 @@ func TestPickTarget(t *testing.T) {
 		logins    map[string]string // instance name → shared login key
 		refuse    []string          // tags the guard refuses
 		ret       bool
+		stop      bool // StopAtCurrent
+		homeOnly  bool
 		want      Target
 		wantOK    bool
 	}
@@ -97,6 +99,21 @@ func TestPickTarget(t *testing.T) {
 			want: Target{Instance: "claude/a", ModelID: "", Home: true}, wantOK: true},
 		{name: "return: home's return-home off", ret: true, current: "codex/b",
 			mutate: func(all []Instance) { all[0].Failover.ReturnHome = false }},
+		{name: "return: without stop-at-current a bad current moves down", ret: true, current: "codex/b",
+			unhealthy: []string{"a", "b"}, want: Target{Instance: "claude/c"}, wantOK: true},
+		{name: "return stop: a bad current never moves down", ret: true, stop: true, current: "codex/b",
+			unhealthy: []string{"a", "b"}},
+		{name: "return stop: moves up past a limited home", ret: true, stop: true, current: "codex/d",
+			unhealthy: []string{"a"}, want: Target{Instance: "codex/b"}, wantOK: true},
+		{name: "return stop: current off the chain, home only", ret: true, stop: true, current: "codex/zz",
+			unhealthy: []string{"a"}},
+		{name: "return stop: current off the chain, healthy home", ret: true, stop: true, current: "codex/zz",
+			want: Target{Instance: "claude/a", Home: true}, wantOK: true},
+		{name: "return stop: current is home", ret: true, stop: true, current: "claude/a"},
+		{name: "return home-only: a healthy target above is not taken", ret: true, stop: true, homeOnly: true, current: "codex/d",
+			unhealthy: []string{"a"}},
+		{name: "return home-only: healthy home", ret: true, stop: true, homeOnly: true, current: "codex/d",
+			want: Target{Instance: "claude/a", Home: true}, wantOK: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -113,13 +130,15 @@ func TestPickTarget(t *testing.T) {
 				refuse[k] = true
 			}
 			got, ok := PickTarget(PickInput{
-				HomeProvider: "claude/a",
-				Current:      c.current,
-				Instances:    all,
-				Tried:        c.tried,
-				Hops:         c.hops,
-				ReturnHome:   c.ret,
-				Now:          now,
+				HomeProvider:  "claude/a",
+				Current:       c.current,
+				Instances:     all,
+				Tried:         c.tried,
+				Hops:          c.hops,
+				ReturnHome:    c.ret,
+				StopAtCurrent: c.stop,
+				HomeOnly:      c.homeOnly,
+				Now:           now,
 				Key: func(ins Instance) string {
 					if k := c.logins[ins.Name]; k != "" {
 						return k

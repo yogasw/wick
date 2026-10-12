@@ -505,7 +505,8 @@ func (a *Agent) Send(text string) error {
 	// Release a.mu before I/O so callers of drainPending (which also
 	// acquires a.mu) cannot deadlock if the stdin pipe blocks.
 	a.mu.Lock()
-	if !a.running || a.proc == nil {
+	// stopped: StopIfIdle claimed the process; the pool re-buffers.
+	if a.stopped || !a.running || a.proc == nil {
 		a.mu.Unlock()
 		return errors.New("agent not running")
 	}
@@ -519,16 +520,41 @@ func (a *Agent) Send(text string) error {
 		)
 	}
 	proc := a.proc
-	a.mu.Unlock()
-	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
-	if _, err := proc.Stdin().Write([]byte(payload + "\n")); err != nil {
-		return err
-	}
-	a.mu.Lock()
+	// The turn opens BEFORE the write, under the same lock as the stopped
+	// check: a fast CLI's Done can arrive before the write returns, and
+	// StopIfIdle must never see an idle agent a message is going into.
+	prevSent, prevAt, prevErr, prevOpen, prevTurns := a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns
 	a.unanswered = append(a.unanswered, text)
 	a.noteSentLocked(text)
 	a.mu.Unlock()
+	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
+	if _, err := proc.Stdin().Write([]byte(payload + "\n")); err != nil {
+		a.mu.Lock()
+		a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns = prevSent, prevAt, prevErr, prevOpen, prevTurns
+		if n := len(a.unanswered); n > 0 && a.unanswered[n-1] == text {
+			a.unanswered = a.unanswered[:n-1]
+		}
+		a.mu.Unlock()
+		return err
+	}
 	return nil
+}
+
+// StopIfIdle is Stop for an agent between turns, decided atomically: it
+// refuses (false) when a turn is open (Send opens it before writing) or a
+// message waits in the queue. Once it says yes, Send answers "agent not running",
+// so a message racing it lands in the pool's buffer, never in a process
+// on its way out.
+func (a *Agent) StopIfIdle() bool {
+	a.mu.Lock()
+	if a.turnOpen || a.turnActive || a.respawning || len(a.pendingQueue) > 0 {
+		a.mu.Unlock()
+		return false
+	}
+	a.stopped = true
+	a.mu.Unlock()
+	_ = a.Stop()
+	return true
 }
 
 // noteSentLocked records text as the message the next turn answers.
