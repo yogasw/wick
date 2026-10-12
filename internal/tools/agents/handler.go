@@ -2400,7 +2400,7 @@ func dequeueAgent(c *tool.Ctx) {
 		for _, b := range roomOwnBackings(c, id) {
 			removed += dequeueSession(b)
 		}
-		if isTicketSession(sess) && ticketSessionOwner(c, sess) {
+		if isTicketSession(sess) && ticketSessionHomeReachable(c, sess) {
 			removed += dequeueSession(sess)
 		}
 		c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
@@ -2685,9 +2685,9 @@ func killAgent(c *tool.Ctx) {
 	if sess.Meta.TicketRoom != nil || isTicketSession(sess) {
 		// Runs of the caller's still waiting behind the room's lock have
 		// no backing turn yet to stop: cancel them first.
-		cancelRoomRuns(id, actorID(c), false)
+		cancelled := cancelRoomRuns(id, actorID(c), false)
 		stopped := []string{}
-		if isTicketSession(sess) && ticketSessionOwner(c, sess) {
+		if isTicketSession(sess) && ticketSessionHomeReachable(c, sess) {
 			if code, body := stopSessionRun(c, sess); code != http.StatusOK {
 				c.JSON(code, body)
 				return
@@ -2700,6 +2700,11 @@ func killAgent(c *tool.Ctx) {
 				return
 			}
 			stopped = append(stopped, b.ID)
+		}
+		if len(stopped) == 0 && cancelled == 0 {
+			// Say so rather than "killed": nothing of the caller's runs here.
+			c.JSON(http.StatusConflict, map[string]any{"error": "nothing of yours is running in this session", "sessions": stopped})
+			return
 		}
 		c.JSON(http.StatusOK, map[string]any{"status": "killed", "sessions": stopped})
 		return
@@ -2784,7 +2789,7 @@ func cancelSessionRun(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}
-	ownRun := run.SessionID == id && (!isTicketSession(sess) || ticketSessionOwner(c, sess))
+	ownRun := run.SessionID == id && (!isTicketSession(sess) || ticketSessionHomeReachable(c, sess))
 	if !ownRun && !runInOwnRoomBacking(c, sess, run.SessionID) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "run does not belong to this session"})
 		return
@@ -2824,17 +2829,21 @@ func deleteSession(c *tool.Ctx) {
 	}
 	// An ordinary ticket session's backing sessions — other people's
 	// agents answering in it — and their sub-agents go with it.
-	if isTicketSession(sess) {
-		all := globalMgr.Registry().Sessions()
-		deleteBackings(c.Context(), all, id, "its ticket session was deleted")
-		for k := range roomOwnersOf(all, id) {
-			cancelRoomRuns(id, k, false)
-		}
-	}
+	// Snapshot first, the session itself second: a failed delete leaves
+	// its backing sessions in place.
+	ticketed := isTicketSession(sess)
+	all := globalMgr.Registry().Sessions()
 	if err := globalMgr.DeleteSession(c.Context(), id); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if ticketed {
+		deleteBackings(c.Context(), all, id, "its ticket session was deleted")
+		for k := range roomOwnersOf(all, id) {
+			cancelRoomRuns(id, k, false)
+		}
+		forgetRoom(id)
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }

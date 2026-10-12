@@ -213,6 +213,11 @@ type Meta struct {
 	// GroupSessionID marks a member's backing session: the group chat it
 	// answers for. Hidden from the agent's own chat list.
 	GroupSessionID string `json:"group_session_id,omitempty"`
+	// TicketBacking marks a backing session made for a ticket room or an
+	// ordinary ticket session: it answered another person there, read
+	// everyone's text, and stays held to a room's rules even after its
+	// parent leaves the ticket or is gone.
+	TicketBacking bool `json:"ticket_backing,omitempty"`
 	// LinkedFromSession pairs this chat of a Team agent with the
 	// conversation that messages it (team_message or an @mention): later
 	// messages from that conversation land here instead of the agent's

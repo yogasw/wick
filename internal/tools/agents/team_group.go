@@ -573,7 +573,18 @@ func groupBacking(c *tool.Ctx, groupID, agentID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return id, saveGroupMeta(id, func(m *session.Meta) { m.GroupSessionID = groupID })
+	return id, saveGroupMeta(id, func(m *session.Meta) {
+		m.GroupSessionID = groupID
+		m.TicketBacking = backsTicketPlace(groupID)
+	})
+}
+
+// backsTicketPlace reports whether a backing session under parentID is
+// made for a ticket room or an ordinary ticket session (team.TicketPlace)
+// and so carries the TicketBacking mark from its creation.
+func backsTicketPlace(parentID string) bool {
+	p, ok := globalMgr.Registry().Session(parentID)
+	return ok && team.TicketPlace(p.Meta)
 }
 
 // runBackingTurn runs one turn in a member's backing session and returns

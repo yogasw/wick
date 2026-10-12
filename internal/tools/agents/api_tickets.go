@@ -495,7 +495,15 @@ func apiProjectTickets(c *tool.Ctx) {
 		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
 		// Same order as the sidebar before the cap, so the rows a card DOES
 		// show are the chats in use, not the first ones ever attached.
-		shown := orderSidebarIDs(t.Sessions, live, lc)
+		// Rows the caller may not see (another person's private group
+		// chat) are dropped before the cap and left out of the count.
+		visible := make([]string, 0, len(t.Sessions))
+		for _, sid := range t.Sessions {
+			if !ticketRowHidden(c, sid, live) {
+				visible = append(visible, sid)
+			}
+		}
+		shown := orderSidebarIDs(visible, live, lc)
 		if rowsPerCard < len(shown) {
 			shown = shown[:rowsPerCard]
 		}
@@ -503,7 +511,7 @@ func apiProjectTickets(c *tool.Ctx) {
 		hasRoom = hasRoom && roomOnTicket(room.ID, t)
 		rows := make([]ticketSessionRow, 0, len(shown))
 		for _, sid := range shown {
-			if (hasRoom && sid == room.ID) || ticketRowHidden(c, sid, live) {
+			if hasRoom && sid == room.ID {
 				continue
 			}
 			rows = append(rows, sessionRow(sid, live, lc, ids, groups))
@@ -526,7 +534,7 @@ func apiProjectTickets(c *tool.Ctx) {
 			Fields:      cardFields(cfg, t.Fields, allFields),
 			SessionRows: rows,
 			Room:        cardRoom,
-			Sessions:    len(t.Sessions),
+			Sessions:    len(visible),
 			Notes:       count.Visible,
 			OpenTasks:   count.OpenTasks,
 			UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
@@ -939,7 +947,16 @@ func apiTicketDelete(c *tool.Ctx) {
 	}
 
 	deleted := 0
+	all := globalMgr.Registry().Sessions()
 	for _, sid := range tk.Sessions {
+		if s, ok := all[sid]; ok && cascade && isTicketSession(s) {
+			// Other people's agents that answered in it go with it.
+			deleteBackings(c.Context(), all, sid, "its ticket was deleted")
+			for k := range roomOwnersOf(all, sid) {
+				cancelRoomRuns(sid, k, false)
+			}
+			forgetRoom(sid)
+		}
 		if !cascade {
 			// Kept: the chat lives on, just without a ticket.
 			writeSessionTicketPointer(sid, "")
@@ -1021,14 +1038,14 @@ func ticketSessionWritable(c *tool.Ctx, sid string) bool {
 }
 
 // backsTicketRoom reports whether sess is a member's backing session in a
-// ticket room — not in an ordinary group chat, whose backing sessions
-// file like any chat.
+// ticket room or an ordinary ticket session (team.RefuseRoomSession, the
+// agent paths' own guard) — not in an ordinary group chat, whose backing
+// sessions file like any chat.
 func backsTicketRoom(sess session.Session) bool {
 	if sess.Meta.GroupSessionID == "" {
 		return false
 	}
-	g, ok := globalMgr.Registry().Session(sess.Meta.GroupSessionID)
-	return ok && g.Meta.TicketRoom != nil
+	return team.RefuseRoomSession(globalLayout, sess.ID) != nil
 }
 
 // apiTicketAttachSession handles PUT /api/tickets/{ticketID}/sessions/{sid}.
@@ -1216,8 +1233,10 @@ func apiNotesList(c *tool.Ctx) {
 	}
 	// A ticket session's owner, so the strip can say whose home agent it
 	// is to everyone else (their own Captain answers them).
+	// Only off the session the scope itself was checked through: with a
+	// ticket_id the session_id went unchecked.
 	var owner string
-	if sid := strings.TrimSpace(c.Query("session_id")); sid != "" {
+	if sid := strings.TrimSpace(c.Query("session_id")); sid != "" && strings.TrimSpace(c.Query("ticket_id")) == "" {
 		if sess, sok := globalMgr.Registry().Session(sid); sok && isTicketSession(sess) && sess.Meta.UserID != "" {
 			owner = sess.Meta.UserID
 			ids[owner] = true

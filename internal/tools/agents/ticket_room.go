@@ -1380,5 +1380,6 @@ func roomDefaultBacking(c *tool.Ctx, roomID, projectID string) (string, error) {
 		// Never someone's agent chat, even in a project an agent owns.
 		m.AgentID = ""
 		m.GroupSessionID = roomID
+		m.TicketBacking = backsTicketPlace(roomID)
 	})
 }

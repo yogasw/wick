@@ -1538,9 +1538,11 @@
   // talks to the one that already has context; mentioning a role starts a
   // new one, so the cheaper, better-informed target is offered first.
   const mentionableAgents = $derived.by(() => {
-    // In a ticket session a mention reaches the sender's own agents only;
-    // elsewhere agents shared with them are offered as before.
-    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "", !!notesInfo?.ticket);
+    // In someone else's ticket session a mention reaches the sender's own
+    // agents only; the owner's goes through the Team hand-off, which takes
+    // agents shared with them, as in any chat.
+    const ownOnly = !!notesInfo?.ticket && !!notesInfo.session_owner && notesInfo.session_owner !== notesInfo.me;
+    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "", ownOnly);
     if (!subAgentsAllowed) return out;
     const seen = new Set<string>(out.map((a) => a.handle));
     for (const s of subAgents) {

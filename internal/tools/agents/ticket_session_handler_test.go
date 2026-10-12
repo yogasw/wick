@@ -367,3 +367,69 @@ func TestSystemLineName(t *testing.T) {
 		}
 	}
 }
+
+// NEW-S1: in an ownerless or channel ticket session anyone who may open
+// it stops the home run; a Stop that reaches nothing says so.
+func TestTicketSessionStopWithoutOwnerOrInChannel(t *testing.T) {
+	_, bob, _ := ticketSessionWorld(t)
+	var stopped []string
+	prev := stopSessionRun
+	stopSessionRun = func(_ *tool.Ctx, s session.Session) (int, any) {
+		stopped = append(stopped, s.ID)
+		return http.StatusOK, map[string]string{"status": "killed"}
+	}
+	t.Cleanup(func() { stopSessionRun = prev })
+	kill := func() int {
+		w, c := teamReq(t, bob, http.MethodPost, "/", nil, map[string]string{"id": "ts"})
+		killAgent(c)
+		return w.Code
+	}
+	// Alice's UI session: bob has nothing running → an honest 409.
+	if code := kill(); code != http.StatusConflict || len(stopped) != 0 {
+		t.Fatalf("nothing to stop: %d %v", code, stopped)
+	}
+	for name, edit := range map[string]func(*session.Meta){
+		"ownerless": func(m *session.Meta) { m.UserID = "" },
+		"channel":   func(m *session.Meta) { m.UserID, m.Origin = "alice", session.OriginSlack },
+	} {
+		if err := saveGroupMeta("ts", edit); err != nil {
+			t.Fatal(err)
+		}
+		stopped = nil
+		if code := kill(); code != http.StatusOK || len(stopped) != 1 || stopped[0] != "ts" {
+			t.Fatalf("%s: %d %v", name, code, stopped)
+		}
+	}
+}
+
+// NEW-S2: a backing session made for a ticket session keeps the room
+// guards after its parent leaves the ticket, and after it is gone.
+func TestTicketBackingStaysGuardedAfterDetachOrDelete(t *testing.T) {
+	_, bob, tk := ticketSessionWorld(t)
+	seedCaptain(t, bob.ID, "p1")
+	if handled, _ := sendTS(t, bob, "hi"); !handled {
+		t.Fatal("not routed")
+	}
+	waitAnswer(t, "ts")
+	b := backingsOf("ts")[0]
+	if !b.Meta.TicketBacking {
+		t.Fatal("backing not marked at creation")
+	}
+	writeSessionTicketPointer("ts", "")
+	if err := ticket.DetachSession(globalLayout, "p1", tk.ID, "ts"); err != nil {
+		t.Fatal(err)
+	}
+	if !InTicketRoom(b.ID) || team.RefuseRoomSession(globalLayout, b.ID) == nil {
+		t.Fatal("guard dropped after detach")
+	}
+	if _, _, ok := team.RoomTicket(login.WithUser(context.Background(), bob, nil), globalLayout, b.ID); ok {
+		t.Fatal("still reaches a ticket it left")
+	}
+	// A backing whose parent is gone, mark or not, stays guarded.
+	if err := saveGroupMeta(b.ID, func(m *session.Meta) { m.TicketBacking, m.GroupSessionID = false, "no-such-parent" }); err != nil {
+		t.Fatal(err)
+	}
+	if !InTicketRoom(b.ID) {
+		t.Fatal("guard dropped with the parent gone")
+	}
+}

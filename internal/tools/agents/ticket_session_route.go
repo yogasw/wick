@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -42,6 +43,19 @@ const errTicketSessionFiles = "files go to this session's own agent only — sen
 func ticketSessionOwner(c *tool.Ctx, sess session.Session) bool {
 	actor := actorID(c)
 	return actor != "" && actor == sess.Meta.UserID
+}
+
+// ticketSessionHomeReachable reports whether the caller's Stop, Dequeue
+// or Cancel reaches ticket session sess's own run: its owner; anyone who
+// may open it when it has no owner; anyone in a channel session (Slack and
+// the like), whose agent answers everyone there anyway; and whoever sees
+// every session.
+func ticketSessionHomeReachable(c *tool.Ctx, sess session.Session) bool {
+	if ticketSessionOwner(c, sess) || sess.Meta.UserID == "" || sess.Meta.Origin != session.OriginUI {
+		return true
+	}
+	u := login.GetUser(c.Context())
+	return u == nil || u.CanSeeAllSessions() || (u.IsAdmin() && adminSeeAll())
 }
 
 // ticketSessionRefusesFiles reports whether files sent to session id must

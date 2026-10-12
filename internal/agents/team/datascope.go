@@ -254,10 +254,10 @@ func IsTicketSession(m session.Meta) bool {
 	return m.TicketID != "" && m.ProjectID != "" && m.TicketRoom == nil && m.AgentGroup == nil && m.GroupSessionID == ""
 }
 
-// ticketPlace reports whether a backing session under m answers in a
+// TicketPlace reports whether a backing session under m answers in a
 // ticket room or an ordinary ticket session — the places held to a
 // room's rules.
-func ticketPlace(m session.Meta) bool {
+func TicketPlace(m session.Meta) bool {
 	return m.TicketRoom != nil || IsTicketSession(m)
 }
 
@@ -296,7 +296,10 @@ func RefuseRoomSession(layout config.Layout, sid string) error {
 		return ErrRoomSession
 	}
 	if g := sess.Meta.GroupSessionID; g != "" {
-		if room, err := session.Load(layout, g); err == nil && ticketPlace(room.Meta) {
+		if sess.Meta.TicketBacking {
+			return ErrRoomSession
+		}
+		if room, err := session.Load(layout, g); err == nil && TicketPlace(room.Meta) {
 			return ErrRoomSession
 		}
 	}
@@ -340,8 +343,14 @@ func SessionInTicketRoom(layout config.Layout, sess session.Session) bool {
 			return true
 		}
 		if sess.Meta.GroupSessionID != "" {
+			// Fail closed: a backing session made for a ticket keeps the
+			// guard once its parent leaves the ticket, and one whose
+			// parent is gone keeps it too.
+			if sess.Meta.TicketBacking {
+				return true
+			}
 			room, err := session.Load(layout, sess.Meta.GroupSessionID)
-			return err == nil && ticketPlace(room.Meta)
+			return err != nil || TicketPlace(room.Meta)
 		}
 		parent := sess.Meta.ParentSessionID
 		if parent == "" {
