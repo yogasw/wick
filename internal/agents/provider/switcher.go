@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,6 +70,20 @@ type SwitchOptions struct {
 	// boundary (PickTarget in ReturnHome mode): the home stays, the run
 	// is over, and the notice says "back to …". Exclusive with Failover.
 	ReturnHome bool
+	// ExpectFrom, when set, makes the switch conditional: it is refused
+	// with ErrSwitchedMeanwhile unless the agent is still on this
+	// instance ("type/name" or bare type). Checked under the agents lock,
+	// so a failover and a manual switch cannot both land.
+	ExpectFrom string
+}
+
+// ErrSwitchedMeanwhile is ApplySwitch's refusal when the agent no longer
+// runs on SwitchOptions.ExpectFrom.
+var ErrSwitchedMeanwhile = errors.New("provider was switched meanwhile")
+
+// failoverAware is a Pool that can say an agent is being failed over.
+type failoverAware interface {
+	FailingOver(sessionID, agentName string) bool
 }
 
 // SwitchResult is what ApplySwitch did.
@@ -117,7 +132,11 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	}
 
 	// Kill async — file already updated, next Send will spawn with new provider.
-	go func() { _ = pool.Kill(sessionID, agentName) }()
+	// Not while a failover runs: it already stopped the old process, and
+	// re-sends the turn to whatever agents.json names — this switch.
+	if fa, ok := pool.(failoverAware); !ok || !fa.FailingOver(sessionID, agentName) {
+		go func() { _ = pool.Kill(sessionID, agentName) }()
+	}
 
 	// Optional greeting to warm up the new agent.
 	if opts.Greeting != "" {
@@ -200,6 +219,13 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 		for i, a := range loaded.Agents {
 			if a.Name == agentName {
 				fromKey = normalizeProviderKey(a.Provider)
+				// A failover moves the agent off the instance that failed,
+				// and only that one: anything else means a switch landed
+				// after the failure (a person's pick), which wins.
+				if opts.ExpectFrom != "" && a.Provider != "" && fromKey != normalizeProviderKey(opts.ExpectFrom) {
+					refused = ErrSwitchedMeanwhile
+					return nil, false, refused
+				}
 				sameInstance := normalizeProviderKey(a.Provider) == newKey
 				// Reject a no-op switch: same instance AND same (or no) model pin
 				// requested. Picking a different model on the same wick instance

@@ -107,6 +107,21 @@ type Pool struct {
 	// capacity math is exercised without touching disk or the global
 	// provider registry (which Save mutates via an async rescan).
 	providerMax func(pType, pName string) int
+
+	// foMu guards the failover bookkeeping (failover.go): foActive marks
+	// the session agents being moved to another provider right now,
+	// foRuns the pool's memory of each one's failover run.
+	// foCancel marks a failover a person stopped (Kill) before its
+	// re-send, foRetired the process each failover stopped until its exit
+	// arrives, foResendKey the run a pending re-send spawn carries on.
+	// foStage is a test seam (nil in production).
+	foMu        sync.Mutex
+	foActive    map[string]bool
+	foRuns      map[string]*failoverRun
+	foCancel    map[string]bool
+	foRetired   map[string]*provider.Agent
+	foResendKey map[string]string
+	foStage     func(stage string)
 }
 
 // PoolConfig knobs.
@@ -235,6 +250,16 @@ type PoolConfig struct {
 	// want every transition should subscribe to AgentEvent via
 	// the factory's OnEvent. Optional; nil = no callback.
 	OnLifecycle func(LifecycleEvent)
+	// OnFailoverNotify / OnFailoverReply carry an automatic provider
+	// failover's notice out, like SwitchOptions.Notify / Reply of a manual
+	// switch: the system turn's chip and steps for the web UI, the
+	// sentence for channels that show no system turn. Optional.
+	OnFailoverNotify func(sessionID, agentName, chip string, steps []string)
+	OnFailoverReply  func(sessionID, agentName, text string)
+	// OnFailoverAbort publishes the end of a turn a failover took over
+	// but could not carry on (switch refused, re-send failed, session
+	// stopped): the original Error when there is one, then Done. Optional.
+	OnFailoverAbort func(sessionID, agentName string, evs []event.AgentEvent)
 	// OnUserMessage fires when a user-role message is injected into a
 	// session from a NON-web source (a channel or the schedule runner).
 	// It lets the web SSE layer push the incoming turn to connected
@@ -408,6 +433,14 @@ type FactoryOptions struct {
 	// instance. Pulled from the agent entry by the pool; empty = that
 	// provider's own default.
 	ModelID string
+	// OnFailover / OnTurnOK are the pool's failover hooks for this spawn
+	// (failover.go), forwarded to provider.Options. The factory leaves
+	// OnFailover off for a remote spawner.
+	OnFailover func(provider.FailoverRequest) provider.FailoverVerdict
+	OnTurnOK   func(sentAt time.Time)
+	// FailoverMsgKey is the failover run this spawn re-sends a turn for
+	// ("" = none); see provider.Options.FailoverMsgKey.
+	FailoverMsgKey string
 }
 
 // queueEntry is one request waiting for a slot.
@@ -888,6 +921,21 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		entry = nil
 	}
 
+	// The agent is being moved to another provider: the message waits in
+	// the buffer and goes out after the turn it interrupted.
+	if held, err := p.holdForFailover(key, sessionID, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); held {
+		if err != nil {
+			return err
+		}
+		delivered = true
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback, reply, userTurnID)
+		if role == "user" {
+			p.setLabelIfEmpty(sessionID, text)
+			p.notifyUserMessage(sessionID, agentName, source, text, sender)
+		}
+		return nil
+	}
+
 	turnPersisted := false
 	userMsgNotified := false
 	if alive {
@@ -1001,6 +1049,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		return nil
 	}
 
+	return p.spawnOrQueue(ctx, sessionID, agentName, source)
+}
+
+// spawnOrQueue starts sessionID's agent on what is buffered when a slot
+// is free, and queues it otherwise. Caller already buffered the message.
+func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source string) error {
+	key := sessionKey(sessionID, agentName)
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
 	pType, pName := p.providerForSession(sessionID, agentName)
@@ -1291,6 +1346,11 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		MaxTurns:       maxTurns,
 		ThinkingTokens: thinkingTokens,
 		ModelID:        modelID,
+		OnFailover:     p.decideFailover,
+		FailoverMsgKey: p.takeResendKey(sessionKey(sessionID, agentName)),
+		OnTurnOK: func(sentAt time.Time) {
+			p.turnOK(sessionID, agentName, pType+"/"+pName, sentAt)
+		},
 	})
 	if err != nil {
 		return err
@@ -2404,6 +2464,9 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 // down — which is the difference between "fine, that was me" and "why did
 // my work vanish". Pass empty strings when nothing is known.
 func (p *Pool) KillBy(sessionID, agentName, by, note string) error {
+	// A failover between processes has nothing to stop yet: cancel its
+	// re-send instead.
+	p.cancelSessionFailovers(sessionID)
 	p.mu.Lock()
 	prefix := sessionID + "::"
 	var entries []*runEntry
@@ -2468,9 +2531,13 @@ func (p *Pool) KillAgent(sessionID, agentName string) error {
 // paths use it so a sub-agent that was stopped by its parent says so,
 // rather than looking like it died on its own.
 func (p *Pool) KillAgentBy(sessionID, agentName, by, note string) error {
+	canceled := p.cancelFailover(sessionKey(sessionID, agentName))
 	p.mu.Lock()
 	e, ok := p.active[sessionID+"::"+agentName]
 	p.mu.Unlock()
+	if !ok && canceled {
+		return nil
+	}
 	// Stop() blocks for up to 5s waiting on the reader goroutine, so it
 	// must never run while holding p.mu — Kill releases the lock first
 	// for the same reason.
@@ -2577,6 +2644,7 @@ func (p *Pool) Dequeue(sessionID, agentName string) int {
 // only knows the session id — Dequeue requires an exact agent match,
 // which the UI often can't supply.
 func (p *Pool) DequeueSession(sessionID string) int {
+	p.cancelSessionFailovers(sessionID)
 	p.mu.Lock()
 	out := p.queue[:0]
 	removed := 0
@@ -2612,6 +2680,29 @@ func (p *Pool) DequeueSession(sessionID string) int {
 // claude (append mode) keeps the 1-agent-1-process model: every exit is
 // the agent dying, so all reasons release.
 func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
+	p.HandleExitTurnEnds(sessionID, agentName, reason, reasonDetail)
+}
+
+// HandleExitTurnEnds is HandleExit that also says whether the exit ends a
+// turn (the caller then publishes its synthetic Done): false for the
+// exit of a process a failover stopped. One decision, taken where the
+// exit is handled, so the caller cannot read a failover flag that
+// changed in between.
+func (p *Pool) HandleExitTurnEnds(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
+	// A failover stopped this process on purpose; its turn goes on
+	// elsewhere, so there is nothing to heal, re-buffer or recover. A late
+	// exit of it must not release the entry of its replacement.
+	if retired, release := p.retiredExit(sessionKey(sessionID, agentName), true); retired {
+		if release {
+			p.onAgentExit(sessionID, agentName)
+		}
+		return false
+	}
+	p.handleExit(sessionID, agentName, reason, reasonDetail)
+	return true
+}
+
+func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
 	// ExitClean too: omp RPC / opencode report a missing resume as the
 	// turn's own error and exit clean, so the flag, not stderr, says so.
 	if reason == provider.ExitError || reason == provider.ExitClean {

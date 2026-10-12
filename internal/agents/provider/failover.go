@@ -33,6 +33,13 @@ type FailoverRequest struct {
 	Produced bool
 	// Snapshot is the turn's output so far, synthetic limit text excluded.
 	Snapshot TurnSnapshot
+	// ErrorMsg is the Error's own text: what consumers get when the
+	// failover cannot go through after all.
+	ErrorMsg string
+	// MsgKey is the failover run this agent was spawned to carry on
+	// (Options.FailoverMsgKey), set only for the turn that run re-sent;
+	// "" = the turn is a message of its own.
+	MsgKey string
 }
 
 // FailoverVerdict is the pool's answer. Rerun=false leaves the error to

@@ -450,6 +450,10 @@ var bgRescans sync.WaitGroup
 // rescan has returned. Test-only helper.
 func waitBackgroundRescans() { bgRescans.Wait() }
 
+// WaitBackgroundRescans is waitBackgroundRescans for tests outside this
+// package that Save instances into a temp home.
+func WaitBackgroundRescans() { bgRescans.Wait() }
+
 // reloadInstanceCache pulls a fresh snapshot from userconfig under the
 // caller-supplied lock contract. Called by FindCached on a miss and
 // by mutating ops (Save/Delete/SetHookEnabled) after writing.

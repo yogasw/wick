@@ -307,9 +307,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// for providers that get no MCP credential at all.
 	var runAsUserID string
 	spawner := f.Spawner
+	// remote: the turn is a call to another wick; failover is not wired
+	// for it (the remote end owns its providers).
+	remote := false
 	if spawner == nil && f.RemoteSpawnerLoader != nil {
 		if rs, ok := f.RemoteSpawnerLoader(opt.SessionID); ok {
-			spawner = rs
+			spawner, remote = rs, true
 		}
 	}
 	if spawner == nil {
@@ -591,6 +594,23 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		// per-instance override (providers UI) takes precedence over the
 		// type default.
 		SendMode: sendModeFor(pType, resolvedIns.SendMode),
+		OnFailover: func() func(provider.FailoverRequest) provider.FailoverVerdict {
+			if remote || opt.OnFailover == nil {
+				return nil
+			}
+			sid, name := opt.SessionID, opt.AgentName
+			return func(r provider.FailoverRequest) provider.FailoverVerdict {
+				r.SessionID, r.AgentName = sid, name
+				return opt.OnFailover(r)
+			}
+		}(),
+		OnTurnOK: func() func(time.Time) {
+			if remote {
+				return nil
+			}
+			return opt.OnTurnOK
+		}(),
+		FailoverMsgKey: opt.FailoverMsgKey,
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken, RunAsUserID: runAsUserID}, nil
 }

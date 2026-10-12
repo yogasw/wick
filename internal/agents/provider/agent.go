@@ -103,6 +103,22 @@ type Agent struct {
 	// turnMsg is the message the current respawn turn started with;
 	// retriedMsg the last one re-run after a quota hit (once per message).
 	turnMsg, retriedMsg string
+	// lastSent is the last message handed to the CLI in any send mode, as
+	// sent (sender line included), and lastSentAt when; a failover
+	// re-sends or quotes it. turnErr: an Error ended a turn since then.
+	lastSent   string
+	lastSentAt time.Time
+	turnErr    bool
+	// turnOpen: a turn was sent and has not ended yet — a message sent
+	// meanwhile joins lastSent instead of replacing it. turns counts the
+	// turns started, so FailoverMsgKey is told only for the first.
+	turnOpen bool
+	turns    int
+	// failingOver latches once the pool took this agent's failed turn
+	// over to another provider (OnFailover): the process only waits to be
+	// killed, so its later Done/Error are swallowed and nothing queued on
+	// it runs here.
+	failingOver bool
 	// modelOverride replaces cfg.ModelID once an auto-retry moved this
 	// agent off a refused model (modelretry.go); modelRetryMsg is the
 	// message being retried, modelRetries/modelTried its retries so far.
@@ -290,6 +306,20 @@ type Options struct {
 	// instance. Empty = that provider's own default. Forwarded verbatim
 	// into SpawnOptions.
 	ModelID string
+	// OnFailover, when set, is asked once per turn that fails with a
+	// classified error (ErrKind) no model retry or account rotation
+	// already took: a Rerun verdict turns the Error into a Warning notice
+	// before anything else sees it, and the pool carries the turn on
+	// another provider. nil = errors surface as they always did.
+	OnFailover func(FailoverRequest) FailoverVerdict
+	// OnTurnOK fires (in its own goroutine) after a turn ends in Done with
+	// no error since the message that started it, sentAt being when that
+	// message went out. The pool clears the account's failure with it.
+	OnTurnOK func(sentAt time.Time)
+	// FailoverMsgKey marks a spawn made to carry a failover run on: the
+	// first turn's failure reports it (FailoverRequest.MsgKey), so the
+	// pool keeps counting that run's tried targets and hops.
+	FailoverMsgKey string
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -496,8 +526,117 @@ func (a *Agent) Send(text string) error {
 	}
 	a.mu.Lock()
 	a.unanswered = append(a.unanswered, text)
+	a.noteSentLocked(text)
 	a.mu.Unlock()
 	return nil
+}
+
+// noteSentLocked records text as the message the next turn answers.
+// Caller holds a.mu.
+func (a *Agent) noteSentLocked(text string) {
+	if a.turnOpen && a.lastSent != "" {
+		// Sent mid-turn: the CLI folds it into the running turn, so a
+		// failover must re-send both.
+		a.lastSent += "\n\n" + text
+		return
+	}
+	a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen = text, time.Now(), false, true
+	a.turns++
+}
+
+// turnEnded closes the turn noteSentLocked opened.
+func (a *Agent) turnEnded() {
+	a.mu.Lock()
+	a.turnOpen = false
+	a.mu.Unlock()
+}
+
+// ExitReported reports whether this agent's current process already
+// fired its exit hook — how the pool tells an agent's own exit from a
+// late one of the process it replaced.
+func (a *Agent) ExitReported() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.exitReasonSet
+}
+
+// LastSent is the last message handed to the CLI, as sent.
+func (a *Agent) LastSent() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastSent
+}
+
+// TakePending hands over (and forgets) the messages queued behind the
+// running turn of a respawn-mode agent, for a failover to re-send them on
+// the next provider. nil for any other mode.
+func (a *Agent) TakePending() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	q := a.pendingQueue
+	a.pendingQueue = nil
+	return q
+}
+
+// FailingOver reports whether the pool took this agent's turn elsewhere.
+func (a *Agent) FailingOver() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.failingOver
+}
+
+// rotationQueuedLocked: the opencode account rotation already re-queued
+// this turn's message (requeueForRetry), so the turn is retried here and
+// not failed over. Caller holds a.mu.
+func (a *Agent) rotationQueuedLocked() bool {
+	return a.turnMsg != "" && a.retriedMsg == a.turnMsg &&
+		len(a.pendingQueue) > 0 && a.pendingQueue[0] == a.turnMsg
+}
+
+// askFailover offers a failed turn to OnFailover. ev is the Error, text
+// the turn's non-synthetic output. On a Rerun verdict it returns the
+// Warning that replaces ev and latches failingOver.
+func (a *Agent) askFailover(ev event.AgentEvent, text string) (event.AgentEvent, bool) {
+	if a.cfg.OnFailover == nil || a.cfg.Instance == nil {
+		return ev, false
+	}
+	a.mu.Lock()
+	userMsg, rotated, st := a.lastSent, a.rotationQueuedLocked(), a.store
+	msgKey := ""
+	if a.turns == 1 {
+		msgKey = a.cfg.FailoverMsgKey
+	}
+	a.mu.Unlock()
+	if rotated {
+		return ev, false
+	}
+	var inflight []store.TurnEvent
+	if st != nil {
+		inflight = st.InFlightEvents()
+	}
+	snap := NewTurnSnapshot(userMsg, text, inflight)
+	v := a.cfg.OnFailover(FailoverRequest{
+		SessionID: a.cfg.SessionID,
+		Instance:  InstanceTag(a.cfg.Instance.Type, a.cfg.Instance.Name),
+		Kind:      ev.ErrKind,
+		ResetAt:   ev.ResetAt,
+		Text:      userMsg,
+		Produced:  snap.Produced,
+		Snapshot:  snap,
+		ErrorMsg:  ev.ErrorMsg,
+		MsgKey:    msgKey,
+	})
+	if !v.Rerun {
+		return ev, false
+	}
+	a.mu.Lock()
+	a.failingOver = true
+	a.mu.Unlock()
+	notice := v.Notice
+	if notice == "" {
+		notice = "Provider failed over to " + v.Target
+	}
+	return event.AgentEvent{Type: event.Warning, ErrorMsg: notice, ErrKind: ev.ErrKind, ResetAt: ev.ResetAt}, true
 }
 
 // respawnWithMessage stops the current process (if any) and spawns a new one
@@ -527,7 +666,7 @@ func (a *Agent) requeueForRetry(msg string) bool {
 func (a *Agent) drainPending() {
 	a.mu.Lock()
 	a.turnActive = false
-	if a.stopped || len(a.pendingQueue) == 0 {
+	if a.stopped || a.failingOver || len(a.pendingQueue) == 0 {
 		a.mu.Unlock()
 		return
 	}
@@ -648,6 +787,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	a.parser = a.cfg.ParserFactory()
 	a.exitReasonSet = false
 	a.turnMsg = text
+	a.noteSentLocked(text)
 
 	log.Debug().Str("message", text).Str("resume_id", resumeID).Msg("agent.respawn: spawning with initial message")
 
@@ -1176,6 +1316,12 @@ func (a *Agent) run(ctx context.Context) {
 	// refusal after it must not re-run the turn (modelretry.go); retried
 	// latches the one re-queue a turn may make.
 	produced, retried := false, false
+	// turnText is the turn's non-synthetic text, for a failover snapshot;
+	// askedFor is the send (lastSentAt) the last failover question was
+	// about: one question per message, as codex reports one failure as
+	// two Errors.
+	var turnText strings.Builder
+	var askedFor time.Time
 	// Separates the assistant messages of one turn (text → tool → text) so
 	// they do not arrive glued together. Per-run state; the loop below is
 	// the only writer.
@@ -1244,6 +1390,12 @@ func (a *Agent) run(ctx context.Context) {
 			evs = []event.AgentEvent{{Type: event.Warning, ErrorMsg: err.Error(), Raw: line}}
 		}
 		for _, ev := range evs {
+			// Taken over by a failover: this process only waits for the
+			// kill, and its turn end must not reach anyone — the turn goes
+			// on (and ends) on the next provider.
+			if (ev.Type == event.Done || ev.Type == event.Error) && a.FailingOver() {
+				continue
+			}
 
 			// A tool boundary ends the current assistant message: text that comes
 			// after it is a NEW message and needs a paragraph break, or the two
@@ -1261,6 +1413,9 @@ func (a *Agent) run(ctx context.Context) {
 			}
 			if countsAsProduced(ev) {
 				produced = true
+			}
+			if ev.Type == event.TextDelta && !ev.Synthetic {
+				turnText.WriteString(ev.Text)
 			}
 
 			switch ev.Type {
@@ -1305,7 +1460,30 @@ func (a *Agent) run(ctx context.Context) {
 					if !retried {
 						retried = a.retryRefusedModel(watch, produced)
 					}
+					// Failover comes last: a model retry or an account
+					// rotation already re-runs the turn here.
+					a.mu.Lock()
+					sentAt := a.lastSentAt
+					a.mu.Unlock()
+					if !retried && ev.ErrKind != event.ErrNone && (askedFor.IsZero() || !sentAt.Equal(askedFor)) {
+						askedFor = sentAt
+						if w, ok := a.askFailover(ev, turnText.String()); ok {
+							ev = w
+						}
+					}
+					a.mu.Lock()
+					a.turnErr = true
+					a.mu.Unlock()
+				} else if a.cfg.OnTurnOK != nil && ev.ErrKind == event.ErrNone {
+					a.mu.Lock()
+					ok, at := !a.turnErr && !a.lastSentAt.IsZero(), a.lastSentAt
+					a.mu.Unlock()
+					if ok {
+						go a.cfg.OnTurnOK(at)
+					}
 				}
+				turnText.Reset()
+				a.turnEnded()
 				// Turn ended (normally or via error) — always reset
 				// toolInFlight so a crash mid-tool doesn't leave the idle
 				// timer stopped forever.

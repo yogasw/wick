@@ -680,7 +680,12 @@ func NewServer() *Server {
 				Str("agent", name).
 				Int("reason", int(reason)).
 				Msg("OnExit: publishing synthetic Done + handing to pool")
-			agentsPool.HandleExit(sid, name, reason, reasonDetail)
+			// A failover stopping the old process is not the turn's end:
+			// the turn carries on (and ends) on the next provider, so no
+			// synthetic Done may close a delegation or a channel reply.
+			if !agentsPool.HandleExitTurnEnds(sid, name, reason, reasonDetail) {
+				return
+			}
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
 			agentsBcast.Publish(sid, name, doneEv)
 			channelReg.DispatchAgentEvent(sid, doneEv)
@@ -962,6 +967,29 @@ func NewServer() *Server {
 	var teamSvc *team.Service
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent: maxConc,
+		// An automatic provider failover tells the same surfaces a manual
+		// switch does: the web UI gets the system turn, a channel thread
+		// (which shows no system turns) a line ahead of the continued
+		// reply — no Done, the turn is still running.
+		OnFailoverNotify: func(sid, name, chip string, steps []string) {
+			agentsBcast.PublishSystemTurn(sid, name, chip, steps)
+		},
+		// A turn a failover could not carry on ends like an unswitched
+		// one: its Error (when there is one) and the Done its stopped
+		// process's exit did not publish.
+		OnFailoverAbort: func(sid, name string, evs []agentevent.AgentEvent) {
+			for _, ev := range evs {
+				agentsBcast.Publish(sid, name, ev)
+				channelReg.DispatchAgentEventFrom(sid, name, ev)
+				turnObserver.OnEvent(sid, name, ev)
+			}
+		},
+		OnFailoverReply: func(sid, name string, text string) {
+			if agentconfig.ParentOfSubSession(sid) != "" {
+				return
+			}
+			channelReg.DispatchAgentEvent(sid, agentevent.AgentEvent{Type: agentevent.TextDelta, Text: "⚠️ " + text + "\n\n"})
+		},
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
 		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
 		PreemptIdle:   preemptIdle,

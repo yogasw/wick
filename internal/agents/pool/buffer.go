@@ -13,6 +13,7 @@
 package pool
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -47,6 +48,19 @@ func NewBuffer(layout config.Layout, sessionID string) (*Buffer, error) {
 func (b *Buffer) Append(text string) error {
 	b.mu.Lock()
 	b.lines = append(b.lines, text)
+	snapshot := append([]string(nil), b.lines...)
+	b.mu.Unlock()
+	return b.persist(snapshot)
+}
+
+// Prepend puts texts, in order, ahead of everything buffered: a failover
+// re-send is the turn the held messages came after. Nil-safe like Drain.
+func (b *Buffer) Prepend(texts ...string) error {
+	if b == nil {
+		return errors.New("no buffer")
+	}
+	b.mu.Lock()
+	b.lines = append(append([]string(nil), texts...), b.lines...)
 	snapshot := append([]string(nil), b.lines...)
 	b.mu.Unlock()
 	return b.persist(snapshot)
