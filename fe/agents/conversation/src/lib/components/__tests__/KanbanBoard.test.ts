@@ -183,6 +183,20 @@ describe("KanbanBoard", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  // The multi-project mode added a second argument; this board never sends it.
+  test("single mode calls back with exactly the arguments it always had", async () => {
+    const { onOpen, onOpenSession, onReload } = renderWithRail();
+    await fireEvent.click(screen.getByTestId("ticket-card-T-4F2A"));
+    expect(onOpen.mock.calls[0]).toEqual(["T-4F2A"]);
+    await fireEvent.click(screen.getByTestId("untracked-loose-1"));
+    expect(onOpenSession.mock.calls[0]).toEqual(["loose-1"]);
+    const transfer = dt();
+    await fireEvent.dragStart(screen.getByTestId("untracked-loose-1"), { dataTransfer: transfer });
+    await fireEvent.drop(screen.getByTestId("ticket-card-T-4F2A"), { dataTransfer: transfer });
+    await vi.waitFor(() => expect(onReload).toHaveBeenCalled());
+    expect(onReload.mock.calls[0]).toEqual([]);
+  });
+
   test("clicking a card opens the ticket", async () => {
     const { onOpen } = renderBoard();
     await fireEvent.click(screen.getByTestId("ticket-card-T-4F2A"));

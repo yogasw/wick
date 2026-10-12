@@ -5,13 +5,20 @@
          with ticket mode on) and Done, which saves ticket_projects;
        - /team/t: the combined board of the picked projects;
        - /team/t/<project>/<ticket>: that ticket's page.
-     The board and the ticket page are placeholders for now; they fill the
-     two blocks marked below. The header (title + ⚙) is AgentsApp's. */
-  import { onMount } from "svelte";
+     The ticket page is a placeholder for now (marked below). The header
+     (title + ⚙) is AgentsApp's. */
+  import { onMount, untrack } from "svelte";
+  import { Effect } from "effect";
+  import { WickClientLayer } from "@wick-fe/common-api";
   import { runApi, saveTeamSettings, type TeamSettings } from "../../api/team.js";
+  import { getProjectTickets, getTicketFilter, saveTicketFilter } from "../../api/tickets.js";
   import type { TicketsRoute } from "../../agentsRouter.js";
-  import type { ProjectOption } from "../../types/agents.js";
-  import { ticketProjectOptions, withProject } from "../../ticketProjects.js";
+  import type { ProjectOption, TicketBoard, TicketFilter, TicketSessionRow } from "../../types/agents.js";
+  import { TEAM_FILTER_KEY, ticketProjectOptions, withProject } from "../../ticketProjects.js";
+  import type { BoardProject } from "../../ticketBoardMerge.js";
+  import { keepPushedOff, mergeRail } from "../../railPaging.js";
+  import { connectSessionsStream } from "../../stores/sessionsStream.js";
+  import KanbanBoard from "../KanbanBoard.svelte";
 
   type Props = {
     base: string;
@@ -28,8 +35,10 @@
     onPicked: (s: TeamSettings) => void;
     /** Move within Tickets ({} = the board). */
     onRoute: (r: TicketsRoute) => void;
+    /** A chat row on the board was clicked. Absent = open it in Agents. */
+    onOpenSession?: (sessionId: string, projectId?: string) => void;
   };
-  let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute }: Props = $props();
+  let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession }: Props = $props();
 
   let projects = $state<ProjectOption[] | null>(null);
   let loadError = $state("");
@@ -58,6 +67,245 @@
     } finally {
       saving = false;
     }
+  }
+
+  /* ── the combined board ──
+     One request per picked project, all at once; each board is drawn as it
+     arrives, and a project that fails says so on its own row instead of
+     leaving a gap nobody can explain. */
+  type Slot = {
+    board?: TicketBoard;
+    error?: string;
+    /* Rail pages loaded on "load more", and where they end ("" = the
+       first page's own cursor continues the rail). */
+    more: TicketSessionRow[];
+    moreNext: string;
+    /* The request `board` answered, so a reload can tell "the same list
+       moved" from "a different list". */
+    key?: string;
+  };
+  let slots = $state<Record<string, Slot>>({});
+  const slotOf = (id: string): Slot => slots[id] ?? { more: [], moreNext: "" };
+
+  /* The combined filter, saved under its own key so a project's own
+     board filter is never touched. */
+  let filter = $state<TicketFilter>({});
+  let filterLoaded = $state(false);
+  let untrackedOwner = $state<"me" | "all">("me");
+  let trackedHere = $state(new Set<string>());
+  const UNTRACKED_PAGE = 25;
+  const UNTRACKED_MORE_PAGE = 50;
+
+  onMount(() => {
+    Effect.runPromise(getTicketFilter(base, TEAM_FILTER_KEY).pipe(Effect.provide(WickClientLayer)))
+      .then((f) => { filter = f ?? {}; })
+      .catch(() => { /* the defaults are a fine board */ })
+      .finally(() => { filterLoaded = true; });
+  });
+
+  /* Same request as a project board makes (ProjectLanding), sent to each. */
+  const boardOptions = $derived.by(() => {
+    const saved = filter.statuses;
+    const statuses = !saved || saved.length === 0 ? undefined : saved[0] === "\u0000none" ? [] : saved;
+    return {
+      rows: 3,
+      statuses,
+      assignee: filter.assignee || undefined,
+      untracked: filter.show_untracked === true,
+      untrackedLimit: UNTRACKED_PAGE,
+      untrackedOwner,
+    };
+  });
+  const showBoard = $derived(!(route.project && route.ticket) && !settingsError && !!selected?.length);
+  const requestKey = $derived((selected ?? []).join(",") + "|" + JSON.stringify(boardOptions));
+
+  $effect(() => {
+    if (!filterLoaded || !showBoard) return;
+    requestKey; // a different request is a different list
+    untrack(() => {
+      /* Each board already drawn stays until its replacement arrives (as
+         on a project's own board), so a filter click never empties the
+         board or remounts it — the project select, a running board
+         button's panel and a half-typed ticket survive. Only the rail
+         pages of the old request go: they no longer continue the list. */
+      const keep = new Set(selected ?? []);
+      const next: Record<string, Slot> = {};
+      for (const [id, s] of Object.entries(slots)) {
+        if (keep.has(id) && s.board) next[id] = { board: s.board, key: s.key, more: [], moreNext: "" };
+      }
+      slots = next;
+      trackedHere = new Set();
+      for (const id of selected ?? []) loadBoard(id);
+    });
+  });
+
+  /* Per project, the newest load wins: a slow answer to an older request
+     (two quick reloads, a filter click mid-load) is dropped on arrival. */
+  const loadSeq: Record<string, number> = {};
+  function loadBoard(id: string) {
+    const key = requestKey;
+    const n = (loadSeq[id] = (loadSeq[id] ?? 0) + 1);
+    Effect.runPromise(getProjectTickets(base, id, boardOptions).pipe(Effect.provide(WickClientLayer)))
+      .then((b) => {
+        if (key !== requestKey || n !== loadSeq[id]) return; // superseded
+        const cur = slotOf(id);
+        // Same list, moved: a chat pushed off page one stays on the rail.
+        let more = cur.more;
+        if (cur.board && cur.key === key) more = keepPushedOff(cur.board.untracked, b.untracked, cur.more, trackedHere, UNTRACKED_PAGE);
+        slots[id] = { ...cur, board: b, key, error: undefined, more, moreNext: more.length > 0 ? cur.moreNext : "" };
+      })
+      .catch((e: unknown) => {
+        if (key !== requestKey || n !== loadSeq[id]) return;
+        // A board already drawn stays on a transient failure.
+        if (slotOf(id).board) return;
+        slots[id] = { ...slotOf(id), error: e instanceof Error ? e.message : String(e) };
+      });
+  }
+
+  /* One more page of one project's rail. */
+  let loadingMore = new Set<string>();
+  function loadMoreUntracked(id?: string) {
+    if (!id || loadingMore.has(id)) return;
+    const slot = slotOf(id);
+    const after = slot.more.length > 0 ? slot.moreNext : slot.board?.untracked_next;
+    if (!after) return;
+    loadingMore.add(id);
+    const key = requestKey;
+    Effect.runPromise(
+      getProjectTickets(base, id, {
+        rows: 0,
+        statuses: [], // rows only — no cards
+        untracked: true,
+        untrackedLimit: UNTRACKED_MORE_PAGE,
+        untrackedAfter: after,
+        untrackedOwner,
+      }).pipe(Effect.provide(WickClientLayer)),
+    )
+      .then((b) => {
+        if (key !== requestKey) return;
+        const cur = slotOf(id);
+        const have = new Set([...(cur.board?.untracked ?? []), ...cur.more].map((r) => r.id));
+        slots[id] = { ...cur, more: [...cur.more, ...b.untracked.filter((r) => !have.has(r.id))], moreNext: b.untracked_next ?? "" };
+      })
+      .catch(() => { /* offered again on the next click */ })
+      .finally(() => { loadingMore.delete(id); });
+  }
+
+  /* The boards handed to KanbanBoard: the arrived ones, in picked order,
+     each rail with its loaded pages. */
+  const boardProjects = $derived.by((): BoardProject[] => {
+    const out: BoardProject[] = [];
+    for (const id of selected ?? []) {
+      const s = slots[id];
+      if (!s?.board) continue;
+      const board =
+        s.more.length === 0
+          ? s.board
+          : { ...s.board, untracked: mergeRail(s.board.untracked, s.more, trackedHere), untracked_next: s.moreNext || undefined };
+      out.push({ id, name: nameOf(id), board });
+    }
+    return out;
+  });
+
+  function sessionTracked(id: string) {
+    trackedHere = new Set(trackedHere).add(id);
+    for (const [pid, s] of Object.entries(slots)) {
+      if (s.more.some((r) => r.id === id)) slots[pid] = { ...s, more: s.more.filter((r) => r.id !== id) };
+    }
+  }
+
+  function reload(id?: string) {
+    if (id) loadBoard(id);
+    else for (const p of selected ?? []) loadBoard(p);
+  }
+
+  /* ── keeping the board current ──
+     The same mechanism as a project's own board (ProjectLanding): a
+     `ticket` signal on /stream/sessions for one of the picked projects
+     refetches that project; polling every 60 s is the fallback while the
+     stream is down, and a reconnect refetches all of them once. A hidden
+     tab or a drag in progress only marks the project stale; it is fetched
+     on return / on drop. */
+  const BOARD_POLL_MS = 60_000;
+  let dragging = $state(false);
+  $effect(() => {
+    const on = () => { dragging = true; };
+    const off = () => { dragging = false; };
+    window.addEventListener("dragstart", on);
+    window.addEventListener("dragend", off);
+    window.addEventListener("drop", off);
+    return () => {
+      window.removeEventListener("dragstart", on);
+      window.removeEventListener("dragend", off);
+      window.removeEventListener("drop", off);
+    };
+  });
+
+  const selectedKey = $derived((selected ?? []).join(","));
+  $effect(() => {
+    if (!filterLoaded || !showBoard) return;
+    const picked = new Set(selectedKey.split(","));
+    let streamUp = false;
+    let dropped = false;
+    const stale = new Set<string>();
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const due = (pid: string) => {
+      if (dragging || (typeof document !== "undefined" && document.hidden)) {
+        stale.add(pid);
+        return;
+      }
+      stale.delete(pid);
+      loadBoard(pid);
+    };
+    /* A burst (a sync touching many tickets) costs one fetch per project. */
+    const soon = (pid: string) => {
+      const t = timers.get(pid);
+      if (t !== undefined) clearTimeout(t);
+      timers.set(pid, setTimeout(() => { timers.delete(pid); due(pid); }, 300));
+    };
+    const all = (f: (pid: string) => void) => { for (const pid of picked) f(pid); };
+    const leave = connectSessionsStream(base, {
+      onTicket: (t) => { if (picked.has(t.project_id)) soon(t.project_id); },
+      onStatus: (st) => {
+        streamUp = st === "connected";
+        if (!streamUp) dropped = true;
+        else if (dropped) { dropped = false; all(soon); }
+      },
+    });
+    const id = setInterval(() => { if (!streamUp) all(due); }, BOARD_POLL_MS);
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (!streamUp) all(due);
+      else for (const pid of [...stale]) due(pid);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const onDragEnd = () => { for (const pid of [...stale]) soon(pid); };
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDragEnd);
+    return () => {
+      leave();
+      for (const t of timers.values()) clearTimeout(t);
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDragEnd);
+    };
+  });
+
+  let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  function applyFilter(f: TicketFilter) {
+    filter = f;
+    clearTimeout(filterSaveTimer);
+    filterSaveTimer = setTimeout(() => {
+      Effect.runPromise(
+        saveTicketFilter(base, TEAM_FILTER_KEY, $state.snapshot(filter)).pipe(Effect.provide(WickClientLayer)),
+      ).catch(() => { /* saving the preference is best-effort */ });
+    }, 400);
+  }
+
+  function openSession(id: string, projectId?: string) {
+    if (onOpenSession) onOpenSession(id, projectId);
+    else window.location.href = `${base}/sessions/${encodeURIComponent(id)}`;
   }
 
   const muted = "text-black-800 dark:text-black-600";
@@ -120,11 +368,37 @@
       <p class="mt-3 text-xs {muted}">Only projects you can already open. Your setting; nothing changes in the projects.</p>
     </div>
   {:else}
-    <!-- Combined board: KanbanBoard in multi-project mode goes here. -->
-    <div class="p-4" data-testid="tickets-board">
-      <p class="text-sm {muted}">
-        Tickets of {#each selected as id, i (id)}{i ? " · " : ""}<span class="font-medium text-black-900 dark:text-white-100">📁 {nameOf(id)}</span>{/each}
-      </p>
+    <div class="flex h-full min-h-0 flex-col gap-2 p-4" data-testid="tickets-board">
+      <!-- A row per project still on its way or refused; the board below
+           draws whatever has arrived. -->
+      {#each selected as id (id)}
+        {@const s = slots[id]}
+        {#if s?.error}
+          <div class="flex items-center gap-2 rounded-lg border border-neg-100 px-3 py-2 text-xs" data-testid={"tickets-board-error-" + id}>
+            <span class="min-w-0 truncate text-neg-400">📁 {nameOf(id)}: couldn't load its tickets — {s.error}</span>
+            <button type="button" class="ml-auto shrink-0 font-medium text-green-600 hover:underline" onclick={() => loadBoard(id)}>Retry</button>
+          </div>
+        {:else if !s?.board}
+          <p class="text-xs {muted}" data-testid={"tickets-board-loading-" + id}>Loading 📁 {nameOf(id)}…</p>
+        {/if}
+      {/each}
+      {#if boardProjects.length > 0}
+        <div class="min-h-0 flex-1">
+          <KanbanBoard
+            {base}
+            projects={boardProjects}
+            {filter}
+            {untrackedOwner}
+            onUntrackedOwner={(v) => { untrackedOwner = v; }}
+            onUntrackedMore={loadMoreUntracked}
+            onSessionTracked={sessionTracked}
+            onFilter={applyFilter}
+            onOpen={(ticket, project) => { if (project) onRoute({ project, ticket }); }}
+            onOpenSession={openSession}
+            onReload={reload}
+          />
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

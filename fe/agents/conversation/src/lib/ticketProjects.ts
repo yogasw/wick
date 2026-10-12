@@ -33,3 +33,10 @@ export function ticketsSubtitle(ids: readonly string[], names: Record<string, st
 export function projectCount(n: number): string {
   return n ? `${n} project${n === 1 ? "" : "s"}` : "";
 }
+
+/** TEAM_FILTER_KEY is where the combined board saves its filter
+    (PUT /api/me/ticket-filters/{key}). The server keys that map by any
+    non-empty string and never checks it is a project, and no project id
+    looks like this — so the combined board never overwrites a project's
+    own saved filter. */
+export const TEAM_FILTER_KEY = "__team__";

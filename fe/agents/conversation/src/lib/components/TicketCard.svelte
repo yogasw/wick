@@ -31,6 +31,14 @@
        so a card in a filtered board says WHY it survived — otherwise a hit
        on an assignee's name looks like a hit on a title nobody can see. */
     highlight?: string;
+    /* The project's name, on a board that combines several (Team ›
+       Tickets). Absent on a project's own board, where it goes without
+       saying. */
+    project?: string;
+    /* The chat in flight belongs to another project: the card does not
+       light up, but still takes the drop so the board can say why
+       (instead of the column underneath turning it into a ticket). */
+    sessionRefused?: boolean;
   };
 
   let {
@@ -45,6 +53,8 @@
     onOpenSession,
     sessionDragging = false,
     highlight = "",
+    project,
+    sessionRefused = false,
   }: Props = $props();
 
   /* Split a string into plain and matched runs. Returned as data rather than
@@ -137,7 +147,7 @@
     if (!sessionDragging) return;
     e.preventDefault();
     e.stopPropagation();
-    dropHover = true;
+    dropHover = !sessionRefused;
   }}
   ondragleave={() => { dropHover = false; }}
   ondrop={(e) => {
@@ -169,6 +179,9 @@
     </span>
     {#if ticket.stale}
       <span class="shrink-0 rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
+    {/if}
+    {#if project}
+      <span title={project} data-testid={"ticket-project-" + ticket.id} class="ml-auto min-w-0 truncate text-[10px] text-black-700 dark:text-black-600">📁 {project}</span>
     {/if}
   </div>
 
