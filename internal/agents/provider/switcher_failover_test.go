@@ -170,7 +170,7 @@ func TestApplySwitchFailover(t *testing.T) {
 	t.Run("errors return no keys", func(t *testing.T) {
 		seedSession(t, layout, "s-err", "main", "codex/codex")
 		res, err := ApplySwitch(layout, "s-err", "main", "codex/nope", SwitchOptions{Failover: true})
-		if err == nil || res != (SwitchResult{}) {
+		if err == nil || !reflect.DeepEqual(res, SwitchResult{}) {
 			t.Fatalf("ApplySwitch = %+v, %v", res, err)
 		}
 		if _, err := ApplySwitch(layout, "s-err", "main", "codex/gemini_flash", SwitchOptions{Failover: true, ReturnHome: true}); err == nil {
@@ -247,7 +247,9 @@ func TestApplySwitchFailover(t *testing.T) {
 			t.Fatalf("return up the chain = %+v, %v", res, err)
 		}
 		a := agentState(t, layout, id)
-		if a.Provider != "codex/codex" || !reflect.DeepEqual(a.Failover, &session.FailoverState{HomeProvider: "claude/claude"}) {
+		// The stand-ins are remembered until the agent is back home.
+		wantSt := &session.FailoverState{HomeProvider: "claude/claude", StandIns: []string{"codex/codex", "codex/gemini_flash"}}
+		if a.Provider != "codex/codex" || !reflect.DeepEqual(a.Failover, wantSt) {
 			t.Fatalf("after return up the chain: %q %+v", a.Provider, a.Failover)
 		}
 		res, err = ApplySwitch(layout, id, "main", "claude", SwitchOptions{ReturnHome: true})
@@ -266,12 +268,59 @@ func TestApplySwitchFailover(t *testing.T) {
 		if last := turns[len(turns)-1]; !strings.HasPrefix(last.Events[0].Text, "Back to home claude") || last.Extras["home"] != "claude/claude" {
 			t.Fatalf("return notice = %+v", last)
 		}
-		// codex → claude: the home resumes its own transcript only.
-		if note := turns[len(turns)-1].Extras["note"]; !strings.Contains(note, "turns answered on codex/codex while it stood in are not part of claude") {
-			t.Fatalf("return note = %q, want the stand-in's turns called out", note)
+		// codex → claude: the home resumes its own transcript only, so
+		// every stand-in passed through is named, not just the last.
+		if note := turns[len(turns)-1].Extras["note"]; !strings.Contains(note, "turns answered on codex/codex, codex/gemini_flash while they stood in are not part of claude") {
+			t.Fatalf("return note = %q, want every stand-in's turns called out", note)
+		}
+		if st := agentState(t, layout, id).Failover; len(st.StandIns) != 0 {
+			t.Fatalf("back home: stand-ins %v not cleared", st.StandIns)
 		}
 		if !strings.HasPrefix(turns[2].Events[0].Text, "Moved back up the failover chain of claude/claude") {
 			t.Fatalf("chain notice = %q", turns[2].Events[0].Text)
 		}
 	})
+}
+
+func TestChannelLabel(t *testing.T) {
+	for _, c := range []struct{ key, model, want string }{
+		{"claude/claude_support_ent", "", "claude_support_ent"},
+		{"omp/work", "anthropic/claude-opus-4", "work · claude-opus-4"},
+		{"codex/codex", "gpt-5", "codex · gpt-5"},
+		{"claude", "", "claude"},
+	} {
+		if got := ChannelLabel(c.key, c.model); got != c.want {
+			t.Errorf("ChannelLabel(%q, %q) = %q, want %q", c.key, c.model, got, c.want)
+		}
+	}
+}
+
+// TestFailoverReplyUsesChannelLabels (F4b-T10): the channel Reply of an
+// automatic switch names instances by label, not by "type/name" key.
+func TestFailoverReplyUsesChannelLabels(t *testing.T) {
+	isolateConfig(t)
+	saveSeed(t, Instance{Type: TypeCodex, Name: "codex"})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "claude"})
+	layout := config.NewLayout(t.TempDir())
+	const id = "s-lbl"
+	seedSession(t, layout, id, "main", "claude/claude")
+	var replies []string
+	reply := func(s string) { replies = append(replies, s) }
+	if _, err := ApplySwitch(layout, id, "main", "codex/codex", SwitchOptions{Failover: true, MsgKey: "k", ModelID: "openai/gpt-5", FailoverReason: "usage limit", Reply: reply}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplySwitch(layout, id, "main", "claude/claude", SwitchOptions{ReturnHome: true, Reply: reply}); err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 2 {
+		t.Fatalf("replies = %q", replies)
+	}
+	for _, r := range replies {
+		if strings.Contains(r, "claude/claude") || strings.Contains(r, "codex/codex") {
+			t.Fatalf("reply carries a raw tag: %q", r)
+		}
+	}
+	if !strings.Contains(replies[0], "Switched to codex · gpt-5") {
+		t.Fatalf("failover reply = %q", replies[0])
+	}
 }

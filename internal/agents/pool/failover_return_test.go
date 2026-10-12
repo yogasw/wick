@@ -136,7 +136,8 @@ func TestFailoverReturnAfterUntil(t *testing.T) {
 	if r := lastReturn(t, layout); !strings.HasPrefix(r.Events[0].Text, "Back to home claude/a") {
 		t.Fatalf("notice = %q", r.Events[0].Text)
 	}
-	if len(replies) != 1 || !strings.HasPrefix(replies[0], "Back to home claude/a") {
+	// The channel reply names instances by label, not "type/name" (T10).
+	if len(replies) != 1 || !strings.HasPrefix(replies[0], "Back to home a.") || strings.Contains(replies[0], "claude/") {
 		t.Fatalf("replies = %q", replies)
 	}
 	if got := userTurns(t, layout); len(got) != 2 {

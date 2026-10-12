@@ -986,7 +986,16 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 				Str("session", sessionID).
 				Str("agent", agentName).
 				Msg("pool.send: stale active entry (race), evicting and respawning")
-			p.releaseSlotIf(key, entry.agent)
+			// Not when the entry is a spawn still in flight (published
+			// before Start): evicting it would orphan the starting process
+			// and drop the session's buffer. The message is buffered below
+			// and endSpawn hands it over once the spawn is done.
+			p.mu.Lock()
+			_, spawning := p.spawningKeys[key]
+			p.mu.Unlock()
+			if !spawning {
+				p.releaseSlotIf(key, entry.agent)
+			}
 			alive = false
 		} else {
 			return err
@@ -1120,9 +1129,7 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 		// is queued or joins a spawn in flight starts nothing.
 		yieldIdleServers(sessionID, pType, pName)
 		err := p.spawn(ctx, sessionID, agentName, source)
-		p.mu.Lock()
-		delete(p.spawningKeys, key)
-		p.mu.Unlock()
+		p.endSpawn(key, sessionID)
 		return err
 	}
 	// Full — queue the request (dedup: one slot per session+agent; the
@@ -1475,6 +1482,9 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	if err != nil {
 		return err
 	}
+	// Published and drained, not started: a message sent from here on is
+	// endSpawn's to deliver (test seam).
+	p.failoverStage("spawn-drained")
 
 	if err := p.markStatus(sessionID, session.StatusRunning); err != nil {
 		return err
@@ -1824,10 +1834,35 @@ func (p *Pool) tryGrantQueue() {
 		// serve it go first (as on the direct Send path).
 		yieldIdleServers(q.sessionID, qType, qName)
 		_ = p.spawn(context.Background(), q.sessionID, q.agentName, "queue")
-		p.mu.Lock()
-		delete(p.spawningKeys, key)
-		p.mu.Unlock()
+		p.endSpawn(key, q.sessionID)
 	}()
+}
+
+// endSpawn ends key's spawn and hands the process whatever was buffered
+// after its drain. spawn drains once, right after publishing the entry,
+// but stays "spawning" until Start returns; a message sent in between is
+// buffered by a sender that sees the spawn in flight and leaves it to
+// that drain, which already happened. Checked after spawningKeys is
+// cleared, so every such message is in the buffer by then, and a later
+// sender sees no spawn and delivers its own.
+func (p *Pool) endSpawn(key, sessionID string) {
+	p.mu.Lock()
+	delete(p.spawningKeys, key)
+	e, alive := p.active[key]
+	p.mu.Unlock()
+	if !alive {
+		return
+	}
+	buf, err := p.bufferFor(sessionID)
+	if err != nil || buf.Len() == 0 {
+		return
+	}
+	if text, err := buf.Drain(); err == nil && text != "" {
+		if err := e.agent.Send(text); err != nil {
+			// Gone meanwhile: the next send or spawn drains it.
+			_ = buf.Prepend(text)
+		}
+	}
 }
 
 // bufferFor returns or lazy-creates the per-session Buffer.

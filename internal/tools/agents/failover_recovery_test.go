@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -393,5 +394,87 @@ func TestUsageCacheLoadsLastError(t *testing.T) {
 	v := c.get("k", func() ([]logintty.UsageWindow, error) { return nil, errors.New("x") }, time.Time{})
 	if v.Err == nil || v.Err.Error() != "401 unauthorized" {
 		t.Fatalf("view = %+v", v)
+	}
+}
+
+// TestFailoverRecoveryRunStopsOnCancel: the checker loop ticks until its
+// context ends, then returns.
+func TestFailoverRecoveryRunStopsOnCancel(t *testing.T) {
+	ticked := make(chan struct{}, 1)
+	r := &failoverRecovery{accounts: func() map[string]provider.Health {
+		select {
+		case ticked <- struct{}{}:
+		default:
+		}
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Run(ctx, time.Millisecond)
+	}()
+	select {
+	case <-ticked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never ticked")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// TestStopFailoverRecovery: Stop ends the started loop, is safe to call
+// twice, and a later start does not bring it back.
+func TestStopFailoverRecovery(t *testing.T) {
+	t.Cleanup(func() {
+		provider.SetUsageRefreshHook(nil)
+		failoverRecoveryMu.Lock()
+		failoverRecoveryStarted = false
+		failoverRecoveryMu.Unlock()
+	})
+	startFailoverRecovery()
+	failoverRecoveryMu.Lock()
+	done := failoverRecoveryDone
+	failoverRecoveryMu.Unlock()
+	if done == nil {
+		t.Fatal("checker not started")
+	}
+	StopFailoverRecovery()
+	select {
+	case <-done:
+	default:
+		t.Fatal("loop still running after Stop")
+	}
+	StopFailoverRecovery()
+	startFailoverRecovery()
+	failoverRecoveryMu.Lock()
+	restarted := failoverRecoveryDone != nil
+	failoverRecoveryMu.Unlock()
+	if restarted {
+		t.Fatal("start after Stop restarted the checker")
+	}
+}
+
+// TestFailoverRecoveryTimeOnlyLimitSkipsProbe (R5): a limit usage cannot
+// see is never probed and never cleared by a reading, only by time.
+func TestFailoverRecoveryTimeOnlyLimitSkipsProbe(t *testing.T) {
+	h := newRecoveryHarness(t, 10)
+	start := h.now
+	provider.MarkUnhealthy("k", provider.Health{Kind: event.ErrLimit, Since: start, CheckedAt: start, Until: start.Add(30 * time.Minute), TimeOnly: true})
+	provider.UsageDiskStore(provider.UsageDisk{Key: "k", ObservedAt: start.Add(time.Minute), Windows: []provider.UsageDiskWindow{{Key: "w", Utilization: 0}}})
+	h.reading = []provider.UsageDiskWindow{{Key: "w", Utilization: 0}}
+	h.now = start.Add(2 * time.Minute)
+	h.r.tick()
+	if h.probes != 0 || h.healthy() {
+		t.Fatalf("before Until: probes=%d healthy=%v, want 0/false", h.probes, h.healthy())
+	}
+	h.now = start.Add(31 * time.Minute)
+	h.r.tick()
+	if h.probes != 0 || !h.healthy() {
+		t.Fatalf("past Until: probes=%d healthy=%v, want 0/true", h.probes, h.healthy())
 	}
 }

@@ -30,6 +30,20 @@ func TestClassifyError(t *testing.T) {
 		{"prompt is 14290 tokens long", ErrNone},
 		{"status 429: slow down", ErrLimit},
 		{"error_during_execution", ErrNone},
+		// A status code only counts as the response's status, not as any
+		// number in the body.
+		{`API Error: 400 {"type":"error","error":{"message":"max_tokens: 500 > 200 allowed"}}`, ErrNone},
+		{"invalid request: max_tokens: 500, retry with 401 tokens", ErrNone},
+		{"context is 5030 tokens, 502 over budget", ErrNone},
+		{"401 Unauthorized", ErrAuth},
+		{"HTTP 401", ErrAuth},
+		{"  500 internal error", ErrUnavailable},
+		{"HTTP/1.1 503", ErrUnavailable},
+		{"status 500", ErrUnavailable},
+		{"stream error: exceeded retry limit, last status: 504", ErrUnavailable},
+		{`{"statusCode":502,"message":"upstream"}`, ErrUnavailable},
+		{"error code 529", ErrUnavailable},
+		{"provider returned 500 error", ErrUnavailable},
 		{"", ErrNone},
 	}
 	for _, c := range cases {

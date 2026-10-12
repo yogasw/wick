@@ -19,22 +19,27 @@ var deferredRecoveryInterval = 2 * time.Second
 
 // resetSessionStatus forces a session whose subprocess is gone back to
 // idle, on disk and in s. cli_session_id is preserved for resume.
+// agents.json goes through session.UpdateAgents, so a writer racing the
+// startup sweep (a failover switch, a new agent) is neither lost nor
+// overwritten with the stale list in s.
 func resetSessionStatus(layout config.Layout, s *session.Session) {
-	dirty := false
 	if s.Meta.Status != session.StatusIdle {
 		s.Meta.Status = session.StatusIdle
-		dirty = true
+		_ = session.SaveMeta(layout, s.ID, s.Meta)
 	}
 	for i := range s.Agents {
-		if s.Agents[i].Status != "idle" {
-			s.Agents[i].Status = "idle"
-			dirty = true
+		s.Agents[i].Status = "idle"
+	}
+	_ = session.UpdateAgents(layout, s.ID, func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
+		dirty := false
+		for i := range agents {
+			if agents[i].Status != "idle" {
+				agents[i].Status = "idle"
+				dirty = true
+			}
 		}
-	}
-	if dirty {
-		_ = session.SaveMeta(layout, s.ID, s.Meta)
-		_ = session.SaveAgents(layout, s.ID, s.Agents)
-	}
+		return agents, dirty, nil
+	})
 }
 
 // recoverSessionInflight folds a leftover inflight.jsonl into the

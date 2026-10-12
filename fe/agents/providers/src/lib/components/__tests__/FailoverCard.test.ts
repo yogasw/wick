@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/svelte";
 import FailoverCard from "../FailoverCard.svelte";
 import * as api from "$lib/api.js";
 import type { FailoverConfig, FailoverResponse } from "$lib/api.js";
@@ -191,5 +191,34 @@ describe("FailoverCard", () => {
     await fireEvent.click(screen.getByTestId("failover-save"));
     await waitFor(() => expect(api.apiSaveFailover).toHaveBeenCalled());
     expect(vi.mocked(api.apiSaveFailover).mock.calls[0][3].chain).toEqual([{ instance: "omp/wick", model_id: "anthropic/acct%201@claude-opus" }]);
+  });
+
+  it("drops a target's server warnings once its row is changed (L4)", async () => {
+    vi.mocked(api.apiGetFailover).mockResolvedValue(
+      resp({ chain: [{ instance: "codex/waba", model_id: "x" }] }, { warnings: [{ instance: "codex/waba", message: "model x is not offered by codex/waba; its default model runs instead" }] }),
+    );
+    render(FailoverCard, { props });
+    expect(await screen.findAllByTestId("failover-warning-0")).toHaveLength(1);
+    // The picker's menu is portaled to <body>: omp drills into omp/wick,
+    // whose default model is the pick.
+    await fireEvent.click(within(screen.getByTestId("failover-target-pick-0")).getAllByRole("button")[0]);
+    await fireEvent.click(await screen.findByRole("button", { name: /omp/i }));
+    await fireEvent.click(await screen.findByRole("button", { name: /use default model/i }));
+    expect(targets()).toEqual(["omp/wick"]);
+    expect(screen.queryAllByTestId("failover-warning-0")).toHaveLength(0);
+  });
+
+  it("moves each row's picker with the row on reorder (L8)", async () => {
+    vi.mocked(api.apiGetFailover).mockResolvedValue(
+      resp({ chain: [{ instance: "claude/sibling" }, { instance: "codex/waba" }] }),
+    );
+    render(FailoverCard, { props });
+    await screen.findAllByTestId("failover-target");
+    // Keyed per row: the picker (and whatever it has open) is the same
+    // element after the move, now in the second slot.
+    const picker = within(screen.getByTestId("failover-target-pick-0")).getAllByRole("button")[0];
+    await fireEvent.click(screen.getByTestId("failover-down-0"));
+    expect(targets()).toEqual(["codex/waba", "claude/sibling"]);
+    expect(screen.getByTestId("failover-target-pick-1").contains(picker)).toBe(true);
   });
 });

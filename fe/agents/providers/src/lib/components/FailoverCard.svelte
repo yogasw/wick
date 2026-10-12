@@ -53,9 +53,14 @@
   // The recheck field is text while typed so an empty or out-of-range
   // value can be shown and refused instead of silently clamped.
   let recheckText = $state("10");
+  // One stable id per chain row, kept beside cfg.chain (which is what is
+  // saved), so a reorder moves each row's picker state with the row.
+  let rowIds = $state<number[]>([]);
+  let nextRowId = 0;
 
   function apply(c: FailoverConfig) {
     cfg = { ...c, triggers: [...c.triggers], chain: c.chain.map((t) => ({ instance: t.instance, model_id: t.model_id ?? "" })) };
+    rowIds = c.chain.map(() => nextRowId++);
     recheckText = String(c.recheck_minutes);
   }
 
@@ -98,10 +103,14 @@
     cfg.triggers = on ? [...cfg.triggers.filter((t) => t !== key), key] : cfg.triggers.filter((t) => t !== key);
   }
   function addTarget() {
-    if (cfg.chain.length < MAX_FAILOVER_TARGETS) cfg.chain.push({ instance: "", model_id: "" });
+    if (cfg.chain.length < MAX_FAILOVER_TARGETS) {
+      cfg.chain.push({ instance: "", model_id: "" });
+      rowIds.push(nextRowId++);
+    }
   }
   function removeTarget(i: number) {
     cfg.chain.splice(i, 1);
+    rowIds.splice(i, 1);
   }
   function moveTarget(i: number, by: number) {
     const j = i + by;
@@ -109,9 +118,17 @@
     const next = [...cfg.chain];
     [next[i], next[j]] = [next[j], next[i]];
     cfg.chain = next;
+    const ids = [...rowIds];
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    rowIds = ids;
   }
   function setTarget(i: number, v: string) {
+    const before = cfg.chain[i]?.instance;
     cfg.chain[i] = fromPickValue(v);
+    // The server's warnings were about the saved pick: once the row
+    // changes they no longer apply until the next save re-checks it.
+    const after = cfg.chain[i].instance;
+    warnings = warnings.filter((w) => w.instance !== before && w.instance !== after);
   }
 
   function loadModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
@@ -236,7 +253,7 @@
       {#if cfg.chain.length === 0}
         <p class="text-[11px] text-black-700 dark:text-black-600">No targets yet. Add up to {MAX_FAILOVER_TARGETS} providers to move to.</p>
       {/if}
-      {#each cfg.chain as t, i (i)}
+      {#each cfg.chain as t, i (rowIds[i] ?? `row-${i}`)}
         {@const note = crossTypeNote(type, t.instance)}
         <div data-testid="failover-target" class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-200/40 dark:bg-navy-800 p-2.5 space-y-1.5">
           <div class="flex items-center gap-2">

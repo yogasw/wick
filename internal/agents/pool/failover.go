@@ -304,7 +304,7 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 		Rerun:   true,
 		Target:  t.Instance,
 		ModelID: t.ModelID,
-		Notice:  failedKey + " stopped: " + reason + ". Continuing on " + t.Instance + ".",
+		Notice:  provider.ChannelLabel(failedKey, "") + " stopped: " + reason + ". Continuing on " + provider.ChannelLabel(t.Instance, t.ModelID) + ".",
 	}
 }
 

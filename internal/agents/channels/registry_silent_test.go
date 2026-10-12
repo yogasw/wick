@@ -247,3 +247,24 @@ func TestQuietTurnKeepsHeldEventsAndReportsStart(t *testing.T) {
 		}
 	}
 }
+
+// TestDispatchNoticeOutsideTurn: a failover notice sent between turns
+// reaches the channel at once as its own Notice, and does not decide the
+// next turn — a silent reply after it is still dropped.
+func TestDispatchNoticeOutsideTurn(t *testing.T) {
+	reg, rec := setup()
+	reg.DispatchNotice("s1", "⚠️ Back to home claude/a")
+	if len(rec.got) != 1 || rec.got[0].Type != event.Notice || rec.got[0].Text != "⚠️ Back to home claude/a" {
+		t.Fatalf("notice not forwarded as a Notice: %+v", rec.got)
+	}
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "[silent] nothing new"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if len(rec.got) != 1 {
+		t.Fatalf("silent reply after the notice must still be dropped, got %+v", rec.got)
+	}
+	reg.DispatchNotice("s1--sub-x", "ignored")
+	reg.DispatchNotice("s1", "")
+	if len(rec.got) != 1 {
+		t.Fatalf("sub-agent / empty notice must not be sent: %+v", rec.got)
+	}
+}

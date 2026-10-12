@@ -1,10 +1,11 @@
 package provider
 
 import (
-	"errors"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,9 @@ type SwitchResult struct {
 	Home string
 	// Continue is the continue text recorded (ContinueFor / ContinueText).
 	Continue string
+	// StandIns, on a return, are the stand-ins the agent went through
+	// since it left home (From included), the target excluded.
+	StandIns []string
 }
 
 // SwitchGuard, when set, decides whether a switch asked for outside the
@@ -213,6 +217,7 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 	fromKey := "" // provider active before this switch — recorded in the turn extras
 	historyCarries := false
 	var home *session.FailoverState // the agent's failover state after the switch
+	var standIns []string           // on a return: the stand-ins passed through
 	var refused error               // the switch's own refusal, as opposed to an I/O error
 	err = session.UpdateAgents(layout, sessionID, func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
 		loaded := session.Session{Agents: agents}
@@ -282,12 +287,18 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 				loaded.Agents[i].ModelID = opts.ModelID
 				switch {
 				case opts.Failover:
-					loaded.Agents[i].Failover = advanceFailover(a, fromKey, opts.MsgKey, now)
+					loaded.Agents[i].Failover = advanceFailover(a, fromKey, newKey, opts.MsgKey, now)
 				case opts.ReturnHome:
 					// Back up the home's chain: the home stays, the run is over.
 					if a.Failover != nil {
 						st := *a.Failover
 						st.EndRun()
+						standIns = returnStandIns(st.StandIns, fromKey, newKey)
+						if newKey == st.HomeProvider {
+							st.StandIns = nil
+						} else {
+							st.StandIns = append([]string(nil), st.StandIns...)
+						}
 						loaded.Agents[i].Failover = &st
 					}
 				default:
@@ -307,7 +318,7 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 		}
 		return SwitchResult{}, fmt.Errorf("save agents: %w", err)
 	}
-	res := SwitchResult{From: fromKey, To: newKey, HistoryCarries: historyCarries}
+	res := SwitchResult{From: fromKey, To: newKey, HistoryCarries: historyCarries, StandIns: standIns}
 	if home != nil {
 		res.Home = home.HomeProvider
 	}
@@ -417,8 +428,11 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 // whose Since is now): the home is recorded on the first hop ever (the
 // provider the session was on), fromKey joins Tried and Hops counts the
 // hop. The home never moves here.
-func advanceFailover(a session.AgentEntry, fromKey, msgKey string, now time.Time) *session.FailoverState {
+func advanceFailover(a session.AgentEntry, fromKey, toKey, msgKey string, now time.Time) *session.FailoverState {
 	st := a.Failover.RunFor(msgKey, now)
+	if !slices.Contains(st.StandIns, toKey) {
+		st.StandIns = append(st.StandIns, toKey)
+	}
 	if st.HomeProvider == "" {
 		st.HomeProvider, st.HomeModelID = fromKey, a.ModelID
 	}
@@ -431,6 +445,19 @@ func advanceFailover(a session.AgentEntry, fromKey, msgKey string, now time.Time
 	}
 	st.Hops++
 	return &st
+}
+
+// returnStandIns is every stand-in passed through on the way to toKey:
+// the recorded ones plus fromKey (a state written before StandIns
+// existed has none), toKey left out.
+func returnStandIns(recorded []string, fromKey, toKey string) []string {
+	var out []string
+	for _, k := range append(append([]string(nil), recorded...), fromKey) {
+		if k != "" && k != toKey && !slices.Contains(out, k) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // recordFailoverTurn writes the KindProviderFailover notice of an
@@ -483,8 +510,32 @@ func recordFailoverTurn(layout config.Layout, sessionID, source string, res Swit
 		opts.Notify(tag, steps)
 	}
 	if opts.Reply != nil {
-		opts.Reply(stopped + ". Switched to " + tag + " and continuing this turn.\n\n" + contextNote)
+		opts.Reply(channelLabels(res, tag, opts.ModelID).Replace(stopped + ". Switched to " + tag + " and continuing this turn.\n\n" + contextNote))
 	}
+}
+
+// outOfSight lists the stand-ins whose turns the return target cannot
+// read: another provider type keeps its own transcript, and the one just
+// left counts unless its history carried over.
+func outOfSight(res SwitchResult) []string {
+	standIns := res.StandIns
+	if len(standIns) == 0 && res.From != "" {
+		standIns = []string{res.From}
+	}
+	toScope := session.ProviderScope(res.To)
+	var out []string
+	for _, k := range standIns {
+		if k == res.From {
+			if !res.HistoryCarries {
+				out = append(out, k)
+			}
+			continue
+		}
+		if session.ProviderScope(k) != toScope {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // recordReturnTurn writes the KindProviderReturn notice of a move back up
@@ -497,8 +548,12 @@ func recordReturnTurn(layout config.Layout, sessionID, source string, res Switch
 	// The target resumes its own transcript, not the stand-in's: what was
 	// said there is out of its sight. Say so rather than let the next
 	// answer look forgetful.
-	if !res.HistoryCarries && res.From != "" {
-		contextNote = "Note: the turns answered on " + res.From + " while it stood in are not part of " + tag + "'s history. " + contextNote
+	if out := outOfSight(res); len(out) > 0 {
+		verb := "it"
+		if len(out) > 1 {
+			verb = "they"
+		}
+		contextNote = "Note: the turns answered on " + strings.Join(out, ", ") + " while " + verb + " stood in are not part of " + tag + "'s history. " + contextNote
 	}
 	steps := []string{
 		head + " (" + res.From + " was a stand-in)",
@@ -533,8 +588,54 @@ func recordReturnTurn(layout config.Layout, sessionID, source string, res Switch
 		opts.Notify(tag, steps)
 	}
 	if opts.Reply != nil {
-		opts.Reply(head + ". Your next message will use " + tag + ".\n\n" + contextNote)
+		opts.Reply(channelLabels(res, tag, opts.ModelID).Replace(head + ". Your next message will use " + tag + ".\n\n" + contextNote))
 	}
+}
+
+// ChannelLabel is how a channel thread names an instance in an automatic
+// switch notice: its own name without the type prefix ("claude/work" →
+// "work"), plus the last segment of a pinned model ("work · opus-4").
+// The "type/name" key is wick's internal handle; a client's thread has
+// no use for it.
+func ChannelLabel(key, modelID string) string {
+	label := key
+	if i := strings.IndexByte(key, '/'); i >= 0 && i < len(key)-1 {
+		label = key[i+1:]
+	}
+	if modelID != "" {
+		if i := strings.LastIndexByte(modelID, '/'); i >= 0 && i < len(modelID)-1 {
+			modelID = modelID[i+1:]
+		}
+		label += " · " + modelID
+	}
+	return label
+}
+
+// channelLabels rewrites the instance keys of a switch notice into
+// ChannelLabels for the channel Reply; longest key first so one key never
+// rewrites part of another.
+func channelLabels(res SwitchResult, tag, modelID string) *strings.Replacer {
+	labels := map[string]string{tag: ChannelLabel(tag, modelID)}
+	for _, k := range append([]string{res.From, res.To, res.Home}, res.StandIns...) {
+		if _, ok := labels[k]; k != "" && !ok {
+			labels[k] = ChannelLabel(k, "")
+		}
+	}
+	for k, l := range labels {
+		if k == l {
+			delete(labels, k) // a bare type ("claude") is its own label
+		}
+	}
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b string) int { return len(b) - len(a) })
+	pairs := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k, labels[k])
+	}
+	return strings.NewReplacer(pairs...)
 }
 
 // ReturnChipText is SwitchChipText for a return home.

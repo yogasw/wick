@@ -82,6 +82,11 @@ type FailoverState struct {
 	// Since is when this run's first failure happened (zero when no run
 	// is in progress).
 	Since time.Time `json:"since,omitempty"`
+	// StandIns lists every instance a failover moved the agent onto
+	// since it last sat on its home, in order. Unlike Tried it outlives
+	// the run: a return home names them all, since none of their turns
+	// is in the home's history. Cleared once back on the home.
+	StandIns []string `json:"stand_ins,omitempty"`
 }
 
 // AwayFromHome reports whether st records a failover run in progress.
@@ -100,6 +105,7 @@ func (st *FailoverState) RunFor(msgKey string, now time.Time) FailoverState {
 	if st != nil {
 		out = *st
 		out.Tried = append([]string(nil), st.Tried...)
+		out.StandIns = append([]string(nil), st.StandIns...)
 	}
 	if msgKey == "" || out.MsgKey != msgKey {
 		out.EndRun()
@@ -108,7 +114,8 @@ func (st *FailoverState) RunFor(msgKey string, now time.Time) FailoverState {
 	return out
 }
 
-// EndRun forgets the run (Tried, Hops, MsgKey, Since) and keeps the home.
+// EndRun forgets the run (Tried, Hops, MsgKey, Since) and keeps the home
+// and StandIns.
 func (st *FailoverState) EndRun() {
 	st.Tried, st.Hops, st.MsgKey, st.Since = nil, 0, "", time.Time{}
 }

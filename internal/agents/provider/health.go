@@ -54,6 +54,11 @@ type Health struct {
 	FailedAt time.Time `json:"failed_at,omitempty"`
 	RetryAt  time.Time `json:"retry_at,omitempty"`
 	Tries    int       `json:"tries,omitempty"`
+	// TimeOnly: this limit failed again right after a usage reading said
+	// it had cleared, so it sits in a window the usage API does not
+	// report (a per-model cap, say). Usage readings get no vote on it;
+	// only EffectiveUntil brings it back.
+	TimeOnly bool `json:"time_only,omitempty"`
 }
 
 // AuthRetryBackoff is the wait before the n-th tentative retry of a
@@ -153,6 +158,10 @@ var (
 	healthMap    = map[string]Health{}
 	healthLoaded bool
 	healthNow    = time.Now
+	// usageClearedAt is when a usage reading last cleared each account
+	// (memory only): a limit coming back within one recheck interval
+	// of it is TimeOnly.
+	usageClearedAt = map[string]time.Time{}
 )
 
 // HealthKeyFunc names the account behind an instance. logintty fills it
@@ -245,12 +254,22 @@ func MarkUnhealthy(key string, h Health) {
 	if h.FailedAt.IsZero() {
 		h.FailedAt = h.CheckedAt
 	}
+	contradicted := h.Kind == event.ErrLimit && usageContradicted(key, h)
 	healthMu.Lock()
 	defer healthMu.Unlock()
 	healthLoadLocked()
+	if contradicted {
+		h.TimeOnly = true
+		delete(usageClearedAt, key)
+	}
 	if prev, ok := healthMap[key]; ok {
-		if prev.Since.Before(h.Since) {
+		// A limit that just turned TimeOnly starts a new run: its wait
+		// counts from this failure, not from the one usage cleared.
+		if prev.Since.Before(h.Since) && (prev.TimeOnly || !h.TimeOnly) {
 			h.Since = prev.Since
+		}
+		if prev.TimeOnly && prev.Kind == h.Kind {
+			h.TimeOnly = true
 		}
 		if prev.Until.After(h.Until) {
 			h.Until = prev.Until
@@ -281,6 +300,41 @@ func MarkUnhealthy(key string, h Health) {
 	}
 	healthMap[key] = h
 	healthSaveLocked()
+}
+
+// usageContradicted: a limit is failing again although the usage file
+// said it had cleared, either right now (a fresh reading clears the
+// entry still on record, which is how HealthyNow let it run) or by
+// clearing it within one recheck interval of this failure.
+func usageContradicted(key string, h Health) bool {
+	if prev, ok := HealthOf(key); ok {
+		if prev.Kind != event.ErrLimit || prev.TimeOnly {
+			return false
+		}
+		cleared, known := UsageClears(key, prev, h.FailedAt)
+		return known && cleared
+	}
+	healthMu.RLock()
+	at, ok := usageClearedAt[key]
+	healthMu.RUnlock()
+	every := h.Recheck
+	if every <= 0 {
+		every = time.Duration(DefaultFailoverRecheckMinutes) * time.Minute
+	}
+	return ok && !h.FailedAt.Before(at) && h.FailedAt.Sub(at) < every
+}
+
+// MarkHealthyByUsage is MarkHealthyIf for a clear a usage reading
+// decided; it remembers when, so a limit back within one recheck
+// interval is known to come from a window usage does not report.
+func MarkHealthyByUsage(key string, since time.Time) bool {
+	if !MarkHealthyIf(key, since) {
+		return false
+	}
+	healthMu.Lock()
+	usageClearedAt[key] = healthNow()
+	healthMu.Unlock()
+	return true
 }
 
 // MarkHealthy clears an account.
@@ -379,9 +433,9 @@ func HealthyNow(key string, now time.Time) (bool, Health) {
 
 // UsageClears is the usage file's verdict on a recorded limit: known is
 // false when there is no fresh reading with a say about it (or h is not
-// a limit), and then the file has no vote.
+// a limit, or a TimeOnly one), and then the file has no vote.
 func UsageClears(key string, h Health, now time.Time) (cleared, known bool) {
-	if h.Kind != event.ErrLimit {
+	if h.Kind != event.ErrLimit || h.TimeOnly {
 		return false, false
 	}
 	d, ok := UsageDiskLookup(key)
@@ -437,11 +491,13 @@ func SetHealthDirForTest(dir string) (restore func()) {
 	prev := healthDir
 	healthDir = func() string { return dir }
 	healthMap, healthLoaded = map[string]Health{}, false
+	usageClearedAt = map[string]time.Time{}
 	healthMu.Unlock()
 	return func() {
 		healthMu.Lock()
 		healthDir = prev
 		healthMap, healthLoaded = map[string]Health{}, false
+		usageClearedAt = map[string]time.Time{}
 		healthMu.Unlock()
 	}
 }
@@ -457,7 +513,10 @@ func RecordUsage(d UsageDisk) {
 	if !ok || h.Kind != event.ErrLimit || !usageFresh(d, healthNow()) {
 		return
 	}
+	if h.TimeOnly {
+		return
+	}
 	if cleared, known := d.Verdict(healthNow(), h.Since); known && cleared {
-		MarkHealthyIf(d.Key, h.Since)
+		MarkHealthyByUsage(d.Key, h.Since)
 	}
 }

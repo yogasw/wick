@@ -349,3 +349,40 @@ func TestAdoptConcurrentReaders(t *testing.T) {
 		t.Fatalf("sessions = %d, want exactly 1", n)
 	}
 }
+
+// TestResetSessionStatusKeepsConcurrentAgents: the startup sweep resets
+// statuses on agents.json as it is now, so an entry written after s was
+// loaded survives instead of being overwritten by the stale list.
+func TestResetSessionStatusKeepsConcurrentAgents(t *testing.T) {
+	layout := newLayout(t)
+	s, err := session.Create(context.Background(), layout, session.CreateOptions{ID: "S1", Origin: session.OriginUI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.AddAgent(layout, "S1", "main", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = session.Load(layout, "S1")
+	s.Agents[0].Status = "running"
+	s.Meta.Status = "running"
+	// Written by someone else after s was loaded.
+	if err := session.UpdateAgents(layout, "S1", func(a []session.AgentEntry) ([]session.AgentEntry, bool, error) {
+		a[0].Status = "running"
+		return append(a, session.AgentEntry{Name: "helper", Provider: "codex", Status: "running"}), true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resetSessionStatus(layout, &s)
+	got, _ := session.Load(layout, "S1")
+	if len(got.Agents) != 2 {
+		t.Fatalf("agents on disk = %d, want 2 (concurrent entry kept)", len(got.Agents))
+	}
+	for _, a := range got.Agents {
+		if a.Status != "idle" {
+			t.Fatalf("agent %s status %q, want idle", a.Name, a.Status)
+		}
+	}
+	if got.Meta.Status != session.StatusIdle || s.Agents[0].Status != "idle" {
+		t.Fatalf("meta=%q in-memory=%q, want idle", got.Meta.Status, s.Agents[0].Status)
+	}
+}

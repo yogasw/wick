@@ -75,9 +75,20 @@ var unavailableMarkers = []string{
 
 var (
 	limitCode       = regexp.MustCompile(`\b429\b`)
-	authCode        = regexp.MustCompile(`\b401\b`)
-	unavailableCode = regexp.MustCompile(`\b(500|502|503|504|529)\b`)
+	authCode        = statusCode(`401`)
+	unavailableCode = statusCode(`500|502|503|504|529`)
 )
+
+// statusCode matches one of codes only where it reads as the response's
+// status, not any number in the body ("API Error: 400 … max_tokens: 500"):
+// at the start of the message, after "status" / "code" / "error" / "HTTP"
+// ("unexpected status 502", "API Error: 529", `"statusCode":503`,
+// "HTTP/1.1 500"), or followed by its reason ("503 Service Unavailable",
+// "500 error").
+func statusCode(codes string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:^|(?:status|code|error)(?:[ _]?code)?"?\s*[:=]?\s*"?|\bhttp(?:/[\d.]+)?\s+)(?:` + codes +
+		`)\b|\b(?:` + codes + `)\s+(?:error|unauthori[sz]ed|internal|bad gateway|service|gateway|server|overloaded)`)
+}
 
 // IsAccountLimit reports whether msg reads like an account hitting its
 // rate limit / quota.
@@ -99,7 +110,7 @@ func isLimit(m string) bool {
 // not the vendor's health — and auth wins over unavailable, since a 5xx
 // page that also says "not logged in" will not heal by waiting.
 func ClassifyError(msg string) ErrKind {
-	m := strings.ToLower(msg)
+	m := strings.ToLower(strings.TrimSpace(msg))
 	switch {
 	case m == "":
 		return ErrNone

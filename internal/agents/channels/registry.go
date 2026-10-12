@@ -680,6 +680,19 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 	r.forward(sessionID, []event.AgentEvent{ev})
 }
 
+// DispatchNotice posts text to sessionID's threads as a standalone
+// notice (event.Notice), outside any turn: it is not buffered with a
+// reply, does not open the turn state the next reply is decided on, and
+// is not dropped with a silent one. For wick's own notes that can come
+// between turns (a provider failover or its return). Sub-agent sessions
+// have no thread; nothing is sent for them.
+func (r *Registry) DispatchNotice(sessionID, text string) {
+	if text == "" || agentconfig.ParentOfSubSession(sessionID) != "" {
+		return
+	}
+	r.forward(sessionID, []event.AgentEvent{{Type: event.Notice, Text: text}})
+}
+
 // finishTurnLocked records the turn's silent verdict for the idle-push check
 // and clears the in-flight state. Caller holds r.mu.
 func (r *Registry) finishTurnLocked(sessionID string, ts *turnState) {

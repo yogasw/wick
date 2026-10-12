@@ -984,11 +984,10 @@ func NewServer() *Server {
 				turnObserver.OnEvent(sid, name, ev)
 			}
 		},
+		// Its own message on the thread, not text folded into a reply: a
+		// return happens between turns, before the next reply starts.
 		OnFailoverReply: func(sid, name string, text string) {
-			if agentconfig.ParentOfSubSession(sid) != "" {
-				return
-			}
-			channelReg.DispatchAgentEvent(sid, agentevent.AgentEvent{Type: agentevent.TextDelta, Text: "⚠️ " + text + "\n\n"})
+			channelReg.DispatchNotice(sid, "⚠️ "+text)
 		},
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
 		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
@@ -4150,6 +4149,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
 		}
+		agentstool.StopFailoverRecovery()
 		// After the pool: its turns are gone, so the shared opencode
 		// servers have no one left to serve and must not outlive wick.
 		opencodeprovider.ShutdownServers()

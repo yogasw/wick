@@ -272,3 +272,77 @@ func TestRequestRefresh(t *testing.T) {
 		t.Fatal("auth failures are not a usage question")
 	}
 }
+
+// TestLimitBackAfterUsageClearIsTimeOnly (R5): a limit that fails again
+// right after a usage reading said it cleared comes from a window usage
+// does not report, so the next wait is time only.
+func TestLimitBackAfterUsageClearIsTimeOnly(t *testing.T) {
+	under := []UsageDiskWindow{{Key: "five_hour", Utilization: 12}}
+
+	t.Run("fresh reading cleared the entry still on record", func(t *testing.T) {
+		healthTestDirs(t)
+		now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+		marked := now.Add(-30 * time.Minute)
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, Since: marked, CheckedAt: marked, Until: now.Add(time.Hour)})
+		UsageDiskStore(UsageDisk{Key: "k", ObservedAt: now.Add(-time.Minute), Windows: under})
+		if ok, _ := HealthyNow("k", now); !ok {
+			t.Fatal("fresh reading under 100% must clear before Until")
+		}
+		// The turn it let through hits the limit again.
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, CheckedAt: now, Recheck: 10 * time.Minute})
+		h, _ := HealthOf("k")
+		if !h.TimeOnly || !h.Since.Equal(now) {
+			t.Fatalf("want TimeOnly with Since=%v, got %+v", now, h)
+		}
+		if ok, _ := HealthyNow("k", now.Add(time.Minute)); ok {
+			t.Fatal("a TimeOnly limit must ignore the fresh reading")
+		}
+		if ok, _ := HealthyNow("k", now.Add(61*time.Minute)); !ok {
+			t.Fatal("past the kept Until the limit lifts by time")
+		}
+		// A repeat keeps it TimeOnly.
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, CheckedAt: now.Add(2 * time.Minute)})
+		if h, _ := HealthOf("k"); !h.TimeOnly || !h.Since.Equal(now) {
+			t.Fatalf("repeat must keep TimeOnly and Since, got %+v", h)
+		}
+	})
+
+	t.Run("cleared by a reading within the recheck interval", func(t *testing.T) {
+		healthTestDirs(t)
+		now := time.Now()
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, Since: now.Add(-time.Hour), Until: now.Add(time.Hour)})
+		RecordUsage(UsageDisk{Key: "k", ObservedAt: now, Windows: under})
+		if _, bad := HealthOf("k"); bad {
+			t.Fatal("reading under 100% must clear")
+		}
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, CheckedAt: now.Add(time.Minute), Recheck: 10 * time.Minute})
+		h, _ := HealthOf("k")
+		if !h.TimeOnly {
+			t.Fatalf("limit back within recheck must be TimeOnly, got %+v", h)
+		}
+		RecordUsage(UsageDisk{Key: "k", ObservedAt: now.Add(2 * time.Minute), Windows: under})
+		if _, bad := HealthOf("k"); !bad {
+			t.Fatal("a usage reading must not clear a TimeOnly limit")
+		}
+		MarkHealthyIf("k", h.Since)
+		if _, bad := HealthOf("k"); bad {
+			t.Fatal("time-based clear must still work")
+		}
+		// The next failure, past the recheck after that clear, is normal.
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, CheckedAt: now.Add(30 * time.Minute)})
+		if h, _ := HealthOf("k"); h.TimeOnly {
+			t.Fatalf("a failure after a time-based clear is not TimeOnly: %+v", h)
+		}
+	})
+
+	t.Run("back after the recheck interval is a normal limit", func(t *testing.T) {
+		healthTestDirs(t)
+		now := time.Now()
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, Since: now.Add(-time.Hour)})
+		RecordUsage(UsageDisk{Key: "k", ObservedAt: now, Windows: under})
+		MarkUnhealthy("k", Health{Kind: event.ErrLimit, CheckedAt: now.Add(11 * time.Minute), Recheck: 10 * time.Minute})
+		if h, _ := HealthOf("k"); h.TimeOnly {
+			t.Fatalf("want a normal limit, got %+v", h)
+		}
+	})
+}

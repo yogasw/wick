@@ -109,7 +109,7 @@ func (r *failoverRecovery) check(key string, h provider.Health, insts []provider
 	// A fresh reading already on disk (a manual reset, a Re-check) is
 	// free to act on, due or not.
 	if cleared, known := provider.UsageClears(key, h, now); known && cleared {
-		provider.MarkHealthyIf(key, h.Since)
+		provider.MarkHealthyByUsage(key, h.Since)
 		return
 	}
 	if !recoveryDue(h, now, every) {
@@ -137,12 +137,18 @@ func (r *failoverRecovery) check(key string, h provider.Health, insts []provider
 		}
 		return
 	case event.ErrLimit:
-		if r.supportsUsage(ins.Type) {
+		if r.supportsUsage(ins.Type) && !h.TimeOnly {
 			// omp included: `omp usage` is the same paced usage path the
-			// panel uses, not a prompt; it is never used for auth.
+			// panel uses, not a prompt; it is never used for auth. A
+			// TimeOnly limit is one usage cannot see: no probe.
 			r.probe(ins)
-			if cleared, known := provider.UsageClears(key, h, r.now()); known && !cleared {
+			cleared, known := provider.UsageClears(key, h, r.now())
+			if known && !cleared {
 				break // the reading says it is still full
+			}
+			if known {
+				provider.MarkHealthyByUsage(key, h.Since)
+				return
 			}
 		}
 		// Cleared, or no reading with a say (probe failed, declined,
@@ -230,7 +236,9 @@ func refreshUsageByKey(key string) {
 	}
 }
 
-func newFailoverRecovery() *failoverRecovery {
+// newFailoverRecovery builds the live checker; ctx bounds its probe waits
+// so a shutdown does not sit out a pace slot.
+func newFailoverRecovery(ctx context.Context) *failoverRecovery {
 	return &failoverRecovery{
 		now:      time.Now,
 		accounts: provider.UnhealthyAccounts,
@@ -255,7 +263,7 @@ func newFailoverRecovery() *failoverRecovery {
 			if ch == nil {
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), failoverRecoveryProbeTimeout)
+			ctx, cancel := context.WithTimeout(ctx, failoverRecoveryProbeTimeout)
 			defer cancel()
 			select {
 			case <-ch:
@@ -278,20 +286,60 @@ func newFailoverRecovery() *failoverRecovery {
 	}
 }
 
-var startFailoverRecoveryOnce sync.Once
+// Run ticks every interval until ctx ends.
+func (r *failoverRecovery) Run(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.tick()
+		}
+	}
+}
+
+var (
+	failoverRecoveryMu      sync.Mutex
+	failoverRecoveryStarted bool
+	failoverRecoveryStop    context.CancelFunc
+	failoverRecoveryDone    chan struct{}
+)
 
 // startFailoverRecovery starts the checker and installs the paced
-// refresh behind provider.RequestRefresh. Idempotent.
+// refresh behind provider.RequestRefresh. Idempotent; a stopped checker
+// stays stopped.
 func startFailoverRecovery() {
-	startFailoverRecoveryOnce.Do(func() {
-		provider.SetUsageRefreshHook(refreshUsageByKey)
-		r := newFailoverRecovery()
-		go func() {
-			t := time.NewTicker(failoverRecoveryTick)
-			defer t.Stop()
-			for range t.C {
-				r.tick()
-			}
-		}()
-	})
+	failoverRecoveryMu.Lock()
+	defer failoverRecoveryMu.Unlock()
+	if failoverRecoveryStarted {
+		return
+	}
+	failoverRecoveryStarted = true
+	provider.SetUsageRefreshHook(refreshUsageByKey)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	failoverRecoveryStop, failoverRecoveryDone = cancel, done
+	r := newFailoverRecovery(ctx)
+	go func() {
+		defer close(done)
+		r.Run(ctx, failoverRecoveryTick)
+	}()
+}
+
+// StopFailoverRecovery stops the checker at shutdown and waits for its
+// loop to return. A check already handed to its own goroutine finishes
+// on its own; its probe wait ends with the context. Safe to call more
+// than once, or when the checker never started.
+func StopFailoverRecovery() {
+	failoverRecoveryMu.Lock()
+	stop, done := failoverRecoveryStop, failoverRecoveryDone
+	failoverRecoveryStop, failoverRecoveryDone = nil, nil
+	failoverRecoveryMu.Unlock()
+	if stop == nil {
+		return
+	}
+	stop()
+	<-done
 }
