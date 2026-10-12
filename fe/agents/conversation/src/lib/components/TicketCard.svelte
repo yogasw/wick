@@ -13,6 +13,8 @@
   type Props = {
     base: string;
     ticket: TicketCard;
+    /* The ticket's project, named on the call that expands its sessions. */
+    projectId?: string;
     /* Project schema, so fields render with their labels, not raw keys. */
     schema?: TicketField[];
     /* user id → display name (assignees on this board). */
@@ -45,6 +47,7 @@
   let {
     base,
     ticket,
+    projectId,
     schema,
     users,
     onOpen,
@@ -129,7 +132,7 @@
   function loadAllSessions() {
     if (loadingMore) return;
     loadingMore = true;
-    Effect.runPromise(getTicket(base, ticket.id).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(getTicket(base, ticket.id, projectId).pipe(Effect.provide(WickClientLayer)))
       .then((d) => { expanded = d.sessions; })
       .catch(() => { /* the +page link on the ticket still shows them */ })
       .finally(() => { loadingMore = false; });

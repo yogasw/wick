@@ -171,7 +171,7 @@
     busy = true;
     // Attach also detaches from the current ticket server-side, and the
     // chat's notes travel with it — so a move is one call.
-    Effect.runPromise(attachSession(base, ticketId, sessionId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(attachSession(base, ticketId, sessionId, projectId).pipe(Effect.provide(WickClientLayer)))
       .then(() => {
         picking = false;
         options = [];
@@ -185,7 +185,7 @@
     if (!ticket) return;
     busy = true;
     Effect.runPromise(
-      detachSession(base, ticket.id, sessionId).pipe(Effect.provide(WickClientLayer)),
+      detachSession(base, ticket.id, sessionId, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => onChanged?.())
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to detach"))
@@ -234,7 +234,7 @@
     }
     savingBody = true;
     Effect.runPromise(
-      updateTicket(base, ticket.id, { body: next }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { body: next }, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => {
         editingBody = false;
@@ -249,7 +249,7 @@
   function saveField(key: string, value: string): Promise<void> {
     if (!ticket) return Promise.resolve();
     return Effect.runPromise(
-      updateTicket(base, ticket.id, { fields: { [key]: value } }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { fields: { [key]: value } }, projectId).pipe(Effect.provide(WickClientLayer)),
     ).then(() => { onChanged?.(); });
   }
 
@@ -265,7 +265,7 @@
   function runButton(b: { id: string; label: string }) {
     if (!ticket || actionBusy !== "") return;
     actionBusy = b.id;
-    Effect.runPromise(runTicketAction(base, ticket.id, b.id).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(runTicketAction(base, ticket.id, b.id, projectId).pipe(Effect.provide(WickClientLayer)))
       .then((r) => {
         if (r.ok) {
           toastOk(`${b.label}: ${r.message || `done (HTTP ${r.status})`}`);
@@ -294,7 +294,7 @@
     const t = titleDraft.trim();
     if (!ticket || t === "" || t === ticket.title) return;
     Effect.runPromise(
-      updateTicket(base, ticket.id, { title: t }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { title: t }, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => onChanged?.())
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to rename"));
@@ -303,7 +303,7 @@
   function setStatus(status: string) {
     if (!ticket) return;
     Effect.runPromise(
-      updateTicket(base, ticket.id, { status }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { status }, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => onChanged?.())
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to update status"));

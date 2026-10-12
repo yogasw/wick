@@ -67,7 +67,7 @@ const roster = {
 const names = () => calls.map((c) => c.fn);
 
 function mount() {
-  return render(TicketRoom, { props: { base: "/b", ticketId: "T-1", projectName: "Billing" } });
+  return render(TicketRoom, { props: { base: "/b", ticketId: "T-1", projectId: "p1", projectName: "Billing" } });
 }
 
 describe("TicketRoom", () => {
@@ -79,9 +79,9 @@ describe("TicketRoom", () => {
     api.sendToGroup = () => ({ status: "sent" });
     api.getTicketRoom = () => ({ room: roomOf() });
     api.openTicketRoom = () => roomOf();
-    api.addRoomMembers = (_b, _t, ids) => roomOf({ members: [...roomOf().members, { kind: "agent", agent_id: (ids as string[])[0], handle: "captain", name: "Captain", owner_id: "alice", owner_handle: "alice", mine: true }] });
+    api.addRoomMembers = (_b, _t, _p, ids) => roomOf({ members: [...roomOf().members, { kind: "agent", agent_id: (ids as string[])[0], handle: "captain", name: "Captain", owner_id: "alice", owner_handle: "alice", mine: true }] });
     api.removeRoomMember = () => roomOf({ members: roomOf().members.filter((m) => m.agent_id !== "a-log") });
-    api.setRoomShareFull = (_b, _t, on) => roomOf({ share_full: on as boolean });
+    api.setRoomShareFull = (_b, _t, _p, on) => roomOf({ share_full: on as boolean });
   });
 
   test("no room yet: the empty state and Open room, which creates it", async () => {
@@ -115,7 +115,7 @@ describe("TicketRoom", () => {
     expect(mine).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Remove @log-hunter" }));
     await waitFor(() => expect(names()).toContain("removeRoomMember"));
-    expect(calls.find((c) => c.fn === "removeRoomMember")!.args).toEqual(["/b", "T-1", "a-log"]);
+    expect(calls.find((c) => c.fn === "removeRoomMember")!.args).toEqual(["/b", "T-1", "p1", "a-log"]);
   });
 
   test("+ Add agents lists your own Team only and adds the picked ones in one call", async () => {
@@ -127,14 +127,14 @@ describe("TicketRoom", () => {
     await fireEvent.click(screen.getByLabelText("Captain"));
     await fireEvent.click(screen.getByRole("button", { name: "Add 1" }));
     await waitFor(() => expect(names()).toContain("addRoomMembers"));
-    expect(calls.find((c) => c.fn === "addRoomMembers")!.args).toEqual(["/b", "T-1", ["a-cap"]]);
+    expect(calls.find((c) => c.fn === "addRoomMembers")!.args).toEqual(["/b", "T-1", "p1", ["a-cap"]]);
   });
 
   test("🧭 Ask Captain brings your Captain in", async () => {
     mount();
     await fireEvent.click(await screen.findByTestId("room-ask-captain"));
     await waitFor(() => expect(names()).toContain("addRoomMembers"));
-    expect(calls.find((c) => c.fn === "addRoomMembers")!.args[2]).toEqual(["a-cap"]);
+    expect(calls.find((c) => c.fn === "addRoomMembers")!.args[3]).toEqual(["a-cap"]);
     await waitFor(() => expect(screen.queryByTestId("room-ask-captain")).toBeNull());
   });
 
@@ -144,7 +144,7 @@ describe("TicketRoom", () => {
     expect(screen.getByTestId("room-context").textContent).toContain("Other people's turns stay on screen only");
     await fireEvent.click(box);
     await waitFor(() => expect(names()).toContain("setRoomShareFull"));
-    expect(calls.find((c) => c.fn === "setRoomShareFull")!.args).toEqual(["/b", "T-1", true]);
+    expect(calls.find((c) => c.fn === "setRoomShareFull")!.args).toEqual(["/b", "T-1", "p1", true]);
     await waitFor(() => expect(screen.getByTestId("room-context").textContent).toContain("other people's included"));
   });
 
@@ -166,4 +166,17 @@ describe("TicketRoom", () => {
     streams[0].push("system_event", { turn_id: "2", ts: "2026-10-12T00:00:01Z", role: "system", kind: "hop_limit", text: "Stopped after 2 agent-to-agent turns" });
     await waitFor(() => expect(screen.getAllByTestId("system-event")).toHaveLength(2));
   });
+
+  test("every room call names the project; two people's Captains are told apart in the thread", async () => {
+    api.groupConversation = () => ({
+      turns: [
+        { turn_id: "1", ts: "2026-10-12T00:00:00Z", role: "assistant", text: "hana's answer", speaker: { agent_id: "h-cap", handle: "captain", via: "group", owner_id: "hana" } },
+      ],
+    });
+    mount();
+    await screen.findByText("hana's answer");
+    expect(calls.find((c) => c.fn === "getTicketRoom")!.args).toEqual(["/b", "T-1", "p1"]);
+    expect(screen.getByTestId("room-thread").textContent).toContain("Captain · @hana");
+  });
+
 });

@@ -238,7 +238,7 @@ func apiProjectDetail(c *tool.Ctx) {
 	// not a chat anyone started, and counting it inflates every project a
 	// delegation has ever run in.
 	for sid, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.ProjectID == id && s.Meta.ParentSessionID == "" {
+		if s.Meta.ProjectID == id && s.Meta.ParentSessionID == "" && s.Meta.GroupSessionID == "" {
 			resp.ChatCount++
 		}
 		_ = sid

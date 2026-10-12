@@ -13,6 +13,7 @@ vi.mock("../../api/tickets.js", async (orig) => {
     getProjectTickets: vi.fn(() => Effect.succeed({ config: { enabled: true }, statuses: [], tickets: [], untracked: [], users: {} })),
     getTicket: vi.fn(() =>
       Effect.succeed({
+        room: room.on ? { session_id: "room-1", members: [{ kind: "project_default", handle: "project", name: "Acme" }, { kind: "agent", agent_id: "a", handle: "captain", name: "Captain", owner_id: "u", owner_handle: "hana" }] } : undefined,
         ticket: { id: "T-7", project_id: "proj-42", title: "Seven", status: "open", created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" },
         config: { enabled: true },
         sessions: [],
@@ -25,6 +26,7 @@ vi.mock("../../api/tickets.js", async (orig) => {
 });
 vi.mock("../../stores/sessionsStream.js", () => ({ connectSessionsStream: vi.fn(() => () => {}) }));
 
+const room = vi.hoisted(() => ({ on: false }));
 /* Whether the caller has a Team (the roster names a Captain). */
 const team = vi.hoisted(() => ({ on: false }));
 vi.mock("../../teamTicketLinks.js", async (orig) => ({
@@ -69,5 +71,15 @@ describe("ProjectLanding ticket page — Open in Team", () => {
     render(ProjectLanding, { props });
     await screen.findByText("Seven");
     await waitFor(() => expect(screen.queryByTestId("open-in-team")).toBeNull());
+  });
+
+  test("a ticket with a room says so and links to it; the room is not a chat here", async () => {
+    team.on = true;
+    room.on = true;
+    render(ProjectLanding, { props });
+    const note = await screen.findByTestId("ticket-room-note");
+    expect(note.textContent).toContain("This ticket has a room · 2 members");
+    expect(note.querySelector("a")!.getAttribute("href")).toBe("/tools/agents/team/t/proj-42/T-7");
+    room.on = false;
   });
 });

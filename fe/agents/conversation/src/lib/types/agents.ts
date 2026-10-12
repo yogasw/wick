@@ -785,6 +785,8 @@ export type Ticket = {
 
 /** GET /api/tickets/{ticketID} response. */
 export type TicketDetail = {
+  /** The ticket's room, when it has one (its session is not in `sessions`). */
+  room?: TicketCardRoom;
   ticket: Ticket;
   config: TicketConfig;
   sessions: TicketSessionRow[];

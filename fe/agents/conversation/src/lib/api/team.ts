@@ -637,7 +637,9 @@ export type GroupTurn = {
   is_error?: boolean;
   sender?: { name?: string } | null;
   /** session_id: the member's backing session the turn ran in (via "group"). */
-  speaker?: { agent_id: string; handle?: string; via: string; session_id?: string } | null;
+  /** owner_id: whom the agent works for, in a ticket room (several
+      people's "captain" share one thread there). */
+  speaker?: { agent_id: string; handle?: string; via: string; session_id?: string; owner_id?: string } | null;
 };
 
 export const listGroups = (base: string) => apiGetE<{ groups: GroupItem[] | null }>(`${base}/api/team/groups`);

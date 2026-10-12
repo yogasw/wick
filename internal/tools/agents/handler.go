@@ -43,6 +43,7 @@ import (
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -1315,6 +1316,12 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.IsAdmin() && adminSeeAll() {
 		return true
 	}
+	// A group or ticket room member's backing session holds its person's
+	// side of the thread and its tool output: theirs alone, never the
+	// project's or the room's.
+	if sess.Meta.GroupSessionID != "" {
+		return u.ID == sess.Meta.UserID
+	}
 	if p, ok := uiAgentChat(c.Context(), sess); ok {
 		// A shared agent's chats are open to everyone it belongs to right
 		// now — its owner and each recipient (the Chats drawer's All tab).
@@ -1361,8 +1368,37 @@ func sessionAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
 			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 			return
 		}
+		if sess.Meta.TicketRoom != nil && !roomRouteAllowed(c, sess) {
+			return
+		}
 		next(c)
 	}
+}
+
+// roomRouteAllowed keeps a ticket room to what a room is: read it, send to
+// it (sendRoomMessage). Moving it to another project, switching its
+// provider, scheduling into it, its workspace and files — none applies to
+// a thread that never runs a provider itself, and several would detach it
+// from its ticket. Deleting it is for its creator, once its ticket is gone
+// (deleting the ticket removes its room). Answers the refusal itself.
+func roomRouteAllowed(c *tool.Ctx, sess session.Session) bool {
+	switch c.R.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	path := strings.TrimRight(c.R.URL.Path, "/")
+	if c.R.Method == http.MethodPost && strings.HasSuffix(path, "/send") {
+		return true
+	}
+	if c.R.Method == http.MethodDelete && strings.HasSuffix(path, "/sessions/"+sess.ID) {
+		if actorID(c) == sess.Meta.UserID && !ticket.Exists(globalLayout, sess.Meta.ProjectID, sess.Meta.TicketRoom.TicketID) {
+			return true
+		}
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "a ticket room goes with its ticket — delete the ticket instead"})
+		return false
+	}
+	c.JSON(http.StatusBadRequest, map[string]string{"error": errRoomSession})
+	return false
 }
 
 // projectAccessMW gates every route under /projects/{id} and /api/projects/{id}

@@ -26,17 +26,22 @@
     /* Drawn between the description and the sessions — Team › Tickets puts
        the ticket's room there. Absent elsewhere. */
     room?: Snippet;
-    /* A session hidden from Sessions (the room's own, shown by `room`). */
-    hideSession?: string;
+    /* The ticket's project: named on every call, since a ticket id is
+       unique per project only. */
+    projectId?: string;
+    /* Where the ticket's room is read, when it has one and the page is not
+       Team › Tickets itself (Agents › Projects with a Team): the room row
+       becomes a link there instead of a chat to open. */
+    roomHref?: string;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession, room, hideSession }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, room, projectId, roomHref }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
   let error = $state("");
 
   function load() {
-    Effect.runPromise(getTicket(base, ticketId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(getTicket(base, ticketId, projectId).pipe(Effect.provide(WickClientLayer)))
       .then((d) => {
         data = d;
         error = "";
@@ -73,13 +78,13 @@
   }
 
   function patch(body: Parameters<typeof updateTicket>[2]) {
-    Effect.runPromise(updateTicket(base, ticketId, body).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(updateTicket(base, ticketId, body, projectId).pipe(Effect.provide(WickClientLayer)))
       .then(load)
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to update ticket"));
   }
 
   function detach(sessionId: string) {
-    Effect.runPromise(detachSession(base, ticketId, sessionId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(detachSession(base, ticketId, sessionId, projectId).pipe(Effect.provide(WickClientLayer)))
       .then(load)
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to detach session"));
   }
@@ -147,7 +152,8 @@
      contract as the fields. */
   const SESSIONS_SHOWN = 5;
   let showAllSessions = $state(false);
-  const listedSessions = $derived((data?.sessions ?? []).filter((s) => s.id !== hideSession));
+  /* The server already keeps the room's own session out of Sessions. */
+  const listedSessions = $derived(data?.sessions ?? []);
   const visibleSessions = $derived(
     showAllSessions ? listedSessions : listedSessions.slice(0, SESSIONS_SHOWN),
   );
@@ -169,7 +175,7 @@
     if (!b.id || actionBusy !== "") return;
     actionBusy = b.id;
     Effect.runPromise(
-      runTicketAction(base, ticketId, b.id).pipe(Effect.provide(WickClientLayer)),
+      runTicketAction(base, ticketId, b.id, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then((r) => {
         /* The receiver's own words when it gave any — a sync that answers
@@ -207,7 +213,7 @@
     if (!data) return;
     deleting = true;
     Effect.runPromise(
-      deleteTicket(base, data.ticket.id, sessions).pipe(Effect.provide(WickClientLayer)),
+      deleteTicket(base, data.ticket.id, sessions, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => { confirmDelete = false; onBack(); })
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to delete the ticket"))
@@ -342,7 +348,14 @@
         {/if}
       </div>
 
-    {#if room}{@render room()}{/if}
+    {#if room}{@render room()}{:else if data.room}
+      <!-- No rooms here (one agent per session); say there is one, and
+           where it is read. -->
+      <div class="flex items-center gap-3 rounded-xl border border-white-300 bg-white-100 px-5 py-3 text-xs shadow-sm dark:border-navy-600 dark:bg-navy-700" data-testid="ticket-room-note">
+        <span class="min-w-0 flex-1 text-black-800 dark:text-black-600">👥 This ticket has a room · {data.room.members.length} member{data.room.members.length === 1 ? "" : "s"}, in Team › Tickets.</span>
+        {#if roomHref}<a class="shrink-0 font-medium text-green-600 hover:underline" href={roomHref}>Open the room ↗</a>{/if}
+      </div>
+    {/if}
 
     <!-- Sessions. Several per ticket is the normal case, not an edge one. -->
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
@@ -421,7 +434,7 @@
       </p>
       <NotesPanel
         {base}
-        scope={{ ticketId: t.id }}
+        scope={{ ticketId: t.id, projectId }}
         notes={data.notes}
         users={data.users}
         onChanged={load}

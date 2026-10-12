@@ -97,6 +97,11 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, acc
 		if s.Meta.ParentSessionID != "" {
 			continue
 		}
+		// A group or ticket room member's backing session is read in its
+		// thread, not listed as a chat of the project it runs in.
+		if s.Meta.GroupSessionID != "" {
+			continue
+		}
 		if scoped != "" && s.Meta.ProjectID != scoped {
 			continue
 		}

@@ -104,6 +104,9 @@ func CheckSessionTarget(ctx context.Context, layout config.Layout, callerUID, ca
 		return nil
 	}
 	notFound := fmt.Errorf("session not found: %s", targetSID)
+	if callingSID != "" && InTicketRoom(layout, callingSID) {
+		return notFound
+	}
 	sess, err := session.Load(layout, targetSID)
 	if err != nil {
 		return notFound
@@ -153,12 +156,17 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	if projectID == "" {
 		return nil
 	}
+	notFound := fmt.Errorf("project not found: %s", projectID)
 	if callingSID != "" {
+		// A ticket room's session reaches one ticket, through RoomTicket at
+		// the caller; never the project it happens to run in.
+		if InTicketRoom(layout, callingSID) {
+			return notFound
+		}
 		if sess, err := session.Load(layout, callingSID); err == nil && sess.Meta.ProjectID == projectID {
 			return nil
 		}
 	}
-	notFound := fmt.Errorf("project not found: %s", projectID)
 	p, err := project.Load(layout, projectID)
 	if err != nil {
 		return notFound
@@ -214,15 +222,24 @@ func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (p
 	return room.Meta.ProjectID, tr.TicketID, true
 }
 
-// CheckTicketTarget allows callingSID to act on one ticket's data: a
-// ticket room member's backing session reaches its room's ticket
-// (RoomTicket) and nothing else of that project; anything else is
-// CheckProjectTarget.
-func CheckTicketTarget(ctx context.Context, layout config.Layout, callerUID, callingSID, projectID, ticketID string) error {
-	if rp, rt, ok := RoomTicket(ctx, layout, callingSID); ok && rp == projectID && rt == ticketID {
-		return nil
+// InTicketRoom reports whether sid answers in a ticket room — a member's
+// backing session, or a sub-agent under one. Such a session reaches its
+// room's ticket (RoomTicket) and nothing else: not the rest of the
+// project it runs in, not other sessions. Followed up a few parent links
+// only; a deeper chain is refused as if it were in a room (fail closed).
+func InTicketRoom(layout config.Layout, sid string) bool {
+	for i := 0; i < 8 && sid != ""; i++ {
+		sess, err := session.Load(layout, sid)
+		if err != nil {
+			return false
+		}
+		if sess.Meta.GroupSessionID != "" {
+			room, err := session.Load(layout, sess.Meta.GroupSessionID)
+			return err == nil && room.Meta.TicketRoom != nil
+		}
+		sid = sess.Meta.ParentSessionID
 	}
-	return CheckProjectTarget(ctx, layout, callerUID, callingSID, projectID)
+	return sid != ""
 }
 
 // CheckAgentProject refuses an ordinary agent any project but its own

@@ -322,10 +322,6 @@
      own board. */
   let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
 
-  /* The room's own session, kept out of the ticket's Sessions list: the
-     room block above it is where that conversation is read. */
-  let roomSession = $state("");
-
   const muted = "text-black-800 dark:text-black-600";
 </script>
 
@@ -342,10 +338,10 @@
           onBack={() => onRoute({})}
           onOpenSession={(sid) => openSession(sid, route.project)}
           onNewSession={(tid) => newSessionOn(route.project ?? "", tid)}
-          hideSession={roomSession}
+          projectId={route.project}
         >
           {#snippet room()}
-            <TicketRoom {base} ticketId={route.ticket ?? ""} projectName={nameOf(route.project ?? "")} onSession={(sid) => (roomSession = sid)} />
+            <TicketRoom {base} ticketId={route.ticket ?? ""} projectId={route.project ?? ""} projectName={nameOf(route.project ?? "")} />
           {/snippet}
         </TicketDetail>
       {/key}

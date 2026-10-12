@@ -173,7 +173,7 @@ describe("KanbanBoard — several projects", () => {
     expect(review.dataset.refused).toBeUndefined();
     await fireEvent.dragOver(review, { dataTransfer: transfer });
     await fireEvent.drop(review, { dataTransfer: transfer });
-    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/api/tickets/T-B1"))).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/api/tickets/T-B1?project=p-b"))).toBe(true));
     expect(calls.find((c) => c.method === "PATCH")!.body).toEqual({ status: "review" });
   });
 
@@ -314,5 +314,16 @@ describe("KanbanBoard — several projects", () => {
   test("no rooms on the board: no Agent in room select", () => {
     renderMulti();
     expect(screen.queryByTestId("board-room-agent")).toBeNull();
+  });
+
+  test("a status move names the card's project (ticket ids are per project)", async () => {
+    const { container } = renderMulti();
+    const src = screen.getByTestId("ticket-card-T-B1");
+    const transfer = dt();
+    await fireEvent.dragStart(src, { dataTransfer: transfer });
+    const done = [...container.querySelectorAll('[role="list"][aria-label="Done"]')][0] as HTMLElement;
+    await fireEvent.dragOver(done, { dataTransfer: transfer });
+    await fireEvent.drop(done, { dataTransfer: transfer });
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.includes("/api/tickets/T-B1?project=p-b"))).toBe(true));
   });
 });

@@ -173,6 +173,10 @@ type Speaker struct {
 	// session, whose trace and tool calls the group thread does not copy.
 	// Set for via "group" only.
 	SessionID string `json:"session_id,omitempty"`
+	// OwnerID is whom the speaking agent works for, in a ticket room —
+	// several people's agents share one thread there, under one handle
+	// ("captain"). Empty elsewhere.
+	OwnerID string `json:"owner_id,omitempty"`
 }
 
 // Speaker.Via values.

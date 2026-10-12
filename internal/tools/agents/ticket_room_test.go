@@ -15,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/tool"
 )
 
 // openRoom creates (or returns) tk's room as u and decodes the answer.
@@ -109,7 +110,8 @@ func TestTicketRoomMembersAreTheCallersOwnAgents(t *testing.T) {
 	if code := addRoomMembers(t, bob, tk.ID, theirs.ID); code != http.StatusNotFound {
 		t.Fatalf("bob without the project: %d, want 404", code)
 	}
-	room, _ := findTicketRoom("p1", tk.ID)
+	tkNow, _ := ticket.Load(globalLayout, "p1", tk.ID)
+	room, _ := findTicketRoom("p1", tkNow)
 	if _, ok := room.Meta.TicketRoom.Member(mine.ID, alice.ID); !ok {
 		t.Fatal("alice's agent missing")
 	}
@@ -372,6 +374,213 @@ func TestTicketBoardCardCarriesRoom(t *testing.T) {
 	for _, row := range withRoom.SessionRows {
 		if row.ID == it.SessionID {
 			t.Fatal("the room is listed among the card's chats")
+		}
+	}
+}
+
+// openRoomIn is openRoom with the project named (?project=).
+func openRoomIn(t *testing.T, u *entity.User, projectID, ticketID string) (int, TicketRoomItem) {
+	t.Helper()
+	w, c := teamReq(t, u, http.MethodPost, "/?project="+projectID, nil, map[string]string{"ticketID": ticketID})
+	apiTicketRoomCreate(c)
+	var it TicketRoomItem
+	_ = json.Unmarshal(w.Body.Bytes(), &it)
+	return w.Code, it
+}
+
+// One ticket id in two projects: the room is opened in the project the
+// caller names, never in whichever the scan meets first, and each project's
+// ticket gets its own room. Without the project the id is refused.
+func TestTicketRoomSameTicketIDInTwoProjects(t *testing.T) {
+	withTeamWorld(t)
+	alice := &entity.User{ID: "alice"}
+	seedTeamProject(t, "p1", alice.ID)
+	seedTeamProject(t, "p2", alice.ID)
+	const id = "0123456789abcdef0123456789abcdef"
+	for _, p := range []string{"p1", "p2"} {
+		if _, err := ticket.Create(globalLayout, ticket.CreateOptions{ProjectID: p, ID: id, Title: "Synced " + p}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, _ := openRoom(t, alice, id); code != http.StatusNotFound {
+		t.Fatalf("ambiguous id without a project: %d, want 404", code)
+	}
+	code, r2 := openRoomIn(t, alice, "p2", id)
+	if code != http.StatusCreated || r2.ProjectID != "p2" {
+		t.Fatalf("p2: %d %+v", code, r2)
+	}
+	w, c := teamReq(t, alice, http.MethodGet, "/?project=p1", nil, map[string]string{"ticketID": id})
+	apiTicketRoomGet(c)
+	if !strings.Contains(w.Body.String(), `"room":null`) {
+		t.Fatalf("p1 should have no room yet: %s", w.Body)
+	}
+	code, r1 := openRoomIn(t, alice, "p1", id)
+	if code != http.StatusCreated || r1.ProjectID != "p1" || r1.SessionID == r2.SessionID {
+		t.Fatalf("p1: %d %+v (p2 room %s)", code, r1, r2.SessionID)
+	}
+	if code, again := openRoomIn(t, alice, "p2", id); code != http.StatusOK || again.SessionID != r2.SessionID {
+		t.Fatalf("p2 again: %d %q, want 200 %q", code, again.SessionID, r2.SessionID)
+	}
+	// A project the caller cannot open is not found, whatever it holds.
+	if code, _ := openRoomIn(t, &entity.User{ID: "mallory"}, "p1", id); code != http.StatusNotFound {
+		t.Fatalf("outsider: %d", code)
+	}
+}
+
+// Outsiders get 404 from every room route.
+func TestTicketRoomRoutesNeedTheProject(t *testing.T) {
+	withTeamWorld(t)
+	alice, mallory := &entity.User{ID: "alice"}, &entity.User{ID: "mallory"}
+	seedTeamProject(t, "p1", alice.ID)
+	tk := seedTicket(t, "p1", "Private")
+	openRoom(t, alice, tk.ID)
+	vals := map[string]string{"ticketID": tk.ID, "agentID": "x"}
+	for name, h := range map[string]func(*tool.Ctx){
+		"get": apiTicketRoomGet, "patch": apiTicketRoomUpdate, "add": apiTicketRoomAddMembers, "remove": apiTicketRoomRemoveMember,
+	} {
+		w, c := teamReq(t, mallory, http.MethodPost, "/", map[string]any{"share_full": true, "agent_ids": []string{"x"}}, vals)
+		h(c)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s as outsider: %d, want 404", name, w.Code)
+		}
+	}
+}
+
+// A room is not a chat: the generic session routes refuse what does not
+// apply to it, and deleting it waits for its ticket.
+func TestTicketRoomGenericSessionRoutes(t *testing.T) {
+	withTeamWorld(t)
+	alice := &entity.User{ID: "alice"}
+	seedTeamProject(t, "p1", alice.ID)
+	tk := seedTicket(t, "p1", "Room")
+	_, it := openRoom(t, alice, tk.ID)
+	called := false
+	next := func(c *tool.Ctx) { called = true; c.JSON(http.StatusOK, map[string]string{"status": "ok"}) }
+	try := func(method, path string) int {
+		called = false
+		w, c := teamReq(t, alice, method, path, map[string]any{}, map[string]string{"id": it.SessionID})
+		sessionAccessMW(next)(c)
+		return w.Code
+	}
+	if code := try(http.MethodGet, "/api/sessions/"+it.SessionID+"/conversation"); code != http.StatusOK || !called {
+		t.Fatalf("read: %d", code)
+	}
+	if code := try(http.MethodPost, "/sessions/"+it.SessionID+"/send"); code != http.StatusOK || !called {
+		t.Fatalf("send: %d", code)
+	}
+	for _, p := range []string{"/project", "/provider", "/schedules", "/workspace/files"} {
+		if code := try(http.MethodPost, "/sessions/"+it.SessionID+p); code != http.StatusBadRequest || called {
+			t.Fatalf("POST %s: %d, want 400", p, code)
+		}
+	}
+	if code := try(http.MethodDelete, "/sessions/"+it.SessionID); code != http.StatusBadRequest || called {
+		t.Fatalf("delete while the ticket exists: %d, want 400", code)
+	}
+	// Moving the room to another ticket, or off this one, is refused too.
+	other := seedTicket(t, "p1", "Other")
+	w, c := teamReq(t, alice, http.MethodPut, "/", nil, map[string]string{"ticketID": other.ID, "sid": it.SessionID})
+	apiTicketAttachSession(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("attach the room elsewhere: %d", w.Code)
+	}
+	w, c = teamReq(t, alice, http.MethodDelete, "/", nil, map[string]string{"ticketID": tk.ID, "sid": it.SessionID})
+	apiTicketDetachSession(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("detach the room: %d", w.Code)
+	}
+	// Deleting the ticket takes its room along.
+	w, c = teamReq(t, alice, http.MethodDelete, "/", nil, map[string]string{"ticketID": tk.ID})
+	apiTicketDelete(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete ticket: %d %s", w.Code, w.Body)
+	}
+	if _, ok := globalMgr.Registry().Session(it.SessionID); ok {
+		t.Fatal("the room outlived its ticket")
+	}
+}
+
+// Backing sessions are their person's alone: not in the project's lists,
+// not on the board's Untracked rail, not openable by another member — and
+// the project default's reaches nothing of the project but its ticket.
+func TestTicketRoomBackingSessionsStayPrivateAndScoped(t *testing.T) {
+	withTeamWorld(t)
+	alice, bob := &entity.User{ID: "alice"}, &entity.User{ID: "bob"}
+	seedTeamProject(t, "p1", "")
+	tk := seedTicket(t, "p1", "Room")
+	other := seedTicket(t, "p1", "Other")
+	// The project is ownerless (admins only), so open it as admins.
+	alice.Role, bob.Role = entity.RoleAdmin, entity.RoleAdmin
+	_, it := openRoom(t, alice, tk.ID)
+	_, c := teamReq(t, alice, http.MethodPost, "/", nil, nil)
+	backing, err := roomDefaultBacking(c, it.SessionID, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, _ := globalMgr.Registry().Session(backing)
+	if bs.Meta.ProjectID != "p1" || bs.Meta.AgentID != "" {
+		t.Fatalf("backing meta: %+v", bs.Meta)
+	}
+	// Bob may open the room, never alice's backing.
+	_, cb := teamReq(t, bob, http.MethodGet, "/", nil, nil)
+	if room, _ := globalMgr.Registry().Session(it.SessionID); !ownsSession(cb, room) {
+		t.Fatal("bob cannot open the room")
+	}
+	if ownsSession(cb, bs) {
+		t.Fatal("bob opens alice's backing session")
+	}
+	_, ca := teamReq(t, alice, http.MethodGet, "/", nil, nil)
+	if !ownsSession(ca, bs) {
+		t.Fatal("alice cannot open her own backing session")
+	}
+	// Not untracked on the board.
+	w, cw := teamReq(t, alice, http.MethodGet, "/?untracked=1", nil, map[string]string{"id": "p1"})
+	apiProjectTickets(cw)
+	if strings.Contains(w.Body.String(), backing) {
+		t.Fatalf("backing session on the board: %s", w.Body)
+	}
+	// Scoped to its ticket: not the project, not another chat.
+	ctx := context.Background()
+	if err := team.CheckProjectTarget(ctx, globalLayout, alice.ID, backing, "p1"); err == nil {
+		t.Fatal("the project default's backing reaches its whole project")
+	}
+	if err := team.CheckSessionTarget(ctx, globalLayout, alice.ID, backing, it.SessionID); err == nil {
+		t.Fatal("the project default's backing reaches another session")
+	}
+	if p, tid, ok := team.RoomTicket(ctx, globalLayout, backing); !ok || p != "p1" || tid != tk.ID || tid == other.ID {
+		t.Fatalf("room ticket: %q %q %v", p, tid, ok)
+	}
+}
+
+// Naming someone else's agent posts a system line and runs nothing: no
+// backing session is even made.
+func TestTicketRoomForeignMentionRunsNothing(t *testing.T) {
+	withTeamWorld(t)
+	alice := &entity.User{ID: "alice"}
+	seedTeamProject(t, "p1", alice.ID)
+	tk := seedTicket(t, "p1", "Room")
+	_, it := openRoom(t, alice, tk.ID)
+	room, _ := globalMgr.Registry().Session(it.SessionID)
+	w, c := teamReq(t, alice, http.MethodPost, "/", nil, nil)
+	sendRoomMessage(c, room, "@hana/captain please check the logs")
+	if w.Code != http.StatusOK {
+		t.Fatalf("send: %d %s", w.Code, w.Body)
+	}
+	turns, _ := loadConversation(globalLayout, it.SessionID)
+	refused := false
+	for _, tr := range turns {
+		if tr.Role == "system" && tr.Kind == store.KindMentionRefused && strings.Contains(tr.Text, "only takes instructions from @hana") {
+			refused = true
+		}
+		if tr.Role == "assistant" {
+			t.Fatalf("an agent answered: %+v", tr)
+		}
+	}
+	if !refused {
+		t.Fatalf("no system line: %+v", turns)
+	}
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.GroupSessionID == it.SessionID {
+			t.Fatalf("a backing session was made: %s", s.ID)
 		}
 	}
 }

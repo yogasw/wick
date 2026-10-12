@@ -1,6 +1,7 @@
 import type { ComposerMentionAgent } from "@wick-fe/common-ui";
 import type { TicketRoom, TicketRoomMember } from "./api/tickets.js";
 import type { TicketCard, TicketCardRoomAgent } from "./types/agents.js";
+import type { GroupTurn } from "./api/team.js";
 
 /* A ticket room's view rules (PLAN-team-tickets §4/§5), kept out of the
    components so they are tested without mounting anything. Identity is
@@ -79,4 +80,28 @@ export function roomAgentOptions(cards: TicketCard[]): { key: string; label: str
 export function withRoomAgent(cards: TicketCard[], key: string): TicketCard[] {
   if (!key) return cards;
   return cards.filter((c) => (c.room?.members ?? []).some((m) => roomAgentKey(m) === key));
+}
+
+/** speakerKey is how a room member is named in the thread: its handle when
+    it is the caller's, "owner/handle" when someone else's — so two people's
+    "captain" never collide. */
+export function speakerKey(m: Pick<TicketRoomMember, "handle" | "owner_handle" | "mine">): string {
+  return m.mine || !m.owner_handle ? m.handle : `${m.owner_handle}/${m.handle}`;
+}
+
+/** roomSpeakers is ThreadMessage's teamAgents for a room, by speakerKey. */
+export function roomSpeakers(room: TicketRoom | null): Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }> {
+  const out: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }> = {};
+  for (const m of room?.members ?? []) out[speakerKey(m)] = { ...(m.avatar ?? {}), name: memberLabel(m) };
+  return out;
+}
+
+/** roomTurnView names an agent turn's speaker by (agent, owner): a reply of
+    someone else's agent is relabelled "owner/handle". A turn with no owner
+    (an older one) keeps its handle. */
+export function roomTurnView(t: GroupTurn, room: TicketRoom | null): GroupTurn {
+  const sp = t.speaker;
+  if (!sp?.owner_id || !room) return t;
+  const m = room.members.find((x) => x.agent_id === sp.agent_id && x.owner_id === sp.owner_id);
+  return m ? { ...t, speaker: { ...sp, handle: speakerKey(m) } } : t;
 }

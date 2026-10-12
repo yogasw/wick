@@ -484,7 +484,7 @@
     if (!t || t.status === status) return;
     const prev = t.status;
     t.status = status; // optimistic — the card jumps immediately
-    Effect.runPromise(updateTicket(base, d.id, { status }).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(updateTicket(base, d.id, { status }, multi ? projectOfTicket(d.id) : projectId).pipe(Effect.provide(WickClientLayer)))
       .then((updated) => {
         if (updated?.updated_at) t.updated_at = updated.updated_at;
         t.stale = false;
@@ -513,7 +513,7 @@
       return;
     }
     Effect.runPromise(
-      attachSession(base, ticketId, d.id).pipe(Effect.provide(WickClientLayer)),
+      attachSession(base, ticketId, d.id, pid).pipe(Effect.provide(WickClientLayer)),
     )
       .then((r) => {
         // Moving the last chat off a ticket leaves nothing to track, so the
@@ -929,6 +929,7 @@
                   schema={projects ? projectById(projectOfTicket(t.id))?.board.config?.fields : view.config.fields}
                   users={view.users}
                   project={showProjectTag ? projectById(projectOfTicket(t.id))?.name : undefined}
+                  projectId={multi ? projectOfTicket(t.id) : projectId}
                   highlight={q}
                   onOpen={multi ? (id) => onOpen(id, projectOfTicket(id)) : onOpen}
                   onOpenSession={multi ? openSession : onOpenSession}

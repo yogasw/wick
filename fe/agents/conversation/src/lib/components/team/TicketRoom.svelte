@@ -33,17 +33,19 @@
   import { isSharedAgent } from "../../agentSharing.js";
   import { mergeTurn } from "../../teamGroups.js";
   import { connectSession } from "../../stores/sse.js";
-  import { addable, memberLabel, responderHint, roomMentionAgents, type OwnAgent } from "../../ticketRoom.js";
+  import { addable, memberLabel, responderHint, roomMentionAgents, roomSpeakers, roomTurnView, type OwnAgent } from "../../ticketRoom.js";
 
   type Props = {
     base: string;
     ticketId: string;
     /** The ticket's project, for the empty state ("opens it in …"). */
+    /** The ticket's project: rooms are per (project, ticket). */
+    projectId: string;
     projectName?: string;
     /** Told the room's session id once there is a room. */
     onSession?: (sessionId: string) => void;
   };
-  let { base, ticketId, projectName = "", onSession }: Props = $props();
+  let { base, ticketId, projectId, projectName = "", onSession }: Props = $props();
 
   let room = $state<TicketRoom | null>(null);
   let loaded = $state(false);
@@ -57,7 +59,7 @@
 
   async function loadRoom() {
     try {
-      room = (await runApi(getTicketRoom(base, ticketId))).room;
+      room = (await runApi(getTicketRoom(base, ticketId, projectId))).room;
       error = "";
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -135,13 +137,14 @@
   const captain = $derived(own.find((a) => a.is_captain && !a.disabled));
   const captainIn = $derived(!!captain && !!room?.members.some((m) => m.mine && m.agent_id === captain.id));
   const typingHandles = $derived(Object.values(typing));
-  const teamAgents = $derived(
-    Object.fromEntries((room?.members ?? []).map((m) => [m.handle, { name: memberLabel(m), ...(m.avatar ?? {}) }])),
-  );
+  /* Speakers by (agent, owner): another person's Captain is drawn as
+     "Captain · @hana", never as yours. */
+  const teamAgents = $derived(roomSpeakers(room));
+  const shownTurns = $derived(turns.map((t) => roomTurnView(t, room)));
 
   async function ensureRoom(): Promise<TicketRoom | null> {
     if (room) return room;
-    room = await runApi(openTicketRoom(base, ticketId));
+    room = await runApi(openTicketRoom(base, ticketId, projectId));
     return room;
   }
 
@@ -164,6 +167,8 @@
   async function send(msg: { text: string; files: File[] }) {
     const t = msg.text.trim();
     if (!t) return;
+    // A room takes text only; say so rather than drop a file silently.
+    const dropped = msg.files.length > 0;
     await act(async () => {
       const r = await ensureRoom();
       if (!r) return;
@@ -172,23 +177,24 @@
       await loadRoom();
       await loadTurns();
     });
+    if (dropped) error = "Files can't be sent to a room yet — only the text went.";
   }
 
   const addAgents = (ids: string[]) =>
     act(async () => {
       await ensureRoom();
-      room = await runApi(addRoomMembers(base, ticketId, ids));
+      room = await runApi(addRoomMembers(base, ticketId, projectId, ids));
       picking = false;
       picked = [];
     });
   const askCaptain = () => captain && addAgents([captain.id]);
   const removeMember = (m: TicketRoomMember) =>
     act(async () => {
-      if (m.agent_id) room = await runApi(removeRoomMember(base, ticketId, m.agent_id));
+      if (m.agent_id) room = await runApi(removeRoomMember(base, ticketId, projectId, m.agent_id));
     });
   const toggleShare = (on: boolean) =>
     act(async () => {
-      room = await runApi(setRoomShareFull(base, ticketId, on));
+      room = await runApi(setRoomShareFull(base, ticketId, projectId, on));
     });
 
   const muted = "text-black-800 dark:text-black-600";
@@ -242,7 +248,7 @@
       {#if turns.length === 0}
         <p class="py-4 text-center text-xs {muted}">No messages yet.</p>
       {/if}
-      {#each turns as t, i (t.turn_id ?? i)}
+      {#each shownTurns as t, i (t.turn_id ?? i)}
         <ThreadMessage turn={t as unknown as ConversationTurn} {teamAgents} />
       {/each}
       {#if typingHandles.length}
@@ -310,7 +316,7 @@
           <p class="text-xs {muted}">You have no Team agents yet.</p>
         {/each}
       </div>
-      <p class="mt-2 text-[11px] {muted}">Only your own Team agents. They work for you, with your access, and reach this ticket only.</p>
+      <p class="mt-2 text-[11px] {muted}">Only your own Team agents. They work for you, with your access — your Captain with everything it can already reach, the others with this ticket.</p>
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" class="rounded-lg border border-white-400 px-3 py-1.5 text-xs dark:border-navy-600" onclick={() => (picking = false)}>Cancel</button>
         <button type="button" class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-semibold text-white-100 hover:bg-green-600 disabled:opacity-50" disabled={!picked.length || busy} onclick={() => addAgents(picked)}>Add {picked.length || ""}</button>

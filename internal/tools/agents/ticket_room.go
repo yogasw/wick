@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -52,7 +53,13 @@ const (
 	roomHomeHandle = "project"
 	// roomTicketBodyMax caps the ticket description a member's turn carries.
 	roomTicketBodyMax = 1500
+	// errRoomSession refuses what a room (or a member's backing session)
+	// does not support through the generic session and ticket routes.
+	errRoomSession = "not supported in a ticket room"
 )
+
+// errLeftRoom is a queued turn of a member that left the room meanwhile.
+var errLeftRoom = errors.New("is no longer in this room")
 
 /* ── DTOs ────────────────────────────────────────────────────────────── */
 
@@ -242,9 +249,12 @@ func planRoomMessage(text string, tr session.TicketRoom, sender string, own []te
 	plan.Unknown = unknown
 	tr.Members = append([]session.RoomMember(nil), tr.Members...)
 	if len(hit) > 0 {
+		// A disabled agent named does not join: it could not answer.
 		ids := make([]string, 0, len(hit))
 		for _, p := range hit {
-			ids = append(ids, p.ID)
+			if !p.Disabled {
+				ids = append(ids, p.ID)
+			}
 		}
 		added, err := roomAddMembers(&tr, ids, own, sender)
 		if err != nil {
@@ -375,14 +385,45 @@ func ownTeamPeers(ctx context.Context, uid string) (map[string]teamlink.Peer, []
 	return byID, own
 }
 
-// findTicketRoom is the room of projectID's ticketID, if one exists.
-func findTicketRoom(projectID, ticketID string) (session.Session, bool) {
+// findTicketRoom is the room of projectID's ticket tk, if one exists and
+// is still on the ticket: a room the ticket no longer lists (moved off it,
+// or a ticket re-created under the same id) is not its room.
+func findTicketRoom(projectID string, tk ticket.Ticket) (session.Session, bool) {
 	for _, s := range globalMgr.Registry().Sessions() {
-		if tr := s.Meta.TicketRoom; tr != nil && tr.TicketID == ticketID && s.Meta.ProjectID == projectID {
+		if tr := s.Meta.TicketRoom; tr != nil && tr.TicketID == tk.ID && s.Meta.ProjectID == projectID && roomOnTicket(s.ID, tk) {
 			return s, true
 		}
 	}
 	return session.Session{}, false
+}
+
+func roomOnTicket(roomID string, tk ticket.Ticket) bool {
+	for _, sid := range tk.Sessions {
+		if sid == roomID {
+			return true
+		}
+	}
+	return false
+}
+
+// endTicketRooms deletes the rooms of projectID's ticketID and their
+// members' backing sessions — a deleted ticket's room has nothing left to
+// work on.
+func endTicketRooms(ctx context.Context, projectID, ticketID string) {
+	for _, s := range globalMgr.Registry().Sessions() {
+		tr := s.Meta.TicketRoom
+		if tr == nil || tr.TicketID != ticketID || s.Meta.ProjectID != projectID {
+			continue
+		}
+		for _, b := range globalMgr.Registry().Sessions() {
+			if b.Meta.GroupSessionID == s.ID {
+				_ = globalMgr.DeleteSession(ctx, b.ID)
+			}
+		}
+		if err := globalMgr.DeleteSession(ctx, s.ID); err != nil {
+			log.Ctx(ctx).Warn().Err(err).Str("session", s.ID).Msg("ticket room: delete with its ticket failed")
+		}
+	}
 }
 
 // roomHomePeer is the project default as a peer.
@@ -496,31 +537,58 @@ func ticketRoomsOf(projectID string) map[string]session.Session {
 	return out
 }
 
-// roomCardOf is sess's members for a board card, in room order. The same
-// for every viewer: a card shows who is in the room, not who answers whom.
-func roomCardOf(ctx context.Context, sess session.Session) *TicketCardRoom {
+// roomCards builds board cards' rooms for one request, reading each agent
+// and each owner's handle once however many cards they sit on.
+type roomCards struct {
+	agents  map[string]*entity.AgentPersona // nil = deleted
+	handles map[string]string
+}
+
+func newRoomCards() *roomCards {
+	return &roomCards{agents: map[string]*entity.AgentPersona{}, handles: map[string]string{}}
+}
+
+func (rc *roomCards) agent(ctx context.Context, id string) *entity.AgentPersona {
+	if a, ok := rc.agents[id]; ok {
+		return a
+	}
+	var out *entity.AgentPersona
+	if globalTeam != nil {
+		if a, err := globalTeam.Get(ctx, id); err == nil {
+			out = &a
+		}
+	}
+	rc.agents[id] = out
+	return out
+}
+
+func (rc *roomCards) handle(ctx context.Context, uid string) string {
+	if h, ok := rc.handles[uid]; ok {
+		return h
+	}
+	h := personHandle(ctx, uid)
+	rc.handles[uid] = h
+	return h
+}
+
+// cardOf is sess's members for a board card, in room order. The same for
+// every viewer: a card shows who is in the room, not who answers whom.
+func (rc *roomCards) cardOf(ctx context.Context, sess session.Session) *TicketCardRoom {
 	out := &TicketCardRoom{SessionID: sess.ID, Members: []TicketCardRoomAgent{}}
-	owners := map[string]string{}
 	for _, m := range sess.Meta.TicketRoom.Members {
 		if m.Kind == session.RoomMemberProjectDefault {
 			home := roomHomePeer(sess.Meta.ProjectID)
 			out.Members = append(out.Members, TicketCardRoomAgent{Kind: m.Kind, Handle: home.Handle, Name: home.Name})
 			continue
 		}
-		if globalTeam == nil {
-			continue
-		}
-		a, err := globalTeam.Get(ctx, m.AgentID)
-		if err != nil {
+		a := rc.agent(ctx, m.AgentID)
+		if a == nil {
 			continue // the agent was deleted
-		}
-		if _, ok := owners[m.OwnerID]; !ok {
-			owners[m.OwnerID] = personHandle(ctx, m.OwnerID)
 		}
 		av := team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID)
 		out.Members = append(out.Members, TicketCardRoomAgent{
-			Kind: m.Kind, AgentID: a.ID, Handle: a.Handle, Name: globalTeam.MemberOf(a).Name,
-			OwnerID: m.OwnerID, OwnerHandle: owners[m.OwnerID], Avatar: &av,
+			Kind: m.Kind, AgentID: a.ID, Handle: a.Handle, Name: globalTeam.MemberOf(*a).Name,
+			OwnerID: m.OwnerID, OwnerHandle: rc.handle(ctx, m.OwnerID), Avatar: &av,
 		})
 	}
 	return out
@@ -538,7 +606,7 @@ func apiTicketRoomGet(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	sess, found := findTicketRoom(projectID, tk.ID)
+	sess, found := findTicketRoom(projectID, tk)
 	if !found {
 		c.JSON(http.StatusOK, map[string]any{"room": nil})
 		return
@@ -557,7 +625,7 @@ func apiTicketRoomCreate(c *tool.Ctx) {
 	}
 	roomCreateMu.Lock()
 	defer roomCreateMu.Unlock()
-	if sess, found := findTicketRoom(projectID, tk.ID); found {
+	if sess, found := findTicketRoom(projectID, tk); found {
 		c.JSON(http.StatusOK, roomItem(c.Context(), sess, actorID(c)))
 		return
 	}
@@ -604,7 +672,7 @@ func roomOf(c *tool.Ctx) (session.Session, bool) {
 	if !ok {
 		return session.Session{}, false
 	}
-	sess, found := findTicketRoom(projectID, tk.ID)
+	sess, found := findTicketRoom(projectID, tk)
 	if !found {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "this ticket has no room"})
 		return session.Session{}, false
@@ -768,9 +836,11 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 	tr := sess.Meta.TicketRoom
 	peers, targets, foreign, unknown, refused, noDefault := plan.Peers, plan.Targets, plan.Foreign, plan.Unknown, plan.Refused, plan.NoDefault
 
+	// Backing sessions only for a message that runs someone: naming only
+	// agents that cannot run creates nothing.
 	backing := map[string]string{}
 	for _, p := range peers {
-		if p.Disabled {
+		if len(targets) == 0 || p.Disabled {
 			continue
 		}
 		var id string
@@ -841,6 +911,11 @@ func newRoomRun(ctx context.Context, sess session.Session, tk ticket.Ticket, sen
 	return &groupRun{
 		group: session.AgentGroup{Name: tk.Title}, members: peers, limit: teamlink.GroupLimit(peers, 0), backing: backing,
 		turn: func(ctx context.Context, p teamlink.Peer, prompt string) (string, error) {
+			// A queued turn re-reads the room: a member removed since the
+			// message was sent does not run (nor spend its owner's budget).
+			if !roomStillHas(roomID, p, sender) {
+				return "", errLeftRoom
+			}
 			return runBackingTurn(ctx, backing[p.ID], prompt)
 		},
 		history: func() []store.ConversationTurn {
@@ -848,6 +923,11 @@ func newRoomRun(ctx context.Context, sess session.Session, tk ticket.Ticket, sen
 			return turns
 		},
 		record: func(t store.ConversationTurn) {
+			// Whom the speaker works for travels with its turn: everyone's
+			// Captain is "captain", the owner tells them apart.
+			if t.Speaker != nil {
+				t.Speaker.OwnerID = sender
+			}
 			if t.Role == "system" {
 				recordSystemTurn(globalLayout, globalBcast, roomID, t)
 				return
@@ -875,9 +955,27 @@ func newRoomRun(ctx context.Context, sess session.Session, tk ticket.Ticket, sen
 	}
 }
 
+// roomStillHas reports whether p is still in room roomID for sender.
+func roomStillHas(roomID string, p teamlink.Peer, sender string) bool {
+	room, ok := globalMgr.Registry().Session(roomID)
+	if !ok || room.Meta.TicketRoom == nil {
+		return false
+	}
+	tr := room.Meta.TicketRoom
+	if p.ID == roomHomePeerID {
+		h, has := tr.Home()
+		return has && h.Kind == session.RoomMemberProjectDefault
+	}
+	_, in := tr.Member(p.ID, sender)
+	return in
+}
+
 // roomTurnOwner is whose a room turn is: its writer, or the person the
 // agent that wrote it works for (its backing session's owner).
 func roomTurnOwner(t store.ConversationTurn) string {
+	if t.Speaker != nil && t.Speaker.OwnerID != "" {
+		return t.Speaker.OwnerID
+	}
 	if t.Speaker != nil {
 		if s, ok := globalMgr.Registry().Session(t.Speaker.SessionID); ok {
 			return s.Meta.UserID

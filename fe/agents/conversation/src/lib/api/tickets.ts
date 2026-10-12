@@ -92,8 +92,14 @@ export const createTicket = (
   },
 ) => apiPostE<TicketCard>(`${base}/api/projects/${encodeURIComponent(projectId)}/tickets`, body);
 
-export const getTicket = (base: string, ticketId: string) =>
-  apiGetE<TicketDetail>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`).pipe(
+/* Ticket ids are unique per project only (an adopted external id can sit in
+   two projects), so every per-ticket call that knows its project names it:
+   the server then never has to guess, and refuses an id it cannot place. */
+const inProject = (projectId: string | undefined, sep: "?" | "&" = "?") =>
+  projectId ? `${sep}project=${encodeURIComponent(projectId)}` : "";
+
+export const getTicket = (base: string, ticketId: string, projectId?: string) =>
+  apiGetE<TicketDetail>(`${base}/api/tickets/${encodeURIComponent(ticketId)}${inProject(projectId)}`).pipe(
     Effect.map((r) => ({
       ...r,
       sessions: r.sessions ?? [],
@@ -117,7 +123,8 @@ export const updateTicket = (
     assignees?: string[];
     fields?: Record<string, string>;
   },
-) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);
+  projectId?: string,
+) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}${inProject(projectId)}`, patch);
 
 /** The receiver's own JSON reply, passed through by the server. Every field
     is optional — a receiver that answers `{}` is still a working receiver —
@@ -161,9 +168,9 @@ export type ActionResult = {
 
 /** One custom-button click: the server POSTs the ticket to the button's URL
     and reports how that went — the user is waiting to see their "Sync" land. */
-export const runTicketAction = (base: string, ticketId: string, buttonId: string) =>
+export const runTicketAction = (base: string, ticketId: string, buttonId: string, projectId?: string) =>
   apiPostE<ActionResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}`,
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}${inProject(projectId)}`,
   );
 
 /** The list-toolbar twin of runTicketAction: the server POSTs the board's
@@ -197,9 +204,10 @@ export const deleteTicket = (
   base: string,
   ticketId: string,
   sessions: "keep" | "delete" = "keep",
+  projectId?: string,
 ) =>
   apiDeleteE<{ status: string; sessions_deleted: number; sessions_kept: number }>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}?sessions=${sessions}`,
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}?sessions=${sessions}${inProject(projectId, "&")}`,
   );
 
 /** A ticket the moved chat just left, when that emptied it — the caller is
@@ -207,14 +215,14 @@ export const deleteTicket = (
 export type EmptiedTicket = { id: string; title: string };
 type MoveResult = { status: string; emptied_ticket?: EmptiedTicket };
 
-export const attachSession = (base: string, ticketId: string, sessionId: string) =>
+export const attachSession = (base: string, ticketId: string, sessionId: string, projectId?: string) =>
   apiPutE<MoveResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}`,
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}${inProject(projectId)}`,
   );
 
-export const detachSession = (base: string, ticketId: string, sessionId: string) =>
+export const detachSession = (base: string, ticketId: string, sessionId: string, projectId?: string) =>
   apiDeleteE<MoveResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}`,
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}${inProject(projectId)}`,
   );
 
 /* ── standing answers to ticket prompts ──────────────────────────────── */
@@ -231,11 +239,11 @@ export const saveTicketPrefs = (base: string, prefs: TicketPrefs) =>
 
 /** A notes scope is a ticket or a session; a session that belongs to a
     ticket resolves server-side to that ticket's notes. */
-export type NotesScope = { ticketId: string } | { sessionId: string };
+export type NotesScope = { ticketId: string; projectId?: string } | { sessionId: string };
 
 function scopeQuery(scope: NotesScope): string {
   return "ticketId" in scope
-    ? `ticket_id=${encodeURIComponent(scope.ticketId)}`
+    ? `ticket_id=${encodeURIComponent(scope.ticketId)}${inProject(scope.projectId, "&")}`
     : `session_id=${encodeURIComponent(scope.sessionId)}`;
 }
 
@@ -317,20 +325,21 @@ export type TicketRoom = {
   responder: string;
 };
 
-export const getTicketRoom = (base: string, ticketId: string) =>
-  apiGetE<{ room: TicketRoom | null }>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room`);
+const roomURL = (base: string, ticketId: string, projectId: string, rest = "") =>
+  `${base}/api/tickets/${encodeURIComponent(ticketId)}/room${rest}${inProject(projectId)}`;
+
+export const getTicketRoom = (base: string, ticketId: string, projectId: string) =>
+  apiGetE<{ room: TicketRoom | null }>(roomURL(base, ticketId, projectId));
 
 /** Create the ticket's room, or return the one it has. */
-export const openTicketRoom = (base: string, ticketId: string) =>
-  apiPostE<TicketRoom>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room`, {});
+export const openTicketRoom = (base: string, ticketId: string, projectId: string) =>
+  apiPostE<TicketRoom>(roomURL(base, ticketId, projectId), {});
 
-export const setRoomShareFull = (base: string, ticketId: string, shareFull: boolean) =>
-  apiPatchE<TicketRoom>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room`, { share_full: shareFull });
+export const setRoomShareFull = (base: string, ticketId: string, projectId: string, shareFull: boolean) =>
+  apiPatchE<TicketRoom>(roomURL(base, ticketId, projectId), { share_full: shareFull });
 
-export const addRoomMembers = (base: string, ticketId: string, agentIds: string[]) =>
-  apiPostE<TicketRoom>(`${base}/api/tickets/${encodeURIComponent(ticketId)}/room/members`, { agent_ids: agentIds });
+export const addRoomMembers = (base: string, ticketId: string, projectId: string, agentIds: string[]) =>
+  apiPostE<TicketRoom>(roomURL(base, ticketId, projectId, "/members"), { agent_ids: agentIds });
 
-export const removeRoomMember = (base: string, ticketId: string, agentId: string) =>
-  apiDeleteE<TicketRoom>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/room/members/${encodeURIComponent(agentId)}`,
-  );
+export const removeRoomMember = (base: string, ticketId: string, projectId: string, agentId: string) =>
+  apiDeleteE<TicketRoom>(roomURL(base, ticketId, projectId, `/members/${encodeURIComponent(agentId)}`));

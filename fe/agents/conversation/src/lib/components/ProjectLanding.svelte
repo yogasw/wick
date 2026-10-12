@@ -426,7 +426,7 @@
 
   /* A ticket that just lost its last chat: EmptyTicketOffer asks. */
   let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
-  const handleEmptied = (t: EmptiedTicket) => emptyOffer?.offer(t);
+  const handleEmptied = (t: EmptiedTicket) => emptyOffer?.offer(t, project.id);
 
   /* Starting a session on a ticket is a two-step: create it in this
      project, then attach. The composer owns creation, so the ticket id is
@@ -496,7 +496,7 @@
         const sessionId = url.split("/").pop()?.split("?")[0] ?? "";
         if (sessionId) {
           await Effect.runPromise(
-            attachSession(base, ticketId, sessionId).pipe(Effect.provide(WickClientLayer)),
+            attachSession(base, ticketId, sessionId, project.id).pipe(Effect.provide(WickClientLayer)),
           ).catch(() => { /* the session is still usable unattached */ });
         }
         pendingTicketId = null;
@@ -588,6 +588,8 @@
           onBack={() => { gotoTicket(null); reloadBoard(); }}
           onOpenSession={onSelectSession}
           onNewSession={newSessionInTicket}
+          projectId={project.id}
+          roomHref={teamOn ? teamTicketsHref(base, project.id, openTicketId) : undefined}
         />
       </div>
     {:else if ticketEnabled && viewMode === "card" && boardView}

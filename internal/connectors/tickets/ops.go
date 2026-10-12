@@ -30,6 +30,9 @@ func resolveProject(layout agentconfig.Layout, c *connector.Ctx, explicit string
 	if sid == "" {
 		return "", fmt.Errorf("project_id is required (no calling session to infer it from)")
 	}
+	if team.InTicketRoom(layout, sid) {
+		return "", fmt.Errorf("in a ticket room you reach only that room's ticket")
+	}
 	sess, err := session.Load(layout, sid)
 	if err != nil {
 		return "", fmt.Errorf("load calling session: %w", err)

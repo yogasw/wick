@@ -256,6 +256,8 @@ describe("TicketsPage", () => {
     expect(page.dataset.ticket).toBe("T-7");
     expect(await screen.findByText("Seven")).toBeTruthy();
     expect(getTicket.mock.calls[0][1]).toBe("T-7");
+    // The route's project travels with the ticket id (ids are per project).
+    expect(getTicket.mock.calls[0][2]).toBe("p1");
     await fireEvent.click(screen.getByRole("button", { name: /Back to board/ }));
     expect(onRoute).toHaveBeenCalledWith({});
   });

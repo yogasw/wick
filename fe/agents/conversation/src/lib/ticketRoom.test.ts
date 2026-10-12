@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { addable, memberLabel, responderHint, roomAgentOptions, roomMentionAgents, withRoomAgent } from "./ticketRoom.js";
+import { addable, memberLabel, responderHint, roomAgentOptions, roomMentionAgents, roomSpeakers, roomTurnView, withRoomAgent } from "./ticketRoom.js";
 import type { TicketRoom } from "./api/tickets.js";
 import type { TicketCard } from "./types/agents.js";
 
@@ -59,5 +59,16 @@ describe("ticketRoom", () => {
     expect(roomAgentOptions(cards).map((o) => o.label)).toEqual(["Captain · @alice", "Captain · @hana"]);
     expect(withRoomAgent(cards, "hana:c2").map((c) => c.id)).toEqual(["T-2"]);
     expect(withRoomAgent(cards, "")).toHaveLength(3);
+  });
+
+  test("thread speakers are (agent, owner): someone else's Captain is not yours", () => {
+    const sp = roomSpeakers(room);
+    expect(sp["captain"].name).toBe("Captain");
+    expect(sp["hana/captain"].name).toBe("Captain · @hana");
+    const turn = (owner: string, agent: string) => ({ ts: "", role: "assistant" as const, text: "x", speaker: { agent_id: agent, handle: "captain", via: "group", owner_id: owner } });
+    expect(roomTurnView(turn("hana", "h-cap"), room).speaker?.handle).toBe("hana/captain");
+    expect(roomTurnView(turn("alice", "a-cap"), room).speaker?.handle).toBe("captain");
+    // An older turn with no owner keeps its handle.
+    expect(roomTurnView({ ts: "", role: "assistant", text: "x", speaker: { agent_id: "h-cap", handle: "captain", via: "group" } }, room).speaker?.handle).toBe("captain");
   });
 });

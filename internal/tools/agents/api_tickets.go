@@ -175,32 +175,46 @@ type ticketDetailResponse struct {
 	Statuses []project.TicketStatus `json:"statuses"`
 	Users    map[string]string      `json:"users,omitempty"`
 	Me       string                 `json:"me,omitempty"`
+	// Room is the ticket's room when it has one; its session is not among
+	// Sessions (it is read in Team › Tickets, not as a chat).
+	Room *TicketCardRoom `json:"room,omitempty"`
 }
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
-// resolveTicketProject finds which project owns a ticket. Ticket ids are
-// unique per project, and the URL carries only the ticket, so this scans the
+// resolveTicketProject finds which project owns a ticket, among the
 // projects the caller may see — which also enforces access without a second
-// check.
+// check. Ticket ids are unique per project only (an adopted external id can
+// sit in two projects), so a caller that knows the project names it with
+// ?project=; without it, an id found in more than one visible project is
+// refused rather than resolved to whichever the scan meets first.
 func resolveTicketProject(c *tool.Ctx, ticketID string) (string, bool) {
 	access := callerProjectAccess(c)
+	if want := strings.TrimSpace(c.Query("project")); want != "" {
+		if !access.allowProject(want) || !ticket.Exists(globalLayout, want, ticketID) {
+			return "", false
+		}
+		// A token may only address tickets in a project that opted into
+		// the REST surface. The caller answers "ticket not found"; the
+		// server log (requireTicketAPI) records that the real reason was
+		// the project's API toggle.
+		return want, requireTicketAPI(c, want)
+	}
+	found := ""
 	for id := range globalMgr.Registry().Projects() {
-		if !access.allowProject(id) {
+		if !access.allowProject(id) || !ticket.Exists(globalLayout, id, ticketID) {
 			continue
 		}
-		if ticket.Exists(globalLayout, id, ticketID) {
-			// A token may only address tickets in a project that opted into
-			// the REST surface. The caller answers "ticket not found"; the
-			// server log (requireTicketAPI) records that the real reason
-			// was the project's API toggle.
-			if !requireTicketAPI(c, id) {
-				return "", false
-			}
-			return id, true
+		if found != "" {
+			log.Ctx(c.Context()).Warn().Str("ticket", ticketID).Msg("ticket id in several projects: ?project= required")
+			return "", false
 		}
+		found = id
 	}
-	return "", false
+	if found == "" || !requireTicketAPI(c, found) {
+		return "", false
+	}
+	return found, true
 }
 
 // userNames resolves display names for a set of user ids, best effort.
@@ -342,6 +356,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	}
 
 	rooms := ticketRoomsOf(id)
+	roomCardsOf := newRoomCards()
 	cards := make([]TicketCard, 0, len(tickets))
 	for _, t := range tickets {
 		// Every session is marked as ticketed even when its card is not
@@ -373,6 +388,7 @@ func apiProjectTickets(c *tool.Ctx) {
 			shown = shown[:rowsPerCard]
 		}
 		room, hasRoom := rooms[t.ID]
+		hasRoom = hasRoom && roomOnTicket(room.ID, t)
 		rows := make([]ticketSessionRow, 0, len(shown))
 		for _, sid := range shown {
 			if hasRoom && sid == room.ID {
@@ -382,7 +398,7 @@ func apiProjectTickets(c *tool.Ctx) {
 		}
 		var cardRoom *TicketCardRoom
 		if hasRoom {
-			cardRoom = roomCardOf(c.Context(), room)
+			cardRoom = roomCardsOf.cardOf(c.Context(), room)
 		}
 		cards = append(cards, TicketCard{
 			ID:        t.ID,
@@ -421,7 +437,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	page, untrackedNext, untrackedTotal := pageLooseSessions(
 		globalMgr.Registry().SessionIDs(), live, lc,
 		func(sid string, s session.Session) bool {
-			return s.Meta.ProjectID == id && s.Meta.ParentSessionID == "" && !ticketed[sid] &&
+			return s.Meta.ProjectID == id && s.Meta.ParentSessionID == "" && s.Meta.GroupSessionID == "" && !ticketed[sid] &&
 				(untrackedOwner == "" || s.Meta.UserID == untrackedOwner)
 		},
 		untrackedAfter, untrackedLimit, wantUntracked,
@@ -579,8 +595,15 @@ func apiTicketDetail(c *tool.Ctx) {
 	// attach order, so the chat someone was just in sat wherever it
 	// happened to be added — a ticket with a long history buried it. Rows
 	// with no live session carry no timestamp and sink to the bottom.
+	room, hasRoom := findTicketRoom(projectID, tk)
+	if hasRoom {
+		resp.Room = newRoomCards().cardOf(c.Context(), room)
+	}
 	resp.Sessions = make([]ticketSessionRow, 0, len(tk.Sessions))
 	for _, sid := range orderSidebarIDs(tk.Sessions, live, lc) {
+		if hasRoom && sid == room.ID {
+			continue
+		}
 		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
 	}
 
@@ -825,6 +848,9 @@ func apiTicketDelete(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// A room belongs to its ticket: it and its members' sessions go with
+	// it, so a ticket re-created under the same id never inherits it.
+	endTicketRooms(c.Context(), projectID, ticketID)
 	c.JSON(http.StatusOK, map[string]any{
 		"status":           "ok",
 		"sessions_deleted": deleted,
@@ -871,6 +897,12 @@ func ticketSessionWritable(c *tool.Ctx, sid string) bool {
 	}
 	if sharedChatReadOnly(c, sess) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": errSharedReadOnly})
+		return false
+	}
+	// A room stays on the ticket it was opened for, and a member's backing
+	// session is not a chat to file anywhere.
+	if sess.Meta.TicketRoom != nil || sess.Meta.GroupSessionID != "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": errRoomSession})
 		return false
 	}
 	return true

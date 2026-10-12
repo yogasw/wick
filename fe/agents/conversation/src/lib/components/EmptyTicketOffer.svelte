@@ -49,7 +49,7 @@
   function removeEmptyTicket(ticketId: string, projectId = emptiedProject) {
     // "keep": an empty ticket has no chats to take with it, so this is only
     // ever the ticket record.
-    Effect.runPromise(deleteTicket(base, ticketId, "keep").pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(deleteTicket(base, ticketId, "keep", projectId).pipe(Effect.provide(WickClientLayer)))
       .then(() => onChanged(projectId))
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to delete the ticket"));
   }
