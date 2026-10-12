@@ -30,12 +30,12 @@ func resolveProject(layout agentconfig.Layout, c *connector.Ctx, explicit string
 	if sid == "" {
 		return "", fmt.Errorf("project_id is required (no calling session to infer it from)")
 	}
-	if team.InTicketRoom(layout, sid) {
-		return "", fmt.Errorf("in a ticket room you reach only that room's ticket")
-	}
 	sess, err := session.Load(layout, sid)
 	if err != nil {
 		return "", fmt.Errorf("load calling session: %w", err)
+	}
+	if team.SessionInTicketRoom(layout, sess) {
+		return "", fmt.Errorf("in a ticket room you reach only that room's ticket")
 	}
 	if sess.Meta.ProjectID == "" {
 		return "", fmt.Errorf("this session belongs to no project, so project_id must be given")
@@ -505,6 +505,9 @@ func (h *handlers) attach(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := team.RefuseRoomSession(h.layout, sid); err != nil {
+		return nil, err
+	}
 	if err := ticket.AttachSession(h.layout, projectID, ticketID, sid); err != nil {
 		return nil, err
 	}
@@ -527,6 +530,9 @@ func (h *handlers) detach(c *connector.Ctx) (any, error) {
 	}
 	sid, err := resolveSession(h.layout, c, c.Input("session_id"))
 	if err != nil {
+		return nil, err
+	}
+	if err := team.RefuseRoomSession(h.layout, sid); err != nil {
 		return nil, err
 	}
 	if err := ticket.DetachSession(h.layout, projectID, ticketID, sid); err != nil {

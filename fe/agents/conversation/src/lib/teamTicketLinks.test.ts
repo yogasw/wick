@@ -100,3 +100,13 @@ describe("teamTicketLinks", () => {
     expect(await hasTeam("/b")).toBe(false);
   });
 });
+
+describe("ticketsEntryShown", () => {
+  test("only a loaded roster with a Captain shows Tickets", async () => {
+    const { ticketsEntryShown } = await import("./teamTicketLinks.js");
+    expect(ticketsEntryShown({ loaded: true, hasCaptain: true })).toBe(true);
+    expect(ticketsEntryShown({ loaded: true, hasCaptain: false })).toBe(false);
+    expect(ticketsEntryShown({ loaded: false, hasCaptain: false })).toBe(false);
+    expect(ticketsEntryShown({ loaded: true, loadError: "boom", hasCaptain: true })).toBe(false);
+  });
+});

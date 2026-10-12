@@ -383,6 +383,9 @@ func (l *LayoutData) AttachSession(ctx context.Context, userID string, in *hostp
 	if err := team.CheckSessionTarget(ctx, l.Layout, userID, "", sessionID); err != nil {
 		return status.Error(codes.NotFound, err.Error())
 	}
+	if err := team.RefuseRoomSession(l.Layout, sessionID); err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
 	if err := ticket.AttachSession(l.Layout, tk.ProjectID, tk.ID, sessionID); err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}

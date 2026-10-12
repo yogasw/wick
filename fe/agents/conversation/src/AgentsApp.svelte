@@ -55,7 +55,7 @@
   import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import TicketsPage from "./lib/components/team/TicketsPage.svelte";
-  import { addTicketProject, sessionTarget } from "./lib/teamTicketLinks.js";
+  import { addTicketProject, sessionTarget, ticketsEntryShown } from "./lib/teamTicketLinks.js";
   import { projectCount, ticketsSubtitle } from "./lib/ticketProjects.js";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
@@ -225,6 +225,11 @@
      or every agent is shared/remote (none can lead, so it is the new-user
      page). */
   const noCaptain = $derived(loaded && !loadError && !captain);
+  // PLAN §6: no Team, no Tickets — the entry, the board and the room.
+  const hasTickets = $derived(ticketsEntryShown({ loaded, loadError, hasCaptain: !!captain }));
+  $effect(() => {
+    if (route.tickets && noCaptain) navigate({ handle: null, session: null, panel: null }, { replace: true });
+  });
   const captainCandidates = $derived(noCaptain ? agents.filter((a) => !a.kind && !isSharedAgent(a)) : []);
 
   /* Agents and groups in one list, newest activity first. The mobile
@@ -830,6 +835,7 @@
     </nav>
     <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account" data-space-account>
       <!-- Tickets: app navigation next to Team settings, not a roster row. -->
+      {#if hasTickets}
       <button
         type="button"
         class="mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium {route.tickets
@@ -843,6 +849,7 @@
         <span class="min-w-0 flex-1">Tickets</span>
         {#if ticketProjects?.length}<span class="shrink-0 text-[11px] font-normal text-black-700" data-testid="tickets-nav-count">{projectCount(ticketProjects.length)}</span>{/if}
       </button>
+      {/if}
       <TeamAccountMenu
         {viewerName}
         {...account}
@@ -865,7 +872,7 @@
       />
     {/key}
   </section>
-  {:else if route.tickets}
+  {:else if route.tickets && hasTickets}
   <section class="flex min-w-0 flex-1 flex-col">
     <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600" data-testid="tickets-header">
       <button

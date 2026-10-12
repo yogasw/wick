@@ -250,7 +250,7 @@ describe("TicketsPage", () => {
     expect(saveTicketFilter.mock.calls.at(-1)![2]).toEqual({ show_untracked: true });
   });
 
-  test("a ticket route renders TicketDetail; Back to board goes back to the board", async () => {
+  test("a ticket route renders TicketDetail with ← Tickets and its 📁 project", async () => {
     const { onRoute } = mount(["p1"], { project: "p1", ticket: "T-7" });
     const page = await screen.findByTestId("tickets-ticket");
     expect(page.dataset.ticket).toBe("T-7");
@@ -258,7 +258,8 @@ describe("TicketsPage", () => {
     expect(getTicket.mock.calls[0][1]).toBe("T-7");
     // The route's project travels with the ticket id (ids are per project).
     expect(getTicket.mock.calls[0][2]).toBe("p1");
-    await fireEvent.click(screen.getByRole("button", { name: /Back to board/ }));
+    expect(screen.getByTestId("ticket-detail-project").textContent).toMatch(/^📁 \S/);
+    await fireEvent.click(screen.getByRole("button", { name: "Tickets" }));
     expect(onRoute).toHaveBeenCalledWith({});
   });
 
@@ -280,7 +281,7 @@ describe("TicketsPage", () => {
     const err = await screen.findByTestId("ticket-detail-error");
     expect(err.textContent).toContain("Couldn't open this ticket");
     expect(err.textContent).toContain("project not accessible");
-    await fireEvent.click(screen.getByRole("button", { name: /Back to board/ }));
+    await fireEvent.click(screen.getByRole("button", { name: "Tickets" }));
     expect(onRoute).toHaveBeenCalledWith({});
   });
 

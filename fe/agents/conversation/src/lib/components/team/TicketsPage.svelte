@@ -339,6 +339,8 @@
           onOpenSession={(sid) => openSession(sid, route.project)}
           onNewSession={(tid) => newSessionOn(route.project ?? "", tid)}
           projectId={route.project}
+          backLabel="Tickets"
+          projectName={nameOf(route.project ?? "")}
         >
           {#snippet room()}
             <TicketRoom {base} ticketId={route.ticket ?? ""} projectId={route.project ?? ""} projectName={nameOf(route.project ?? "")} />

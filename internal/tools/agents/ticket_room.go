@@ -145,6 +145,15 @@ func roomRemoveMember(tr *session.TicketRoom, agentID, owner string) error {
 // foreignMention is "@owner/handle" at a line start: another person's agent.
 type foreignMention struct{ Owner, Handle string }
 
+// foreignLabel names another person's agent in a system line: "Captain"
+// for anyone's Captain (they all share the name), else its @handle.
+func foreignLabel(f foreignMention) string {
+	if f.Handle == "captain" {
+		return "Captain"
+	}
+	return "@" + f.Handle
+}
+
 // foreignMentions lists, once each, the "@owner/handle" mentions at line
 // starts outside fenced code — agents of someone else, which never run on
 // the sender's message.
@@ -406,19 +415,37 @@ func roomOnTicket(roomID string, tk ticket.Ticket) bool {
 	return false
 }
 
-// endTicketRooms deletes the rooms of projectID's ticketID and their
-// members' backing sessions — a deleted ticket's room has nothing left to
-// work on.
+// endTicketRooms deletes the rooms of projectID's ticketID, their
+// members' backing sessions and every sub-agent session under those — a
+// deleted ticket's room has nothing left to work on, and a sub-agent left
+// behind would be an orphan on disk.
 func endTicketRooms(ctx context.Context, projectID, ticketID string) {
-	for _, s := range globalMgr.Registry().Sessions() {
+	all := globalMgr.Registry().Sessions()
+	for _, s := range all {
 		tr := s.Meta.TicketRoom
 		if tr == nil || tr.TicketID != ticketID || s.Meta.ProjectID != projectID {
 			continue
 		}
-		for _, b := range globalMgr.Registry().Sessions() {
-			if b.Meta.GroupSessionID == s.ID {
-				_ = globalMgr.DeleteSession(ctx, b.ID)
+		// Breadth-first from the backing sessions down the parent links,
+		// then deleted deepest first so no child outlives its parent.
+		var doomed []string
+		seen := map[string]bool{}
+		for _, b := range all {
+			if b.Meta.GroupSessionID == s.ID && !seen[b.ID] {
+				seen[b.ID] = true
+				doomed = append(doomed, b.ID)
 			}
+		}
+		for i := 0; i < len(doomed); i++ {
+			for _, c := range all {
+				if c.Meta.ParentSessionID == doomed[i] && !seen[c.ID] {
+					seen[c.ID] = true
+					doomed = append(doomed, c.ID)
+				}
+			}
+		}
+		for i := len(doomed) - 1; i >= 0; i-- {
+			_ = globalMgr.DeleteSession(ctx, doomed[i])
 		}
 		if err := globalMgr.DeleteSession(ctx, s.ID); err != nil {
 			log.Ctx(ctx).Warn().Err(err).Str("session", s.ID).Msg("ticket room: delete with its ticket failed")
@@ -465,9 +492,8 @@ func roomTicketFor(c *tool.Ctx) (string, ticket.Ticket, bool) {
 		return "", ticket.Ticket{}, false
 	}
 	id := c.PathValue("ticketID")
-	projectID, ok := resolveTicketProject(c, id)
+	projectID, ok := ticketProjectOrAnswer(c, id)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return "", ticket.Ticket{}, false
 	}
 	tk, err := ticket.Load(globalLayout, projectID, id)
@@ -662,6 +688,8 @@ func apiTicketRoomCreate(c *tool.Ctx) {
 		return
 	}
 	writeSessionTicketPointer(id, tk.ID)
+	emitSystemEvent(id, store.KindGroupMemberAdded, fmt.Sprintf("Room opened in %s · the ticket stays in this project", roomHomePeer(projectID).Name),
+		map[string]string{"ticket_id": tk.ID, "project_id": projectID})
 	sess, _ := globalMgr.Registry().Session(id)
 	c.JSON(http.StatusCreated, roomItem(c.Context(), sess, creator))
 }
@@ -780,7 +808,11 @@ func apiTicketRoomRemoveMember(c *tool.Ctx) {
 		}
 	}
 	by := actorName(c)
-	emitSystemEvent(sess.ID, store.KindGroupMemberRemoved, fmt.Sprintf("@%s left the room · by %s", handle, by),
+	ticketID := ""
+	if sess.Meta.TicketRoom != nil {
+		ticketID = sess.Meta.TicketRoom.TicketID
+	}
+	emitSystemEvent(sess.ID, store.KindGroupMemberRemoved, fmt.Sprintf("@%s left · its access to %s ended", handle, ticketID),
 		map[string]string{"agent_id": agentID, "handle": handle, "owner_id": caller, "by": by})
 	sess, _ = globalMgr.Registry().Session(sess.ID)
 	c.JSON(http.StatusOK, roomItem(c.Context(), sess, caller))
@@ -868,7 +900,7 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 	}
 	announceRoomJoin(c, sess.ID, added)
 	for _, f := range foreign {
-		emitSystemEvent(sess.ID, store.KindMentionRefused, fmt.Sprintf("@%s/%s only takes instructions from @%s", f.Owner, f.Handle, f.Owner),
+		emitSystemEvent(sess.ID, store.KindMentionRefused, fmt.Sprintf("%s · @%s only takes instructions from @%s. Ask them, or mention your own @captain.", foreignLabel(f), f.Owner, f.Owner),
 			map[string]string{"from": "user", "to": f.Owner + "/" + f.Handle, "reason": "another person's agent"})
 	}
 	for _, h := range unknown {

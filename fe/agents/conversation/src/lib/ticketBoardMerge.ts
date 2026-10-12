@@ -1,4 +1,4 @@
-import type { TicketBoard, TicketButton, TicketStatus } from "./types/agents.js";
+import type { TicketBoard, TicketButton, TicketCard, TicketStatus } from "./types/agents.js";
 
 /* The Team Tickets board is N project boards drawn as one. Each project
    keeps its own statuses, buttons and filter on the server; this file only
@@ -31,17 +31,23 @@ export function hasStatus(p: BoardProject | undefined, key: string): boolean {
   return !!p && p.board.statuses.some((s) => s.key === key);
 }
 
+/** cardKey names a card on the combined board. Ticket ids are only unique
+    within a project (two projects can both hold T-4F2A, and a synced id is
+    the same everywhere), so the key carries the project too. A card with
+    no project (the single board) is keyed by its id alone. */
+export function cardKey(t: Pick<TicketCard, "id" | "project_id">): string {
+  return t.project_id ? `${t.project_id}/${t.id}` : t.id;
+}
+
 /** mergeBoards folds the boards into one payload for the toolbar and the
-    columns, and records which project every ticket and chat came from.
-    Ticket ids are global (PATCH /api/tickets/{id} takes no project), so an
-    id is a safe key. `config` is the first project's; per-card fields are
-    looked up through `ticketProject`. */
+    columns. Every card it emits carries its `project_id`, which is what
+    PATCH, open, drop and per-card fields go by; session ids are global, so
+    chats are mapped through `sessionProject`. `config` is the first
+    project's. */
 export function mergeBoards(projects: readonly BoardProject[]): {
   board: TicketBoard;
-  ticketProject: Map<string, string>;
   sessionProject: Map<string, string>;
 } {
-  const ticketProject = new Map<string, string>();
   const sessionProject = new Map<string, string>();
   const board: TicketBoard = {
     config: projects[0]?.board.config ?? { enabled: true },
@@ -54,9 +60,8 @@ export function mergeBoards(projects: readonly BoardProject[]): {
   };
   for (const p of projects) {
     for (const t of p.board.tickets) {
-      ticketProject.set(t.id, p.id);
       for (const r of t.session_rows ?? []) sessionProject.set(r.id, p.id);
-      board.tickets.push(t);
+      board.tickets.push({ ...t, project_id: p.id });
     }
     for (const r of p.board.untracked) {
       sessionProject.set(r.id, p.id);
@@ -65,7 +70,7 @@ export function mergeBoards(projects: readonly BoardProject[]): {
     board.untracked_total! += p.board.untracked_total ?? p.board.untracked.length;
     Object.assign(board.users!, p.board.users ?? {});
   }
-  return { board, ticketProject, sessionProject };
+  return { board, sessionProject };
 }
 
 /** A toolbar button of the combined board: one label, fired once per

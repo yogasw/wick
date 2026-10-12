@@ -135,6 +135,9 @@ describe("TicketRoom", () => {
     await fireEvent.click(await screen.findByTestId("room-ask-captain"));
     await waitFor(() => expect(names()).toContain("addRoomMembers"));
     expect(calls.find((c) => c.fn === "addRoomMembers")!.args[3]).toEqual(["a-cap"]);
+    // The message to it is started for you.
+    const box = screen.getByPlaceholderText("Message the room · @ to bring in an agent") as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toBe("@captain "));
     await waitFor(() => expect(screen.queryByTestId("room-ask-captain")).toBeNull());
   });
 

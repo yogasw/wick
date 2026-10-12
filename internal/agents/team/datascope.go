@@ -8,6 +8,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -104,7 +105,7 @@ func CheckSessionTarget(ctx context.Context, layout config.Layout, callerUID, ca
 		return nil
 	}
 	notFound := fmt.Errorf("session not found: %s", targetSID)
-	if callingSID != "" && InTicketRoom(layout, callingSID) {
+	if InTicketRoom(layout, callingSID) {
 		return notFound
 	}
 	sess, err := session.Load(layout, targetSID)
@@ -160,11 +161,13 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	if callingSID != "" {
 		// A ticket room's session reaches one ticket, through RoomTicket at
 		// the caller; never the project it happens to run in.
-		if InTicketRoom(layout, callingSID) {
-			return notFound
-		}
-		if sess, err := session.Load(layout, callingSID); err == nil && sess.Meta.ProjectID == projectID {
-			return nil
+		if sess, err := session.Load(layout, callingSID); err == nil {
+			if SessionInTicketRoom(layout, sess) {
+				return notFound
+			}
+			if sess.Meta.ProjectID == projectID {
+				return nil
+			}
 		}
 	}
 	p, err := project.Load(layout, projectID)
@@ -183,9 +186,10 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 // RoomTicket is the one ticket a ticket room's member may reach from its
 // backing session (callingSID): the room's ticket, in the room's project.
 // ok only while the session is the backing session of a current member
-// — the agent and the person it works for both still listed — and that
-// person may open the project. Removing the member or losing the project
-// ends it on the next call; nothing is cached.
+// — the agent and the person it works for both still listed — that
+// person may open the project, and the ticket still exists with the room
+// on it. Removing the member, losing the project, deleting the ticket or
+// moving the room off it ends it on the next call; nothing is cached.
 func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (projectID, ticketID string, ok bool) {
 	if callingSID == "" {
 		return "", "", false
@@ -219,27 +223,89 @@ func RoomTicket(ctx context.Context, layout config.Layout, callingSID string) (p
 	if !project.CanAccess(p.Meta, acc) {
 		return "", "", false
 	}
+	// The ticket is the record: a room it no longer lists (moved, or the
+	// ticket gone by any path) grants nothing.
+	tk, err := ticket.Load(layout, room.Meta.ProjectID, tr.TicketID)
+	if err != nil || !listsSession(tk, room.ID) {
+		return "", "", false
+	}
 	return room.Meta.ProjectID, tr.TicketID, true
 }
 
-// InTicketRoom reports whether sid answers in a ticket room — a member's
-// backing session, or a sub-agent under one. Such a session reaches its
-// room's ticket (RoomTicket) and nothing else: not the rest of the
-// project it runs in, not other sessions. Followed up a few parent links
-// only; a deeper chain is refused as if it were in a room (fail closed).
-func InTicketRoom(layout config.Layout, sid string) bool {
-	for i := 0; i < 8 && sid != ""; i++ {
-		sess, err := session.Load(layout, sid)
-		if err != nil {
-			return false
+func listsSession(tk ticket.Ticket, sid string) bool {
+	for _, s := range tk.Sessions {
+		if s == sid {
+			return true
 		}
+	}
+	return false
+}
+
+// ErrRoomSession refuses filing a ticket room, or a member's backing
+// session, onto or off a ticket: a room stays on the ticket it was opened
+// for, and a backing session is not a chat to file anywhere.
+var ErrRoomSession = errors.New("not supported in a ticket room")
+
+// RefuseRoomSession is the guard every attach/detach path (connector, host
+// API, HTTP) runs on the session it would move. An id with no session on
+// disk is left to the ticket store, as before.
+func RefuseRoomSession(layout config.Layout, sid string) error {
+	sess, err := session.Load(layout, sid)
+	if err != nil {
+		return nil
+	}
+	if sess.Meta.TicketRoom != nil || sess.Meta.GroupSessionID != "" {
+		return ErrRoomSession
+	}
+	return nil
+}
+
+// InTicketRoom reports whether sid answers in a ticket room — a member's
+// backing session, or a sub-agent under one at any depth. Such a session
+// reaches its room's ticket (RoomTicket) and nothing else: not the rest of
+// the project it runs in, not other sessions.
+func InTicketRoom(layout config.Layout, sid string) bool {
+	if sid == "" {
+		return false
+	}
+	sess, err := session.Load(layout, sid)
+	if err != nil {
+		return false
+	}
+	return SessionInTicketRoom(layout, sess)
+}
+
+// roomParentHops bounds the room walk far past any real delegation depth
+// (an admin may raise that well above AgentOfSession's maxParentHops); it
+// only stops a corrupt chain from spinning.
+const roomParentHops = 1024
+
+// SessionInTicketRoom is InTicketRoom for a session the caller already
+// loaded. The parent chain is walked to its top; a chain that loops back
+// on itself, or runs past roomParentHops, is refused as if it were in a
+// room (fail closed). A parent that no longer exists ends the walk: there
+// is no room left above it.
+func SessionInTicketRoom(layout config.Layout, sess session.Session) bool {
+	seen := map[string]bool{}
+	for hops := 0; ; hops++ {
 		if sess.Meta.GroupSessionID != "" {
 			room, err := session.Load(layout, sess.Meta.GroupSessionID)
 			return err == nil && room.Meta.TicketRoom != nil
 		}
-		sid = sess.Meta.ParentSessionID
+		parent := sess.Meta.ParentSessionID
+		if parent == "" {
+			return false
+		}
+		seen[sess.ID] = true
+		if seen[parent] || hops >= roomParentHops {
+			return true
+		}
+		next, err := session.Load(layout, parent)
+		if err != nil {
+			return false
+		}
+		sess = next
 	}
-	return sid != ""
 }
 
 // CheckAgentProject refuses an ordinary agent any project but its own

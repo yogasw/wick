@@ -33,9 +33,13 @@
        Team › Tickets itself (Agents › Projects with a Team): the room row
        becomes a link there instead of a chat to open. */
     roomHref?: string;
+    /* Team › Tickets: the back link reads "Tickets" and the header names
+       the ticket's project (📁). Elsewhere the defaults stand. */
+    backLabel?: string;
+    projectName?: string;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession, room, projectId, roomHref }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, room, projectId, roomHref, backLabel = "Back to board", projectName }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
   let error = $state("");
@@ -229,7 +233,7 @@
       type="button"
       onclick={onBack}
       class="inline-flex w-fit items-center gap-1.5 text-xs text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
-    >Back to board</button>
+    >{backLabel}</button>
     <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">Couldn't open this ticket: {error}</div>
   </div>
 {:else if data}
@@ -243,7 +247,7 @@
       <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
         <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
       </svg>
-      Back to board
+      {backLabel}
     </button>
 
     <!-- Two panes: the work reads down the main column — title, description,
@@ -264,6 +268,9 @@
         >
           {t.id}
         </span>
+        {#if projectName}
+          <span class="shrink-0 truncate text-[11px] text-black-700 dark:text-black-600" data-testid="ticket-detail-project">📁 {projectName}</span>
+        {/if}
         <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold " + pillFor(t.status)}>
           {labelOf(t.status)}
         </span>

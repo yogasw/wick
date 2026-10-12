@@ -189,16 +189,40 @@ type ticketDetailResponse struct {
 // ?project=; without it, an id found in more than one visible project is
 // refused rather than resolved to whichever the scan meets first.
 func resolveTicketProject(c *tool.Ctx, ticketID string) (string, bool) {
+	id, _, ok := lookupTicketProject(c, ticketID)
+	return id, ok
+}
+
+// errAmbiguousTicket is the 409 for a ticket id that more than one visible
+// project holds, asked for without ?project=.
+const errAmbiguousTicket = "ambiguous ticket id: add ?project="
+
+// ticketProjectOrAnswer is resolveTicketProject for a handler: on failure
+// it answers itself — 409 when the id is ambiguous, 404 otherwise.
+func ticketProjectOrAnswer(c *tool.Ctx, ticketID string) (string, bool) {
+	id, ambiguous, ok := lookupTicketProject(c, ticketID)
+	switch {
+	case ok:
+		return id, true
+	case ambiguous:
+		c.JSON(http.StatusConflict, map[string]string{"error": errAmbiguousTicket})
+	default:
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+	}
+	return "", false
+}
+
+func lookupTicketProject(c *tool.Ctx, ticketID string) (projectID string, ambiguous, ok bool) {
 	access := callerProjectAccess(c)
 	if want := strings.TrimSpace(c.Query("project")); want != "" {
 		if !access.allowProject(want) || !ticket.Exists(globalLayout, want, ticketID) {
-			return "", false
+			return "", false, false
 		}
 		// A token may only address tickets in a project that opted into
 		// the REST surface. The caller answers "ticket not found"; the
 		// server log (requireTicketAPI) records that the real reason was
 		// the project's API toggle.
-		return want, requireTicketAPI(c, want)
+		return want, false, requireTicketAPI(c, want)
 	}
 	found := ""
 	for id := range globalMgr.Registry().Projects() {
@@ -207,14 +231,14 @@ func resolveTicketProject(c *tool.Ctx, ticketID string) (string, bool) {
 		}
 		if found != "" {
 			log.Ctx(c.Context()).Warn().Str("ticket", ticketID).Msg("ticket id in several projects: ?project= required")
-			return "", false
+			return "", true, false
 		}
 		found = id
 	}
 	if found == "" || !requireTicketAPI(c, found) {
-		return "", false
+		return "", false, false
 	}
-	return found, true
+	return found, false, true
 }
 
 // userNames resolves display names for a set of user ids, best effort.
@@ -568,9 +592,8 @@ func apiTicketDetail(c *tool.Ctx) {
 		return
 	}
 	ticketID := c.PathValue("ticketID")
-	projectID, ok := resolveTicketProject(c, ticketID)
+	projectID, ok := ticketProjectOrAnswer(c, ticketID)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
 	tk, err := ticket.Load(globalLayout, projectID, ticketID)
@@ -630,9 +653,8 @@ func apiTicketUpdate(c *tool.Ctx) {
 		return
 	}
 	ticketID := c.PathValue("ticketID")
-	projectID, ok := resolveTicketProject(c, ticketID)
+	projectID, ok := ticketProjectOrAnswer(c, ticketID)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
 	var req struct {
@@ -749,9 +771,8 @@ func apiTicketAction(c *tool.Ctx) {
 		return
 	}
 	ticketID := c.PathValue("ticketID")
-	projectID, ok := resolveTicketProject(c, ticketID)
+	projectID, ok := ticketProjectOrAnswer(c, ticketID)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
 	cfg := project.TicketConfig{}
@@ -808,9 +829,8 @@ func apiTicketDelete(c *tool.Ctx) {
 		return
 	}
 	ticketID := c.PathValue("ticketID")
-	projectID, ok := resolveTicketProject(c, ticketID)
+	projectID, ok := ticketProjectOrAnswer(c, ticketID)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
 	mode := strings.TrimSpace(c.Query("sessions"))
@@ -915,9 +935,8 @@ func apiTicketAttachSession(c *tool.Ctx) {
 	}
 	ticketID := c.PathValue("ticketID")
 	sid := c.PathValue("sid")
-	projectID, ok := resolveTicketProject(c, ticketID)
+	projectID, ok := ticketProjectOrAnswer(c, ticketID)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
 	// Which ticket this chat is leaving, so the response can tell the board
@@ -960,9 +979,8 @@ func apiTicketDetachSession(c *tool.Ctx) {
 	}
 	ticketID := c.PathValue("ticketID")
 	sid := c.PathValue("sid")
-	projectID, ok := resolveTicketProject(c, ticketID)
+	projectID, ok := ticketProjectOrAnswer(c, ticketID)
 	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
 	if !ticketSessionWritable(c, sid) {

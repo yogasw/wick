@@ -152,6 +152,24 @@ func TestLayoutAttachSession(t *testing.T) {
 	// Bob's session is not ada's to attach.
 	err = l.AttachSession(ctx, "ada", &hostpb.AttachSessionRequest{TicketId: "one-1", SessionId: "s-bob"})
 	codeIs(t, err, codes.NotFound, "other user's session")
+	// A ticket room stays on its ticket, and a member's backing session is
+	// not filed anywhere.
+	for _, m := range []func(*session.Meta){
+		func(m *session.Meta) { m.TicketRoom = &session.TicketRoom{TicketID: "dupe-1"} },
+		func(m *session.Meta) { m.GroupSessionID = "room-x" },
+	} {
+		sess, _ := session.Load(l.Layout, "s-ada")
+		sess.Meta.TicketRoom, sess.Meta.GroupSessionID = nil, ""
+		m(&sess.Meta)
+		if err := session.SaveMeta(l.Layout, "s-ada", sess.Meta); err != nil {
+			t.Fatal(err)
+		}
+		err = l.AttachSession(ctx, "ada", &hostpb.AttachSessionRequest{TicketId: "one-1", ProjectId: "a", SessionId: "s-ada"})
+		codeIs(t, err, codes.FailedPrecondition, "room session")
+	}
+	if tk, _ := ticket.Load(l.Layout, "a", "one-1"); len(tk.Sessions) != 0 {
+		t.Fatalf("room session moved onto one-1: %v", tk.Sessions)
+	}
 }
 
 func TestLayoutSessions(t *testing.T) {

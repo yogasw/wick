@@ -698,6 +698,9 @@ export type TicketConfig = {
     session: a ticket holds the work, and several sessions can hang off it. */
 export type TicketCard = {
   id: string; // short quotable code, e.g. "T-4F2A"
+  /** The project the card belongs to. Set by the combined Team board,
+      where one id can exist in two projects; absent on a single board. */
+  project_id?: string;
   title: string;
   status: string;
   /** The first of `assignees` — what a card has room to draw. */

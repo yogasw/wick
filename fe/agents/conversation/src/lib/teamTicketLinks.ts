@@ -103,3 +103,10 @@ export function ticketJumpFor(
   }
   return { label: "Ticket board", onJump: () => go(`${base}/sessions?project=${proj}`) };
 }
+
+/** ticketsEntryShown says whether Team › Tickets exists for this viewer:
+    only once the roster has loaded and they have a Team (a Captain). With
+    no Team nothing changes — no Tickets entry, no board, no room. */
+export function ticketsEntryShown(s: { loaded: boolean; loadError?: unknown; hasCaptain: boolean }): boolean {
+  return s.loaded && !s.loadError && s.hasCaptain;
+}

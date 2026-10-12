@@ -2,10 +2,13 @@ package tickets
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/ticket"
 )
 
@@ -86,4 +89,113 @@ func TestRoomMemberReachesOnlyItsTicket(t *testing.T) {
 	// An ordinary chat of the project is unaffected.
 	mkSession(t, l, "chat-1", "p1")
 	mustDispatch(t, h.get, ctxFor("chat-1", map[string]string{"ticket_id": other.ID}))
+}
+
+// tickets.attach / tickets.detach never move a room off its ticket, nor
+// file a member's backing session — even for an ordinary chat of the same
+// project that may otherwise reach both sessions.
+func TestRoomSessionCannotBeMovedOrDetached(t *testing.T) {
+	h, l := newTestHandlers(t)
+	mine, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "Room ticket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "Other ticket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, backing := seedRoom(t, l, mine)
+	mkSession(t, l, "chat-1", "p1")
+
+	for _, sid := range []string{room, backing} {
+		if _, err := h.attach(ctxFor("chat-1", map[string]string{"ticket_id": other.ID, "session_id": sid})); !errors.Is(err, team.ErrRoomSession) {
+			t.Fatalf("attach %s: err = %v", sid, err)
+		}
+	}
+	if _, err := h.detach(ctxFor("chat-1", map[string]string{"ticket_id": mine.ID, "session_id": room})); !errors.Is(err, team.ErrRoomSession) {
+		t.Fatalf("detach room: err = %v", err)
+	}
+	tk, _ := ticket.Load(l, "p1", mine.ID)
+	if len(tk.Sessions) != 1 || tk.Sessions[0] != room {
+		t.Fatalf("room ticket sessions = %v", tk.Sessions)
+	}
+	if s, _ := session.Load(l, room); s.Meta.TicketID != "" && s.Meta.TicketID != mine.ID {
+		t.Fatalf("room back-pointer moved to %q", s.Meta.TicketID)
+	}
+	// An ordinary chat still files as before.
+	mustDispatch(t, h.attach, ctxFor("chat-1", map[string]string{"ticket_id": other.ID}))
+}
+
+// RoomTicket grants nothing once the ticket no longer lists the room, or
+// the ticket is gone, whatever the room's own meta still says.
+func TestRoomTicketNeedsTheTicketAndTheRoomOnIt(t *testing.T) {
+	_, l := newTestHandlers(t)
+	mine, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "Room ticket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, backing := seedRoom(t, l, mine)
+	ctx := context.Background()
+	if _, tid, ok := team.RoomTicket(ctx, l, backing); !ok || tid != mine.ID {
+		t.Fatalf("member: %q %v", tid, ok)
+	}
+	if err := ticket.DetachSession(l, "p1", mine.ID, room); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := team.RoomTicket(ctx, l, backing); ok {
+		t.Fatal("room off its ticket still granted the ticket")
+	}
+	if err := ticket.AttachSession(l, "p1", mine.ID, room); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := team.RoomTicket(ctx, l, backing); !ok {
+		t.Fatal("room back on its ticket")
+	}
+	if err := ticket.Delete(l, "p1", mine.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := team.RoomTicket(ctx, l, backing); ok {
+		t.Fatal("deleted ticket still granted")
+	}
+}
+
+// A deep chain of ordinary sub-agents is not a room: every level keeps its
+// project. The same depth under a room member is still in the room.
+func TestDeepSubAgentChainIsNotARoom(t *testing.T) {
+	h, l := newTestHandlers(t)
+	other, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "Other ticket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := func(prefix, root string, n int) string {
+		parent := root
+		for i := 0; i < n; i++ {
+			id := fmt.Sprintf("%s-%d", prefix, i)
+			if _, err := session.Create(context.Background(), l, session.CreateOptions{ID: id, ProjectID: "p1", UserID: "alice", ParentSessionID: parent}); err != nil {
+				t.Fatal(err)
+			}
+			parent = id
+		}
+		return parent
+	}
+	mkSession(t, l, "top", "p1")
+	leaf := chain("deep", "top", 20)
+	if team.InTicketRoom(l, leaf) {
+		t.Fatal("a 20-deep ordinary chain read as a room")
+	}
+	mustDispatch(t, h.get, ctxFor(leaf, map[string]string{"ticket_id": other.ID}))
+	mustDispatch(t, h.list, ctxFor(leaf, map[string]string{}))
+
+	mine, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "Room ticket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, backing := seedRoom(t, l, mine)
+	roomLeaf := chain("roomsub", backing, 20)
+	if !team.InTicketRoom(l, roomLeaf) {
+		t.Fatal("a 20-deep chain under a room member left the room")
+	}
+	if _, err := h.get(ctxFor(roomLeaf, map[string]string{"ticket_id": other.ID})); err == nil {
+		t.Fatal("deep room sub-agent read another ticket")
+	}
 }

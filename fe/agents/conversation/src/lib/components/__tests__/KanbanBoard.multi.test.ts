@@ -232,6 +232,45 @@ describe("KanbanBoard — several projects", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/api/projects/p-b/tickets"))).toBe(true));
   });
 
+  test("one ticket id in two projects stays two cards, each moved and opened in its own project", async () => {
+    const twinA: TicketBoard = { ...alpha, tickets: [card("T-4F2A", "Alpha twin", "open")] };
+    const twinB: TicketBoard = { ...beta, tickets: [card("T-4F2A", "Beta twin", "open")] };
+    const { container, props } = renderMulti({
+      projects: [
+        { id: "p-a", name: "Alpha", board: twinA },
+        { id: "p-b", name: "Beta", board: twinB },
+      ],
+    });
+    const cards = screen.getAllByTestId("ticket-card-T-4F2A");
+    expect(cards).toHaveLength(2);
+    expect(cards.map((c) => c.textContent?.includes("Alpha twin"))).toEqual([true, false]);
+
+    // Dragging Alpha's card to Done patches Alpha's ticket, not Beta's.
+    const done = container.querySelector('[aria-label="Done"]') as HTMLElement;
+    const transfer = dt();
+    await fireEvent.dragStart(cards[0], { dataTransfer: transfer });
+    await fireEvent.dragOver(done, { dataTransfer: transfer });
+    await fireEvent.drop(done, { dataTransfer: transfer });
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches).toHaveLength(1);
+    expect(patches[0].url.endsWith("/api/tickets/T-4F2A?project=p-a")).toBe(true);
+
+    // Beta's card is refused on Alpha-only "In Progress" — its own project decides.
+    const inProgress = container.querySelector('[aria-label="In Progress"]') as HTMLElement;
+    const betaCard = screen.getAllByTestId("ticket-card-T-4F2A").find((c) => c.textContent?.includes("Beta twin"))!;
+    await fireEvent.dragStart(betaCard, { dataTransfer: dt() });
+    expect(inProgress.dataset.refused).toBe("true");
+    await fireEvent.dragEnd(betaCard);
+
+    // Opening each card names its own project.
+    const titles = screen.getAllByTestId("ticket-title-T-4F2A");
+    await fireEvent.click(titles.find((x) => x.textContent?.includes("Beta twin"))!);
+    expect(props.onOpen).toHaveBeenLastCalledWith("T-4F2A", "p-b");
+    await fireEvent.click(titles.find((x) => x.textContent?.includes("Alpha twin"))!);
+    expect(props.onOpen).toHaveBeenLastCalledWith("T-4F2A", "p-a");
+  });
+
   test("opening a card names its project", async () => {
     const { props } = renderMulti();
     await fireEvent.click(screen.getByTestId("ticket-title-T-B1"));

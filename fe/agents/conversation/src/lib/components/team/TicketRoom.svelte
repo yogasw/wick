@@ -187,7 +187,13 @@
       picking = false;
       picked = [];
     });
-  const askCaptain = () => captain && addAgents([captain.id]);
+  // The composer, so "Ask Captain" can start the message to it.
+  let composer = $state<{ prefill: (text: string) => void }>();
+  const askCaptain = () => {
+    if (!captain) return;
+    composer?.prefill("@captain ");
+    return addAgents([captain.id]);
+  };
   const removeMember = (m: TicketRoomMember) =>
     act(async () => {
       if (m.agent_id) room = await runApi(removeRoomMember(base, ticketId, projectId, m.agent_id));
@@ -260,9 +266,10 @@
   {#if loaded}
     <div class="mt-3" data-testid="room-composer">
       <Composer
+        bind:this={composer}
         onSend={send}
         disabled={busy}
-        placeholder="Message the room — @ asks one of your agents"
+        placeholder="Message the room · @ to bring in an agent"
         {mentionAgents}
         {mentionAvatar}
         {caption}

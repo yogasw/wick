@@ -402,14 +402,19 @@ func TestTicketRoomSameTicketIDInTwoProjects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if code, _ := openRoom(t, alice, id); code != http.StatusNotFound {
-		t.Fatalf("ambiguous id without a project: %d, want 404", code)
+	if code, _ := openRoom(t, alice, id); code != http.StatusConflict {
+		t.Fatalf("ambiguous id without a project: %d, want 409", code)
+	}
+	w, c := teamReq(t, alice, http.MethodGet, "/", nil, map[string]string{"ticketID": id})
+	apiTicketRoomGet(c)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "ambiguous ticket id") {
+		t.Fatalf("ambiguous GET: %d %s", w.Code, w.Body)
 	}
 	code, r2 := openRoomIn(t, alice, "p2", id)
 	if code != http.StatusCreated || r2.ProjectID != "p2" {
 		t.Fatalf("p2: %d %+v", code, r2)
 	}
-	w, c := teamReq(t, alice, http.MethodGet, "/?project=p1", nil, map[string]string{"ticketID": id})
+	w, c = teamReq(t, alice, http.MethodGet, "/?project=p1", nil, map[string]string{"ticketID": id})
 	apiTicketRoomGet(c)
 	if !strings.Contains(w.Body.String(), `"room":null`) {
 		t.Fatalf("p1 should have no room yet: %s", w.Body)
@@ -468,7 +473,13 @@ func TestTicketRoomGenericSessionRoutes(t *testing.T) {
 	if code := try(http.MethodPost, "/sessions/"+it.SessionID+"/send"); code != http.StatusOK || !called {
 		t.Fatalf("send: %d", code)
 	}
-	for _, p := range []string{"/project", "/provider", "/schedules", "/workspace/files"} {
+	// The controls a member needs: stop a stuck run, follow the room.
+	for _, p := range []string{"/kill", "/runs/run-1/cancel", "/dequeue", "/subscribe", "/unsubscribe"} {
+		if code := try(http.MethodPost, "/api/sessions/"+it.SessionID+p); code != http.StatusOK || !called {
+			t.Fatalf("POST %s: %d, want through", p, code)
+		}
+	}
+	for _, p := range []string{"/project", "/provider", "/schedules", "/workspace/files", "/runs/run-1/retry", "/runs//cancel", "/kill/x"} {
 		if code := try(http.MethodPost, "/sessions/"+it.SessionID+p); code != http.StatusBadRequest || called {
 			t.Fatalf("POST %s: %d, want 400", p, code)
 		}
@@ -488,14 +499,32 @@ func TestTicketRoomGenericSessionRoutes(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("detach the room: %d", w.Code)
 	}
-	// Deleting the ticket takes its room along.
+	// Deleting the ticket takes its room along, with the backing sessions
+	// and the sub-agents under them.
+	_, c = teamReq(t, alice, http.MethodPost, "/", nil, nil)
+	backing, err := roomDefaultBacking(c, it.SessionID, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := backing
+	var subs []string
+	for _, id := range []string{"sub-a", "sub-b", "sub-c"} {
+		sub, err := globalMgr.CreateSession(context.Background(), session.CreateOptions{ID: id, ProjectID: "p1", UserID: alice.ID, ParentSessionID: parent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		subs = append(subs, sub.ID)
+		parent = sub.ID
+	}
 	w, c = teamReq(t, alice, http.MethodDelete, "/", nil, map[string]string{"ticketID": tk.ID})
 	apiTicketDelete(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete ticket: %d %s", w.Code, w.Body)
 	}
-	if _, ok := globalMgr.Registry().Session(it.SessionID); ok {
-		t.Fatal("the room outlived its ticket")
+	for _, sid := range append([]string{it.SessionID, backing}, subs...) {
+		if _, ok := globalMgr.Registry().Session(sid); ok {
+			t.Fatalf("session %s outlived its ticket", sid)
+		}
 	}
 }
 

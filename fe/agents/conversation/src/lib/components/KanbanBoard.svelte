@@ -35,6 +35,7 @@
   import { now } from "../stores/now.js";
   import {
     buttonCaption,
+    cardKey,
     groupBoardButtons,
     hasStatus,
     mergeBoards,
@@ -122,7 +123,9 @@
   });
   const view = $derived<TicketBoard>(roomAgent ? { ...boardView, tickets: withRoomAgent(boardView.tickets, roomAgent) } : boardView);
   const projectById = (id: string | undefined) => projects?.find((p) => p.id === id);
-  const projectOfTicket = (id: string) => merged?.ticketProject.get(id);
+  /* A card's project rides on the card (multi mode): ids repeat across
+     projects, so nothing is looked up by a bare ticket id. */
+  const projectOfTicket = (t: { project_id?: string } | undefined) => t?.project_id;
   const projectOfSession = (id: string) => merged?.sessionProject.get(id);
   // A card names its project only once two of them share the board.
   const showProjectTag = $derived((projects?.length ?? 0) >= 2);
@@ -407,7 +410,9 @@
   }
 
   /* ── drag & drop ── */
-  type Drag = { kind: "ticket" | "session"; id: string };
+  /* A ticket drag carries the card's project: the same id can sit in two
+     projects on the combined board. */
+  type Drag = { kind: "ticket" | "session"; id: string; project?: string };
   let drag = $state<Drag | null>(null);
   let dropColumn = $state<string | null>(null);
 
@@ -417,7 +422,7 @@
      not have. It is dimmed while dragging and refuses the drop — the
      status would mean nothing to that project. */
   function dragProject(d: Drag): BoardProject | undefined {
-    return projectById(d.kind === "ticket" ? projectOfTicket(d.id) : projectOfSession(d.id));
+    return projectById(d.kind === "ticket" ? d.project : projectOfSession(d.id));
   }
   function refuses(d: Drag | null, status: string): boolean {
     return multi && d !== null && !hasStatus(dragProject(d), status);
@@ -427,8 +432,8 @@
     toastError(`${name} has no "${labelOf(status)}" column`);
   }
 
-  function startTicketDrag(e: DragEvent, ticketId: string) {
-    drag = { kind: "ticket", id: ticketId };
+  function startTicketDrag(e: DragEvent, ticketId: string, project?: string) {
+    drag = { kind: "ticket", id: ticketId, project };
     e.dataTransfer?.setData("text/plain", "ticket:" + ticketId);
     if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
   }
@@ -480,11 +485,11 @@
       return;
     }
 
-    const t = items.find((x) => x.id === d.id);
+    const t = items.find((x) => x.id === d.id && (!multi || x.project_id === d.project));
     if (!t || t.status === status) return;
     const prev = t.status;
     t.status = status; // optimistic — the card jumps immediately
-    Effect.runPromise(updateTicket(base, d.id, { status }, multi ? projectOfTicket(d.id) : projectId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(updateTicket(base, d.id, { status }, multi ? d.project : projectId).pipe(Effect.provide(WickClientLayer)))
       .then((updated) => {
         if (updated?.updated_at) t.updated_at = updated.updated_at;
         t.stale = false;
@@ -498,17 +503,20 @@
   /* A session dropped on a card: attach it, or move it off whatever ticket
      it was on. The server does the detach, and the session's notes travel
      with it — so the board just re-reads afterwards. */
-  function dropSessionOnTicket(ticketId: string) {
+  function dropSessionOnTicket(ticketId: string, ticketProject?: string) {
     const d = drag;
     drag = null;
     if (!d || d.kind !== "session") return;
     const alreadyHere = items.some(
-      (t) => t.id === ticketId && (t.session_rows ?? []).some((s) => s.id === d.id),
+      (t) =>
+        t.id === ticketId &&
+        (!multi || t.project_id === ticketProject) &&
+        (t.session_rows ?? []).some((s) => s.id === d.id),
     );
     if (alreadyHere) return;
     /* A chat lives in one project; a ticket of another cannot hold it. */
     const pid = multi ? projectOfSession(d.id) : projectId;
-    if (multi && pid !== projectOfTicket(ticketId)) {
+    if (multi && pid !== ticketProject) {
       toastError("A chat can only go on a ticket of its own project");
       return;
     }
@@ -921,23 +929,23 @@
           <!-- Per-column scroller: only THIS column moves when it scrolls;
                its neighbours (and the page) stay put. -->
           <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-            {#each col.tickets as t (t.id)}
+            {#each col.tickets as t (cardKey(t))}
               <div class={t.status === terminalKey ? "opacity-70" : ""}>
                 <TicketCard
                   {base}
                   ticket={t}
-                  schema={projects ? projectById(projectOfTicket(t.id))?.board.config?.fields : view.config.fields}
+                  schema={projects ? projectById(projectOfTicket(t))?.board.config?.fields : view.config.fields}
                   users={view.users}
-                  project={showProjectTag ? projectById(projectOfTicket(t.id))?.name : undefined}
-                  projectId={multi ? projectOfTicket(t.id) : projectId}
+                  project={showProjectTag ? projectById(projectOfTicket(t))?.name : undefined}
+                  projectId={multi ? projectOfTicket(t) : projectId}
                   highlight={q}
-                  onOpen={multi ? (id) => onOpen(id, projectOfTicket(id)) : onOpen}
+                  onOpen={multi ? (id) => onOpen(id, projectOfTicket(t)) : onOpen}
                   onOpenSession={multi ? openSession : onOpenSession}
                   {sessionDragging}
-                  sessionRefused={multi && drag?.kind === "session" && projectOfSession(drag.id) !== projectOfTicket(t.id)}
-                  onDragStart={startTicketDrag}
+                  sessionRefused={multi && drag?.kind === "session" && projectOfSession(drag.id) !== projectOfTicket(t)}
+                  onDragStart={(e, id) => startTicketDrag(e, id, projectOfTicket(t))}
                   onSessionDragStart={startSessionDrag}
-                  onSessionDrop={dropSessionOnTicket}
+                  onSessionDrop={(id) => dropSessionOnTicket(id, projectOfTicket(t))}
                 />
               </div>
             {/each}

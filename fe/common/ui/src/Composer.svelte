@@ -696,6 +696,17 @@
   export function openProject() {
     if (project) openProjectPicker();
   }
+  // Imperative start for the parent (e.g. "Ask Captain" → "@captain "):
+  // puts `prefix` in front of the draft unless it already starts with it,
+  // and focuses the box with the caret at the end.
+  export function prefill(prefix: string) {
+    if (!text.startsWith(prefix)) text = prefix + text;
+    queueMicrotask(() => {
+      if (!textareaEl) return;
+      textareaEl.focus();
+      textareaEl.setSelectionRange(text.length, text.length);
+    });
+  }
 
   /* ── screenshot + image editor ──────────────────────────────────────── */
   const canScreenshot = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia;

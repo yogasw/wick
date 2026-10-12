@@ -1376,7 +1376,7 @@ func sessionAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
 }
 
 // roomRouteAllowed keeps a ticket room to what a room is: read it, send to
-// it (sendRoomMessage). Moving it to another project, switching its
+// it (sendRoomMessage), stop or follow it (roomPostAllowed). Moving it to another project, switching its
 // provider, scheduling into it, its workspace and files — none applies to
 // a thread that never runs a provider itself, and several would detach it
 // from its ticket. Deleting it is for its creator, once its ticket is gone
@@ -1387,7 +1387,7 @@ func roomRouteAllowed(c *tool.Ctx, sess session.Session) bool {
 		return true
 	}
 	path := strings.TrimRight(c.R.URL.Path, "/")
-	if c.R.Method == http.MethodPost && strings.HasSuffix(path, "/send") {
+	if c.R.Method == http.MethodPost && roomPostAllowed(path, sess.ID) {
 		return true
 	}
 	if c.R.Method == http.MethodDelete && strings.HasSuffix(path, "/sessions/"+sess.ID) {
@@ -1399,6 +1399,24 @@ func roomRouteAllowed(c *tool.Ctx, sess session.Session) bool {
 	}
 	c.JSON(http.StatusBadRequest, map[string]string{"error": errRoomSession})
 	return false
+}
+
+// roomPostAllowed is the POST allowlist of a ticket room: sending, and the
+// controls any member needs — stopping a stuck run (kill, cancel a
+// connector run, drop the queue) and following the room's notifications.
+// Anything else (provider, project move, files, …) stays refused.
+func roomPostAllowed(path, sid string) bool {
+	i := strings.LastIndex(path, "/sessions/"+sid+"/")
+	if i < 0 {
+		return false
+	}
+	switch rest := path[i+len("/sessions/"+sid+"/"):]; rest {
+	case "send", "kill", "dequeue", "subscribe", "unsubscribe":
+		return true
+	default:
+		parts := strings.Split(rest, "/")
+		return len(parts) == 3 && parts[0] == "runs" && parts[1] != "" && parts[2] == "cancel"
+	}
 }
 
 // projectAccessMW gates every route under /projects/{id} and /api/projects/{id}
