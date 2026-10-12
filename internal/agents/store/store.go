@@ -224,6 +224,19 @@ func PostbackFrom(ctx context.Context) *Postback {
 // SystemTurnKind values for ConversationTurn.Kind.
 const KindProviderSwitch = "provider_switch"
 
+// KindProviderFailover is the notice of an AUTOMATIC switch: the provider
+// hit a limit, an auth error or an outage mid-turn and wick moved the
+// session along its home's failover chain (extras: from, to, home,
+// reason, note, continue). A kind of its own so it is never mistaken for
+// a manual switch — the switcher collapses trailing provider_switch
+// turns, and a failover notice must survive that.
+const KindProviderFailover = "provider_failover"
+
+// KindProviderReturn is the notice of a session moving back to its home
+// (or a higher target of the home's chain) once that recovered, at a turn
+// boundary (extras: from, to, home, note). Never collapsed either.
+const KindProviderReturn = "provider_return"
+
 // Kinds of the server-recorded Team events (system turns). Each is
 // written by wick itself, never by an agent, so none can be forged from a
 // reply. Extras per kind are listed where each is emitted.
@@ -1519,43 +1532,38 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 // parks its id under its OWN type — that is where it belongs — but it
 // must not touch CLISessionID once the entry has moved to another type.
 func (s *Store) persistCLISessionID(id string) error {
-	sess, err := session.Load(s.layout, s.sessionID)
-	if err != nil {
-		return err
-	}
-	scope := session.ProviderScope(s.provider)
-	updated := false
-	for i := range sess.Agents {
-		if sess.Agents[i].Name != s.agentName {
-			continue
+	// Locked read-modify-write: a provider switch (or failover) may save
+	// agents.json at this very moment, at the end of the same turn.
+	return session.UpdateAgents(s.layout, s.sessionID, func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
+		scope := session.ProviderScope(s.provider)
+		for i := range agents {
+			if agents[i].Name != s.agentName {
+				continue
+			}
+			// A store built without a provider (legacy/test paths) cannot tell
+			// stale from current; fall back to attributing the id to whatever
+			// the entry currently points at, as it always did.
+			if scope == "" {
+				scope = session.ProviderScope(agents[i].Provider)
+			}
+			sameScope := session.ProviderScope(agents[i].Provider) == scope
+			if agents[i].ProviderSessions[scope] == id &&
+				(!sameScope || agents[i].CLISessionID == id) {
+				return agents, false, nil // already up to date
+			}
+			if agents[i].ProviderSessions == nil {
+				agents[i].ProviderSessions = map[string]string{}
+			}
+			// Keyed by type: any instance of this type can resume it later.
+			agents[i].ProviderSessions[scope] = id
+			if sameScope {
+				agents[i].CLISessionID = id
+				agents[i].LastActive = s.now().UTC()
+			}
+			return agents, true, nil
 		}
-		// A store built without a provider (legacy/test paths) cannot tell
-		// stale from current; fall back to attributing the id to whatever
-		// the entry currently points at, as it always did.
-		if scope == "" {
-			scope = session.ProviderScope(sess.Agents[i].Provider)
-		}
-		sameScope := session.ProviderScope(sess.Agents[i].Provider) == scope
-		if sess.Agents[i].ProviderSessions[scope] == id &&
-			(!sameScope || sess.Agents[i].CLISessionID == id) {
-			return nil // already up to date
-		}
-		if sess.Agents[i].ProviderSessions == nil {
-			sess.Agents[i].ProviderSessions = map[string]string{}
-		}
-		// Keyed by type: any instance of this type can resume it later.
-		sess.Agents[i].ProviderSessions[scope] = id
-		if sameScope {
-			sess.Agents[i].CLISessionID = id
-			sess.Agents[i].LastActive = s.now().UTC()
-		}
-		updated = true
-		break
-	}
-	if !updated {
 		// No matching agent — caller might not have created it yet.
 		// Don't fabricate one here; leave session.AddAgent in charge.
-		return nil
-	}
-	return session.SaveAgents(s.layout, s.sessionID, sess.Agents)
+		return agents, false, nil
+	})
 }

@@ -3,8 +3,10 @@ package session
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -41,11 +43,74 @@ type AgentEntry struct {
 	ThinkingTokens string `json:"thinking_tokens,omitempty"`
 	// ModelID pins a specific model id this agent uses on its next spawn,
 	// scoped to whichever provider Provider currently points at. Empty =
-	// use that provider instance's own default-model resolution. Currently
-	// only meaningful for wick (WickModel.ID); other provider types ignore
-	// it. Cleared on switching to a provider type that doesn't recognize
-	// it, so a later switch back doesn't resurrect a stale/foreign pin.
+	// use that provider instance's own default-model resolution. Every
+	// provider type honors it: wick maps it to a WickModel.ID, the CLI
+	// providers pass it to their binary via --model. A switch rewrites it
+	// (empty when none is asked for), so a later switch back doesn't
+	// resurrect a stale/foreign pin.
 	ModelID string `json:"model_id,omitempty"`
+	// Failover is the agent's failover bookkeeping: the HOME provider the
+	// session belongs on and what an automatic failover already tried.
+	// nil on entries written before failover existed, and on agents that
+	// never switched.
+	Failover *FailoverState `json:"failover,omitempty"`
+}
+
+// FailoverState is the HOME of one session agent plus the progress of the
+// failover run in flight. Home is what the user (or the session's
+// creation) picked; an automatic failover moves Provider but never Home,
+// so the chain followed is always Home's and the session can go back to
+// it once it recovers. A manual switch makes the new provider the home
+// and forgets the run.
+//
+// Plain strings: provider imports this package, so the provider types
+// cannot appear here.
+type FailoverState struct {
+	// HomeProvider is the home instance's "type/name" key.
+	HomeProvider string `json:"home_provider,omitempty"`
+	// HomeModelID is the model pin the home runs with ("" = its default).
+	HomeModelID string `json:"home_model_id,omitempty"`
+	// Tried lists the instance keys this run already failed on, so one
+	// message never visits an instance twice.
+	Tried []string `json:"tried,omitempty"`
+	// MsgKey identifies the user turn the run is for (the message plus a
+	// mark unique to that send, so a repeated "ok" is a new run). A new
+	// key starts a new run: Tried and Hops only count within one MsgKey.
+	MsgKey string `json:"msg_key,omitempty"`
+	// Hops is how many automatic switches this run made.
+	Hops int `json:"hops,omitempty"`
+	// Since is when this run's first failure happened (zero when no run
+	// is in progress).
+	Since time.Time `json:"since,omitempty"`
+}
+
+// AwayFromHome reports whether st records a failover run in progress.
+func (st *FailoverState) AwayFromHome() bool {
+	return st != nil && (len(st.Tried) > 0 || st.Hops > 0)
+}
+
+// RunFor is the state as seen by the run for msgKey: st itself (a copy)
+// when that run is the one recorded, otherwise the same home with a fresh
+// run — no Tried, no Hops, Since = now. An empty msgKey never matches, so
+// every call starts a new run. Both the reader (before PickTarget) and
+// the writer (the switch that records a hop) go through here, so they
+// cannot disagree on what "this run" holds. nil st = no home yet.
+func (st *FailoverState) RunFor(msgKey string, now time.Time) FailoverState {
+	var out FailoverState
+	if st != nil {
+		out = *st
+		out.Tried = append([]string(nil), st.Tried...)
+	}
+	if msgKey == "" || out.MsgKey != msgKey {
+		out.EndRun()
+		out.MsgKey, out.Since = msgKey, now
+	}
+	return out
+}
+
+// EndRun forgets the run (Tried, Hops, MsgKey, Since) and keeps the home.
+func (st *FailoverState) EndRun() {
+	st.Tried, st.Hops, st.MsgKey, st.Since = nil, 0, "", time.Time{}
 }
 
 // ProviderScope returns the provider type of a provider key
@@ -107,6 +172,39 @@ func SaveAgents(layout config.Layout, id string, agents []AgentEntry) error {
 	return storage.WriteJSON(layout.SessionAgents(id), agents)
 }
 
+// agentsLocks serialize every read-modify-write of one session's
+// agents.json inside this process (striped by path, so the set never
+// grows). Without it two writers — a provider switch and the store
+// parking a resume id at the end of the same turn — each load, edit and
+// save, and the later save silently undoes the earlier one.
+var agentsLocks [64]sync.Mutex
+
+func agentsLock(layout config.Layout, id string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(layout.SessionAgents(id)))
+	return &agentsLocks[h.Sum32()%uint32(len(agentsLocks))]
+}
+
+// UpdateAgents is the locked read-modify-write of agents.json: fn gets
+// the current entries and returns the new list and whether to save it.
+// fn's error is returned as is, with nothing written. fn must not call
+// another agents.json writer of the same session (the lock is not
+// reentrant).
+func UpdateAgents(layout config.Layout, id string, fn func([]AgentEntry) ([]AgentEntry, bool, error)) error {
+	mu := agentsLock(layout, id)
+	mu.Lock()
+	defer mu.Unlock()
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	agents, save, err := fn(sess.Agents)
+	if err != nil || !save {
+		return err
+	}
+	return SaveAgents(layout, id, agents)
+}
+
 // ErrNoAgentName rejects a blank agent name.
 //
 // The setters below create an entry when the name does not match, which is
@@ -119,43 +217,36 @@ var ErrNoAgentName = errors.New("session: agent name is empty")
 // AddAgent appends a new agent entry. Errors on duplicate name within
 // the same session.
 func AddAgent(layout config.Layout, id, name, provider string) error {
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for _, a := range sess.Agents {
-		if a.Name == name {
-			return fmt.Errorf("agent %q already exists in session %q", name, id)
+	return UpdateAgents(layout, id, func(agents []AgentEntry) ([]AgentEntry, bool, error) {
+		for _, a := range agents {
+			if a.Name == name {
+				return nil, false, fmt.Errorf("agent %q already exists in session %q", name, id)
+			}
 		}
-	}
-	sess.Agents = append(sess.Agents, AgentEntry{
-		Name:      name,
-		Provider:  provider,
-		Status:    "idle",
-		CreatedAt: time.Now().UTC(),
+		return append(agents, AgentEntry{
+			Name:      name,
+			Provider:  provider,
+			Status:    "idle",
+			CreatedAt: time.Now().UTC(),
+		}), true, nil
 	})
-	return SaveAgents(layout, id, sess.Agents)
 }
 
 // SetAgentProvider repoints an existing agent entry at another provider
 // instance, leaving the rest of the entry (resume id, caps) intact.
 //
 // Distinct from AddAgent, which refuses a name that already exists. Used
-// to repair an entry created with no provider: the spawn path has to fill
-// one in, and re-adding would drop the resume id the entry already
-// carries. No-op when the entry doesn't exist.
+// to repair an entry created with no provider, and by a workflow node
+// repointing a reused session: the spawn path has to fill one in, and
+// re-adding would drop the resume id the entry already carries. Like a
+// manual switch, the new provider becomes the home and any failover run
+// is over. No-op when the entry doesn't exist.
 func SetAgentProvider(layout config.Layout, id, name, providerKey string) error {
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for i := range sess.Agents {
-		if sess.Agents[i].Name == name {
-			sess.Agents[i].Provider = providerKey
-			return SaveAgents(layout, id, sess.Agents)
-		}
-	}
-	return nil
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		a.Provider = providerKey
+		a.Failover = &FailoverState{HomeProvider: providerKey, HomeModelID: a.ModelID}
+		return true
+	})
 }
 
 // SetModelIDIfEmpty pins a model only when the entry carries no pin.
@@ -165,37 +256,22 @@ func SetAgentProvider(layout config.Layout, id, name, providerKey string) error 
 // not silently move it. No-op when the entry doesn't exist or already has
 // a pin.
 func SetModelIDIfEmpty(layout config.Layout, id, name, modelID string) error {
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for i := range sess.Agents {
-		if sess.Agents[i].Name != name {
-			continue
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		if a.ModelID != "" {
+			return false
 		}
-		if sess.Agents[i].ModelID != "" {
-			return nil
-		}
-		sess.Agents[i].ModelID = modelID
-		return SaveAgents(layout, id, sess.Agents)
-	}
-	return nil
+		a.ModelID = modelID
+		return true
+	})
 }
 
 // SetCLISessionID writes (or clears, with "") the CLI resume id on the
 // agent entry. No-op when the entry doesn't exist.
 func SetCLISessionID(layout config.Layout, id, name, cliID string) error {
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for i := range sess.Agents {
-		if sess.Agents[i].Name == name {
-			sess.Agents[i].CLISessionID = cliID
-			return SaveAgents(layout, id, sess.Agents)
-		}
-	}
-	return nil
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		a.CLISessionID = cliID
+		return true
+	})
 }
 
 // SetMaxTurns persists the per-spawn turn cap on the agent entry,
@@ -204,23 +280,10 @@ func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
 	if name == "" {
 		return ErrNoAgentName
 	}
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for i := range sess.Agents {
-		if sess.Agents[i].Name == name {
-			sess.Agents[i].MaxTurns = maxTurns
-			return SaveAgents(layout, id, sess.Agents)
-		}
-	}
-	sess.Agents = append(sess.Agents, AgentEntry{
-		Name:      name,
-		Status:    "idle",
-		CreatedAt: time.Now().UTC(),
-		MaxTurns:  maxTurns,
+	return updateAgent(layout, id, name, newIdleAgent, func(a *AgentEntry) bool {
+		a.MaxTurns = maxTurns
+		return true
 	})
-	return SaveAgents(layout, id, sess.Agents)
 }
 
 // SetThinkingTokens persists the resolved MAX_THINKING_TOKENS env value on
@@ -231,23 +294,10 @@ func SetThinkingTokens(layout config.Layout, id, name, v string) error {
 	if name == "" {
 		return ErrNoAgentName
 	}
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for i := range sess.Agents {
-		if sess.Agents[i].Name == name {
-			sess.Agents[i].ThinkingTokens = v
-			return SaveAgents(layout, id, sess.Agents)
-		}
-	}
-	sess.Agents = append(sess.Agents, AgentEntry{
-		Name:           name,
-		Status:         "idle",
-		CreatedAt:      time.Now().UTC(),
-		ThinkingTokens: v,
+	return updateAgent(layout, id, name, newIdleAgent, func(a *AgentEntry) bool {
+		a.ThinkingTokens = v
+		return true
 	})
-	return SaveAgents(layout, id, sess.Agents)
 }
 
 // SetModelID persists the pinned model id on the agent entry, creating it
@@ -256,23 +306,34 @@ func SetModelID(layout config.Layout, id, name, modelID string) error {
 	if name == "" {
 		return ErrNoAgentName
 	}
-	sess, err := Load(layout, id)
-	if err != nil {
-		return err
-	}
-	for i := range sess.Agents {
-		if sess.Agents[i].Name == name {
-			sess.Agents[i].ModelID = modelID
-			return SaveAgents(layout, id, sess.Agents)
-		}
-	}
-	sess.Agents = append(sess.Agents, AgentEntry{
-		Name:      name,
-		Status:    "idle",
-		CreatedAt: time.Now().UTC(),
-		ModelID:   modelID,
+	return updateAgent(layout, id, name, newIdleAgent, func(a *AgentEntry) bool {
+		a.ModelID = modelID
+		return true
 	})
-	return SaveAgents(layout, id, sess.Agents)
+}
+
+// newIdleAgent is the entry the creating setters add for an unknown name.
+func newIdleAgent(name string) AgentEntry {
+	return AgentEntry{Name: name, Status: "idle", CreatedAt: time.Now().UTC()}
+}
+
+// updateAgent runs edit on the entry named name under the session's
+// agents lock and saves when edit reports a change. An unknown name is
+// created from create, or left alone (no write) when create is nil.
+func updateAgent(layout config.Layout, id, name string, create func(string) AgentEntry, edit func(*AgentEntry) bool) error {
+	return UpdateAgents(layout, id, func(agents []AgentEntry) ([]AgentEntry, bool, error) {
+		for i := range agents {
+			if agents[i].Name == name {
+				return agents, edit(&agents[i]), nil
+			}
+		}
+		if create == nil {
+			return agents, false, nil
+		}
+		a := create(name)
+		edit(&a)
+		return append(agents, a), true, nil
+	})
 }
 
 // ActiveRunTarget reports the provider instance + model a session is
@@ -334,4 +395,42 @@ func SetActiveAgent(layout config.Layout, id, name string) error {
 	sess.Meta.ActiveAgent = name
 	sess.Meta.LastActive = time.Now().UTC()
 	return SaveMeta(layout, id, sess.Meta)
+}
+
+// SetFailoverState writes st onto the agent entry. No-op when the entry
+// doesn't exist: the state belongs to an agent already running.
+func SetFailoverState(layout config.Layout, id, name string, st FailoverState) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
+	st.Tried = append([]string(nil), st.Tried...)
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		a.Failover = &st
+		return true
+	})
+}
+
+// EndFailoverRun closes the agent's failover run (EndRun) and keeps its
+// home: the turn the run was for finished. No-op when the entry doesn't
+// exist or has no run.
+func EndFailoverRun(layout config.Layout, id, name string) error {
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		if a.Failover == nil || (a.Failover.MsgKey == "" && len(a.Failover.Tried) == 0 && a.Failover.Hops == 0 && a.Failover.Since.IsZero()) {
+			return false
+		}
+		a.Failover.EndRun()
+		return true
+	})
+}
+
+// ClearFailoverState drops the agent's failover state, home included.
+// No-op when the entry doesn't exist or carries none.
+func ClearFailoverState(layout config.Layout, id, name string) error {
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		if a.Failover == nil {
+			return false
+		}
+		a.Failover = nil
+		return true
+	})
 }

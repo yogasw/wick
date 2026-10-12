@@ -45,6 +45,45 @@ type SwitchOptions struct {
 	// still needs to persist + kill so the next spawn picks it up) even
 	// though the provider tag itself is unchanged.
 	ModelID string
+	// Failover marks an automatic switch along the home's failover chain
+	// (PickTarget): the turn is a KindProviderFailover notice, the home is
+	// kept and the run's Tried/Hops advance. false = a manual switch,
+	// which makes the target the new home and forgets any run.
+	Failover bool
+	// FailoverReason says why the previous provider stopped ("usage limit
+	// reached"); shown on the failover notice. Failover only.
+	FailoverReason string
+	// ContinueText is what wick sends the target to carry the turn on
+	// (ContinueMessage), kept in the notice's extras. Failover only.
+	ContinueText string
+	// ContinueFor, when set, builds ContinueText from the switch's result
+	// — the continue message depends on whether history carried over,
+	// which only the switch knows. Its answer is also SwitchResult.Continue.
+	// Failover only.
+	ContinueFor func(SwitchResult) string
+	// MsgKey is FailoverMsgKey of the user turn the run is for. A key
+	// other than the stored one (or "") starts a new run (RunFor).
+	// Failover only.
+	MsgKey string
+	// ReturnHome marks the move back up the home's chain at a turn
+	// boundary (PickTarget in ReturnHome mode): the home stays, the run
+	// is over, and the notice says "back to …". Exclusive with Failover.
+	ReturnHome bool
+}
+
+// SwitchResult is what ApplySwitch did.
+type SwitchResult struct {
+	// From / To are the "type/name" keys the agent moved between.
+	From, To string
+	// HistoryCarries: the target resumes this conversation (same type,
+	// a resume id it can read). False for another type, a same-type
+	// target that cannot reach the transcript, or no transcript yet — the
+	// target then starts fresh and a continue must recap the turn.
+	HistoryCarries bool
+	// Home is the agent's home after the switch.
+	Home string
+	// Continue is the continue text recorded (ContinueFor / ContinueText).
+	Continue string
 }
 
 // SwitchGuard, when set, decides whether a switch asked for outside the
@@ -73,9 +112,40 @@ func normalizeProviderKey(key string) string {
 // agents.json, records a system turn in conversation.jsonl (with step trace),
 // kills the running agent, and optionally sends a greeting to the new agent.
 func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, opts SwitchOptions) error {
+	if _, err := ApplySwitch(layout, sessionID, agentName, tag, opts); err != nil {
+		return err
+	}
+
+	// Kill async — file already updated, next Send will spawn with new provider.
+	go func() { _ = pool.Kill(sessionID, agentName) }()
+
+	// Optional greeting to warm up the new agent.
+	if opts.Greeting != "" {
+		source := opts.Source
+		if source == "" {
+			source = "system"
+		}
+		go func() {
+			_ = pool.Send(context.Background(), sessionID, agentName, source, "user", opts.Greeting)
+		}()
+	}
+
+	return nil
+}
+
+// ApplySwitch is Switch without touching the running agent: it persists
+// the new provider to agents.json (under the session's agents lock) and
+// records the switch turn, and says what it did. The caller stops the
+// old process — Switch kills it async; a failover kills it synchronously
+// before re-sending, so the re-send cannot reach the account that just
+// failed. opts.Greeting is Switch's alone and ignored here.
+func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts SwitchOptions) (SwitchResult, error) {
+	if opts.Failover && opts.ReturnHome {
+		return SwitchResult{}, fmt.Errorf("a switch is either a failover or a return home, not both")
+	}
 	instances, err := Load()
 	if err != nil {
-		return fmt.Errorf("load providers: %w", err)
+		return SwitchResult{}, fmt.Errorf("load providers: %w", err)
 	}
 	// tag may be a bare type ("codex") or a named instance ("codex/gemini_flash").
 	// Bare type resolves to the per-type default instance (Name == type).
@@ -105,14 +175,11 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 			}
 			names = append(names, "#"+label)
 		}
-		return fmt.Errorf("unknown provider %q — available: %s", tag, strings.Join(names, ", "))
+		return SwitchResult{}, fmt.Errorf("unknown provider %q — available: %s", tag, strings.Join(names, ", "))
 	}
 
 	// 1. Persist new provider to agents.json.
-	loaded, err := session.Load(layout, sessionID)
-	if err != nil {
-		return fmt.Errorf("load session: %w", err)
-	}
+	now := time.Now().UTC()
 	newKey := wantType + "/" + wantName
 	// targetHasHistory reports whether the target provider already ran in this
 	// session (has a stored resume id), so the notice can say whether it will
@@ -125,77 +192,118 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	// (and how) the conversation reaches the target instance.
 	var carry HistoryCarry
 	fromKey := "" // provider active before this switch — recorded in the turn extras
-	for i, a := range loaded.Agents {
-		if a.Name == agentName {
-			fromKey = normalizeProviderKey(a.Provider)
-			sameInstance := normalizeProviderKey(a.Provider) == newKey
-			// Reject a no-op switch: same instance AND same (or no) model pin
-			// requested. Picking a different model on the same wick instance
-			// still needs to persist + kill, so it is NOT treated as a no-op.
-			if sameInstance && opts.ModelID == a.ModelID {
-				short := wantType
-				if wantName != wantType {
-					short = newKey
+	historyCarries := false
+	var home *session.FailoverState // the agent's failover state after the switch
+	var refused error               // the switch's own refusal, as opposed to an I/O error
+	err = session.UpdateAgents(layout, sessionID, func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
+		loaded := session.Session{Agents: agents}
+		for i, a := range loaded.Agents {
+			if a.Name == agentName {
+				fromKey = normalizeProviderKey(a.Provider)
+				sameInstance := normalizeProviderKey(a.Provider) == newKey
+				// Reject a no-op switch: same instance AND same (or no) model pin
+				// requested. Picking a different model on the same wick instance
+				// still needs to persist + kill, so it is NOT treated as a no-op.
+				if sameInstance && opts.ModelID == a.ModelID {
+					short := wantType
+					if wantName != wantType {
+						short = newKey
+					}
+					refused = fmt.Errorf("already using %s", short)
+					return nil, false, refused
 				}
-				return fmt.Errorf("already using %s", short)
-			}
-			fromScope := session.ProviderScope(a.Provider)
-			toScope := session.ProviderScope(newKey)
-			sameScope = fromScope == toScope
-			if a.CLISessionID != "" {
-				if loaded.Agents[i].ProviderSessions == nil {
-					loaded.Agents[i].ProviderSessions = map[string]string{}
+				fromScope := session.ProviderScope(a.Provider)
+				toScope := session.ProviderScope(newKey)
+				sameScope = fromScope == toScope
+				if a.CLISessionID != "" {
+					if loaded.Agents[i].ProviderSessions == nil {
+						loaded.Agents[i].ProviderSessions = map[string]string{}
+					}
+					// Park the outgoing id under its provider TYPE: any instance
+					// of that type reads the same transcript store, so any of
+					// them can resume it later.
+					loaded.Agents[i].ProviderSessions[fromScope] = a.CLISessionID
 				}
-				// Park the outgoing id under its provider TYPE: any instance
-				// of that type reads the same transcript store, so any of
-				// them can resume it later.
-				loaded.Agents[i].ProviderSessions[fromScope] = a.CLISessionID
-			}
-			loaded.Agents[i].Provider = newKey
-			resumeID := session.ResumeIDForScope(loaded.Agents[i].ProviderSessions, toScope)
-			targetHasHistory = resumeID != ""
-			// Within one type the id carries over — the conversation
-			// continues. Across types it becomes whatever the target type
-			// recorded before, or empty for a fresh start: handing codex an
-			// id claude minted only buys a failed spawn, since neither can
-			// read the other's store. Never blanked on a same-scope miss —
-			// an empty CLISessionID drops --resume from the next spawn and
-			// abandons a conversation still on disk.
-			if resumeID != "" && sameScope {
-				carry = carriesOver(instanceFor(instances, fromKey), toIns, resumeID)
-				if carry.Reason != "" {
-					// Say so, and start clean: a resume the target cannot
-					// find only buys a failed turn.
-					resumeID, targetHasHistory = "", false
+				loaded.Agents[i].Provider = newKey
+				resumeID := session.ResumeIDForScope(loaded.Agents[i].ProviderSessions, toScope)
+				targetHasHistory = resumeID != ""
+				// Within one type the id carries over — the conversation
+				// continues. Across types it becomes whatever the target type
+				// recorded before, or empty for a fresh start: handing codex an
+				// id claude minted only buys a failed spawn, since neither can
+				// read the other's store. Never blanked on a same-scope miss —
+				// an empty CLISessionID drops --resume from the next spawn and
+				// abandons a conversation still on disk.
+				if resumeID != "" && sameScope {
+					carry = carriesOver(instanceFor(instances, fromKey), toIns, resumeID)
+					if carry.Reason != "" {
+						// Say so, and start clean: a resume the target cannot
+						// find only buys a failed turn.
+						resumeID, targetHasHistory = "", false
+						loaded.Agents[i].CLISessionID = ""
+					}
+				}
+				historyCarries = sameScope && resumeID != ""
+				if resumeID != "" {
+					loaded.Agents[i].CLISessionID = resumeID
+				} else if !sameScope {
 					loaded.Agents[i].CLISessionID = ""
 				}
+				// Pin the requested model. All provider types now honor a model
+				// pin: wick maps it to a WickModel.ID, the CLI providers pass it
+				// to their binary via --model. Empty clears any stale pin (so a
+				// switch back doesn't resurrect a foreign instance's choice).
+				loaded.Agents[i].ModelID = opts.ModelID
+				switch {
+				case opts.Failover:
+					loaded.Agents[i].Failover = advanceFailover(a, fromKey, opts.MsgKey, now)
+				case opts.ReturnHome:
+					// Back up the home's chain: the home stays, the run is over.
+					if a.Failover != nil {
+						st := *a.Failover
+						st.EndRun()
+						loaded.Agents[i].Failover = &st
+					}
+				default:
+					// A manual pick is the new home; whatever run was in
+					// flight is over.
+					loaded.Agents[i].Failover = &session.FailoverState{HomeProvider: newKey, HomeModelID: opts.ModelID}
+				}
+				home = loaded.Agents[i].Failover
+				break
 			}
-			if resumeID != "" {
-				loaded.Agents[i].CLISessionID = resumeID
-			} else if !sameScope {
-				loaded.Agents[i].CLISessionID = ""
-			}
-			// Pin the requested model. All provider types now honor a model
-			// pin: wick maps it to a WickModel.ID, the CLI providers pass it
-			// to their binary via --model. Empty clears any stale pin (so a
-			// switch back doesn't resurrect a foreign instance's choice).
-			loaded.Agents[i].ModelID = opts.ModelID
-			break
 		}
+		return loaded.Agents, true, nil
+	})
+	if err != nil {
+		if err == refused {
+			return SwitchResult{}, err
+		}
+		return SwitchResult{}, fmt.Errorf("save agents: %w", err)
 	}
-	if err := session.SaveAgents(layout, sessionID, loaded.Agents); err != nil {
-		return fmt.Errorf("save agents: %w", err)
+	res := SwitchResult{From: fromKey, To: newKey, HistoryCarries: historyCarries}
+	if home != nil {
+		res.Home = home.HomeProvider
+	}
+	if opts.Failover {
+		res.Continue = opts.ContinueText
+		if opts.ContinueFor != nil {
+			res.Continue = opts.ContinueFor(res)
+		}
 	}
 
 	// Collapse a run of back-to-back switches: if the tail of the history is
 	// nothing but switch artifacts (no real chat since the last switch), drop
 	// them so only this switch remains. Keeps the transcript clean when the
 	// user flips providers a few times before actually sending a message.
+	// Never for a failover: it happens mid-turn, and the manual switch
+	// notices before it are part of the story it tells.
 	convPath := layout.SessionConversation(sessionID)
-	pruneTrailingSwitchTurns(convPath, sessionID)
+	if !opts.Failover && !opts.ReturnHome {
+		pruneTrailingSwitchTurns(convPath, sessionID)
+	}
 
 	// 2. Record user turn (the raw "#provider" message) so it appears in history.
-	now := time.Now().UTC()
 	source := opts.Source
 	if source == "" {
 		source = "system"
@@ -219,6 +327,15 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	// the three cases this switch is, so the user knows what the next turn
 	// will remember.
 	contextNote := switchNote(tag, carry, sameScope, targetHasHistory)
+
+	switch {
+	case opts.Failover:
+		recordFailoverTurn(layout, sessionID, source, res, tag, contextNote, now, opts)
+		return res, nil
+	case opts.ReturnHome:
+		recordReturnTurn(layout, sessionID, source, res, tag, contextNote, now, opts)
+		return res, nil
+	}
 
 	steps := []string{
 		"Saved provider to agents.json",
@@ -266,17 +383,144 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 		opts.Reply(replyText)
 	}
 
-	// 5. Kill async — file already updated, next Send will spawn with new provider.
-	go func() { _ = pool.Kill(sessionID, agentName) }()
+	return res, nil
+}
 
-	// 6. Optional greeting to warm up the new agent.
-	if opts.Greeting != "" {
-		go func() {
-			_ = pool.Send(context.Background(), sessionID, agentName, source, "user", opts.Greeting)
-		}()
+// advanceFailover is a's failover state after one automatic hop away from
+// fromKey, within the run for msgKey (RunFor: a new key starts a new run
+// whose Since is now): the home is recorded on the first hop ever (the
+// provider the session was on), fromKey joins Tried and Hops counts the
+// hop. The home never moves here.
+func advanceFailover(a session.AgentEntry, fromKey, msgKey string, now time.Time) *session.FailoverState {
+	st := a.Failover.RunFor(msgKey, now)
+	if st.HomeProvider == "" {
+		st.HomeProvider, st.HomeModelID = fromKey, a.ModelID
 	}
+	seen := false
+	for _, k := range st.Tried {
+		seen = seen || k == fromKey
+	}
+	if !seen {
+		st.Tried = append(st.Tried, fromKey)
+	}
+	st.Hops++
+	return &st
+}
 
-	return nil
+// recordFailoverTurn writes the KindProviderFailover notice of an
+// automatic switch and tells the caller's channels, like a manual
+// switch's turn but saying why and that the turn carries on.
+func recordFailoverTurn(layout config.Layout, sessionID, source string, res SwitchResult, tag, contextNote string, now time.Time, opts SwitchOptions) {
+	fromKey, toKey, home := res.From, res.To, res.Home
+	stopped := fromKey + " stopped"
+	if opts.FailoverReason != "" {
+		stopped += ": " + opts.FailoverReason
+	}
+	steps := []string{
+		stopped,
+		"Saved provider to agents.json (home stays " + home + ")",
+		"Stopping " + fromKey,
+		"Continuing this turn on " + tag,
+		contextNote,
+	}
+	events := make([]store.TurnEvent, 0, len(steps))
+	for _, s := range steps {
+		events = append(events, store.TurnEvent{Type: store.KindProviderFailover, Text: s, At: now})
+	}
+	extras := map[string]string{
+		"from": fromKey,
+		"to":   toKey,
+		"home": home,
+		"note": contextNote,
+	}
+	if opts.FailoverReason != "" {
+		extras["reason"] = opts.FailoverReason
+	}
+	if res.Continue != "" {
+		extras["continue"] = res.Continue
+	}
+	_ = storage.AppendJSONL(
+		layout.SessionConversation(sessionID),
+		"wick-conv-v1",
+		sessionID,
+		store.ConversationTurn{
+			Timestamp: now,
+			Role:      "system",
+			Source:    source,
+			Kind:      store.KindProviderFailover,
+			Text:      FailoverChipText(tag, opts.ModelID),
+			Extras:    extras,
+			Events:    events,
+		},
+	)
+	if opts.Notify != nil {
+		opts.Notify(tag, steps)
+	}
+	if opts.Reply != nil {
+		opts.Reply(stopped + ". Switched to " + tag + " and continuing this turn.\n\n" + contextNote)
+	}
+}
+
+// recordReturnTurn writes the KindProviderReturn notice of a move back up
+// the home's chain at a turn boundary.
+func recordReturnTurn(layout config.Layout, sessionID, source string, res SwitchResult, tag, contextNote string, now time.Time, opts SwitchOptions) {
+	head := "Back to home " + tag
+	if res.Home != "" && res.To != res.Home {
+		head = "Moved back up the failover chain of " + res.Home + " to " + tag
+	}
+	steps := []string{
+		head + " (" + res.From + " was a stand-in)",
+		"Saved provider to agents.json",
+		"Next message spawns with provider: " + tag,
+		contextNote,
+	}
+	events := make([]store.TurnEvent, 0, len(steps))
+	for _, s := range steps {
+		events = append(events, store.TurnEvent{Type: store.KindProviderReturn, Text: s, At: now})
+	}
+	_ = storage.AppendJSONL(
+		layout.SessionConversation(sessionID),
+		"wick-conv-v1",
+		sessionID,
+		store.ConversationTurn{
+			Timestamp: now,
+			Role:      "system",
+			Source:    source,
+			Kind:      store.KindProviderReturn,
+			Text:      ReturnChipText(tag, opts.ModelID),
+			Extras: map[string]string{
+				"from": res.From,
+				"to":   res.To,
+				"home": res.Home,
+				"note": contextNote,
+			},
+			Events: events,
+		},
+	)
+	if opts.Notify != nil {
+		opts.Notify(tag, steps)
+	}
+	if opts.Reply != nil {
+		opts.Reply(head + ". Your next message will use " + tag + ".\n\n" + contextNote)
+	}
+}
+
+// ReturnChipText is SwitchChipText for a return home.
+func ReturnChipText(tag, modelID string) string {
+	s := "Provider back → " + tag
+	if modelID != "" {
+		s += " · " + modelID
+	}
+	return s
+}
+
+// FailoverChipText is SwitchChipText for an automatic switch.
+func FailoverChipText(tag, modelID string) string {
+	s := "Provider failed over → " + tag
+	if modelID != "" {
+		s += " · " + modelID
+	}
+	return s
 }
 
 // SwitchChipText builds the "Provider switched → <tag>" label, appending
