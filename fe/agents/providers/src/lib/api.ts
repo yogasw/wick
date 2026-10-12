@@ -17,7 +17,8 @@ import type {
   ConfigFieldDTO,
   ProviderConnection,
 } from "./types.js";
-import type { ModelCaps } from "@wick-fe/common-ui";
+import type { ModelCaps, ComposerModelOption } from "@wick-fe/common-ui";
+import type { ProviderListItem } from "@wick-fe/common-api";
 import { parseSavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
 interface WireProviderInstance {
@@ -28,6 +29,8 @@ interface WireProviderInstance {
   max_concurrent: number;
   send_mode: string;
   idle_compact?: { seconds: number; trigger: string; threshold: number; scope?: string; match?: string[] } | null;
+  failover?: { enabled?: boolean; targets?: string[] | null } | null;
+  health?: { kind: string; since?: string; until?: string; reason?: string; retrying?: boolean } | null;
 }
 
 interface WireProviderCap {
@@ -204,6 +207,7 @@ interface WireProviderCaps {
   storage_sync?: boolean;
   rescan?: boolean;
   view_sessions?: boolean;
+  failover?: boolean;
 }
 
 interface WireProviderDetailResponse {
@@ -308,6 +312,10 @@ function mapInstance(w: WireProviderInstance): ProviderInstanceDTO {
     SendMode: w.send_mode ?? "",
     IdleCompact: w.idle_compact
       ? { Seconds: w.idle_compact.seconds ?? 0, Trigger: w.idle_compact.trigger ?? "", Threshold: w.idle_compact.threshold ?? 0, Scope: w.idle_compact.scope ?? "skip", Match: w.idle_compact.match ?? [] }
+      : null,
+    Failover: w.failover ? { Enabled: w.failover.enabled ?? false, Targets: w.failover.targets ?? [] } : null,
+    Health: w.health
+      ? { Kind: w.health.kind ?? "", Since: w.health.since ?? "", Until: w.health.until ?? "", Reason: w.health.reason ?? "", Retrying: w.health.retrying ?? false }
       : null,
   };
 }
@@ -642,6 +650,7 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
       StorageSync: r.can?.storage_sync ?? false,
       Rescan: r.can?.rescan ?? false,
       ViewSessions: r.can?.view_sessions ?? false,
+      Failover: r.can?.failover ?? false,
     },
     OwnerPerms: r.owner_perms ?? {},
     Instance: mapInstance(r.instance),
@@ -1755,4 +1764,104 @@ export async function apiIdleCompactProbe(
     throw new ApiError(resp.status, msg);
   }
   return JSON.parse(text) as IdleCompactProbe;
+}
+
+/* ── Failover ─────────────────────────────────────────────────────────
+   Wire shapes of /providers/detail/{type}/{name}/failover, kept snake
+   case like IdleCompactProbe: only FailoverCard reads them. */
+
+export interface FailoverTarget {
+  /* instance is the "type/name" tag; model_id the pin ("" = default). */
+  instance: string;
+  model_id?: string;
+}
+
+export interface FailoverConfig {
+  enabled: boolean;
+  triggers: string[];
+  chain: FailoverTarget[];
+  recheck_minutes: number;
+  return_home: boolean;
+}
+
+export interface FailoverResponse {
+  config: FailoverConfig;
+  warnings: { instance: string; message: string }[];
+  /* errors: on GET what the stored chain no longer satisfies, on a
+     refused POST why nothing was saved. */
+  errors: string[];
+  can_edit: boolean;
+}
+
+function failoverPath(base: string, type: string, name: string): string {
+  return `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/failover`;
+}
+
+function normalizeFailover(r: Partial<FailoverResponse> | null | undefined): FailoverResponse {
+  const c = r?.config;
+  return {
+    config: {
+      enabled: c?.enabled ?? false,
+      triggers: c?.triggers ?? [],
+      chain: c?.chain ?? [],
+      recheck_minutes: c?.recheck_minutes ?? 10,
+      return_home: c?.return_home ?? true,
+    },
+    warnings: r?.warnings ?? [],
+    errors: r?.errors ?? [],
+    can_edit: r?.can_edit ?? false,
+  };
+}
+
+export async function apiGetFailover(base: string, type: string, name: string): Promise<FailoverResponse> {
+  return normalizeFailover(await get<Partial<FailoverResponse>>(failoverPath(base, type, name)));
+}
+
+/* apiSaveFailover stores the whole config. A refused save (400) is not
+   thrown: it resolves with the server's errors so the card can list them
+   next to the form. Anything else non-OK throws. */
+export async function apiSaveFailover(base: string, type: string, name: string, cfg: FailoverConfig): Promise<FailoverResponse> {
+  const resp = await fetch(failoverPath(base, type, name), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(cfg),
+  });
+  const text = await resp.text().catch(() => "");
+  let body: (Partial<FailoverResponse> & { error?: string }) | null = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    /* not JSON */
+  }
+  if (resp.ok || (resp.status === 400 && body?.errors)) return normalizeFailover(body);
+  throw new ApiError(resp.status, body?.error || text || `HTTP ${resp.status}`);
+}
+
+/* apiResetProviderHealth forgets the account's recorded failure. */
+export async function apiResetProviderHealth(base: string, type: string, name: string): Promise<void> {
+  await post<unknown>(`${failoverPath(base, type, name)}/reset-health`);
+}
+
+/* apiFailoverOptions lists the instances the caller may pick, the same
+   access-filtered list every provider picker reads. */
+export async function apiFailoverOptions(base: string): Promise<ProviderListItem[]> {
+  return (await get<ProviderListItem[] | null>(`${base}/providers/options`)) ?? [];
+}
+
+/* apiFailoverOptionModels backs ProviderPicker's lazy model loader; the
+   caller attaches the list stamp (withModelListMeta). */
+export async function apiFailoverOptionModels(
+  base: string,
+  optionValue: string,
+  opts?: { entry?: string; refresh?: boolean },
+): Promise<{ models?: ComposerModelOption[] | null; fetched_at?: string; source?: string; can_refresh?: boolean }> {
+  const s = optionValue.indexOf("/");
+  const type = s < 0 ? optionValue : optionValue.slice(0, s);
+  const name = s < 0 ? optionValue : optionValue.slice(s + 1);
+  const q = new URLSearchParams();
+  if (opts?.entry) q.set("entry", opts.entry);
+  if (opts?.refresh) q.set("refresh", "1");
+  const qs = q.toString();
+  return get(`${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${qs ? `?${qs}` : ""}`);
 }

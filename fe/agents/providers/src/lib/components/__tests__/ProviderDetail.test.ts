@@ -33,7 +33,7 @@ function makeDetail(): ProviderDetailResponse {
     Can: {
       Configure: true, Models: true, Env: true, ExtraArgs: true, Binary: true, ExtraMCPServers: true, ExternalSkills: true,
       Sandbox: true, AIRouterRawConfig: true, BorrowLogin: true, Rename: true, Delete: true, AIRouter: true, StorageSync: true,
-      Rescan: true, ViewSessions: true,
+      Rescan: true, ViewSessions: true, Failover: true,
     },
     OwnerPerms: { configure: true, binary: false, delete: true },
     Instance: { Type: "claude", Name: "default", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
@@ -284,7 +284,10 @@ describe("ProviderDetail - key-value editor (env)", () => {
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue(data);
     render(ProviderDetail, { props: defaultProps });
     await fireEvent.click(await screen.findByText("env"));
-    const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+    // The failover card above has inputs of its own; skip them.
+    const inputs = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).filter(
+      (i) => !i.closest('[data-testid="failover-card"]'),
+    );
     await fireEvent.blur(inputs[0]);
     await vi.waitFor(() => expect(api.apiSaveConfigKey).toHaveBeenCalled());
     const lastCall = vi.mocked(api.apiSaveConfigKey).mock.calls.at(-1)!;
@@ -670,5 +673,36 @@ describe("ProviderDetail - owner permissions", () => {
     render(ProviderDetail, { props: defaultProps });
     await screen.findByText("Configuration");
     expect(screen.queryByText("Owner permissions")).toBeNull();
+  });
+});
+
+describe("ProviderDetail - failover", () => {
+  it("lists the failover owner permission and saves it", async () => {
+    vi.mocked(api.apiSaveOwnerPerms).mockImplementation(async (_b, _t, _n, perms) => perms);
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), OwnerPerms: { failover: false } });
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Owner permissions"));
+    const fo = (await screen.findByTestId("owner-perm-failover")) as HTMLInputElement;
+    expect(fo.checked).toBe(false);
+    await fireEvent.click(fo);
+    await fireEvent.click(screen.getByTestId("owner-perms-save"));
+    expect(api.apiSaveOwnerPerms).toHaveBeenCalledWith(
+      defaultProps.base, "claude", "default",
+      expect.objectContaining({ failover: true }),
+    );
+  });
+
+  it("mounts the failover card with the instance health", async () => {
+    vi.mocked(api.apiGetFailover).mockResolvedValue({
+      config: { enabled: false, triggers: [], chain: [], recheck_minutes: 10, return_home: true },
+      warnings: [], errors: [], can_edit: true,
+    });
+    vi.mocked(api.apiFailoverOptions).mockResolvedValue([]);
+    const d = makeDetail();
+    d.Instance.Health = { Kind: "unavailable", Since: "", Until: "", Reason: "" };
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: defaultProps });
+    expect(await screen.findByTestId("failover-card")).toBeTruthy();
+    expect(screen.getByTestId("failover-health-label").textContent).toBe("Unavailable");
   });
 });

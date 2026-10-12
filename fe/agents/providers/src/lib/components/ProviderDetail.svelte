@@ -28,6 +28,7 @@
   import TerminalPanel from "$lib/components/TerminalPanel.svelte";
   import LiveModelsPanel from "$lib/components/LiveModelsPanel.svelte";
   import IdleCompactCard from "$lib/components/IdleCompactCard.svelte";
+  import FailoverCard from "$lib/components/FailoverCard.svelte";
 
 
   type Props = {
@@ -339,6 +340,7 @@
     { key: "storage_sync", label: "Storage sync", desc: "Run a storage sync of the login files." },
     { key: "rescan", label: "Rescan", desc: "Rescan the binary." },
     { key: "view_sessions", label: "Recent sessions", desc: "See the Recent Sessions list (time, status and spawn count only)." },
+    { key: "failover", label: "Failover", desc: "Edit this instance's failover chain and reset its health status (targets must be ones you can use)." },
   ];
   let ownerPerms = $state<Record<string, boolean>>({});
   let ownerPermsSaving = $state(false);
@@ -906,6 +908,12 @@
          not an edit. -->
     {#if idleCompactFields.length > 0 && (!readOnly || data?.CanManage)}
       <IdleCompactCard {base} {type} {name} fields={idleCompactFields} onSaved={() => load(true)} />
+    {/if}
+
+    <!-- Failover reads its own endpoint, open to whoever manages the
+         instance; the card itself locks unless the server says can_edit. -->
+    {#if data && (!readOnly || data.CanManage)}
+      <FailoverCard {base} {type} {name} health={data.Instance.Health ?? null} onChanged={() => load(true)} />
     {/if}
 
     {#if readOnly}

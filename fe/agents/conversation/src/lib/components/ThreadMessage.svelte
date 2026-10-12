@@ -15,6 +15,7 @@
   import SystemEventChip from "./system/SystemEventChip.svelte";
   import RemoteQueueChip from "./RemoteQueueChip.svelte";
   import InputRequestCard from "./system/InputRequestCard.svelte";
+  import ProviderFailoverCard from "./system/ProviderFailoverCard.svelte";
   import ActionCard from "./system/ActionCard.svelte";
   import ApprovalRequestCard from "./system/ApprovalRequestCard.svelte";
   import type { ApprovalDecisionChoice } from "../interactiveCards.js";
@@ -560,6 +561,8 @@
         <ApprovalRequestCard {turn} onDecide={onApprovalDecide} />
       {:else if turn.kind === "input_request"}
         <InputRequestCard {turn} />
+      {:else if turn.kind === "provider_failover" || turn.kind === "provider_return"}
+        <ProviderFailoverCard {turn} />
       {:else if isSystemEvent}
         <!-- A server-recorded event (agent created, access changed, a Team
              handoff, a refused mention, …): one chip, drawn from the

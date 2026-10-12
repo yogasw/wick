@@ -628,3 +628,35 @@ describe("ProvidersList unmount", () => {
     spy.mockRestore();
   });
 });
+
+describe("ProvidersList - failover badges", () => {
+  it("shows the chain when enabled and the health badge, nothing when healthy", async () => {
+    const until = new Date();
+    until.setHours(14, 30, 0, 0);
+    const data = makeData();
+    data.Providers[0].Instance.Failover = { Enabled: true, Targets: ["codex/waba", "omp/wick"] };
+    data.Providers[0].Instance.Health = { Kind: "limit", Since: "", Until: until.toISOString(), Reason: "session limit" };
+    data.Providers[1].Instance.Failover = { Enabled: false, Targets: ["claude/claude"] };
+    data.Providers[1].Instance.Health = null;
+    vi.mocked(api.apiGetProviders).mockResolvedValue(data);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    const fo = await screen.findAllByTestId("card-failover");
+    expect(fo).toHaveLength(1);
+    expect(fo[0].textContent).toBe("Failover → codex/waba, omp/wick");
+    const hb = screen.getAllByTestId("card-health");
+    expect(hb).toHaveLength(1);
+    expect(hb[0].textContent).toBe("Limited until 14:30");
+    expect(hb[0].className).toContain("amber");
+  });
+
+  it("labels auth and outage failures", async () => {
+    const data = makeData();
+    data.Providers[0].Instance.Health = { Kind: "auth", Since: "", Until: "", Reason: "" };
+    data.Providers[1].Instance.Health = { Kind: "unavailable", Since: "", Until: "", Reason: "" };
+    vi.mocked(api.apiGetProviders).mockResolvedValue(data);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    const hb = await screen.findAllByTestId("card-health");
+    expect(hb.map((b) => b.textContent)).toEqual(["Auth failed", "Unavailable"]);
+    expect(hb.every((b) => b.className.includes("red"))).toBe(true);
+  });
+});

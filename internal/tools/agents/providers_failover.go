@@ -3,7 +3,9 @@ package agents
 import (
 	"errors"
 	"net/http"
+	"time"
 
+	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
@@ -48,6 +50,45 @@ type FailoverResponse struct {
 type FailoverSummaryDTO struct {
 	Enabled bool     `json:"enabled"`
 	Targets []string `json:"targets"`
+}
+
+// ProviderHealthDTO is an account's recorded failure (provider.Health)
+// on the wire. Times are RFC 3339; the browser shows them in local time.
+type ProviderHealthDTO struct {
+	// Kind is limit, auth or unavailable.
+	Kind  string `json:"kind"`
+	Since string `json:"since"`
+	// Until is when the vendor said the limit lifts, "" = unknown.
+	Until  string `json:"until,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	// Retrying: a broken login inside an open retry window. Failover may
+	// pick it again for one try, so it is not "unhealthy", but nothing
+	// proved it fixed either — the UI says so instead of "Healthy".
+	Retrying bool `json:"retrying,omitempty"`
+}
+
+// healthNow is the clock providerHealthDTO judges recovery by.
+var healthNow = time.Now
+
+// providerHealthDTO is nil while the instance's account counts as
+// healthy. A record HealthyNow already clears (a usage reading below the
+// cap, a lapsed limit) is not shown: failover would pick that account
+// again, so the list must not call it limited. A broken login in an open
+// retry window is the exception — it is shown with Retrying set, since
+// its record stays until a turn proves the login works.
+func providerHealthDTO(ins provider.Instance) *ProviderHealthDTO {
+	ok, h := provider.HealthyNow(provider.HealthKey(ins), healthNow())
+	if ok && h.Kind != event.ErrAuth {
+		return nil
+	}
+	out := &ProviderHealthDTO{Kind: h.Kind.String(), Reason: h.Reason, Retrying: ok}
+	if !h.Since.IsZero() {
+		out.Since = h.Since.UTC().Format(time.RFC3339)
+	}
+	if !h.Until.IsZero() {
+		out.Until = h.Until.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 // listProviderInstancesFn lists every configured instance. A var so tests
@@ -243,4 +284,23 @@ func instanceListed(all []provider.Instance, t provider.Type, name string) bool 
 		}
 	}
 	return false
+}
+
+// resetProviderHealth forgets the instance account's recorded failure
+// (provider.ResetHealth): the next turn proves whether it was right. Same
+// permission as editing the chain — both steer where turns go.
+// POST /providers/detail/{type}/{name}/failover/reset-health
+func resetProviderHealth(c *tool.Ctx) {
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	if !requireProviderDo(c, t, name, ownerPermFailover) {
+		return
+	}
+	ins, err := findProviderInstanceFn(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	provider.ResetHealth(provider.HealthKey(ins))
+	c.JSON(http.StatusOK, map[string]bool{"ok": true})
 }

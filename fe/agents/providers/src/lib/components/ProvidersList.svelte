@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { healthLabel, healthBadgeClass } from "$lib/failover.js";
   import { ConfirmDialog, Modal, ProviderIcon, Select } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
@@ -814,6 +815,26 @@
                     {/if}
                   </div>
                 </div>
+                <!-- Failover chain + account health ride on their own wrapping
+                     line: a chain of three tags would push the actions away. -->
+                {#if (p.Instance.Failover?.Enabled && p.Instance.Failover.Targets.length > 0) || healthLabel(p.Instance.Health)}
+                  <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                    {#if p.Instance.Failover?.Enabled && p.Instance.Failover.Targets.length > 0}
+                      <span
+                        data-testid="card-failover"
+                        title="Auto failover: on a limit, auth or availability error the session moves to these providers, in order."
+                        class="break-all rounded px-1.5 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                      >Failover → {p.Instance.Failover.Targets.join(", ")}</span>
+                    {/if}
+                    {#if healthLabel(p.Instance.Health)}
+                      <span
+                        data-testid="card-health"
+                        title={p.Instance.Health?.Reason ?? ""}
+                        class="whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium {healthBadgeClass(p.Instance.Health)}"
+                      >{healthLabel(p.Instance.Health)}</span>
+                    {/if}
+                  </div>
+                {/if}
                 {#if ACCOUNT_ISOLATED.has(p.Instance.Type)}
                   <!-- Several omp/opencode instances differ only by account,
                        so the account is part of the card's identity. -->

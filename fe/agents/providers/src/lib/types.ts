@@ -29,6 +29,27 @@ export interface ProviderInstanceDTO {
   SendMode: string;
   /* IdleCompact is the enabled compact-when-idle policy; null when off. */
   IdleCompact?: IdleCompactDTO | null;
+  /* Failover summarizes the failover chain; null when never saved. */
+  Failover?: FailoverSummaryDTO | null;
+  /* Health is the account's recorded failure; null while healthy. */
+  Health?: ProviderHealthDTO | null;
+}
+
+export interface FailoverSummaryDTO {
+  Enabled: boolean;
+  /* Targets are the chain's "type/name" tags, in order. */
+  Targets: string[];
+}
+
+export interface ProviderHealthDTO {
+  /* Kind is limit, auth or unavailable. */
+  Kind: string;
+  /* RFC 3339; Until is "" when the vendor named no reset time. */
+  Since: string;
+  Until: string;
+  Reason: string;
+  /* Retrying: a broken login inside an open retry window (auth only). */
+  Retrying?: boolean;
 }
 
 export interface IdleCompactDTO {
@@ -287,6 +308,7 @@ export interface ProviderCaps {
   StorageSync: boolean;
   Rescan: boolean;
   ViewSessions: boolean;
+  Failover: boolean;
 }
 
 export interface ProviderDetailResponse {

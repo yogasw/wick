@@ -55,6 +55,8 @@ type ProviderInstanceDTO struct {
 	// Failover summarizes the instance's failover chain, nil when it
 	// never saved one (the default: off).
 	Failover *FailoverSummaryDTO `json:"failover,omitempty"`
+	// Health is the account's recorded failure, nil while it is healthy.
+	Health *ProviderHealthDTO `json:"health,omitempty"`
 }
 
 // IdleCompactDTO is an enabled idle-compact policy with defaults filled in.
@@ -529,6 +531,7 @@ func providerStatusDTO(st provider.Status, caps map[string]view.ProviderCapVM) P
 			SendMode:      st.Instance.SendMode,
 			IdleCompact:   idleCompactDTO(st.Instance),
 			Failover:      failoverSummaryDTO(st.Instance),
+			Health:        providerHealthDTO(st.Instance),
 		},
 		Path:        st.Path,
 		PathFound:   st.PathFound,
@@ -841,6 +844,8 @@ func apiProviderDetail(c *tool.Ctx) {
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
 			IdleCompact:   idleCompactDTO(st.Instance),
+			Failover:      failoverSummaryDTO(st.Instance),
+			Health:        providerHealthDTO(st.Instance),
 		},
 		Path:          st.Path,
 		PathFound:     st.PathFound,
