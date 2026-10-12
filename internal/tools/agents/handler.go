@@ -105,6 +105,7 @@ func SetPool(p *pool.Pool) {
 	globalPool = p
 	if p != nil {
 		startProviderIdleCompactor()
+		startFailoverRecovery()
 	}
 }
 

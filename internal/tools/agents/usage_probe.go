@@ -62,6 +62,17 @@ const (
 	// our own backoff but never this floor — and never a cooldown the
 	// server itself asked for.
 	usageManualMinInterval = 10 * time.Second
+
+	// usageAutoMinInterval is the floor between two refreshes nobody
+	// clicked for: the failover side asking for a fresh reading of an
+	// account it has marked limited. Longer than the button's floor,
+	// because nobody is waiting on it.
+	usageAutoMinInterval = time.Minute
+
+	// usageAutoMaxBackoff caps the doubling of usageAutoMinInterval after
+	// consecutive failed probes, so a broken endpoint is asked at most
+	// twice an hour by the failover side.
+	usageAutoMaxBackoff = 30 * time.Minute
 )
 
 // paceGate serialises outbound probes with a randomised gap. Callers
@@ -141,6 +152,9 @@ type usageEntry struct {
 	// serverUntil is a cooldown the SERVER asked for (Retry-After).
 	// Nothing overrides it — not the backoff reset, not the button.
 	serverUntil time.Time
+	// fromDisk marks an entry loaded from the account's usage file;
+	// diskProbed is set once its one post-restart refresh was started.
+	fromDisk, diskProbed bool
 }
 
 // usageCache is the per-account probe cache described above.
@@ -150,6 +164,12 @@ type usageCache struct {
 	now   func() time.Time
 	sleep func(time.Duration)
 	run   func(func())
+
+	// load and save connect the cache to the per-account usage files
+	// (provider/usage_disk.go): load fills a miss, so a restart serves
+	// the last reading instead of probing; save writes every good one.
+	load func(key string) (provider.UsageDisk, bool)
+	save func(provider.UsageDisk)
 
 	mu       sync.Mutex
 	entries  map[string]*usageEntry
@@ -163,6 +183,8 @@ func newUsageCache(ttl time.Duration) *usageCache {
 		now:      time.Now,
 		sleep:    time.Sleep,
 		run:      func(f func()) { go f() },
+		load:     provider.UsageDiskLookup,
+		save:     provider.RecordUsage,
 		entries:  map[string]*usageEntry{},
 		inflight: map[string]chan struct{}{},
 	}
@@ -292,13 +314,21 @@ func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt 
 		c.mu.Unlock()
 		return ch // rule 2: one flight per account
 	}
-	if e := c.entries[key]; e != nil && !force && !retryOnNewCreds(e, credsAt, c.now()) {
+	if e := c.entryLocked(key); e != nil && !force && !retryOnNewCreds(e, credsAt, c.now()) {
 		// An entry exists, so this account has been read at least once.
 		// Refreshing it is a human's decision (forceRefresh), never a
 		// side effect of someone having a page open — that automatic
 		// refresh is exactly what fed the rate limit before.
-		c.mu.Unlock()
-		return nil
+		//
+		// One exception: a reading loaded from disk that is older than
+		// the TTL gets ONE background refresh the first time it is read
+		// in this process — what a cold start always did before the
+		// file existed, never more. It is served meanwhile.
+		if !c.staleFromDiskLocked(e) {
+			c.mu.Unlock()
+			return nil
+		}
+		e.diskProbed = true
 	}
 	ch := make(chan struct{})
 	c.inflight[key] = ch
@@ -337,14 +367,24 @@ func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt 
 // store records a probe result and decides when the next one is allowed.
 func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error, saved ...*savedresets.SavedResets) {
 	now := c.now()
+	// The file write runs after the unlock (deferred first, so it runs
+	// last): readers of every account must not wait on disk I/O.
+	var persist func()
+	defer func() {
+		if persist != nil {
+			persist()
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() { persist = c.persistLocked(key, err) }()
 	e := c.entries[key]
 	if e == nil {
 		e = &usageEntry{}
 		c.entries[key] = e
 	}
 	e.attemptedAt = now
+	e.fromDisk = false // a real probe replaced the file's reading
 	if len(saved) > 0 {
 		e.resets = saved[0]
 	}
@@ -416,7 +456,7 @@ func (c *usageCache) forceRefresh(key string, fetch usageFetch, resets ...resets
 		c.mu.Unlock()
 		return true, 0
 	}
-	if e := c.entries[key]; e != nil {
+	if e := c.entryLocked(key); e != nil {
 		if d := e.serverUntil.Sub(now); d > 0 {
 			c.mu.Unlock()
 			return false, d
@@ -444,4 +484,131 @@ func instanceResetsFetch(t provider.Type, env []string) resetsFetch {
 		return nil
 	}
 	return func() (*savedresets.SavedResets, error) { return read(env) }
+}
+
+// entryLocked is c.entries[key], filled from the account's usage file on
+// a miss. A loaded reading counts as an existing one: it is served, and
+// replacing it is a refresh like any other. The probe bookkeeping comes
+// back with it, so a restart keeps honouring Retry-After and the
+// backoff. Callers hold c.mu.
+func (c *usageCache) entryLocked(key string) *usageEntry {
+	if e := c.entries[key]; e != nil || c.load == nil {
+		return e
+	}
+	d, ok := c.load(key)
+	if !ok {
+		return nil
+	}
+	e := &usageEntry{
+		goodAt: d.ObservedAt, resets: d.SavedResets, fromDisk: true,
+		attemptedAt: d.AttemptedAt, fails: d.Fails, serverUntil: d.ServerUntil,
+	}
+	if d.ObservedAt.IsZero() && d.LastError != "" {
+		e.err = errors.New(d.LastError)
+	}
+	for _, w := range d.Windows {
+		e.windows = append(e.windows, logintty.UsageWindow{
+			Key: w.Key, Utilization: w.Utilization, ResetsAt: w.ResetsAt,
+			ObservedAt: w.ObservedAt, Account: w.Account, Error: w.Error,
+		})
+	}
+	e.nextAt = e.attemptedAt.Add(usageManualMinInterval)
+	if e.serverUntil.After(e.nextAt) {
+		e.nextAt = e.serverUntil
+	}
+	c.entries[key] = e
+	return e
+}
+
+// staleFromDiskLocked: the entry came from disk, is older than the TTL,
+// has not had its one refresh yet, and the backoff allows one. Callers
+// hold c.mu.
+func (c *usageCache) staleFromDiskLocked(e *usageEntry) bool {
+	if !e.fromDisk || e.diskProbed {
+		return false
+	}
+	now := c.now()
+	if !e.goodAt.IsZero() && now.Sub(e.goodAt) <= c.ttl {
+		return false
+	}
+	return autoAllowed(e, now)
+}
+
+// autoAllowed is the gate for every probe nobody clicked: never inside a
+// server cooldown, and never sooner than the backoff after the last
+// attempt or reading.
+func autoAllowed(e *usageEntry, now time.Time) bool {
+	if e.serverUntil.After(now) {
+		return false
+	}
+	last := e.attemptedAt
+	if e.goodAt.After(last) {
+		last = e.goodAt
+	}
+	return last.IsZero() || now.Sub(last) >= autoBackoff(e.fails)
+}
+
+// autoBackoff doubles usageAutoMinInterval per consecutive failure, up
+// to usageAutoMaxBackoff: 1, 2, 4, 8, 16, 30 minutes.
+func autoBackoff(fails int) time.Duration {
+	d := usageAutoMinInterval
+	for i := 1; i < fails && d < usageAutoMaxBackoff; i++ {
+		d *= 2
+	}
+	return min(d, usageAutoMaxBackoff)
+}
+
+// persistLocked snapshots the entry for its usage file and returns the
+// write, to run after c.mu is released (nil = nothing to write). The
+// last good reading stays on disk through failures; the bookkeeping
+// (attempt, failures, server cooldown) is always current. An
+// unsupported verdict drops the file. Callers hold c.mu.
+func (c *usageCache) persistLocked(key string, err error) func() {
+	if c.save == nil {
+		return nil
+	}
+	if errors.Is(err, logintty.ErrUsageUnsupported) {
+		return func() { provider.UsageDiskDrop(key) }
+	}
+	e := c.entries[key]
+	if e == nil {
+		return nil
+	}
+	d := provider.UsageDisk{
+		Key: key, ObservedAt: e.goodAt, SavedResets: e.resets,
+		AttemptedAt: e.attemptedAt, Fails: e.fails, ServerUntil: e.serverUntil,
+	}
+	if e.err != nil {
+		d.LastError = e.err.Error()
+	}
+	if !e.goodAt.IsZero() {
+		for _, w := range e.windows {
+			d.Windows = append(d.Windows, provider.UsageDiskWindow{
+				Key: w.Key, Utilization: w.Utilization, ResetsAt: w.ResetsAt,
+				ObservedAt: w.ObservedAt, Account: w.Account, Error: w.Error,
+			})
+		}
+	}
+	save := c.save
+	return func() { save(d) }
+}
+
+// autoRefresh is a refresh nobody clicked: the failover side wants a
+// newer reading of an account it marked limited. It obeys everything
+// the button obeys — one flight, the server's Retry-After — plus the
+// autoAllowed backoff, and goes through the same pace gate. Returns the
+// channel of the probe it started or joined, nil when it declined.
+func (c *usageCache) autoRefresh(key string, fetch usageFetch, resets ...resetsFetch) chan struct{} {
+	now := c.now()
+	c.mu.Lock()
+	if ch, running := c.inflight[key]; running {
+		c.mu.Unlock()
+		return ch
+	}
+	if e := c.entryLocked(key); e != nil && !autoAllowed(e, now) {
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+	return c.schedule(key, fetch, true, time.Time{}, resets...)
 }
