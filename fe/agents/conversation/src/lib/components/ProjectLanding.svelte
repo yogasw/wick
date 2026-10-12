@@ -8,12 +8,9 @@
   import { listComposerCommands } from "../api/composer.js";
   import {
     attachSession,
-    deleteTicket,
     getProjectTickets,
     getTicketFilter,
-    getTicketPrefs,
     saveTicketFilter,
-    saveTicketPrefs,
     type EmptiedTicket,
   } from "../api/tickets.js";
   import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
@@ -23,6 +20,8 @@
   import KanbanBoard from "./KanbanBoard.svelte";
   import { mergeRail, keepPushedOff } from "../railPaging.js";
   import TicketDetail from "./TicketDetail.svelte";
+  import EmptyTicketOffer from "./EmptyTicketOffer.svelte";
+  import { hasTeam, teamTicketsHref } from "../teamTicketLinks.js";
   import { connectSessionsStream } from "../stores/sessionsStream.js";
   import OwnerTabs from "./OwnerTabs.svelte";
   import ProjectMenu from "./ProjectMenu.svelte";
@@ -416,52 +415,18 @@
   });
 
 
-  /* ── a ticket that just lost its last chat ──
-     A ticket with no sessions tracks nothing, so removal is offered. The
-     answer can be made standing ("don't ask again"), which is safe here
-     precisely because deleting an EMPTY ticket destroys no conversation —
-     unlike deleting one that still holds chats, which always asks. */
-  let emptied = $state<EmptiedTicket | null>(null);
-  let dontAskEmpty = $state(false);
-  let autoDeleteEmpty = $state<"" | "always" | "never">("");
-
+  /* With a Team, a ticket's page points at Team › Tickets, where several
+     agents can work it; without one nothing changes. Read once a ticket
+     page is open. */
+  let teamOn = $state(false);
   $effect(() => {
-    Effect.runPromise(getTicketPrefs(base).pipe(Effect.provide(WickClientLayer)))
-      .then((p) => { autoDeleteEmpty = p.auto_delete_empty ?? ""; })
-      .catch(() => { /* asking is the safe default */ });
+    if (!openTicketId || teamOn) return;
+    hasTeam(base).then((on) => { teamOn = on; });
   });
 
-  function handleEmptied(t: EmptiedTicket) {
-    if (autoDeleteEmpty === "never") return;
-    if (autoDeleteEmpty === "always") {
-      removeEmptyTicket(t.id);
-      return;
-    }
-    emptied = t;
-    dontAskEmpty = false;
-  }
-
-  function removeEmptyTicket(ticketId: string) {
-    // "keep": an empty ticket has no chats to take with it, so this is only
-    // ever the ticket record.
-    Effect.runPromise(deleteTicket(base, ticketId, "keep").pipe(Effect.provide(WickClientLayer)))
-      .then(reloadBoard)
-      .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to delete the ticket"));
-  }
-
-  function answerEmptied(remove: boolean) {
-    const t = emptied;
-    emptied = null;
-    if (dontAskEmpty) {
-      const choice = remove ? "always" : "never";
-      autoDeleteEmpty = choice;
-      Effect.runPromise(
-        saveTicketPrefs(base, { auto_delete_empty: choice }).pipe(Effect.provide(WickClientLayer)),
-      ).catch(() => { /* the prompt will simply appear again */ });
-    }
-    if (remove && t) removeEmptyTicket(t.id);
-    else reloadBoard();
-  }
+  /* A ticket that just lost its last chat: EmptyTicketOffer asks. */
+  let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
+  const handleEmptied = (t: EmptiedTicket) => emptyOffer?.offer(t);
 
   /* Starting a session on a ticket is a two-step: create it in this
      project, then attach. The composer owns creation, so the ticket id is
@@ -608,6 +573,15 @@
       <!-- The page height is locked (each panel scrolls itself), so the
            ticket's long page scrolls in its own container. -->
       <div class="min-h-0 flex-1 overflow-y-auto">
+        {#if teamOn}
+          <div class="mb-3 flex items-center gap-3 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs dark:border-navy-600 dark:bg-navy-800" data-testid="open-in-team">
+            <span class="min-w-0 flex-1 text-black-800 dark:text-black-600">Need several agents on this ticket? That happens in Team.</span>
+            <a
+              class="shrink-0 rounded-lg bg-green-500 px-3 py-1.5 font-semibold text-white-100 hover:bg-green-600"
+              href={teamTicketsHref(base, project.id, openTicketId)}
+            >Open in Team › Tickets ↗</a>
+          </div>
+        {/if}
         <TicketDetail
           {base}
           ticketId={openTicketId}
@@ -684,47 +658,4 @@
   </div>
 </div>
 
-<!-- The last chat left a ticket, so the ticket now tracks nothing. Offering
-     removal here (rather than doing it silently) keeps a deliberately-empty
-     ticket — one just created, not yet used — from disappearing. -->
-{#if emptied}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4">
-    <div class="w-full max-w-sm rounded-xl border border-white-300 bg-white-100 p-5 shadow-xl dark:border-navy-600 dark:bg-navy-700">
-      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
-        Delete the empty ticket?
-      </h2>
-      <p class="mt-2 text-xs leading-relaxed text-black-700 dark:text-black-600">
-        <span class="rounded bg-white-200 px-1 font-mono text-[10px] dark:bg-navy-800">{emptied.id}</span>
-        “{emptied.title}” has no chats left. Nothing else is deleted — the chat you moved is
-        safe on its new ticket.
-      </p>
-
-      <label class="mt-4 flex cursor-pointer items-start gap-2 text-xs text-black-800 dark:text-black-600">
-        <input
-          type="checkbox"
-          bind:checked={dontAskEmpty}
-          class="mt-0.5 h-3.5 w-3.5 rounded border-white-400 text-green-600 focus:ring-green-500 dark:border-navy-600"
-        />
-        <span>
-          Don’t ask again — remember my answer.
-          <span class="mt-0.5 block text-[11px] text-black-700 dark:text-black-600">
-            Only for empty tickets. Deleting a ticket that still holds chats always asks.
-          </span>
-        </span>
-      </label>
-
-      <div class="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onclick={() => answerEmptied(false)}
-          class="rounded-lg border border-white-400 px-3 py-1.5 text-xs text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
-        >Keep it</button>
-        <button
-          type="button"
-          onclick={() => answerEmptied(true)}
-          class="rounded-lg bg-neg-400 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-neg-500"
-        >Delete ticket</button>
-      </div>
-    </div>
-  </div>
-{/if}
+<EmptyTicketOffer bind:this={emptyOffer} {base} onChanged={reloadBoard} />

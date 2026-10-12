@@ -55,6 +55,10 @@
     users?: Record<string, string>;
     /* Opens the ticket's own page (sessions, fields, full note list). */
     onOpenTicket?: (ticketId: string) => void;
+    /* Set when the ticket's page lives elsewhere (Team › Tickets from a
+       Team chat): a labelled button under the title opens it too, since
+       the short id alone does not say where it leads. */
+    openLabel?: string;
     /* Switches the rail to the Notes tab — passed only while that tab
        exists. With ticket mode on there is no separate Notes tab: this panel
        IS both, and a link to a tab that is not in the strip is a dead end. */
@@ -74,6 +78,7 @@
     notes,
     users,
     onOpenTicket,
+    openLabel,
     onOpenNotes,
     onChanged,
   }: Props = $props();
@@ -415,6 +420,14 @@
           title="Rename this ticket"
           class="mt-2 w-full rounded text-left text-xs font-medium text-black-900 hover:bg-white-100 dark:text-white-100 dark:hover:bg-navy-700"
         >{ticket.title}</button>
+      {/if}
+      {#if openLabel && onOpenTicket}
+        <button
+          type="button"
+          data-testid="ticket-open-team"
+          onclick={() => onOpenTicket?.(ticket.id)}
+          class="mt-2 rounded-lg border border-white-400 px-2 py-1 text-[11px] font-medium text-black-800 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600 dark:hover:text-green-400"
+        >{openLabel}</button>
       {/if}
 
 

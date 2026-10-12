@@ -5,8 +5,7 @@
          with ticket mode on) and Done, which saves ticket_projects;
        - /team/t: the combined board of the picked projects;
        - /team/t/<project>/<ticket>: that ticket's page.
-     The ticket page is a placeholder for now (marked below). The header
-     (title + ⚙) is AgentsApp's. */
+     The header (title + ⚙) is AgentsApp's. */
   import { onMount, untrack } from "svelte";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
@@ -19,6 +18,8 @@
   import { keepPushedOff, mergeRail } from "../../railPaging.js";
   import { connectSessionsStream } from "../../stores/sessionsStream.js";
   import KanbanBoard from "../KanbanBoard.svelte";
+  import TicketDetail from "../TicketDetail.svelte";
+  import EmptyTicketOffer from "../EmptyTicketOffer.svelte";
 
   type Props = {
     base: string;
@@ -35,7 +36,8 @@
     onPicked: (s: TeamSettings) => void;
     /** Move within Tickets ({} = the board). */
     onRoute: (r: TicketsRoute) => void;
-    /** A chat row on the board was clicked. Absent = open it in Agents. */
+    /** A chat row (board or ticket page) was clicked. Absent = open it in
+        Agents › Projects. */
     onOpenSession?: (sessionId: string, projectId?: string) => void;
   };
   let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession }: Props = $props();
@@ -308,19 +310,35 @@
     else window.location.href = `${base}/sessions/${encodeURIComponent(id)}`;
   }
 
+  /* "+ New session" on a ticket page: the chat that joins a ticket is
+     started from the project's own ticket page (its composer), until the
+     room gives this page a composer of its own. */
+  function newSessionOn(project: string, ticketId: string) {
+    window.location.href = `${base}/sessions?project=${encodeURIComponent(project)}&ticket=${encodeURIComponent(ticketId)}`;
+  }
+
+  /* A ticket a move just emptied: offered for deletion as on a project's
+     own board. */
+  let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
+
   const muted = "text-black-800 dark:text-black-600";
 </script>
 
 <div class="h-full overflow-y-auto" data-testid="tickets-page">
   {#if route.project && route.ticket}
-    <!-- Ticket page: TicketDetail (and later the room) goes here. A link
-         to a ticket opens it even before any project is picked. -->
+    <!-- Ticket page. A link to a ticket opens it even before (or without)
+         its project being picked; a ticket that cannot be read says so
+         inside TicketDetail. -->
     <div class="p-4" data-testid="tickets-ticket" data-project={route.project} data-ticket={route.ticket}>
-      <div class="flex items-center gap-3">
-        <button type="button" class="rounded-lg px-2 py-1 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => onRoute({})}>← Tickets</button>
-        <span class="font-mono text-xs {muted}">{route.ticket}</span>
-        <span class="text-xs {muted}">📁 {nameOf(route.project)}</span>
-      </div>
+      {#key route.project + "/" + route.ticket}
+        <TicketDetail
+          {base}
+          ticketId={route.ticket}
+          onBack={() => onRoute({})}
+          onOpenSession={(sid) => openSession(sid, route.project)}
+          onNewSession={(tid) => newSessionOn(route.project ?? "", tid)}
+        />
+      {/key}
     </div>
   {:else if settingsError}
     <div class="p-4 text-sm" data-testid="tickets-load-error">
@@ -396,9 +414,12 @@
             onOpen={(ticket, project) => { if (project) onRoute({ project, ticket }); }}
             onOpenSession={openSession}
             onReload={reload}
+            onEmptied={(t, pid) => emptyOffer?.offer(t, pid)}
           />
         </div>
       {/if}
     </div>
   {/if}
 </div>
+
+<EmptyTicketOffer bind:this={emptyOffer} {base} onChanged={reload} />

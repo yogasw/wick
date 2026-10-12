@@ -18,8 +18,10 @@ vi.mock("../../../api/options.js", async (orig) => ({
 const getProjectTickets = vi.fn();
 const getTicketFilter = vi.fn();
 const saveTicketFilter = vi.fn();
+const getTicket = vi.fn();
 vi.mock("../../../api/tickets.js", async (orig) => ({
   ...(await orig<typeof import("../../../api/tickets.js")>()),
+  getTicket: (...a: unknown[]) => getTicket(...a),
   getProjectTickets: (...a: unknown[]) => getProjectTickets(...a),
   getTicketFilter: (...a: unknown[]) => getTicketFilter(...a),
   saveTicketFilter: (...a: unknown[]) => saveTicketFilter(...a),
@@ -56,9 +58,19 @@ const options = () => [
 function mount(selected: string[] | null, route = {}) {
   const onPicked = vi.fn();
   const onRoute = vi.fn();
-  render(TicketsPage, { props: { base: "/tools/agents", selected, route, onPicked, onRoute } });
-  return { onPicked, onRoute };
+  const onOpenSession = vi.fn();
+  render(TicketsPage, { props: { base: "/tools/agents", selected, route, onPicked, onRoute, onOpenSession } });
+  return { onPicked, onRoute, onOpenSession };
 }
+
+const detailOf = (id: string) => ({
+  ticket: { id, project_id: "p1", title: "Seven", status: "open", created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" },
+  config: { enabled: true },
+  sessions: [{ id: "s-1", label: "First chat" }],
+  notes: [],
+  statuses: [{ key: "open", label: "Open" }],
+  users: {},
+});
 
 describe("TicketsPage", () => {
   beforeEach(() => {
@@ -74,6 +86,9 @@ describe("TicketsPage", () => {
     saveTicketFilter.mockReset();
     saveTicketFilter.mockReturnValue(Effect.succeed({ status: "ok" }));
     stream = {};
+    getTicket.mockReset();
+    getTicket.mockImplementation((_b: string, id: string) => Effect.succeed(detailOf(id)));
+    vi.unstubAllGlobals();
   });
 
   const callsFor = (id: string) => getProjectTickets.mock.calls.filter((c) => c[1] === id);
@@ -232,12 +247,57 @@ describe("TicketsPage", () => {
     expect(saveTicketFilter.mock.calls.at(-1)![2]).toEqual({ show_untracked: true });
   });
 
-  test("a ticket route shows its page; ← Tickets goes back to the board", async () => {
+  test("a ticket route renders TicketDetail; Back to board goes back to the board", async () => {
     const { onRoute } = mount(["p1"], { project: "p1", ticket: "T-7" });
     const page = await screen.findByTestId("tickets-ticket");
     expect(page.dataset.ticket).toBe("T-7");
-    await fireEvent.click(screen.getByRole("button", { name: "← Tickets" }));
+    expect(await screen.findByText("Seven")).toBeTruthy();
+    expect(getTicket.mock.calls[0][1]).toBe("T-7");
+    await fireEvent.click(screen.getByRole("button", { name: /Back to board/ }));
     expect(onRoute).toHaveBeenCalledWith({});
+  });
+
+  test("a chat row on the ticket page goes to onOpenSession with its project", async () => {
+    const { onOpenSession } = mount(["p1"], { project: "p1", ticket: "T-7" });
+    await fireEvent.click(await screen.findByText("First chat"));
+    expect(onOpenSession).toHaveBeenCalledWith("s-1", "p1");
+  });
+
+  test("a ticket that cannot be opened says so and keeps the way back", async () => {
+    getTicket.mockReturnValue(Effect.fail(new Error("project not accessible")));
+    const { onRoute } = mount([], { project: "p9", ticket: "T-X" });
+    const err = await screen.findByTestId("ticket-detail-error");
+    expect(err.textContent).toContain("Couldn't open this ticket");
+    expect(err.textContent).toContain("project not accessible");
+    await fireEvent.click(screen.getByRole("button", { name: /Back to board/ }));
+    expect(onRoute).toHaveBeenCalledWith({});
+  });
+
+  test("a move that empties a ticket offers its deletion, as on a project board", async () => {
+    getTicketFilter.mockReturnValue(Effect.succeed({ show_untracked: true }));
+    getProjectTickets.mockImplementation((_b: string, id: string) =>
+      Effect.succeed({ ...boardOf(id === "p1" ? "T-A" : "T-B", "t"), untracked: [{ id: "loose-" + id, label: "Loose " + id }] }),
+    );
+    const fetched: { method: string; url: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(typeof input === "string" ? input : ((input as Request).url ?? input));
+      fetched.push({ method: (init?.method ?? "GET").toUpperCase(), url });
+      const answer = url.includes("/sessions/loose-p1") ? { status: "ok", emptied_ticket: { id: "T-OLD", title: "Old husk" } } : {};
+      return new Response(JSON.stringify(answer), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    mount(["p1", "p2"]);
+    const src = await screen.findByTestId("untracked-loose-p1");
+    const target = screen.getByTestId("ticket-card-T-A");
+    const store: Record<string, string> = {};
+    const transfer = { setData: (k: string, v: string) => { store[k] = v; }, getData: (k: string) => store[k] ?? "", effectAllowed: "", dropEffect: "" };
+    await fireEvent.dragStart(src, { dataTransfer: transfer });
+    await fireEvent.dragOver(target, { dataTransfer: transfer });
+    await fireEvent.drop(target, { dataTransfer: transfer });
+    expect(await screen.findByText("Delete the empty ticket?")).toBeTruthy();
+    const before = callsFor("p1").length;
+    await fireEvent.click(screen.getByRole("button", { name: "Delete ticket" }));
+    await waitFor(() => expect(fetched.some((c) => c.method === "DELETE" && c.url.includes("/api/tickets/T-OLD"))).toBe(true));
+    await waitFor(() => expect(callsFor("p1").length).toBeGreaterThan(before));
   });
 
   test("settings failed to load: the reason and Retry, never the picker", async () => {

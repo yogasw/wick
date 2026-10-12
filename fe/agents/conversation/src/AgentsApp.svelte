@@ -55,6 +55,7 @@
   import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import TicketsPage from "./lib/components/team/TicketsPage.svelte";
+  import { addTicketProject, sessionTarget } from "./lib/teamTicketLinks.js";
   import { projectCount, ticketsSubtitle } from "./lib/ticketProjects.js";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
@@ -351,6 +352,25 @@
   function go(patch: Partial<AgentsRoute>, replace = false) {
     navigate({ ...route, ...patch }, { replace });
   }
+
+  /* Team › Tickets: a ticket's chat opens in its agent's Team chat when it
+     is a chat with one of the roster's agents, else in Agents › Projects. */
+  async function openTicketSession(id: string) {
+    const t = await sessionTarget(base, id, agents);
+    if (t.kind === "team") navigate({ handle: t.handle, session: t.session, panel: null });
+    else window.location.href = t.href;
+  }
+
+  /* The rail's jump from a chat: Team › Tickets in place, and the project
+     put on the Tickets selection when missing. Saving is best-effort and
+     never holds the jump up. */
+  function openTicketInTeam(project: string, ticket?: string) {
+    rosterOpen = false;
+    navigate({ handle: null, session: null, panel: null, tickets: ticket ? { project, ticket } : {} });
+    addTicketProject(base, ticketProjects, project)
+      .then((list) => { if (list) ticketProjects = list; })
+      .catch((e) => toastError(`Couldn't add the project to Tickets: ${e instanceof Error ? e.message : String(e)}`));
+  }
   /* A row opens the agent's oldest chat still running elsewhere (a Team
      task, a chat the person opened) while there is one, else its pinned
      main chat. */
@@ -572,6 +592,7 @@
     providerSwitch: !!selected?.allow_provider_switch,
     onOpenSettings: () => openPanel({ kind: "settings", tab: "advanced" }),
     onNewChat: newChat,
+    onOpenTicket: openTicketInTeam,
     agent: selected
       ? {
           id: selected.id,
@@ -883,6 +904,7 @@
         route={route.tickets}
         onPicked={(s) => (ticketProjects = s.ticket_projects ?? [])}
         onRoute={(t) => go({ tickets: t })}
+        onOpenSession={(id) => void openTicketSession(id)}
       />
     </div>
   </section>

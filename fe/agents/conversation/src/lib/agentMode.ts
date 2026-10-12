@@ -72,6 +72,10 @@ export type AgentMode = {
   onOpenSettings?: () => void;
   /** Starts a new chat with the agent (the switch warning's button). */
   onNewChat?: () => void;
+  /** Opens a ticket (or, without one, the board) in Team › Tickets
+      without leaving the app — the rail's jump. Absent, the jump goes
+      there by URL. */
+  onOpenTicket?: (project: string, ticket?: string) => void;
 };
 
 /** providerKey is the "type/name" part of a picker value

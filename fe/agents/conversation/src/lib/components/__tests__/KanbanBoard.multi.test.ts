@@ -270,4 +270,17 @@ describe("KanbanBoard — several projects", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/api/projects/p-b/tickets"))).toBe(true));
   });
+
+  test("a move that empties a ticket names that ticket's project", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ status: "ok", emptied_ticket: { id: "T-OLD", title: "Old" } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    ));
+    const onEmptied = vi.fn();
+    renderMulti({ filter: { show_untracked: true }, onEmptied });
+    const transfer = dt();
+    await fireEvent.dragStart(screen.getByTestId("untracked-loose-a"), { dataTransfer: transfer });
+    await fireEvent.dragOver(screen.getByTestId("ticket-card-T-A1"), { dataTransfer: transfer });
+    await fireEvent.drop(screen.getByTestId("ticket-card-T-A1"), { dataTransfer: transfer });
+    await waitFor(() => expect(onEmptied).toHaveBeenCalledWith({ id: "T-OLD", title: "Old" }, "p-a"));
+  });
 });

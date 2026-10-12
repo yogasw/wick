@@ -41,7 +41,11 @@ type SessionListItem struct {
 type SessionMetaDTO struct {
 	// ReadOnly: the caller reads this chat only through a shared Team
 	// agent (sharedChatReadOnly) — the composer and actions are off.
-	ReadOnly    bool   `json:"read_only,omitempty"`
+	ReadOnly bool `json:"read_only,omitempty"`
+	// AgentID: the Team agent this web chat talks to, so a page that only
+	// has the session id (a ticket's chat rows) can open it in that
+	// agent's chat. Empty for any other session.
+	AgentID     string `json:"agent_id,omitempty"`
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Status      string `json:"status"`
@@ -432,6 +436,9 @@ func apiSessionMeta(c *tool.Ctx) {
 		Widget:      resolveWidgetPolicy(sess.Meta.ProjectID),
 		Speaker:     sessionSpeaker(c, id),
 		ReadOnly:    sharedChatReadOnly(c, sess),
+	}
+	if sess.Meta.Origin == session.OriginUI {
+		dto.AgentID = sess.Meta.AgentID
 	}
 	// Resolve provider + pinned model from the active (or first) agent
 	// entry — ActiveAgent above is the agent's own NAME ("main"), not its

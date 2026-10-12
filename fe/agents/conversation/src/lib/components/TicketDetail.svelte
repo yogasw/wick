@@ -209,7 +209,16 @@
 </script>
 
 {#if error}
-  <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">{error}</div>
+  <!-- A ticket that cannot be opened (gone, or a project the caller cannot
+       reach) says why and keeps the way back. -->
+  <div class="flex flex-col gap-3" data-testid="ticket-detail-error">
+    <button
+      type="button"
+      onclick={onBack}
+      class="inline-flex w-fit items-center gap-1.5 text-xs text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+    >Back to board</button>
+    <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">Couldn't open this ticket: {error}</div>
+  </div>
 {:else if data}
   {@const t = data.ticket}
   <div class="flex flex-col gap-4">

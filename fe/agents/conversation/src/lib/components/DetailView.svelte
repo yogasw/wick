@@ -75,6 +75,7 @@
   import { listNotes } from "../api/tickets.js";
   import type { NotesResponse } from "../types/agents.js";
   import TicketPanel from "./TicketPanel.svelte";
+  import { ticketJumpFor } from "../teamTicketLinks.js";
   import NotesRail from "./NotesRail.svelte";
   import RailMore from "./RailMore.svelte";
   import { getRailPrefs, saveRailPrefs } from "../api/tickets.js";
@@ -1737,25 +1738,13 @@
     activeProjectId !== null &&
       projectOptions.some((p) => p.id === activeProjectId && p.ticketEnabled),
   );
+  /* In the Team app the jump stays in Team (Team › Tickets); elsewhere it
+     opens the project's board in Agents › Projects. */
   const ticketJump = $derived.by(() => {
     if (!ticketModeOn || activeProjectId === null) return undefined;
-    const proj = encodeURIComponent(activeProjectId);
-    const tk = notesInfo?.ticket;
-    if (tk) {
-      return {
-        label: `Ticket ${tk.id}`,
-        onJump: () => {
-          window.location.href = `${base}/sessions?project=${proj}&ticket=${encodeURIComponent(tk.id)}`;
-        },
-      };
-    }
-    return {
-      label: "Ticket board",
-      onJump: () => {
-        window.location.href = `${base}/sessions?project=${proj}`;
-      },
-    };
+    return ticketJumpFor(base, activeProjectId, notesInfo?.ticket?.id, agentMode);
   });
+  const openTicketPage = (id: string) => ticketJumpFor(base, activeProjectId ?? "", id, agentMode).onJump();
 
   /* Rehydrate a question that arrived while the tab was closed; never
    * clobber an ask already shown by a live SSE event. */
@@ -3501,7 +3490,8 @@
           noteCount={(notesInfo?.notes ?? []).length}
           notes={notesInfo?.notes}
           users={notesInfo?.users}
-          onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
+          onOpenTicket={openTicketPage}
+          openLabel={agentMode ? "Open in Team › Tickets ↗" : undefined}
           onChanged={loadTicket}
         />
       {:else if railTab === "notes" && notesInfo}
@@ -3722,7 +3712,8 @@
               noteCount={(notesInfo?.notes ?? []).length}
               notes={notesInfo?.notes}
               users={notesInfo?.users}
-              onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
+              onOpenTicket={openTicketPage}
+              openLabel={agentMode ? "Open in Team › Tickets ↗" : undefined}
               onChanged={loadTicket}
             />
           {:else if railTab === "notes" && notesInfo}

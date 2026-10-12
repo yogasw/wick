@@ -75,6 +75,8 @@ export type SessionListItem = {
 export type SessionMeta = {
   /** Another person's chat of a shared Team agent: readable, not changeable. */
   read_only?: boolean;
+  /** The Team agent this web chat talks to; absent for any other session. */
+  agent_id?: string;
   id: string;
   label: string;
   status: string;
