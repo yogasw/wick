@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	"github.com/yogasw/wick/internal/agents/clitoken"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/team"
@@ -343,6 +344,9 @@ func apiCLISend(c *tool.Ctx) {
 	// inheriting an HTTP context would kill the agent the moment this
 	// response returns.
 	bg := log.Ctx(c.Context()).WithContext(context.Background())
+	// The token names the person who minted it: carry them as the caller so
+	// the spawn gets their access, not the session owner's.
+	bg = agentchannels.WithCallerUserID(bg, g.UserID)
 	if InTicketRoom(g.SessionID) {
 		c.JSON(http.StatusConflict, map[string]string{"error": team.ErrRoomSession.Error()})
 		return

@@ -181,10 +181,11 @@ func DefaultGeneralConfig() GeneralConfig {
 		// doesn't pin a provider the operator never chose.
 		AutoRescan:  true,
 		PreemptIdle: true,
-		// Ships OFF: recycling the subprocess costs its in-memory context,
-		// which is the wrong trade for the common single-user session. Opt in
-		// where a session is genuinely shared and attribution matters.
-		RespawnOnCallerChange: false,
+		// Ships ON: off, a person joining someone else's running session has
+		// their turn served with that owner's connectors — on an admin's
+		// session that is privilege escalation. A single-user session never
+		// changes caller, so it never pays the recycle cost.
+		RespawnOnCallerChange: true,
 		// Off by default: an inbound message should not be able to create an
 		// account until an operator decides that is wanted.
 		ChannelAutoRegister: false,

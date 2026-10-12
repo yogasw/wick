@@ -2112,6 +2112,12 @@ func withComposerSender(c *tool.Ctx, bg context.Context, sessionID string) conte
 	if name == "" {
 		name = u.Email
 	}
+	// The pool reads the caller from ctx to decide whose MCP credential a
+	// spawn gets. bg is detached from the request, so login.GetUser finds
+	// nobody there: without this every web turn looked callerless, the spawn
+	// fell back to the session OWNER's access, and RespawnOnCallerChange
+	// never fired — a teammate typing into an admin's session ran as admin.
+	bg = agentchannels.WithCallerUserID(bg, u.ID)
 	return agentchannels.WithSender(bg, &store.Sender{
 		ID:         u.ID,
 		Name:       name,
