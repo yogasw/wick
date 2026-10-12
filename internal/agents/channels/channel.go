@@ -333,6 +333,18 @@ type LiveTurnReporter interface {
 type DetachedSurvivor struct {
 	Handle     string
 	ProfileKey string
+	// Teammate marks a Team teammate the session is waiting on (a working
+	// team task) rather than a sub-agent. Zero value = sub-agent.
+	Teammate bool
+	// Hidden: the session's agent has "Show teammates in channels" off,
+	// so the channel shows its generic working state and never the name.
+	// Teammate entries only.
+	Hidden bool
+	// Replied / Of count the tasks of the session's open team batches:
+	// how many came back out of how many. The same on every teammate
+	// entry of one set; Of == 0 = unknown.
+	Replied int
+	Of      int
 }
 
 // DetachedNoticeReceiver is notified when a session's leader was killed while

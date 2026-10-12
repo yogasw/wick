@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -53,10 +54,19 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// the task is open. Off the Hub's path: the audience reads the store.
 	hub.OnTaskChange = func(sessionID string, v teamlink.TaskView) {
 		publishTeamTask(globalBcast, sessionID, v)
-		if rosterTaskMoved(v) {
+		if moved, first := rosterTaskMovedFirst(v); moved {
 			go TeamTaskChanged(sessionID, v.ToID)
+			// The sender's channels and sidebar row follow the teammates
+			// it waits on (working tasks).
+			if f := onTeamTaskMoved.Load(); f != nil {
+				go (*f)(sessionID, v, first)
+			}
+			go publishTeamWaiting(globalBcast, hub.LiveTasks, sessionID)
 		}
 	}
+	// A session whose agent hides teammates in channels gets prompts that
+	// ask for an answer naming none.
+	hub.HideTeammates = func(sessionID string) bool { return !teamShowsTeammatesCached(sessionID) }
 	// "Needs you" also turns on when the chat goes idle without its agent
 	// answering: once its turn ended (and the pool settled), the chat's
 	// waiting questions go out again.
@@ -97,6 +107,9 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 		if err := hub.Persist(globalLayout.TeamTasksDir()); err != nil {
 			log.Warn().Err(err).Msg("team: task store")
 		}
+		// Tasks adopted from disk were sent before the restart: their next
+		// change is not a "first" (no second start ping in the thread).
+		seedRosterTasks(hub.LiveTasks())
 	}
 	// A remote agent's late reply goes to the agent that asked it too. The
 	// reply to a timed-out turn is found from the conversation, so it still
@@ -132,6 +145,13 @@ type rosterSeen struct {
 // state and moves no roster row. Settling always signals (the teammate's
 // "Replied to …") and forgets the task.
 func rosterTaskMoved(v teamlink.TaskView) bool {
+	moved, _ := rosterTaskMovedFirst(v)
+	return moved
+}
+
+// rosterTaskMovedFirst is rosterTaskMoved plus first: the task had not
+// signalled before (it was just sent).
+func rosterTaskMovedFirst(v teamlink.TaskView) (moved, first bool) {
 	now := time.Now()
 	rosterTaskState.Range(func(k, val any) bool {
 		if now.Sub(val.(rosterSeen).at) > rosterTaskKeep {
@@ -142,11 +162,98 @@ func rosterTaskMoved(v teamlink.TaskView) bool {
 	switch v.State {
 	case "working", "input_required":
 		prev, loaded := rosterTaskState.Swap(v.TaskID, rosterSeen{state: v.State, at: now})
-		return !loaded || prev.(rosterSeen).state != v.State
+		return !loaded || prev.(rosterSeen).state != v.State, !loaded
 	}
-	rosterTaskState.Delete(v.TaskID)
-	return true
+	_, loaded := rosterTaskState.LoadAndDelete(v.TaskID)
+	return true, !loaded
 }
+
+// seedRosterTasks records the open tasks a restart adopted as already
+// signalled, in their current state, so rosterTaskMovedFirst reads a
+// change of theirs as a move, never as a just-sent task.
+func seedRosterTasks(live []teamlink.LiveTask) {
+	now := time.Now()
+	for _, t := range live {
+		state := "input_required"
+		if t.Working {
+			state = "working"
+		}
+		rosterTaskState.LoadOrStore(t.TaskID, rosterSeen{state: state, at: now})
+	}
+}
+
+// onTeamTaskMoved is told when a task's state moved (rosterTaskMovedFirst):
+// first = the task was just sent. Set by the server (SetOnTeamTaskMoved)
+// for the channels' background set; unset = nobody. Atomic: the Hub may
+// fire before the server finished wiring.
+var onTeamTaskMoved atomic.Pointer[func(sessionID string, v teamlink.TaskView, first bool)]
+
+// SetOnTeamTaskMoved installs the OnTeamTaskMoved hook.
+func SetOnTeamTaskMoved(f func(sessionID string, v teamlink.TaskView, first bool)) {
+	onTeamTaskMoved.Store(&f)
+}
+
+// onTeamVisibilityChanged is told an agent's "Show teammates in channels"
+// changed, so the channels it waits in repaint at once. Set by the server.
+var onTeamVisibilityChanged atomic.Pointer[func(agentID string)]
+
+// SetOnTeamVisibilityChanged installs the hook.
+func SetOnTeamVisibilityChanged(f func(agentID string)) {
+	onTeamVisibilityChanged.Store(&f)
+}
+
+// teamVisibilityChanged drops the cached reads and tells the server.
+func teamVisibilityChanged(agentID string) {
+	forgetShowTeammates()
+	if f := onTeamVisibilityChanged.Load(); f != nil {
+		go (*f)(agentID)
+	}
+}
+
+// TeamShowsTeammates reports whether the Team agent of sessionID shows
+// teammates in its channels (channel_show_teammates). A session of no
+// Team agent has nothing to hide: true.
+func TeamShowsTeammates(ctx context.Context, sessionID string) bool {
+	if globalTeam == nil {
+		return true
+	}
+	p := globalTeam.AgentFor(ctx, sessionID)
+	if p == nil {
+		return true
+	}
+	return team.ShowsTeammatesInChannels(p.ChannelShowTeammates)
+}
+
+// showTeammatesTTL bounds how long a read of the setting is reused: the
+// Hub asks under its lock, which must not wait on the database.
+const showTeammatesTTL = 30 * time.Second
+
+type showTeammatesSeen struct {
+	show bool
+	at   time.Time
+}
+
+// showTeammatesCache holds the last read per session.
+var showTeammatesCache sync.Map
+
+// teamShowsTeammatesCached is TeamShowsTeammates read at most once per
+// showTeammatesTTL per session.
+func teamShowsTeammatesCached(sessionID string) bool {
+	if v, ok := showTeammatesCache.Load(sessionID); ok && time.Since(v.(showTeammatesSeen).at) < showTeammatesTTL {
+		return v.(showTeammatesSeen).show
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	show := TeamShowsTeammates(ctx, sessionID)
+	showTeammatesCache.Store(sessionID, showTeammatesSeen{show: show, at: time.Now()})
+	return show
+}
+
+// forgetShowTeammates drops the cached reads, after the setting changed.
+func forgetShowTeammates() { showTeammatesCache.Clear() }
+
+// TeamHidesTeammates is the server's hidden probe for the background set.
+func TeamHidesTeammates(sessionID string) bool { return !teamShowsTeammatesCached(sessionID) }
 
 // TeamAgentOf returns the Team agent a session belongs to, "" for none.
 func TeamAgentOf(ctx context.Context, sessionID string) string {
@@ -185,7 +292,9 @@ func sessionTeamTasks(c *tool.Ctx) {
 	if tasks == nil {
 		tasks = []teamlink.TaskView{}
 	}
-	c.JSON(http.StatusOK, map[string]any{"tasks": tasks})
+	// show_teammates: the session's agent names teammates in its channels;
+	// off = its sent replies carry "teammates hidden in …" (any view).
+	c.JSON(http.StatusOK, map[string]any{"tasks": tasks, "show_teammates": TeamShowsTeammates(c.Context(), id)})
 }
 
 // sessionTeamTaskThread handles GET /api/sessions/{id}/team-tasks/{task}/thread:
@@ -308,6 +417,37 @@ func sessionTeamTaskCancel(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTasksCancelWorking handles POST
+// /api/sessions/{id}/team-tasks/cancel-working: Stop on a conversation
+// waiting on teammates, when the person also stops them. Every task the
+// session sent that is still working is canceled as the person (a
+// question back to the session is left alone); failed lists the ids that
+// could not be.
+func sessionTeamTasksCancelWorking(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	n, failed := cancelWorkingTeamTasks(c.Context(), h, id)
+	c.JSON(http.StatusOK, map[string]any{"canceled": n, "failed": failed})
+}
+
+// cancelWorkingTeamTasks cancels sessionID's working tasks.
+func cancelWorkingTeamTasks(ctx context.Context, h *teamlink.Hub, sessionID string) (int, []string) {
+	n, failed := 0, []string{}
+	for _, t := range h.SentFrom(sessionID) {
+		if t.State != "working" {
+			continue
+		}
+		if _, err := h.CancelFromUser(ctx, sessionID, t.TaskID); err != nil {
+			failed = append(failed, t.TaskID)
+			continue
+		}
+		n++
+	}
+	return n, failed
 }
 
 // sessionTeamTasksSummarize handles POST /api/sessions/{id}/team-tasks/summarize

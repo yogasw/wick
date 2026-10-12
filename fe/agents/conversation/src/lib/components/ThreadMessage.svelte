@@ -32,6 +32,7 @@
   import type { RemoteRecheck as RecheckResult } from "../api/team.js";
   import { isRemoteTimeout, isLateReply, lateLabel, NOTE_NO_MARKER } from "../remoteRecheck.js";
   import { jumpLink, deliveryView } from "../slackDelivery.js";
+  import { teammatesHiddenNote, TEAMMATES_HIDDEN_TIP } from "../teammatesBusy.js";
   import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
   import { renderWithSourceTags } from "../sourceTags.js";
 
@@ -51,7 +52,9 @@
         handoff row's target is plain text. */
     onOpenAgent?: (handle: string) => void;
     /** The agent this chat belongs to — names a speaker missing from teamAgents. */
-    agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
+    agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null; showTeammates?: boolean };
+    /** The chat's agent has "Show teammates in channels" off (any view). */
+    teammatesHidden?: boolean;
     /** Handle of the teammate a via-mention turn answered ("" = none). */
     via?: string;
     /** Server-computed actioncard state for the whole thread. */
@@ -76,7 +79,7 @@
     /** This bubble's quote lookup is in flight: spinner + "Finding message…". */
     jumpPending?: boolean;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -1020,6 +1023,9 @@
             </a>
           {:else}
             <span class="break-words">{delivery.label}</span>
+          {/if}
+          {#if delivery.state === "sent" && (teammatesHidden || agent?.showTeammates === false)}
+            <span data-testid="teammates-hidden-note" class="text-black-700 dark:text-black-600" title={TEAMMATES_HIDDEN_TIP}>· {teammatesHiddenNote(delivery.label)}</span>
           {/if}
         </span>
       {/if}

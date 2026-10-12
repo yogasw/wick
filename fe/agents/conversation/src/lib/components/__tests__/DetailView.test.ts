@@ -188,6 +188,8 @@ vi.mock("../../api/subagents.js", () => ({
   interruptAllSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   getMessages: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   bumpHops: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  getTeamTasksView: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  cancelWorkingTeamTasks: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   // Real behaviour — the rail badge and the poll both key off it.
   liveSubAgents: (subs: { status: string }[]) =>
     subs.filter((s) => s.status === "queued" || s.status === "running"),
@@ -257,7 +259,7 @@ import { fetchSessionContext } from "../../api/context.js";
 import { getConversation } from "../../api/sessions.js";
 import { toastWarn, pushToast } from "@wick-fe/common-stores";
 import { APIError } from "@wick-fe/common-api";
-import { getSubAgentPanel, interruptAllSubAgents } from "../../api/subagents.js";
+import { getSubAgentPanel, interruptAllSubAgents, getTeamTasksView, cancelWorkingTeamTasks } from "../../api/subagents.js";
 import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
 import { Effect } from "effect";
 import { sendMessage } from "../../api/messages.js";
@@ -928,6 +930,47 @@ describe("DetailView — composer Stop", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));
     expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
     expect(interruptAllSubAgents).toHaveBeenCalledWith("/api", "test-sess");
+  });
+
+  test("waiting on teammates: tray line, and Stop offers to stop them", async () => {
+    threadState.lifecycle = { state: "working", pid: 7, substate: "", at: 0 };
+    const view = { pipe: () => view };
+    (getTeamTasksView as unknown as ReturnType<typeof vi.fn>).mockReturnValue(view);
+    const tasks = [
+      { task_id: "t1", to_handle: "halodev", state: "working" },
+      { task_id: "t2", to_handle: "halodev", state: "working" },
+      { task_id: "t3", to_handle: "qa", state: "working" },
+    ];
+    runPromise.mockImplementation((e: unknown) =>
+      e === view ? Promise.resolve({ tasks, showTeammates: true }) : new Promise(() => {}),
+    );
+    render(DetailView, { props: TEAM_PROPS as never });
+    await waitFor(() => expect(screen.getByTestId("teammates-tray").textContent).toContain("is waiting on 2 teammates"));
+    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(screen.getByText("Stop this agent and its teammates' tasks?")).toBeDefined();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));
+    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
+    expect(cancelWorkingTeamTasks).toHaveBeenCalledWith("/api", "test-sess");
+  });
+
+  test("header Kill leaves sub-agents to their own cascade (only teammates are offered)", async () => {
+    threadState.lifecycle = { state: "working", pid: 7, substate: "", at: 0 };
+    const panel = { pipe: () => panel };
+    (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mockReturnValue(panel);
+    runPromise.mockImplementation((e: unknown) =>
+      e === panel
+        ? Promise.resolve({ subAgents: [{ id: "d1", status: "running", lifecycle: "working" }], incident: null })
+        : new Promise(() => {}),
+    );
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() => expect(getSubAgentPanel).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent.click(screen.getByRole("button", { name: /kill session/i }));
+    expect(screen.getByText("Stop this agent?")).toBeDefined();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop agent$/i }));
+    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
+    expect(interruptAllSubAgents).not.toHaveBeenCalled();
   });
 
   test("queued spawn: the button reads Cancel and dequeues", async () => {

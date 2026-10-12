@@ -208,6 +208,9 @@ type turn struct {
 	bgAgents     []agentchannels.DetachedSurvivor
 	bgCheckedAt  time.Time
 	bgRechecking bool
+	// bgPaintedAt is when the background banner was last written; a set
+	// of only teammates repaints on teammateKeepAlive, not every tick.
+	bgPaintedAt time.Time
 	// bgTicker keeps the banner alive once the leader's own turn has ended;
 	// it never runs alongside statusTicker. Stopped (and set to nil) when the
 	// set empties, a new turn takes over, or the turn is replaced.
@@ -297,6 +300,11 @@ type Channel struct {
 	promptsFn PromptsFn
 	// matrixAPIURL points the matrix's auth.test at a stub in tests.
 	matrixAPIURL string
+
+	// bgKeepAlive / bgTick override teammateKeepAlive and the background
+	// banner's tick (statusAnimInterval) — tests only. Guarded by mu.
+	bgKeepAlive time.Duration
+	bgTick      time.Duration
 
 	cfgMu          sync.Mutex
 	cfg            agentconfig.SlackChannelConfig

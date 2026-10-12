@@ -637,6 +637,9 @@ func NewServer() *Server {
 	// finishing before the service exists simply is not routed, which is
 	// the correct behaviour during boot.
 	var delegationSvc *delegation.Service
+	// bgSets is the background set channels see (sub-agents + teammates
+	// waiting on), built once delegationSvc and the Team hub exist.
+	var bgSets *backgroundSets
 	turnObserver := delegation.NewTurnObserver(func(sid, agentName, text string) {
 		if delegationSvc == nil {
 			return
@@ -2287,7 +2290,13 @@ func NewServer() *Server {
 			channelReg.DispatchBackgroundStart(parentSessionID, channelSurvivor(st.Agent), st.Task, st.Queued)
 		},
 		OnBackgroundChange: func(parentSessionID string, active []delegation.Survivor) {
-			channelReg.DispatchBackgroundAgents(parentSessionID, channelSurvivors(active))
+			// Recomputed whole: the set also carries the teammates the
+			// session waits on, which active does not know.
+			if bgSets != nil {
+				bgSets.report(parentSessionID)
+			} else {
+				channelReg.DispatchBackgroundAgents(parentSessionID, channelSurvivors(active))
+			}
 			// And the Team roster, whose card shows the same set.
 			agentstool.TeamSubagentsChanged(parentSessionID)
 		},
@@ -2368,7 +2377,16 @@ func NewServer() *Server {
 	agentstool.SetDelegation(delegationSvc)
 	// A channel's background banner asks again once it has gone stale, so a
 	// sub-agent that died without closing its row cannot hold it forever.
-	channelReg.SetBackgroundRecheck(backgroundRecheck(delegationSvc))
+	bgSets = newBackgroundSets(delegationSvc, hub, channelReg, agentstool.TeamHidesTeammates)
+	channelReg.SetBackgroundRecheck(bgSets.recheck())
+	// A Team task the session sent moved: a just-sent working task gets
+	// its start ping, and the set (banner) follows every move.
+	agentstool.SetOnTeamTaskMoved(teamTaskMoved(bgSets, agentstool.TeamHidesTeammates, func(sessionID string, mate agentchannels.DetachedSurvivor, task string) {
+		channelReg.DispatchBackgroundStart(sessionID, mate, task, false)
+	}))
+	// "Show teammates in channels" changed: the threads the agent waits
+	// in repaint now, named or generic, not on the next task move.
+	agentstool.SetOnTeamVisibilityChanged(bgSets.reportAgent)
 
 	// Return board tasks whose worker vanished to the queue; without this
 	// a crashed worker's claim pins its task forever.
@@ -3346,7 +3364,7 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
 }
 
 type Server struct {
@@ -3369,7 +3387,9 @@ type Server struct {
 	// connector mints for wick's loopback address are recognised.
 	customConn *customconn.Service
 	channelReg *agentchannels.Registry
-	db         *gorm.DB
+	// bgSets re-reports the channels' background sets after boot.
+	bgSets *backgroundSets
+	db     *gorm.DB
 	// resourceSampler records agent memory/CPU/IO into the history buffer
 	// behind the Resources page. Built in NewServer but STARTED in Run,
 	// which owns the context cancelled at shutdown — running it on
@@ -3442,6 +3462,9 @@ func (s *Server) JobsSvc() *manager.Service { return s.jobsSvc }
 func (s *Server) startChannels(ctx context.Context) {
 	s.channelReg.StartAll(ctx)
 	go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+	if s.bgSets != nil {
+		go replayBackgroundSets(ctx, s.bgSets)
+	}
 	if s.wfMgr != nil {
 		go wfsetup.WatchWorkflows(ctx, s.wfMgr.Layout.WorkflowsDir(), s.wfMgr.Service, s.wfMgr.Router, s.wfMgr.Cron, s.wfMgr.ScheduleAt)
 	}

@@ -32,8 +32,8 @@ func TestLiveTasksOpenOnly(t *testing.T) {
 
 	got := h.LiveTasks()
 	want := []LiveTask{
-		{FromSession: "sess-cap", FromAgentID: "a-cap", ToID: "a-anton", ToHandle: "anton", Chat: "sess-anton-1", Working: true},
-		{FromSession: "sess-cap", FromAgentID: "a-cap", ToID: "a-vera", ToHandle: "vera", Chat: "sess-vera-1", Question: "which deploy?"},
+		{TaskID: "t-work", FromSession: "sess-cap", FromAgentID: "a-cap", ToID: "a-anton", ToHandle: "anton", Chat: "sess-anton-1", Working: true},
+		{TaskID: "t-ask", FromSession: "sess-cap", FromAgentID: "a-cap", ToID: "a-vera", ToHandle: "vera", Chat: "sess-vera-1", Question: "which deploy?"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("LiveTasks = %+v, want %+v", got, want)

@@ -28,6 +28,7 @@
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
   import AgentHeaderTitle from "./lib/components/team/AgentHeaderTitle.svelte";
+  import TeammatesChip from "./lib/components/team/TeammatesChip.svelte";
   import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteChatMode, remoteTarget, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import DraftChat from "./lib/components/DraftChat.svelte";
@@ -588,6 +589,14 @@
   /* The main chat's tool, off the same stream as its working bubble: the
      row and header switch between thinking and the tool with the thread,
      not a poll later. */
+  /* Teammates the chat on screen waits on, for the header chip. Keyed by
+     the session it came from, so it never follows the user elsewhere. */
+  let teammatesBusy = $state<{ sid: string; n: number } | null>(null);
+  function onTeammatesBusy(n: number) {
+    teammatesBusy = { sid: chatSessionId, n };
+  }
+  const headerTeammates = $derived(teammatesBusy && teammatesBusy.sid === chatSessionId ? teammatesBusy.n : 0);
+
   function onActivity(tool: string | undefined) {
     const a = selected;
     if (!a || route.session) return;
@@ -617,6 +626,7 @@
     onDeleted: () => go({ session: null }),
     onTurnChange,
     onActivity,
+    onTeammatesBusy,
     ...(selected && isRemoteAgent(selected)
       ? { remoteProgress: true, onProgress: ((id: string) => (label: string | undefined) => (progress = label ? { id, label } : null))(selected.id) }
       : {}),
@@ -638,6 +648,7 @@
           image: selected.avatar?.image,
           avatarEvents: selected.avatar?.events,
           caption: remoteMode?.caption ?? connectorCaption(selected.allowed_connectors),
+          showTeammates: selected.channel_show_teammates !== false,
         }
       : undefined,
   });
@@ -1021,6 +1032,7 @@
             {:else if selected.disabled}
               <span>disabled</span><span aria-hidden="true">·</span>
             {/if}
+            {#if headerTeammates > 0}<TeammatesChip count={headerTeammates} /><span aria-hidden="true">·</span>{/if}
             <span class="truncate">@{selected.handle}{route.session ? " · other chat" : ""}</span>
             {#if isRemoteAgent(selected)}
               <span aria-hidden="true">·</span>

@@ -1547,3 +1547,21 @@ describe("ThreadMessage - source tags", () => {
     expect(screen.queryByTestId("source-tag")).toBeNull();
   });
 });
+
+describe("ThreadMessage - teammates hidden in the channel (B.3)", () => {
+  const sent = () => makeTurn({ role: "assistant", text: "Done.", delivery: { channel: "slack", status: "sent", permalink: "" } });
+  test("muted note when the agent's Show teammates in channels is off", () => {
+    render(ThreadMessage, { props: { turn: sent(), agent: { name: "Captain", showTeammates: false } } });
+    const note = screen.getByTestId("teammates-hidden-note");
+    expect(note.textContent).toContain("teammates hidden in Slack");
+    expect(note.getAttribute("title")).toBe("Show teammates in channels is off for this agent — Advanced");
+  });
+  test("note outside the Team app, from the session's agent (teammatesHidden)", () => {
+    render(ThreadMessage, { props: { turn: sent(), teammatesHidden: true } });
+    expect(screen.getByTestId("teammates-hidden-note").textContent).toContain("teammates hidden in Slack");
+  });
+  test("no note when it is on", () => {
+    render(ThreadMessage, { props: { turn: sent(), agent: { name: "Captain", showTeammates: true } } });
+    expect(screen.queryByTestId("teammates-hidden-note")).toBeNull();
+  });
+});

@@ -72,6 +72,12 @@ func AllowsProviderSwitch(set *bool, isCaptain bool) bool {
 	return isCaptain
 }
 
+// ShowsTeammatesInChannels reads ChannelShowTeammates with its default:
+// on, channels name the teammates an agent waits on.
+func ShowsTeammatesInChannels(set *bool) bool {
+	return set == nil || *set
+}
+
 // TurnStatus is the roster status of a session: "running" only while a
 // turn is in flight. metaStatus is the persisted session status, which
 // the pool sets to running at spawn and back to idle only when the

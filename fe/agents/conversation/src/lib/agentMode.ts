@@ -59,6 +59,9 @@ export type AgentMode = {
       thinks or once it ends), off the same stream, so the host's roster
       and header show the tool with the thread's bubble. */
   onActivity?: (tool: string | undefined) => void;
+  /** Told how many teammates (per handle) this chat waits on, on every
+      change, so the host's own header shows "waiting on N teammates". */
+  onTeammatesBusy?: (count: number) => void;
   /** A remote agent's chat: its thinking lines are progress labels from
       the remote ("lagi pakai code read…"), shown in place of "thinking…". */
   remoteProgress?: boolean;
@@ -134,6 +137,9 @@ export type AgentIdentity = {
   avatarEvents?: Record<string, { state?: string; expression?: string; off?: boolean }>;
   /** Right-hand composer caption, e.g. "3 connector". */
   caption: string;
+  /** "Show teammates in channels" (default on). Off: the channel saw one
+      agent working, so a sent reply carries "teammates hidden in …". */
+  showTeammates?: boolean;
 };
 
 /** Persona feature flags as the server sends them (snake_case JSON). */

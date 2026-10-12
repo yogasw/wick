@@ -52,7 +52,6 @@
     liveSubAgents,
     getMessages,
     bumpHops,
-    getTeamTasks,
   } from "../api/subagents.js";
   import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
@@ -64,7 +63,8 @@
   import { setTeamTasksCtx } from "../teamTasksContext.js";
   import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
-  import { answerTeamTask, cancelTeamTask, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
+  import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
+  import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -183,6 +183,11 @@
     if (active === turnActive) return;
     turnActive = active;
     untrack(() => agentMode?.onTurnChange?.(active));
+  });
+  /* And how many teammates it waits on, for the host's own header. */
+  $effect(() => {
+    const n = busyTeammateCount;
+    untrack(() => agentMode?.onTeammatesBusy?.(n));
   });
   /* And the tool it is on, on every change: thinking ↔ tool. */
   let toolSent: string | undefined;
@@ -834,7 +839,7 @@
   // so the confirm can explain why a "cancel" turned into "stop the agent".
   // subAgents: busy sub-agents the composer's Stop will interrupt too.
   // quick: a composer Stop — confirms with a small "Stopped" toast.
-  let confirmKill = $state<{ sid: string; queued: boolean; note?: string; subAgents?: number; quick?: boolean } | null>(null);
+  let confirmKill = $state<{ sid: string; queued: boolean; note?: string; subAgents?: number; teammates?: number; quick?: boolean } | null>(null);
   // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
@@ -1322,12 +1327,20 @@
      patch bumps it too, so a list fetched before that event cannot put the
      task back to what it was. */
   let teamTasksSeq = 0;
+  /* Read for every chat, not only a Team agent's: an agent's project or
+     channel session sends tasks too, and its agent's "Show teammates in
+     channels" decides the hidden note on its sent replies. */
+  let teammatesShown = $state(true);
   function loadTeamTasks() {
-    if (!agentMode?.agent) return;
     const seq = ++teamTasksSeq;
     const sid = sessionId;
-    run(getTeamTasks(base, sid).pipe(Effect.provide(WickClientLayer)))
-      .then((t) => { if (seq === teamTasksSeq && sid === sessionId) teamTasks = t; })
+    run(getTeamTasksView(base, sid).pipe(Effect.provide(WickClientLayer)))
+      .then((v) => {
+        if (seq === teamTasksSeq && sid === sessionId) {
+          teamTasks = v.tasks;
+          teammatesShown = v.showTeammates;
+        }
+      })
       .catch(() => {});
   }
 
@@ -1425,7 +1438,8 @@
     void turns.length;
     void liveIdle;
     void sessionId;
-    if (!agentMode?.agent) return;
+    // Every chat, not only a Team agent's: a project or channel session of
+    // an agent sends tasks too (and reads its "Show teammates" setting).
     // The cleanup drops a pending refetch when the chat changes, the
     // next turn re-arms it, or the view is destroyed.
     const timer = setTimeout(loadTeamTasks, 400);
@@ -1656,6 +1670,14 @@
       .catch((e: unknown) =>
         toastError(`Continue sub-agent: ${e instanceof Error ? e.message : String(e)}`),
       );
+  }
+
+  // Stop → also stop teammates: cancels the tasks this chat sent that are
+  // still working, then rereads them.
+  function stopWorkingTeammates() {
+    run(cancelWorkingTeamTasks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => loadTeamTasks())
+      .catch((e: unknown) => toastError(`Stop teammates: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   function stopAllSubAgents() {
@@ -2332,7 +2354,9 @@
 
   /* ── header actions ───────────────────────────────────────────── */
   function handleKill() {
-    confirmKill = { sid: sessionId, queued: false };
+    // Sub-agents keep their own cascade (server side); only working
+    // teammates are offered here, since nothing else would stop them.
+    confirmKill = { sid: sessionId, queued: false, teammates: busyTeammateCount };
   }
 
   // Cancel one in-flight connector run behind a running tool call (the ✕ on a
@@ -2376,8 +2400,8 @@
       doKill();
       return;
     }
-    if (busySubAgentCount > 0) {
-      confirmKill = { sid: sessionId, queued: false, subAgents: busySubAgentCount, quick: true };
+    if (busySubAgentCount > 0 || busyTeammateCount > 0) {
+      confirmKill = { sid: sessionId, queued: false, subAgents: busySubAgentCount, teammates: busyTeammateCount, quick: true };
       return;
     }
     confirmKill = { sid: sessionId, queued: false, quick: true };
@@ -2389,6 +2413,7 @@
     confirmKill = null;
     if (!target) return;
     if (target.subAgents) stopAllSubAgents();
+    if (target.teammates) stopWorkingTeammates();
     const action = target.queued
       ? dequeueProcess(base, target.sid)
       : killProcess(base, target.sid);
@@ -3096,6 +3121,9 @@
     subAgents.filter((s) => isSubAgentWorking(s.status, s.lifecycle)).length,
   );
   const subAgentsBusy = $derived(busySubAgentCount > 0);
+  // Teammates this chat waits on (per handle): header chip, tray, Stop.
+  const busyTeammateCount = $derived(workingTeammates(teamTasks).length);
+  const stopPrompt = $derived(confirmKill && !confirmKill.queued ? stopDialog(confirmKill.subAgents ?? 0, confirmKill.teammates ?? 0) : null);
   /* The tab's accessible name, and its only tooltip: the custom one in
      icons mode, the native title in labels mode. Source carries its repo
      here rather than in a title of its own, which stacked a second tooltip
@@ -3189,6 +3217,7 @@
       lifecycle={agentLifecycle}
       {idleTimeoutMs}
       subAgentsBusy={busySubAgentCount}
+      teammatesBusy={busyTeammateCount}
       {activeView}
       {ticketJump}
       onKill={handleKill}
@@ -3224,7 +3253,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
           {#if loadingNewer}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -3351,6 +3380,13 @@
             <p class="mb-2 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" data-testid="read-only-chat">
               Read-only — this chat belongs to someone else.
             </p>
+          {/if}
+          {#if busyTeammateCount > 0 && !readOnly}
+            <div data-testid="teammates-tray" class="mb-2 flex items-center gap-2 rounded-xl border border-navy-600 bg-white-200 px-3 py-2 text-xs dark:bg-navy-800">
+              <span class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-navy-400 border-t-transparent animate-spin motion-reduce:animate-none" aria-hidden="true"></span>
+              <span class="text-black-800 dark:text-white-300">{waitingTrayLine(agentMode?.agent?.name || agentLabel, busyTeammateCount)}</span>
+              <span class="ml-auto text-black-700 dark:text-black-600">Stop also offers to stop them</span>
+            </div>
           {/if}
           {#if agentMode?.agent && !readOnly}
             <TaskTray tasks={teamTasks} agents={teamAgentsByHandle} onAnswer={answerTask} onCancel={cancelTask} onJump={jumpToTask} />
@@ -4193,13 +4229,13 @@
 
 <ConfirmDialog
   open={confirmKill !== null}
-  title={confirmKill?.queued ? "Cancel queued agent?" : confirmKill?.subAgents ? "Stop this agent and its sub-agents?" : "Stop this agent?"}
+  title={confirmKill?.queued ? "Cancel queued agent?" : stopPrompt ? stopPrompt.title : "Stop this agent?"}
   body={confirmKill?.queued
     ? "The queued spawn will be dropped."
-    : confirmKill?.subAgents
-      ? `${confirmKill.subAgents} ${confirmKill.subAgents === 1 ? "sub-agent is" : "sub-agents are"} still working and will be stopped too. The chat history is kept.`
+    : stopPrompt
+      ? stopPrompt.body
       : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
-  confirmLabel={confirmKill?.queued ? "Cancel spawn" : confirmKill?.subAgents ? "Stop all" : "Stop agent"}
+  confirmLabel={confirmKill?.queued ? "Cancel spawn" : stopPrompt ? stopPrompt.confirm : "Stop agent"}
   destructive={true}
   onConfirm={doKill}
   onCancel={() => { confirmKill = null; }}

@@ -155,6 +155,12 @@ type batchHub struct {
 	// SoftTimeout is the optional soft timeout of a batch (Team config):
 	// after it, what has arrived is delivered. 0 or nil = none.
 	SoftTimeout func() time.Duration
+	// HideTeammates reports whether a session's channels must not name
+	// teammates (its agent's "Show teammates in channels" is off): every
+	// prompt the Hub delivers then asks for an answer that names none.
+	// Asked as each prompt goes out, never under Hub.mu (it may read the
+	// database). nil = names allowed.
+	HideTeammates func(sessionID string) bool
 	// TurnSeals: SealTurn is called at the end of every turn, so an all
 	// batch waits for its turn to end before it delivers. Off = it
 	// delivers as soon as its members ended (tests, headless).
@@ -942,6 +948,10 @@ func (h *Hub) drain(session string) {
 		}
 		text := d.Text
 		h.outMu.Unlock()
+		// Read here, with no Hub lock held: the hook may ask the database.
+		if h.HideTeammates != nil && h.HideTeammates(session) {
+			text += "\n\n" + hiddenTeammatesNote
+		}
 		var err error
 		if h.sessionGone(session) {
 			err = ErrSessionGone
@@ -1188,4 +1198,29 @@ func (h *Hub) resumeFanin(wait time.Duration) {
 	h.queueLocked(sends)
 	h.mu.Unlock()
 	h.commit(sends, cancels)
+}
+
+// hiddenTeammatesNote ends a delivered prompt whose session's channels do
+// not show teammates: the answer goes there as the agent's own.
+const hiddenTeammatesNote = "The user's channel does not show teammates: do not name them or say who answered; write it as your own answer."
+
+// BatchProgress counts the tasks of sessionID's open batches: how many
+// came back for good (replied, failed, canceled) out of how many. A
+// question back to the sender is not back. For the channel status line.
+func (h *Hub) BatchProgress(sessionID string) (replied, total int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, b := range h.sessionBatchesLocked(sessionID) {
+		for _, id := range b.Tasks {
+			r := h.tasks[id]
+			if r == nil {
+				continue
+			}
+			total++
+			if terminal(r) {
+				replied++
+			}
+		}
+	}
+	return replied, total
 }

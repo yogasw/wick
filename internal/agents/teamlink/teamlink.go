@@ -1884,6 +1884,8 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 
 // LiveTask is one task still open, as the roster reads it.
 type LiveTask struct {
+	// TaskID names the task.
+	TaskID string
 	// FromSession is the conversation that sent the task, FromAgentID
 	// its agent; Origin is OriginUser when the person sent it.
 	FromSession string
@@ -1912,7 +1914,7 @@ func (h *Hub) LiveTasks() []LiveTask {
 	defer h.mu.Unlock()
 	h.pruneLocked()
 	var out []LiveTask
-	for _, ref := range h.tasks {
+	for id, ref := range h.tasks {
 		if ref.callerSession == "" || ref.started.IsZero() {
 			continue
 		}
@@ -1921,6 +1923,7 @@ func (h *Hub) LiveTasks() []LiveTask {
 			continue
 		}
 		t := LiveTask{
+			TaskID:      string(id),
 			FromSession: ref.callerSession, FromAgentID: ref.callerAgentID, Origin: ref.origin,
 			ToID: ref.to.ID, ToHandle: ref.to.Handle, Chat: ref.chat, Working: state == "working",
 		}

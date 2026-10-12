@@ -101,8 +101,10 @@ type TeamAgentItem struct {
 	// too (project.ShowsInProjects).
 	ShowInProjects bool `json:"show_in_projects"`
 	// AllowProviderSwitch is the effective value (default applied).
-	AllowProviderSwitch bool                   `json:"allow_provider_switch"`
-	SuggestedPrompts    []team.SuggestedPrompt `json:"suggested_prompts"`
+	AllowProviderSwitch bool `json:"allow_provider_switch"`
+	// ChannelShowTeammates is the effective value (default on).
+	ChannelShowTeammates bool                   `json:"channel_show_teammates"`
+	SuggestedPrompts     []team.SuggestedPrompt `json:"suggested_prompts"`
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
@@ -265,6 +267,7 @@ type teamAgentWriteReq struct {
 	RunAs                *string                 `json:"run_as"`
 	Disabled             *bool                   `json:"disabled"`
 	AllowProviderSwitch  *bool                   `json:"allow_provider_switch"`
+	ChannelShowTeammates *bool                   `json:"channel_show_teammates"`
 	IsCaptain            *bool                   `json:"is_captain"`
 	UseGlobalPrompt      *bool                   `json:"use_global_prompt"`
 	MentionFrom          *string                 `json:"mention_from"`
@@ -1011,6 +1014,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
+		ChannelShowTeammates: team.ShowsTeammatesInChannels(p.ChannelShowTeammates),
 		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
@@ -1529,6 +1533,10 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		v := *req.AllowProviderSwitch
 		p.AllowProviderSwitch = &v
 	}
+	if req.ChannelShowTeammates != nil {
+		v := *req.ChannelShowTeammates
+		p.ChannelShowTeammates = &v
+	}
 	if req.Features != nil {
 		p.Features = team.EncodeFeatures(*req.Features)
 	}
@@ -1596,6 +1604,10 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	syncAgentSlack(context.Background(), p)
 	syncAgentTelegram(context.Background(), p)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
+	if req.ChannelShowTeammates != nil {
+		// Saved: the threads this agent waits in repaint with the new look.
+		teamVisibilityChanged(p.ID)
+	}
 	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
 

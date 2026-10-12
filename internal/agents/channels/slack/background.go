@@ -19,10 +19,40 @@ import (
 // banner of its own for the background set, fed from those same rows (see
 // delegation.ActiveBackground), and posts one short message when each one
 // starts so the human gets a notification.
+//
+// Teammates a Team agent is waiting on (working team tasks) ride in the same
+// set, marked Teammate. They are not sub-agents, so HideSubAgentStatus does
+// not hide them; the agent's own "Show teammates in channels" does (Hidden),
+// and then the thread sees only the generic working state.
 
 // backgroundRecheckTimeout bounds one stale re-check. It runs off the banner
 // goroutine, so a slow answer only delays the next repaint of the set.
 const backgroundRecheckTimeout = 10 * time.Second
+
+// teammateKeepAlive is how often a banner showing only teammates is
+// written again. Teammates can work for many minutes, and a status write
+// every statusAnimInterval per thread for that long would spend Slack's
+// rate limit on dots; Slack keeps a status about two minutes, so one
+// write well inside that keeps it up. A change of the set repaints at
+// once (OnBackgroundAgents). A test sets Channel.bgKeepAlive instead.
+const teammateKeepAlive = 45 * time.Second
+
+// keepAliveLocked is the teammate keep-alive of this channel. Caller
+// holds mu.
+func (s *Channel) keepAliveLocked() time.Duration {
+	if s.bgKeepAlive > 0 {
+		return s.bgKeepAlive
+	}
+	return teammateKeepAlive
+}
+
+// bgTickLocked is how often the background banner ticks. Caller holds mu.
+func (s *Channel) bgTickLocked() time.Duration {
+	if s.bgTick > 0 {
+		return s.bgTick
+	}
+	return statusAnimInterval
+}
 
 // SetBackgroundRecheck satisfies channels.BackgroundRecheckSetter.
 func (s *Channel) SetBackgroundRecheck(fn agentchannels.BackgroundRecheckFn) {
@@ -42,7 +72,7 @@ func (s *Channel) subAgentStatusHidden() bool {
 // work was fired off before the leader goes quiet. Foreground delegations
 // never reach here — the leader's live turn already shows them.
 func (s *Channel) OnBackgroundStart(sessionKey string, agent agentchannels.DetachedSurvivor, task string, queued bool) {
-	if s.subAgentStatusHidden() {
+	if agent.Teammate && agent.Hidden || !agent.Teammate && s.subAgentStatusHidden() {
 		return
 	}
 	s.mu.Lock()
@@ -81,6 +111,9 @@ func (s *Channel) OnBackgroundStart(sessionKey string, agent agentchannels.Detac
 // backgroundStartText renders the start ping: who, and what it was asked.
 func backgroundStartText(agent agentchannels.DetachedSurvivor, task string, queued bool) string {
 	icon, verb := "🔧", "started"
+	if agent.Teammate {
+		icon = "🤝"
+	}
 	if queued {
 		icon, verb = "⏳", "queued"
 	}
@@ -95,16 +128,28 @@ func backgroundStartText(agent agentchannels.DetachedSurvivor, task string, queu
 // current set and, when the leader's own turn is not running, shows, repaints
 // or clears the banner to match it.
 func (s *Channel) OnBackgroundAgents(sessionKey string, active []agentchannels.DetachedSurvivor) {
+	hideSubs := s.subAgentStatusHidden()
 	s.mu.Lock()
 	t := s.turns[sessionKey]
-	if t == nil {
+	s.mu.Unlock()
+	if t == nil && len(bannerAgents(active, hideSubs)) > 0 {
+		// No turn here (a restart, a handover, a turn already handed
+		// back): rebind from the session's stored thread so the banner
+		// still shows. Not ours or unbound = nothing to show.
+		t = s.restoreBackgroundTurn(sessionKey)
+	}
+	s.mu.Lock()
+	if t = s.turns[sessionKey]; t == nil {
 		s.mu.Unlock()
 		return
 	}
 	t.bgAgents = append([]agentchannels.DetachedSurvivor(nil), active...)
 	t.bgCheckedAt = time.Now()
 	wasShowing := t.bgTicker != nil
-	if len(active) == 0 {
+	// The set is kept whole (a DM's turn stays while any of it works), but
+	// the banner only follows what it may show.
+	shown := len(bannerAgents(active, hideSubs)) > 0
+	if !shown {
 		t.stopBackgroundBanner()
 	}
 	running := t.running
@@ -112,7 +157,7 @@ func (s *Channel) OnBackgroundAgents(sessionKey string, active []agentchannels.D
 	s.mu.Unlock()
 
 	switch {
-	case len(active) > 0:
+	case shown:
 		s.startBackgroundBanner(sessionKey)
 	case wasShowing && !running:
 		// The last one finished and no turn owns the banner: clear it.
@@ -125,12 +170,10 @@ func (s *Channel) OnBackgroundAgents(sessionKey string, active []agentchannels.D
 // up. No-op while the leader's own turn is running — that turn's banner owns
 // the thread — or when nothing is left in the background.
 func (s *Channel) startBackgroundBanner(sessionKey string) {
-	if s.subAgentStatusHidden() {
-		return
-	}
+	hideSubs := s.subAgentStatusHidden()
 	s.mu.Lock()
 	t := s.turns[sessionKey]
-	if t == nil || t.running || len(t.bgAgents) == 0 {
+	if t == nil || t.running || len(bannerAgents(t.bgAgents, hideSubs)) == 0 {
 		s.mu.Unlock()
 		return
 	}
@@ -138,13 +181,14 @@ func (s *Channel) startBackgroundBanner(sessionKey string) {
 	var stop chan struct{}
 	var ticker *time.Ticker
 	if fresh {
-		ticker = time.NewTicker(statusAnimInterval)
+		ticker = time.NewTicker(s.bgTickLocked())
 		stop = make(chan struct{})
 		t.bgTicker, t.bgStop = ticker, stop
 	}
 	channelID, threadTS := t.channelID, t.threadTS
-	agents := append([]agentchannels.DetachedSurvivor(nil), t.bgAgents...)
+	agents := bannerAgents(t.bgAgents, hideSubs)
 	dot := t.bgDot
+	t.bgPaintedAt = time.Now()
 	s.mu.Unlock()
 
 	s.paintBackgroundBanner(channelID, threadTS, agents, dot)
@@ -168,10 +212,17 @@ func (s *Channel) startBackgroundBanner(sessionKey string) {
 				var agents []agentchannels.DetachedSurvivor
 				var dot int
 				var doRecheck bool
+				paint := true
 				if stillCurrent {
-					cur.bgDot++
+					agents = bannerAgents(cur.bgAgents, hideSubs)
+					// Only teammates: no dots, a keep-alive write instead.
+					if onlyTeammates(agents) && time.Since(cur.bgPaintedAt) < s.keepAliveLocked() {
+						paint = false
+					} else {
+						cur.bgDot++
+						cur.bgPaintedAt = time.Now()
+					}
 					dot = cur.bgDot
-					agents = append(agents, cur.bgAgents...)
 					// Same idea as the label age-out: a set nothing has
 					// confirmed for a while may name a child that died
 					// without closing its row, so ask again.
@@ -181,10 +232,12 @@ func (s *Channel) startBackgroundBanner(sessionKey string) {
 					}
 				}
 				s.mu.Unlock()
-				if !stillCurrent {
+				if !stillCurrent || len(agents) == 0 {
 					return
 				}
-				s.paintBackgroundBanner(channelID, threadTS, agents, dot)
+				if paint {
+					s.paintBackgroundBanner(channelID, threadTS, agents, dot)
+				}
 				if doRecheck {
 					go s.recheckBackground(sessionKey, recheck)
 				}
@@ -228,35 +281,104 @@ func (t *turn) stopBackgroundBanner() {
 
 // paintBackgroundBanner writes the background banner: the footer names who is
 // working with the same animated dots as a turn's banner, and the bubble
-// rotates one line per sub-agent.
+// rotates one line per sub-agent or named teammate.
 func (s *Channel) paintBackgroundBanner(channelID, threadTS string, agents []agentchannels.DetachedSurvivor, dot int) {
 	if channelID == "" || len(agents) == 0 {
 		return
 	}
-	lines := make([]string, 0, len(agents))
+	var lines []string
 	for _, a := range agents {
-		lines = append(lines, backgroundName(a)+" is working")
+		if !a.Hidden {
+			lines = append(lines, backgroundName(a)+" is working")
+		}
 	}
-	s.setAssistantStatusWithLoading(channelID, threadTS, backgroundBannerText(agents)+strings.Repeat(".", dot%4), bubbleLoadingMessages(lines))
+	if len(lines) == 0 {
+		lines = []string{footerWorking}
+	}
+	if onlyTeammates(agents) {
+		dot = 0 // repainted on teammateKeepAlive: dots would freeze mid-way
+	}
+	s.setAssistantStatusWithLoading(channelID, threadTS, backgroundFooter(agents, dot), bubbleLoadingMessages(lines))
+}
+
+// bannerAgents is the part of the background set the banner shows: every
+// teammate (named or, when Hidden, as the generic working state), and the
+// sub-agents unless their status is hidden.
+func bannerAgents(agents []agentchannels.DetachedSurvivor, hideSubs bool) []agentchannels.DetachedSurvivor {
+	out := make([]agentchannels.DetachedSurvivor, 0, len(agents))
+	for _, a := range agents {
+		if a.Teammate || !hideSubs {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// onlyTeammates reports whether every entry of a non-empty set is a
+// teammate (no sub-agent, whose banner animates).
+func onlyTeammates(agents []agentchannels.DetachedSurvivor) bool {
+	for _, a := range agents {
+		if !a.Teammate {
+			return false
+		}
+	}
+	return len(agents) > 0
 }
 
 // backgroundBannerText is the banner's footer without its dots:
-// "wick-fixer is working", or "2 sub-agents working: wick-fixer, wick-deployer".
+// "wick-fixer is working", "2 sub-agents working: wick-fixer, wick-deployer",
+// "is waiting on @halodev, @qa (1/3 replied)" (Slack puts the app's name in
+// front), or, with only hidden teammates, the plain "Working" of a turn.
 func backgroundBannerText(agents []agentchannels.DetachedSurvivor) string {
-	if len(agents) == 1 {
-		return backgroundName(agents[0]) + " is working"
-	}
-	names := make([]string, 0, len(agents))
+	return backgroundFooter(agents, 0)
+}
+
+// backgroundFooter renders the footer with dot animated dots, placed after
+// the names so the "(1/3 replied)" count stays put.
+func backgroundFooter(agents []agentchannels.DetachedSurvivor, dot int) string {
+	dots := strings.Repeat(".", dot%4)
+	var subs, mates []string
+	replied, of := 0, 0
 	for _, a := range agents {
-		names = append(names, backgroundName(a))
+		switch {
+		case !a.Teammate:
+			subs = append(subs, backgroundName(a))
+		case !a.Hidden:
+			mates = append(mates, backgroundName(a))
+			replied, of = a.Replied, a.Of
+		}
 	}
-	return fmt.Sprintf("%d sub-agents working: %s", len(agents), strings.Join(names, ", "))
+	var subText string
+	switch len(subs) {
+	case 0:
+	case 1:
+		subText = subs[0] + " is working"
+	default:
+		subText = fmt.Sprintf("%d sub-agents working: %s", len(subs), strings.Join(subs, ", "))
+	}
+	if len(mates) == 0 {
+		if subText == "" {
+			// Only teammates the channel must not name: a normal turn's look.
+			return footerWorking + dots
+		}
+		return subText + dots
+	}
+	text := "is waiting on " + strings.Join(mates, ", ") + dots
+	if of > 0 {
+		text += fmt.Sprintf(" (%d/%d replied)", replied, of)
+	}
+	if subText != "" {
+		text += " · " + subText
+	}
+	return text
 }
 
 // backgroundName is the handle a human addresses the sub-agent by, falling
-// back to its role.
+// back to its role. A teammate is addressed as @handle.
 func backgroundName(a agentchannels.DetachedSurvivor) string {
 	switch {
+	case a.Teammate && a.Handle != "":
+		return "@" + a.Handle
 	case a.Handle != "":
 		return a.Handle
 	case a.ProfileKey != "":
@@ -272,4 +394,23 @@ func (s *Channel) hasBackgroundAgents(sessionKey string) bool {
 	defer s.mu.Unlock()
 	t := s.turns[sessionKey]
 	return t != nil && len(t.bgAgents) > 0
+}
+
+// restoreBackgroundTurn rebinds sessionKey's thread for the background
+// banner alone. ensureTurn restores a turn as running (it is made for a
+// reply on its way); here no turn runs, so the banner may paint.
+func (s *Channel) restoreBackgroundTurn(sessionKey string) *turn {
+	s.mu.Lock()
+	had := s.turns[sessionKey] != nil
+	s.mu.Unlock()
+	t := s.ensureTurn(sessionKey)
+	if t == nil || had {
+		return t
+	}
+	s.mu.Lock()
+	if s.turns[sessionKey] == t && t.statusTicker == nil {
+		t.running = false
+	}
+	s.mu.Unlock()
+	return t
 }

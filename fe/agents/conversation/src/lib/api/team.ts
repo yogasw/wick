@@ -84,6 +84,8 @@ export type AgentItem = {
   /** Whether the chat may pick another provider/model (server applies
       the default: Captain on, others off). */
   allow_provider_switch?: boolean;
+  /** "Show teammates in channels" (default on). Older servers omit it. */
+  channel_show_teammates?: boolean;
   /** "Manage other agents" (agents.* ops), default applied: on for the
       Captain, off for the rest. Older servers omit it. */
   manage_agents?: boolean;
@@ -246,6 +248,7 @@ export type AgentWrite = Partial<{
   run_as: "caller" | "owner";
   disabled: boolean;
   allow_provider_switch: boolean;
+  channel_show_teammates: boolean;
   is_captain: boolean;
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;

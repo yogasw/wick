@@ -60,7 +60,7 @@
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
-    disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean; show_in_projects: boolean;
+    disabled: boolean; allow_provider_switch: boolean; channel_show_teammates: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
@@ -73,7 +73,7 @@
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
-      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
+      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, channel_show_teammates: a.channel_show_teammates !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
@@ -315,6 +315,7 @@
     if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
+    if (d.channel_show_teammates !== (saved.channel_show_teammates !== false)) p.channel_show_teammates = d.channel_show_teammates;
     if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
     if (d.show_in_projects !== (saved.show_in_projects ?? !saved.own_project)) p.show_in_projects = d.show_in_projects;
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
@@ -994,6 +995,12 @@
       <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
         Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
+      </p>
+    </div>
+    <div data-testid="as-show-teammates">
+      <Toggle checked={draft.channel_show_teammates} onChange={(v) => (draft.channel_show_teammates = v)} label="Show teammates in channels" />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        When off, channels see one agent working; teammates and their names stay in the web view only.
       </p>
     </div>
     {@render dangerZone()}

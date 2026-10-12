@@ -51,6 +51,9 @@
     /** Set in the Team app: the empty thread introduces the agent and its
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
+    /** The chat's agent has "Show teammates in channels" off: sent replies
+        carry "teammates hidden in …". */
+    teammatesHidden?: boolean;
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
     teamAgents?: Record<string, { id?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     /** History has not arrived yet: a loading state, not "no messages". */
@@ -71,7 +74,7 @@
     jumpPendingId?: string | null;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPendingId = null }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teammatesHidden = false, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPendingId = null }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -281,7 +284,7 @@
     {/if}
     <!-- data-turn-id is the anchor a reply's quote jumps to. -->
     <div data-turn-id={turn.turn_id} class="min-w-0 rounded-xl transition-shadow">
-      <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} />
+      <ThreadMessage {turn} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} />
     </div>
   {/each}
 

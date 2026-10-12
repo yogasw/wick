@@ -21,6 +21,13 @@ export const getTeamTasks = (base: string, id: string) =>
     `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
   ).pipe(Effect.map((r) => r?.tasks ?? []));
 
+// getTeamTasksView is getTeamTasks plus show_teammates: whether the
+// session's agent names teammates in its channels (absent = on).
+export const getTeamTasksView = (base: string, id: string) =>
+  apiGetE<{ tasks: TeamTaskItem[] | null; show_teammates?: boolean }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
+  ).pipe(Effect.map((r) => ({ tasks: r?.tasks ?? [], showTeammates: r?.show_teammates !== false })));
+
 // getTeamTaskThread reads the messages of one task this chat sent, oldest
 // first, for the task's thread (chip section, Tasks tab).
 export const getTeamTaskThread = (base: string, id: string, taskId: string) =>
@@ -51,6 +58,14 @@ export const messageTeamTask = (base: string, id: string, taskId: string, text: 
 export const cancelTeamTask = (base: string, id: string, taskId: string) =>
   apiPostE<{ task: unknown }>(
     `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/cancel`,
+    {},
+  );
+
+// cancelWorkingTeamTasks cancels every task this chat sent that is still
+// working (Stop → also stop teammates). A question back is left alone.
+export const cancelWorkingTeamTasks = (base: string, id: string) =>
+  apiPostE<{ canceled: number; failed: string[] }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/cancel-working`,
     {},
   );
 
