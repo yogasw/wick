@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, taskQuickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus } from "../delegations.js";
+import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, taskQuickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus, canSummarize, summarizeGroup, taskDuration } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -214,19 +214,22 @@ describe("P48 helpers", () => {
     expect(chipLabel(task({ state: "failed", interrupted: true }), "Cap")).toBe("interrupted by a restart");
   });
 
-  test("chipElapsed: timer while working or asking, clock time once ended", () => {
+  test("chipElapsed: timer while working or asking, how long an ended task took (T16)", () => {
     expect(chipElapsed(task({ started_at: "2026-10-10T10:03:00Z" }), now)).toBe("2m 10s");
     expect(chipElapsed(task({ started_at: "2026-10-10T10:05:00Z" }), now)).toBe("10s");
     expect(chipElapsed(task({ started_at: "2026-10-10T08:00:00Z" }), now)).toBe("2h 5m");
     expect(chipElapsed(task({ state: "input_required", needs_you: true, updated_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
     const end = "2026-10-10T10:08:00Z";
-    expect(chipElapsed(task({ state: "completed", updated_at: end }), now)).toBe(clockTime(Date.parse(end)));
+    // Started 10:00 (the helper), ended 10:08: the duration.
+    expect(chipElapsed(task({ state: "completed", updated_at: end }), now)).toBe("8m 00s");
+    // No start known: the clock time it ended.
+    expect(chipElapsed(task({ state: "completed", started_at: "", updated_at: end }), now)).toBe(clockTime(Date.parse(end)));
     // The sender answering a question: timed from the ask, like needs input.
     expect(chipElapsed(task({ state: "input_required", started_at: "2026-10-10T09:00:00Z", asked_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
     // asked_at / ended_at win over updated_at, which moves with every touch.
     expect(chipElapsed(task({ state: "input_required", needs_you: true, asked_at: "2026-10-10T10:03:00Z", updated_at: "2026-10-10T10:05:00Z" }), now)).toBe("2m 10s");
-    expect(chipElapsed(task({ state: "completed", ended_at: end, updated_at: "2026-10-10T10:09:30Z" }), now)).toBe(clockTime(Date.parse(end)));
-    expect(chipElapsed(task({ state: "rejected", ended_at: end }), now)).toBe(clockTime(Date.parse(end)));
+    expect(chipElapsed(task({ state: "completed", ended_at: end, updated_at: "2026-10-10T10:09:30Z" }), now)).toBe("8m 00s");
+    expect(chipElapsed(task({ state: "rejected", ended_at: end }), now)).toBe("8m 00s");
     expect(clockTime(new Date(2026, 9, 10, 9, 7).getTime())).toBe("09:07");
     expect(clockTime(NaN)).toBe("");
   });
@@ -398,5 +401,23 @@ describe("liveTurnStatus (grouped §3 live)", () => {
     expect(teammateName(task({ to_handle: "x", to_name: "Ex" }), { x: { name: "Team X" } })).toBe("Team X");
     expect(teammateName(task({ to_handle: "x", to_name: "Ex" }))).toBe("Ex");
     expect(teammateName(task({ to_handle: "x", to_name: "" }))).toBe("@x");
+  });
+});
+
+describe("Summarize now and duration (T16 S9)", () => {
+  const now = Date.parse("2026-10-10T10:05:10Z");
+  test("canSummarize / summarizeGroup: the server's per-task flag, never the person's own task", () => {
+    const held = task({ task_id: "a", state: "completed", group: "g1", summarizable: true });
+    const work = task({ task_id: "b", state: "working", group: "g1", summarizable: true });
+    expect(canSummarize([held, work])).toBe(true);
+    expect(summarizeGroup([held, work])).toBe("g1");
+    expect(canSummarize([{ ...held, summarizable: false }, { ...work, summarizable: false }])).toBe(false);
+    expect(summarizeGroup([task({})])).toBeUndefined();
+    expect(canSummarize([{ ...held, origin: "user" }])).toBe(false);
+  });
+  test("taskDuration: start to end, or to now while out", () => {
+    expect(taskDuration(task({ state: "completed", started_at: "2026-10-10T10:00:00Z", ended_at: "2026-10-10T10:02:21Z" }), now)).toBe("2m 21s");
+    expect(taskDuration(task({ state: "working", started_at: "2026-10-10T10:05:00Z" }), now)).toBe("10s");
+    expect(taskDuration(task({ started_at: "" }), now)).toBe("");
   });
 });

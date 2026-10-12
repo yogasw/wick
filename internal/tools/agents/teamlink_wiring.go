@@ -451,12 +451,17 @@ func cancelWorkingTeamTasks(ctx context.Context, h *teamlink.Hub, sessionID stri
 }
 
 // sessionTeamTasksSummarize handles POST /api/sessions/{id}/team-tasks/summarize
-// ("Summarize now"): the replies the session's open batches hold go to
-// its agent now, without waiting for the teammates still working (they
+// ("Summarize now"): the replies the session's open batches hold (or the
+// one batch ?group= names) go to its agent now, without waiting for the teammates still working (they
 // are not canceled; their replies come as an update).
 func sessionTeamTasksSummarize(c *tool.Ctx) {
 	id, h, ok := teamTaskHub(c)
 	if !ok {
+		return
+	}
+	// ?group= scopes it to one Delegated block's batch.
+	if g := strings.TrimSpace(c.Query("group")); g != "" {
+		c.JSON(http.StatusOK, map[string]any{"delivered": h.FlushGroup(c.Context(), id, g)})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"delivered": h.FlushSession(c.Context(), id)})

@@ -1825,6 +1825,11 @@ type TaskView struct {
 	Progress string `json:"progress,omitempty"`
 	// RetryOf is the task this one was sent again for (Retry/Reassign).
 	RetryOf string `json:"retry_of,omitempty"`
+	// Group is the batch the task is in (its group_id); Summarizable says
+	// "Summarize now" on that batch would deliver something now. Filled
+	// by SentFrom only.
+	Group        string `json:"group,omitempty"`
+	Summarizable bool   `json:"summarizable,omitempty"`
 	// ReplacedBy is the task the person sent again for this one; how
 	// ("retry" or "reassign") and to whom.
 	ReplacedBy       string `json:"replaced_by,omitempty"`
@@ -1864,6 +1869,7 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	now := h.now()
 	out := []TaskView{}
 	orphans := false
+	canSum := map[string]bool{}
 	for id, ref := range h.tasks {
 		if ref.callerSession != sessionID || ref.started.IsZero() {
 			continue
@@ -1871,6 +1877,13 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 		orphans = orphans || h.orphanLocked(id, ref)
 		v := h.viewLocked(id, ref, now)
 		v.NeedsYou = needsYou(v, ref.userAnswer, busy)
+		if b := h.byTask[id]; b != nil {
+			v.Group = b.ID
+			if _, ok := canSum[b.ID]; !ok {
+				canSum[b.ID] = h.summarizableLocked(b)
+			}
+			v.Summarizable = canSum[b.ID]
+		}
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })

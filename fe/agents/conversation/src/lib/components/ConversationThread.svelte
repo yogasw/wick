@@ -17,7 +17,10 @@
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
+  import { foldTeamResults } from "../teamResults.js";
   import DelegationBlock from "./team/DelegationBlock.svelte";
+  import TeamTraceRows from "./team/TeamTraceRows.svelte";
+  import { liveBlockTasks } from "../teamTrace.js";
   import { viewerName } from "../viewer.js";
   import { getTeamTasksCtx } from "../teamTasksContext.js";
   import { isTeamMessageTool, liveTurnStatus, liveTurnTasks, turnSpan } from "../delegations.js";
@@ -135,17 +138,6 @@
 
      Deliberately narrow. A user message in between means the agent was
      answering something new, and both turns stay. */
-  const shownTurns = $derived(withRemoteLinks(
-    foldSystemEvents(
-      foldReplaced(turns).filter((t, i, all) => {
-        if (!t.interrupted || t.role !== "assistant") return true;
-        const next = all[i + 1];
-        return !next || next.role !== "assistant";
-      }),
-    ),
-  ));
-
-  const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
 
   // Same merge as ThreadMessage's persisted-turn trace: a long-running
   // live turn calling todo repeatedly shows one checklist with current
@@ -163,6 +155,31 @@
     teamCtx?.tasks && live ? JSON.stringify(liveTurnTasks(live.blocks, teamCtx.tasks())) : "[]",
   );
   const liveTasks = $derived(JSON.parse(liveTaskKey) as TeamTaskItem[]);
+  /* One UI per delegation (T16 S9): the tasks a Delegated block shows —
+     on a committed turn or the running one. The prompts that carried
+     their replies to the agent and their hand-off pills leave the thread
+     (foldTeamResults); a late reply's prompt stays as one line. */
+  const blockTaskIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (!teamCtx) return ids;
+    for (const t of turns) {
+      if (t.role === "assistant") for (const k of teamCtx.forTurn(t.turn_id)) ids.add(k.task_id);
+    }
+    for (const k of liveTasks) ids.add(k.task_id);
+    return ids;
+  });
+  const teamNames = $derived(teamCtx ? Object.fromEntries(Object.entries(teamCtx.agents()).map(([h, a]) => [h, a.name])) : {});
+  const shownTurns = $derived(foldTeamResults(withRemoteLinks(
+    foldSystemEvents(
+      foldReplaced(turns).filter((t, i, all) => {
+        if (!t.interrupted || t.role !== "assistant") return true;
+        const next = all[i + 1];
+        return !next || next.role !== "assistant";
+      }),
+    ),
+  ), blockTaskIds, teamNames));
+
+  const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
   /* grouped §3 live asst-meta over the block: "Captain · 10:02 · split
      the question into 4 tasks — summary comes when they're back", from
      the task count alone; gone once every task has settled. */
@@ -170,9 +187,11 @@
   // The clock is the first task's start, not the turn's: the line
   // reports the moment it delegated.
   const liveStatusTime = $derived(liveStatus ? turnSpan(liveTasks) : "");
-  const liveNonTodoBlocks = $derived(
-    stripTodoBlocks(live?.blocks ?? []).filter((b) => !(liveTasks.length > 0 && b.kind === "tool" && isTeamMessageTool(b.toolName))),
-  );
+  /* The live trace keeps each team_message card, with a row per teammate
+     read from the live task list (T16 S6), as the stored trace will once
+     the turn commits. */
+  const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  const liveTaskById = $derived(new Map((teamCtx?.tasks?.() ?? []).map((t) => [t.task_id, t])));
   /* The working indicator is on from a turn's start to its end: while
      typing is up (hide debounced) or the live turn has not been committed.
      A todo card carries the activity instead when there is one. */
@@ -284,7 +303,15 @@
     {/if}
     <!-- data-turn-id is the anchor a reply's quote jumps to. -->
     <div data-turn-id={turn.turn_id} class="min-w-0 rounded-xl transition-shadow">
+      {#if turn.team_update}
+        <!-- A late teammate reply re-woke the agent: the reply is in the
+             block above, the answer below is the update. -->
+        <div data-testid="team-update-label" class="flex w-fit items-center gap-2 rounded-xl border border-white-300 bg-white-100 px-3 py-[5px] text-[11px] text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">
+          <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
+        </div>
+      {:else}
       <ThreadMessage {turn} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} />
+      {/if}
     </div>
   {/each}
 
@@ -378,6 +405,12 @@
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
                   <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} {traceFiles} />
+                  {#if teamCtx && isTeamMessageTool((block as Extract<ThreadBlock, { kind: "tool" }>).toolName)}
+                    {@const rows = liveBlockTasks(block, liveTaskById)}
+                    {#if rows.length > 0}
+                      <TeamTraceRows tasks={rows} captainName={teamCtx.captainName()} live={Object.fromEntries(liveTaskById)} onOpen={teamCtx.openChat} />
+                    {/if}
+                  {/if}
                 {:else if block.kind === "thinking" || block.kind === "text"}
                   <TraceNote kind={block.kind} text={(block as Extract<ThreadBlock, { kind: "thinking" | "text" }>).text} />
                 {/if}
@@ -403,6 +436,7 @@
             onMessage={teamCtx.message}
             onOpenChat={teamCtx.openChat}
             loadThread={teamCtx.loadThread}
+            onSummarize={teamCtx.summarize}
           />
         {/if}
         {#if live?.text}

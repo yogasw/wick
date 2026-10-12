@@ -20,6 +20,9 @@ export type TeamTasksCtx = {
   cancel?: (taskId: string) => Promise<void>;
   /** Reply in thread on a task that asks nothing (working or ended). */
   message?: (taskId: string, text: string) => Promise<void>;
+  /** "Summarize now": the replies in so far of the batch group go to the
+      agent at once. */
+  summarize?: (group?: string) => Promise<void>;
   /** Opens the teammate's chat the task runs in. */
   openChat?: (t: TeamTaskItem) => void;
   /** Reads a task's thread (TaskThread), when it is opened. */

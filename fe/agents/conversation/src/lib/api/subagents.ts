@@ -69,6 +69,16 @@ export const cancelWorkingTeamTasks = (base: string, id: string) =>
     {},
   );
 
+// summarizeTeamTasks hands the replies this chat's open batches hold to
+// its agent now ("Summarize now"), only group's batch when one is given;
+// teammates still working are not
+// canceled, their replies come as an update.
+export const summarizeTeamTasks = (base: string, id: string, group?: string) =>
+  apiPostE<{ delivered: number }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/summarize${group ? `?group=${encodeURIComponent(group)}` : ""}`,
+    {},
+  );
+
 // retryTeamTask sends a failed task this chat sent again, as a new task
 // to the same teammate. 409 = it is not failed, or was already sent again.
 export const retryTeamTask = (base: string, id: string, taskId: string) =>

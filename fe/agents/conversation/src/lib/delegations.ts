@@ -285,8 +285,9 @@ export function endedDay(t: TeamTaskItem, now: number): string {
 }
 
 /** The chip's time: a running timer while the teammate works, how long
-    a question has waited (the sender answering it or the person), the
-    clock time a task ended. */
+    a question has waited (the sender answering it or the person), how
+    long an ended task took (mockup T16: "replied 2m 21s"); the clock time
+    it ended when its start is unknown. */
 export function chipElapsed(t: TeamTaskItem, now: number): string {
   const s = taskStatus(t);
   if (s === "working") {
@@ -297,7 +298,9 @@ export function chipElapsed(t: TeamTaskItem, now: number): string {
     const at = askedMs(t);
     return Number.isFinite(at) ? formatTimer(now - at) : "";
   }
-  return clockTime(endedMs(t));
+  const start = ms(t.started_at);
+  const end = endedMs(t);
+  return Number.isFinite(start) && Number.isFinite(end) ? formatTimer(end - start) : clockTime(end);
 }
 
 /** One teammate in the folded line's avatar stack. */
@@ -444,4 +447,28 @@ export function taskRailBadge(tasks: TeamTaskItem[]): { count: number; needsInpu
     needsInput: tasks.filter((t) => taskStatus(t) === "needs_you").length,
     working: tasks.some((t) => taskStatus(t) === "working"),
   };
+}
+
+/** How long a task ran: its start to its end, or to now while it is still
+    out; "" when the start is unknown. The open row's head shows it next
+    to the reply (T16 S9). */
+export function taskDuration(t: TeamTaskItem, now: number): string {
+  const start = ms(t.started_at);
+  if (!Number.isFinite(start)) return "";
+  const end = isTaskActive(t) ? now : endedMs(t);
+  return Number.isFinite(end) ? formatTimer(end - start) : "";
+}
+
+/** "Summarize now" shows while the block's batch holds a reply the agent
+    has not had, with a teammate still working: the server says so per
+    task (summarizable, from its batch), so a press, a remount or a reload
+    all read the same. fan_in each and a lone task never hold one. */
+export function canSummarize(tasks: TeamTaskItem[]): boolean {
+  return tasks.some((t) => !isUserTask(t) && t.summarizable === true);
+}
+
+/** The batch "Summarize now" hands over: the group of the block's first
+    summarizable task; undefined when none. */
+export function summarizeGroup(tasks: TeamTaskItem[]): string | undefined {
+  return tasks.find((t) => !isUserTask(t) && t.summarizable === true && t.group)?.group;
 }

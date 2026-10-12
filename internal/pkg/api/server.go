@@ -1596,6 +1596,9 @@ func NewServer() *Server {
 	// Per-channel SendFunc is wired below with its own workspace lookup so
 	// each channel can have its own configured workspace.
 	channelReg.WithSessionChecker(agentsPool)
+	// A Team agent's quiet answer to its teammates' results still gets
+	// the results to the thread.
+	channelReg.WithTurnFallback(agentstool.TeamFallbackNotice)
 	if approvalMgr != nil {
 		channelReg.WithApproveFn(func(channelName, sessionID, requestID, decision, matchKey string) error {
 			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, channelName, matchKey)

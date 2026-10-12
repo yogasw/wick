@@ -5,6 +5,7 @@ import DelegationBlock from "../DelegationBlock.svelte";
 import TaskTray from "../TaskTray.svelte";
 import TasksPanel from "../TasksPanel.svelte";
 import ThreadMessage from "../../ThreadMessage.svelte";
+import TeamTraceRows from "../TeamTraceRows.svelte";
 import { TEAM_TASKS_KEY, type TeamTasksCtx } from "../../../teamTasksContext.js";
 import type { ConversationTurn, TeamTaskItem } from "../../../types/agents.js";
 
@@ -509,15 +510,15 @@ describe("DelegationBlock head + chip (P48 s3)", () => {
     expect(chip("Wabster").className).not.toContain("ring-1");
   });
 
-  test("elapsed: a running timer, how long a question waited, the clock time a reply came", async () => {
+  test("elapsed: a running timer, how long a question waited, how long a reply took (T16)", async () => {
     fake("2026-10-10T10:12:00Z");
     render(DelegationBlock, { props: { tasks: four() } });
     const el = (name: string) => chip(name).querySelector("[data-testid=chip-elapsed]")!.textContent;
     expect(el("Halodev")).toBe("10m 00s");
     expect(el("Wabster")).toBe("8m 30s");
     expect(el("Franky")).toBe("10s");
-    const d = new Date("2026-10-10T10:08:00Z");
-    expect(el("Atraxa")).toBe(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`);
+    // Started 10:00, replied 10:08 (updated_at stands in for ended_at).
+    expect(el("Atraxa")).toBe("8m 00s");
     expect(chip("Atraxa").querySelector("[data-testid=chip-elapsed]")!.className).toContain("font-mono");
     await vi.advanceTimersByTimeAsync(1000);
     await tick();
@@ -719,7 +720,7 @@ describe("ThreadMessage delegation block", () => {
     await waitFor(() => expect(message).toHaveBeenCalledWith("t1", "hi"));
   });
 
-  test("renders the block from context and drops the raw team_message card", async () => {
+  test("T16 S10: the block sums it up, the trace keeps the team_message card with a row per teammate", async () => {
     const ctx: TeamTasksCtx = {
       forTurn: (id) => (id === "turn-1" ? [task({})] : []),
       agents: () => ({}),
@@ -727,10 +728,27 @@ describe("ThreadMessage delegation block", () => {
       answer: vi.fn(),
       cancel: vi.fn(),
     };
-    render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    const traced = {
+      ...turn,
+      events: [
+        ...turn.events!,
+        { type: "team_task", tool_use_id: "u1", text: JSON.stringify({ task_id: "t1", via: "tool", to_handle: "anton", state: "completed", started_at: "2026-10-10T10:00:00Z", ended_at: "2026-10-10T10:02:21Z", entries: [{ role: "user", text: "check the logs", at: "2026-10-10T10:00:00Z" }, { role: "agent", handle: "anton", text: "all clear", at: "2026-10-10T10:02:21Z" }] }) },
+        { type: "team_task", text: JSON.stringify({ task_id: "t2", via: "mention", to_handle: "bea", state: "working" }) },
+      ],
+    } as ConversationTurn;
+    render(ThreadMessage, { props: { turn: traced }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
     expect(screen.getByTestId("delegation-block")).toBeDefined();
     await fireEvent.click(screen.getByText(/show trace/));
-    expect(screen.queryByText(/team_message/)).toBeNull();
+    expect(screen.getByText(/team_message/)).toBeDefined();
+    const rows = screen.getAllByTestId("team-trace-row");
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain("@anton");
+    expect(rows[0].textContent).toContain("replied");
+    expect(rows[0].textContent).toContain("all clear");
+    expect(rows[0].querySelector("[data-testid=team-trace-duration]")!.textContent).toBe("2m 21s");
+    expect(screen.getByTestId("team-trace-mention").textContent).toBe("Sent with an @mention in the reply");
+    await fireEvent.click(rows[0].querySelector("[data-testid=team-trace-toggle]")!);
+    expect(screen.getByTestId("team-trace-thread").textContent).toContain("check the logs");
   });
 
   test("P45: the person's own task — 'You asked', straight to Needs you, no answering stage", async () => {
@@ -822,5 +840,73 @@ describe("task avatar activity", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("DelegationBlock Summarize now (T16 S9)", () => {
+  const done = task({ task_id: "a", to_handle: "halodev", to_name: "Halodev", state: "completed", reply: "done", ended_at: "2026-10-10T10:02:21Z", group: "g1", summarizable: true });
+  const work = task({ task_id: "b", to_handle: "research", to_name: "Research", state: "working", group: "g1", summarizable: true });
+
+  test("shows from the server's summarizable; a press hands over that batch and stays away until the list moves", async () => {
+    const onSummarize = vi.fn().mockResolvedValue(undefined);
+    const r = render(DelegationBlock, { props: { tasks: [done, work], onSummarize } });
+    await fireEvent.click(screen.getByTestId("delegation-summarize"));
+    await waitFor(() => expect(onSummarize).toHaveBeenCalledWith("g1"));
+    await waitFor(() => expect(screen.queryByTestId("delegation-summarize")).toBeNull());
+    // The refetch: the batch handed its replies over.
+    await r.rerender({ tasks: [{ ...done, summarizable: false }, { ...work, summarizable: false }], onSummarize });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+    // Another reply landed: something to hand over again.
+    await r.rerender({ tasks: [done, work, task({ task_id: "c", state: "completed", group: "g1", summarizable: true })], onSummarize });
+    expect(screen.getByTestId("delegation-summarize")).toBeDefined();
+  });
+
+  test("a remount reads the server's state: nothing held = no button", () => {
+    render(DelegationBlock, { props: { tasks: [{ ...done, summarizable: false }, { ...work, summarizable: false }], onSummarize: vi.fn() } });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+  });
+
+  test("absent without the action, or for the person's own tasks", () => {
+    const b = render(DelegationBlock, { props: { tasks: [done, work] } });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+    b.unmount();
+    render(DelegationBlock, { props: { tasks: [{ ...done, origin: "user" }], onSummarize: vi.fn() } });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+  });
+
+  test("a failed press says why and keeps the button", async () => {
+    render(DelegationBlock, { props: { tasks: [done, work], onSummarize: vi.fn().mockRejectedValue(new Error("nope")) } });
+    await fireEvent.click(screen.getByTestId("delegation-summarize"));
+    await waitFor(() => expect(screen.getByTestId("summarize-error").textContent).toBe("nope"));
+    expect(screen.getByTestId("delegation-summarize")).toBeDefined();
+  });
+
+  test("an open row shows how long the teammate took next to its reply", async () => {
+    render(DelegationBlock, { props: { tasks: [{ ...done, started_at: "2026-10-10T10:00:00Z" }, work] } });
+    await fireEvent.click(screen.getAllByTestId("delegation-chip")[0]);
+    expect(screen.getByTestId("delegation-preview-duration").textContent).toBe("2m 21s");
+    expect(screen.getByTestId("delegation-preview").textContent).toContain("done");
+  });
+});
+
+describe("TeamTraceRows (T16 S10)", () => {
+  const rec = { task_id: "t1", via: "tool" as const, to_handle: "anton", state: "working", started_at: "2026-10-10T10:00:00Z", entries: [{ role: "user", text: "check" }] };
+
+  test("the live task moves a recorded row on, and Open opens its chat", async () => {
+    const onOpen = vi.fn();
+    const live = task({ task_id: "t1", state: "completed", reply: "all clear", ended_at: "2026-10-10T10:02:21Z", chat_id: "c9" });
+    render(TeamTraceRows, { props: { tasks: [rec], live: { t1: live }, onOpen } });
+    const row = screen.getByTestId("team-trace-row");
+    expect(row.dataset.status).toBe("replied");
+    expect(row.textContent).toContain("all clear");
+    expect(screen.getByTestId("team-trace-duration").textContent).toBe("2m 21s");
+    await fireEvent.click(screen.getByTestId("team-trace-open"));
+    expect(onOpen).toHaveBeenCalledWith(live);
+  });
+
+  test("no live task: the snapshot as recorded, no Open", () => {
+    render(TeamTraceRows, { props: { tasks: [rec], onOpen: vi.fn() } });
+    expect(screen.getByTestId("team-trace-row").dataset.status).toBe("working");
+    expect(screen.queryByTestId("team-trace-open")).toBeNull();
   });
 });

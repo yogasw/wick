@@ -973,6 +973,12 @@ export type TeamTaskItem = {
       sentence before its newest tool call, or "Running <tool>…"); only
       while the task works, pushed on the team_task event, never stored. */
   progress?: string;
+  /** The batch (group_id) the task is in. */
+  group?: string;
+  /** "Summarize now" on its batch would hand the agent something now:
+      the server's truth (a holding batch with a reply in and a member
+      still working), so it survives a remount or a reload. */
+  summarizable?: boolean;
   /** The task this one was sent again for (Retry / Reassign). */
   retry_of?: string;
   /** The task the person sent again for this one, how and to whom;

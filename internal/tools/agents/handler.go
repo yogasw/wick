@@ -2945,6 +2945,15 @@ func sessionTurnTrace(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// The turn's hand-offs to teammates, from the Hub (team_trace.go).
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			data = mergeTeamTrace(data, h.SentFrom(id), func(task string) []teamlink.ThreadEntry {
+				entries, _ := h.TaskThread(id, task)
+				return entries
+			})
+		}
+	}
 	c.W.Header().Set("Content-Type", "application/json")
 	_, _ = c.W.Write(data)
 }

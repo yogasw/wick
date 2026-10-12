@@ -3108,13 +3108,18 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		// decides the next step.
 		s.setStatusLabel(sessionKey, statusLabelWorking)
 
-	case event.Compaction:
+	case event.Compaction, event.Notice:
 		// Something happened TO the session rather than in the reply. The
 		// web UI has a row for it; a thread has nothing unless we post it,
 		// so /compact asked for from Slack would otherwise finish in
 		// silence. Posted as its own small message, not folded into the
 		// reply buffer: the turn's text belongs to the agent.
 		if text, ok := agentchannels.SystemNoticeText(ev); ok {
+			if ev.Type == event.Notice {
+				// wick's notice can quote a teammate's reply: plain text,
+				// never a <!channel> or <@U…> ping or a link.
+				text = escapeMrkdwn(text)
+			}
 			s.postSystemNotice(sessionKey, text)
 		}
 

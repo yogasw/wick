@@ -65,7 +65,20 @@ type Registry struct {
 	// never becomes a push alert. Set when a turn ends silent; cleared when a
 	// non-silent turn ends.
 	silentLast map[string]bool
+
+	// turnFallback, when set, is told about the end of every turn: when
+	// it started (its first event here) and whether it gave the channels
+	// nothing (empty or silent). A line it returns for a quiet turn goes
+	// out as a Notice before the turn's terminal event, while the thread
+	// is still open. See WithTurnFallback.
+	turnFallback TurnFallback
 }
+
+// TurnFallback is told that sessionID's turn, started at start, ended;
+// quiet = it gave the channels nothing. It returns the line to post for
+// a quiet turn, or false. It runs for every turn end, so it must be cheap
+// when it has nothing to say.
+type TurnFallback func(sessionID string, start time.Time, quiet bool) (string, bool)
 
 // SilentMarker is the case-insensitive prefix an agent puts at the very start
 // of a reply to keep that reply out of every channel and push notification.
@@ -90,6 +103,7 @@ type turnState struct {
 	pending []event.AgentEvent // events held until the silent decision
 	decided bool
 	silent  bool
+	start   time.Time // the turn's first event here (turnFallback)
 }
 
 // NewRegistry returns an empty registry. Use the With* methods to attach
@@ -142,6 +156,41 @@ func (r *Registry) WasLastTurnSilent(sessionID string) bool {
 // ignoring leading whitespace and case.
 func looksSilent(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimLeft(s, " \t\r\n")), SilentMarker)
+}
+
+// WithTurnFallback attaches the check run at every turn end; for a turn
+// with nothing for the channels (no text, or a [silent] reply) the line
+// fn returns is posted instead. A Team agent woken with its teammates'
+// results that writes no answer is the case it exists for: the results
+// still reach the thread.
+func (r *Registry) WithTurnFallback(fn TurnFallback) *Registry {
+	r.turnFallback = fn
+	return r
+}
+
+// turnEndNotice tells turnFallback a turn ended and, for a quiet one,
+// returns its line wrapped as the Notice to forward; ok false when none.
+func (r *Registry) turnEndNotice(sessionID string, start time.Time, quiet bool) (event.AgentEvent, bool) {
+	if r.turnFallback == nil {
+		return event.AgentEvent{}, false
+	}
+	text, ok := r.turnFallback(sessionID, start, quiet)
+	if !quiet || !ok || strings.TrimSpace(text) == "" {
+		return event.AgentEvent{}, false
+	}
+	return event.AgentEvent{Type: event.Notice, Text: text}, true
+}
+
+// withoutText is evs minus their reply text: what a quiet turn still
+// owes the channels (a compaction, a warning, a link).
+func withoutText(evs []event.AgentEvent) []event.AgentEvent {
+	var out []event.AgentEvent
+	for _, e := range evs {
+		if e.Type != event.TextDelta && e.Type != event.TextReplace {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // WithSendFunc attaches the pool dispatch closure. Called once at boot.
@@ -561,6 +610,10 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		ts = &turnState{}
 		r.turns[sessionID] = ts
 	}
+	if ts.start.IsZero() {
+		ts.start = time.Now()
+	}
+	start := ts.start
 
 	terminal := ev.Type == event.Done || ev.Type == event.Error
 
@@ -586,6 +639,21 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 			r.finishTurnLocked(sessionID, ts)
 		}
 		r.mu.Unlock()
+		// A turn that ends here and gave the channels no text: a fallback
+		// line goes out before its terminal event. An empty turn's other
+		// held events still go (a compaction, a warning); a silent turn's
+		// stay dropped, as before.
+		if terminal {
+			quiet := silent || strings.TrimSpace(text) == ""
+			if n, ok := r.turnEndNotice(sessionID, start, quiet); ok {
+				out := []event.AgentEvent{n, ev}
+				if !silent {
+					out = append(withoutText(held[:len(held)-1]), n, ev)
+				}
+				r.forward(sessionID, out)
+				return
+			}
+		}
 		if silent {
 			return // drop the whole held batch — nothing goes to channels
 		}
@@ -599,6 +667,13 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		r.finishTurnLocked(sessionID, ts)
 	}
 	r.mu.Unlock()
+	if terminal {
+		// Decided before the end: quiet only when silent (text came).
+		if n, ok := r.turnEndNotice(sessionID, start, silent); ok {
+			r.forward(sessionID, []event.AgentEvent{n, ev})
+			return
+		}
+	}
 	if silent {
 		return
 	}

@@ -186,6 +186,12 @@ type batchHub struct {
 	// session's prompts reach it in Seq order while a slow session never
 	// holds up another's.
 	drainMu map[string]*sync.Mutex
+
+	// wakes holds, per session, when each prompt was handed to it (taken
+	// just before Deliver): the turn that answers it starts later. See
+	// TakeWakes. Guarded by wakeMu.
+	wakeMu sync.Mutex
+	wakes  map[string][]time.Time
 }
 
 // batching reads the switch. Never call it with h.mu held: it may read
@@ -341,6 +347,47 @@ func (h *Hub) FlushSession(_ context.Context, sessionID string) int {
 	h.mu.Unlock()
 	h.commit(sends, cancels)
 	return len(sends)
+}
+
+// FlushGroup is FlushSession for one batch of sessionID ("Summarize now"
+// on its Delegated block). An unknown, foreign or closed group delivers
+// nothing.
+func (h *Hub) FlushGroup(_ context.Context, sessionID, group string) int {
+	on := h.batching()
+	h.mu.Lock()
+	b := h.batches[group]
+	if b == nil || b.Session != sessionID || b.Closed {
+		h.mu.Unlock()
+		return 0
+	}
+	sends, cancels := h.evalBatchLocked(b, on)
+	if len(sends) == 0 {
+		sends = h.flushLocked(b, "")
+	}
+	h.queueLocked(sends)
+	h.mu.Unlock()
+	h.commit(sends, cancels)
+	return len(sends)
+}
+
+// summarizableLocked reports whether "Summarize now" would hand b's sender
+// something: a batch that holds its replies (all, or first before its
+// answer) with a reply waiting and a member still working. fan_in each and
+// a lone task hold nothing.
+func (h *Hub) summarizableLocked(b *batch) bool {
+	if b == nil || b.Closed || len(b.Tasks) < 2 || !(b.FanIn == FanInAll || (b.FanIn == FanInFirst && !b.FirstDone)) {
+		return false
+	}
+	m := h.membersLocked(b)
+	if len(m.working) == 0 {
+		return false
+	}
+	for _, id := range m.held {
+		if deliverable(h.tasks[id]) {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionBatchesLocked is sessionID's open batches, oldest first.
@@ -956,7 +1003,14 @@ func (h *Hub) drain(session string) {
 		if h.sessionGone(session) {
 			err = ErrSessionGone
 		} else {
+			// Marked before Deliver: the turn it wakes may start (and its
+			// first event land) before Deliver returns.
+			at := h.now()
+			h.markWake(session, at)
 			err = h.Notify.Deliver(context.Background(), session, text)
+			if err != nil {
+				h.unmarkWake(session, at)
+			}
 		}
 		var gaveUp []a2a.TaskID
 		var retry time.Duration

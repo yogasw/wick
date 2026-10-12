@@ -33,6 +33,9 @@ const FILES = [
   "KanbanBoard.svelte",
   "SessionPanel.svelte",
   "AssigneeFilter.svelte",
+  // T16: the delegation block and its trace rows.
+  "team/DelegationBlock.svelte",
+  "team/TeamTraceRows.svelte",
 ];
 
 function offendersIn(src: string): string[] {

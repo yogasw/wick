@@ -64,7 +64,7 @@
   import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
-  import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
+  import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, summarizeTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -1385,6 +1385,13 @@
       loadTeamTasks();
     }
   }
+  async function summarizeTasks(group?: string) {
+    try {
+      await run(summarizeTeamTasks(base, sessionId, group).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
   async function retryTask(taskId: string) {
     try {
       await run(retryTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
@@ -1424,6 +1431,7 @@
     get answer() { return readOnly ? undefined : answerTask; },
     get cancel() { return readOnly ? undefined : cancelTask; },
     get message() { return readOnly ? undefined : messageTask; },
+    get summarize() { return readOnly ? undefined : summarizeTasks; },
     openChat: openTaskChat,
     get loadThread() { return readOnly ? undefined : loadTaskThread; },
   });

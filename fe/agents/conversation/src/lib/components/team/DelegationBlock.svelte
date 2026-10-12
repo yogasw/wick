@@ -18,7 +18,7 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, settledParts, statusParts, taskProgress, taskQuickReplies, taskStatus, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, canSummarize, summarizeGroup, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, settledParts, statusParts, taskDuration, taskProgress, taskQuickReplies, taskStatus, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
   import { questionHtml } from "../../questionText.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
@@ -41,8 +41,37 @@
     onOpenChat?: (t: TeamTaskItem) => void;
     /** Reads a task's thread for its open chip (TaskThread). */
     loadThread?: (taskId: string) => Promise<TeamThreadEntry[]>;
+    /** "Summarize now": the replies in so far of the block's batch
+        (group) go to the agent at once, without waiting for the
+        teammates still working (none canceled). */
+    onSummarize?: (group?: string) => Promise<void>;
   };
-  let { tasks, agents = {}, captainName = "Captain", userName, onAnswer, onCancel, onMessage, onOpenChat, loadThread }: Props = $props();
+  let { tasks, agents = {}, captainName = "Captain", userName, onAnswer, onCancel, onMessage, onOpenChat, loadThread, onSummarize }: Props = $props();
+
+  // Summarize now: shown from the server's per-task summarizable (it
+  // turns off once the batch handed its replies over); hidden while a
+  // press is on its way.
+  let summarizing = $state(false);
+  let summarizeError = $state("");
+  // The tasks as they stood when a press went through: the button stays
+  // away until the server's list moves on (its refetch clears the flag).
+  const taskKey = $derived(tasks.map((t) => `${t.task_id}:${t.state}:${t.summarizable ? 1 : 0}`).join(" "));
+  let pressedOn = $state<string | null>(null);
+  const showSummarize = $derived(!!onSummarize && canSummarize(tasks) && !summarizing && pressedOn !== taskKey);
+  async function summarize() {
+    if (!onSummarize || summarizing) return;
+    summarizing = true;
+    summarizeError = "";
+    try {
+      const key = taskKey;
+      await onSummarize(summarizeGroup(tasks));
+      pressedOn = key;
+    } catch (e) {
+      summarizeError = e instanceof Error ? e.message : String(e);
+    } finally {
+      summarizing = false;
+    }
+  }
 
   let showAll = $state(false);
   let unfolded = $state(false);
@@ -220,6 +249,14 @@
       <TeamIcon name="tasks" size={14} class="text-green-600 dark:text-green-400" />
       <span class="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-black-900 dark:text-white-100">{blockHead(tasks)}</span>
       <span data-testid="delegation-summary" class="min-w-0 flex-1 truncate text-[11.5px] text-black-700">{#each parts as p, i}{i ? " · " : "· "}<span data-status={p.status} class={PART_TONE[p.status]}>{p.label}</span>{/each}</span>
+      {#if showSummarize}
+        <SmBtn
+          class="shrink-0"
+          data-testid="delegation-summarize"
+          title={`Send the replies in so far to ${captainName} now; teammates still working keep going`}
+          onclick={summarize}
+        >Summarize now</SmBtn>
+      {/if}
       <SmBtn
         class="shrink-0"
         data-testid="delegation-show-all"
@@ -242,6 +279,7 @@
       ><TeamIcon name="chevron" class={collapsed ? "-rotate-90" : ""} /></button>
     </div>
 
+    {#if summarizeError}<span data-testid="summarize-error" class="block px-3 pb-1 text-[11px] text-red-600 dark:text-red-400">{summarizeError}</span>{/if}
     <div class="flex flex-wrap gap-1.5 px-3 pb-2.5">
       {#each tasks as t (t.task_id)}
         {@const s = taskStatus(t)}
@@ -323,6 +361,7 @@
             <AvatarActivity activity={taskActivity(s)} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
             <b class="shrink-0 text-xs font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</b>
             <span data-testid="delegation-preview-task" class="min-w-0 flex-1 truncate" title={t.title}>· {t.title}{t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}</span>
+            {#if taskDuration(t, now)}<span data-testid="delegation-preview-duration" title={isTaskActive(t) ? "Working for" : "Took"} class="shrink-0 font-mono text-[10px] text-black-700">{taskDuration(t, now)}</span>{/if}
             {#if s === "needs_you" || s === "answering"}
               <!-- A question: the reply is the answer (the card above). -->
               {#if onAnswer}

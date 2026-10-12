@@ -74,6 +74,10 @@ const (
 	// RemoteLink carries the remote's own page for the running turn
 	// (.Text = URL), where it can be followed or stopped. Not end-of-turn.
 	RemoteLink
+	// Notice is a line wick itself posts to a session's channels, ABOUT the
+	// session rather than part of the reply (.Text). Only the channel
+	// registry makes one; providers never emit it.
+	Notice
 )
 
 // String makes log lines readable. Not used for serialization.
@@ -97,6 +101,8 @@ func (t EventType) String() string {
 		return "warning"
 	case Compaction:
 		return "compaction"
+	case Notice:
+		return "notice"
 	case Trace:
 		return "trace"
 	case TextReplace:

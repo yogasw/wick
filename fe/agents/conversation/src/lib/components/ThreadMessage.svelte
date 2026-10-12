@@ -23,6 +23,8 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
   import DelegationBlock from "./team/DelegationBlock.svelte";
+  import TeamTraceRows from "./team/TeamTraceRows.svelte";
+  import { teamTraceOf, traceActive } from "../teamTrace.js";
   import { getTeamTasksCtx } from "../teamTasksContext.js";
   import { isTeamMessageTool, turnSpan } from "../delegations.js";
   import TodoCard from "./TodoCard.svelte";
@@ -438,14 +440,32 @@
   // The individual todo tool_use blocks are stripped from the flat
   // trace below since this merged widget replaces them.
   const mergedTodoItems = $derived(mergeTodoItemsWithSteps(traceBlocks));
-  /* The turn's team_message calls render as one delegation block (see
-     DelegationBlock), so their raw ToolCards leave the trace — only when
-     the block has tasks to show, never hiding a call it could not place. */
+  /* The turn's team_message calls are summed up in one delegation block
+     (DelegationBlock) and recorded exactly in the trace (T16 S10): each
+     call keeps its ToolCard there, with one nested row per teammate from
+     the team_task events the server merges into the trace; a task an
+     @handle line sent gets its rows after the trace. */
   const teamCtx = getTeamTasksCtx();
   const delegated = $derived(teamCtx && turn.role === "assistant" ? teamCtx.forTurn(turn.turn_id) : []);
-  const nonTodoBlocks = $derived(
-    stripTodoBlocks(traceBlocks).filter((b) => !(delegated.length > 0 && b.kind === "tool" && isTeamMessageTool(b.toolName))),
-  );
+  const nonTodoBlocks = $derived(stripTodoBlocks(traceBlocks));
+  const teamTrace = $derived(teamTraceOf(resolvedTraceEvents));
+  // The chat's live tasks by id: laid over the recorded rows (S2) and
+  // what a row's Open opens.
+  const liveById = $derived(Object.fromEntries((teamCtx?.tasks?.() ?? []).map((t) => [t.task_id, t])));
+  const traceTasks = $derived([...[...teamTrace.byUse.values()].flat(), ...teamTrace.mentions]);
+  /* While a recorded row's teammate still works, the stored trace is
+     read again each time its task moves, so the row's thread grows; once
+     every recorded row has settled it is left alone. */
+  const liveTraceKey = $derived(traceTasks.map((t) => `${t.task_id}:${liveById[t.task_id]?.state ?? ""}:${liveById[t.task_id]?.updated_at ?? ""}`).join(" "));
+  let traceReadKey = "";
+  $effect(() => {
+    const key = liveTraceKey;
+    if (!traceOpen || traceEvents === null || !canFetch || !traceActive(traceTasks)) return;
+    if (traceReadKey === "") { traceReadKey = key; return; }
+    if (key === traceReadKey) return;
+    traceReadKey = key;
+    loadTrace!(turn.turn_id).then((ev) => { traceEvents = ev; }).catch(() => {});
+  });
   // Goal mode is optional and independent of the checklist — a turn can
   // report a goal with no items at all, so the card renders for either.
   const todoGoal = $derived(latestTodoGoal(traceBlocks));
@@ -884,8 +904,14 @@
                       : undefined}
                     {traceFiles}
                   />
+                  {#if isTeamMessageTool(block.toolName) && teamTrace.byUse.get(block.toolUseId)?.length}
+                    <TeamTraceRows tasks={teamTrace.byUse.get(block.toolUseId) ?? []} captainName={teamCtx?.captainName()} live={liveById} onOpen={teamCtx?.openChat} />
+                  {/if}
                 {/if}
               {/each}
+              {#if teamTrace.mentions.length > 0}
+                <TeamTraceRows tasks={teamTrace.mentions} mention captainName={teamCtx?.captainName()} live={liveById} onOpen={teamCtx?.openChat} />
+              {/if}
             </div>
           {/if}
         </div>
@@ -902,6 +928,7 @@
           onMessage={teamCtx.message}
           onOpenChat={teamCtx.openChat}
           loadThread={teamCtx.loadThread}
+          onSummarize={teamCtx.summarize}
         />
       {/if}
 

@@ -317,15 +317,17 @@ describe("ConversationThread live delegation block", () => {
   };
   const context = () => new Map([[TEAM_TASKS_KEY, ctx]]);
 
-  test("the running turn shows its block and drops the team_message cards from its trace", async () => {
+  test("the running turn shows its block, and its trace keeps the team_message cards with a live row each (T16 S6)", async () => {
     state = { turns: [userTurn], live };
     const { container } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
     const block = screen.getByTestId("delegation-block");
     expect(block.dataset.taskIds).toBe("k1 k2");
     expect(block.textContent).toContain("Delegated to 2 teammates");
     await fireEvent.click(screen.getByText("show trace"));
-    // Only the Search card is left in the trace.
-    expect(container.querySelectorAll("[data-tool-description]").length).toBe(1);
+    expect(container.querySelectorAll("[data-tool-description]").length).toBe(3);
+    const rows = screen.getAllByTestId("team-trace-row");
+    expect(rows.map((r) => r.textContent?.includes("@alpha") || r.textContent?.includes("@beta"))).toEqual([true, true]);
+    expect(rows.every((r) => r.dataset.status === "working")).toBe(true);
   });
 
   test("on commit the block moves to the committed turn: exactly one, never none", async () => {
@@ -367,16 +369,16 @@ describe("ConversationThread live delegation block", () => {
     expect(container.querySelectorAll("[data-tool-description]").length).toBe(1);
   });
 
-  test("the step count leaves out the cards the block stands for; none left, no toggle", () => {
+  test("T16 S6: the step count counts the team_message cards the trace now keeps; a turn of only those still has its toggle", () => {
     state = { turns: [userTurn], live };
     const { container, unmount } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
-    expect(container.querySelector("[data-live-trace-toggle]")!.textContent).toContain("· 1 step");
+    expect(container.querySelector("[data-live-trace-toggle]")!.textContent).toContain("· 3 steps");
     unmount();
     const onlyTeam: LiveTurn = { text: "", blocks: [teamBlock("u1", "k1"), teamBlock("u2", "k2")] };
     state = { turns: [userTurn], live: onlyTeam };
     const r = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
     expect(r.getByTestId("delegation-block")).toBeDefined();
-    expect(r.container.querySelector("[data-live-trace-toggle]")).toBeNull();
+    expect(r.container.querySelector("[data-live-trace-toggle]")!.textContent).toContain("· 2 steps");
   });
 
   test("the live turn opens with the asst-meta status line: who, when, how many tasks", () => {
@@ -443,5 +445,49 @@ describe("ConversationThread live delegation block", () => {
     render(ConversationThread, { props: { turns: [], live, typing: { active: true } } });
     expect(screen.queryByTestId("delegation-block")).toBeNull();
     expect(screen.getByText("show trace")).toBeDefined();
+  });
+});
+
+describe("ConversationThread one UI per delegation (T16 S9)", () => {
+  const t1: TeamTaskItem = { task_id: "k1", context_id: "c", to_agent_id: "a1", to_handle: "research", to_name: "Research", title: "Check PR", state: "completed", turns: 1, max_turns: 8, started_at: "2026-10-10T10:02:00Z", updated_at: "2026-10-10T10:04:00Z", reply: "PR is open" };
+  const sender: ConversationTurn = {
+    ...makeTurn("a1", "assistant", "Asked the team."),
+    events: [
+      { type: "tool_use", tool_use_id: "u1", tool_name: "mcp__wick__team_message", tool_input: '{"to":"@research"}' },
+      { type: "tool_result", tool_use_id: "u1", text: '{"task_id":"k1","state":"working"}' },
+    ],
+  };
+  const ctx: TeamTasksCtx = { forTurn: (id) => (id === "a1" ? [t1] : []), tasks: () => [t1], agents: () => ({ research: { name: "Research" } }), captainName: () => "Captain" };
+  const wake = (text: string): ConversationTurn => ({ ...makeTurn("w" + text.length, "user", text), source: "subagent" });
+  const handoff: ConversationTurn = { ...makeTurn("h1", "system", "handoff"), kind: "mention_handoff", extras: { from: "main", to: "research", state: "completed", task_id: "k1" } };
+
+  test("the batch prompt and the hand-off pill leave the thread; the block keeps the reply", () => {
+    const batch = wake('[team results · group b1 · 1 of 1 replied]\nResearch — completed [task k1]:\n<reply from="@research" task="k1" state="completed">\nPR is open\n</reply>');
+    const { container } = render(ConversationThread, {
+      props: { turns: [makeTurn("u0", "user", "check it"), handoff, sender, batch, makeTurn("a2", "assistant", "One answer.")], live: null, typing: { active: false } },
+      context: new Map([[TEAM_TASKS_KEY, ctx]]),
+    });
+    expect(container.querySelector('[data-turn-id="h1"]')).toBeNull();
+    expect(container.querySelector(`[data-turn-id="${batch.turn_id}"]`)).toBeNull();
+    expect(screen.queryByText(/team results/)).toBeNull();
+    expect(container.querySelectorAll("[data-task-ids]").length).toBe(1);
+  });
+
+  test("a late reply's update prompt stays as one 'Updated with' line", () => {
+    const upd = wake('[team results update · group b1 · Updated with @research\'s reply · 2 of 2 replied]\n<reply from="@research" task="k1" state="completed">\nx\n</reply>\n[task k1]');
+    render(ConversationThread, {
+      props: { turns: [sender, upd, makeTurn("a3", "assistant", "Updated answer.")], live: null, typing: { active: false } },
+      context: new Map([[TEAM_TASKS_KEY, ctx]]),
+    });
+    expect(screen.getByTestId("team-update-label").textContent).toContain("Updated with Research's reply");
+  });
+
+  test("without a block the prompt still renders as before", () => {
+    const batch = wake("[team results · group b9 · 1 of 1 replied]\nGone — completed [task zz]:\nhi");
+    const { container } = render(ConversationThread, {
+      props: { turns: [batch], live: null, typing: { active: false } },
+      context: new Map([[TEAM_TASKS_KEY, ctx]]),
+    });
+    expect(container.querySelector(`[data-turn-id="${batch.turn_id}"]`)).not.toBeNull();
   });
 });

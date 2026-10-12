@@ -27,6 +27,8 @@ func SystemNoticeText(ev event.AgentEvent) (string, bool) {
 			return "", false
 		}
 		return ev.Compaction.Summary(), true
+	case event.Notice:
+		return ev.Text, ev.Text != ""
 	default:
 		return "", false
 	}
