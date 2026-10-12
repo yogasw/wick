@@ -80,6 +80,8 @@ describe("ProjectLanding ticket page — Open in Team", () => {
     const note = await screen.findByTestId("ticket-room-note");
     expect(note.textContent).toContain("This ticket has a room · 2 members");
     expect(note.querySelector("a")!.getAttribute("href")).toBe("/tools/agents/team/t/proj-42/T-7");
+    // One box, not two: the Team banner gives way to the room note.
+    await waitFor(() => expect(screen.queryByTestId("open-in-team")).toBeNull());
     room.on = false;
   });
 });

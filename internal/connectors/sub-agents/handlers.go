@@ -290,6 +290,9 @@ func (h *handlers) continueDelegation(c *connector.Ctx) (any, error) {
 	if !modeOK {
 		return nil, errors.New("mode must be 'background' or 'foreground'")
 	}
+	if err := h.deps.roomMayDrive(c.Context(), caller.sessionID, id); err != nil {
+		return nil, err
+	}
 
 	res, err := h.deps.svc().Continue(c.Context(), delegation.ContinueRequest{
 		DelegationID: id,

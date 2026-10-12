@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
@@ -285,4 +287,24 @@ func encodeTagIDs(ids []string) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+// roomMayDrive keeps a caller in a ticket room on its own tree: such a
+// session reaches its ticket only, and driving a delegation that hangs off
+// another chat of the same person would set a sub-agent to work with that
+// chat's full reach. Outside a room nothing changes — the service's
+// CanInterrupt still decides. Errors read "not found", as the service's do.
+func (d Deps) roomMayDrive(ctx context.Context, callerSID, delegationID string) error {
+	if !team.InTicketRoom(d.Layout, callerSID) {
+		return nil
+	}
+	svc := d.svc()
+	if svc == nil || svc.Repo == nil {
+		return errUnavailable
+	}
+	row, err := svc.Repo.Get(ctx, delegationID)
+	if err != nil || row == nil || !team.UnderSession(d.Layout, row.ParentSessionID, callerSID) {
+		return fmt.Errorf("no such delegation: %s", delegationID)
+	}
+	return nil
 }

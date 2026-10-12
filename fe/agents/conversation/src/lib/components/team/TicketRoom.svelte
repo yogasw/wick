@@ -323,7 +323,7 @@
           <p class="text-xs {muted}">You have no Team agents yet.</p>
         {/each}
       </div>
-      <p class="mt-2 text-[11px] {muted}">Only your own Team agents. They work for you, with your access — your Captain with everything it can already reach, the others with this ticket.</p>
+      <p class="mt-2 text-[11px] {muted}">Only your own Team agents. They work for you, with your access, and reach this ticket only.</p>
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" class="rounded-lg border border-white-400 px-3 py-1.5 text-xs dark:border-navy-600" onclick={() => (picking = false)}>Cancel</button>
         <button type="button" class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-semibold text-white-100 hover:bg-green-600 disabled:opacity-50" disabled={!picked.length || busy} onclick={() => addAgents(picked)}>Add {picked.length || ""}</button>

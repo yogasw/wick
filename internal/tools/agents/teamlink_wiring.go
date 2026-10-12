@@ -951,6 +951,9 @@ type TeamMentionRouter struct{ Hub func() *teamlink.Hub }
 // with an agent shared with the session's user — that user's own agents
 // and those shared with them (teamlink.Hub.MentionTargets).
 func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []string {
+	if InTicketRoom(sessionID) {
+		return nil
+	}
 	h, id := r.Hub(), TeamAgentOf(ctx, sessionID)
 	if h == nil || id == "" {
 		return nil
@@ -967,6 +970,9 @@ func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []
 }
 
 func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body string, human bool) error {
+	if InTicketRoom(sessionID) {
+		return team.ErrInTicketRoom
+	}
 	h := r.Hub()
 	if h == nil {
 		return nil
@@ -977,6 +983,13 @@ func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body
 		To:          handle, Text: body, Wait: -1, Mention: true, Human: human,
 	})
 	return err
+}
+
+// InTicketRoom reports whether sessionID answers in a ticket room, the
+// room itself included (team.InTicketRoom): the guard for every path that
+// would set another agent to work on that session's behalf.
+func InTicketRoom(sessionID string) bool {
+	return globalLayout.BaseDir != "" && team.InTicketRoom(globalLayout, sessionID)
 }
 
 // sessionUserOf is the wick user of sessionID, "" when unknown.

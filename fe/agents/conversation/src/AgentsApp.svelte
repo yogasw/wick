@@ -884,6 +884,9 @@
   </section>
   {:else if route.tickets && hasTickets}
   <section class="flex min-w-0 flex-1 flex-col">
+    <!-- The board has the Tickets header; a ticket's page has its own
+         "← Tickets · id · 📁 project" row instead (mockup renderHeader). -->
+    {#if !(route.tickets.project && route.tickets.ticket)}
     <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600" data-testid="tickets-header">
       <button
         type="button"
@@ -911,6 +914,16 @@
         </button>
       {/if}
     </header>
+    {:else}
+    <button
+      type="button"
+      class="lg:hidden m-2 flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+      aria-label="Agent list"
+      onclick={() => (rosterOpen = true)}
+    >
+      <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+    </button>
+    {/if}
     <div class="min-h-0 flex-1">
       <TicketsPage
         {base}

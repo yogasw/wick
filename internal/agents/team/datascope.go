@@ -246,6 +246,13 @@ func listsSession(tk ticket.Ticket, sid string) bool {
 // for, and a backing session is not a chat to file anywhere.
 var ErrRoomSession = errors.New("not supported in a ticket room")
 
+// ErrInTicketRoom refuses a session in a ticket room (InTicketRoom) the
+// tools that set another agent to work outside it: Team messages, the
+// agents.* ops, schedules. A peer they reach runs in its own chat with
+// its full reach, so the room's "this ticket only" would end there.
+// Members of the room hand each other turns with @handle in the room.
+var ErrInTicketRoom = errors.New("not available in a ticket room: this session reaches its ticket only — hand a room member a turn with @handle in the room")
+
 // RefuseRoomSession is the guard every attach/detach path (connector, host
 // API, tickets.create) runs on the session it would move: a ticket room,
 // or a member's backing session in one. An ordinary group chat's backing
@@ -295,6 +302,12 @@ const roomParentHops = 1024
 func SessionInTicketRoom(layout config.Layout, sess session.Session) bool {
 	seen := map[string]bool{}
 	for hops := 0; ; hops++ {
+		// The room itself never runs a provider; should anything make it
+		// run one, it counts as in the room and reaches no more than its
+		// members do.
+		if sess.Meta.TicketRoom != nil {
+			return true
+		}
 		if sess.Meta.GroupSessionID != "" {
 			room, err := session.Load(layout, sess.Meta.GroupSessionID)
 			return err == nil && room.Meta.TicketRoom != nil
@@ -313,6 +326,34 @@ func SessionInTicketRoom(layout config.Layout, sess session.Session) bool {
 		}
 		sess = next
 	}
+}
+
+// UnderSession reports whether sid is ancestor or a sub-agent session
+// under it at any depth (the ParentSessionID chain). A loop, a chain past
+// roomParentHops or a missing link answers false.
+func UnderSession(layout config.Layout, sid, ancestor string) bool {
+	if sid == "" || ancestor == "" {
+		return false
+	}
+	seen := map[string]bool{}
+	for hops := 0; hops < roomParentHops; hops++ {
+		if sid == ancestor {
+			return true
+		}
+		if seen[sid] {
+			return false
+		}
+		seen[sid] = true
+		sess, err := session.Load(layout, sid)
+		if err != nil {
+			return false
+		}
+		sid = sess.Meta.ParentSessionID
+		if sid == "" {
+			return false
+		}
+	}
+	return false
 }
 
 // CheckAgentProject refuses an ordinary agent any project but its own

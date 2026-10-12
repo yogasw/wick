@@ -214,6 +214,23 @@ var uuidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // somebody reserved it by hand.
 var generatedIDRe = regexp.MustCompile(`^T-[` + idAlphabet + `]{4}$`)
 
+// ValidID reports whether id can name a ticket (or project) on disk: one
+// path segment — no separator, no "..", no leading dot, no control
+// character. Ids come from URLs and tool input, so every read through
+// Load / Exists checks it before joining id into a path; an id that fails
+// is simply not found.
+func ValidID(id string) bool {
+	if id == "" || len(id) > 128 || strings.HasPrefix(id, ".") || strings.Contains(id, "..") {
+		return false
+	}
+	for _, r := range id {
+		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // NormalizeID canonicalises a caller-supplied ticket id.
 //
 // Any id in the safe charset is kept verbatim — "TIK-2026-001" stays what
@@ -339,6 +356,9 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 func Load(layout config.Layout, projectID, ticketID string) (Ticket, error) {
 	if projectID == "" || ticketID == "" {
 		return Ticket{}, fmt.Errorf("project id and ticket id are required")
+	}
+	if !ValidID(projectID) || !ValidID(ticketID) {
+		return Ticket{}, fmt.Errorf("invalid ticket id %q", ticketID)
 	}
 	var tk Ticket
 	if err := storage.ReadJSON(layout.TicketFile(projectID, ticketID), &tk); err != nil {
@@ -535,7 +555,7 @@ func List(layout config.Layout, projectID string) ([]Ticket, error) {
 
 // Exists reports whether a ticket is on disk.
 func Exists(layout config.Layout, projectID, ticketID string) bool {
-	if projectID == "" || ticketID == "" {
+	if !ValidID(projectID) || !ValidID(ticketID) {
 		return false
 	}
 	return storage.PathExists(layout.TicketFile(projectID, ticketID))

@@ -256,6 +256,9 @@ const (
 	KindGroupMemberRemoved = "group_member_removed"
 	// KindTicketRoomOpened is a ticket room's first line; nobody joined.
 	KindTicketRoomOpened = "ticket_room_opened"
+	// KindTicketStatus is a ticket's status change, posted into its room
+	// (extras: from, to, by). It adds nobody to the room.
+	KindTicketStatus = "ticket_status"
 )
 
 // KindCompaction marks the point where the CLI folded older turns into

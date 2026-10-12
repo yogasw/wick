@@ -2349,7 +2349,7 @@ func dequeueAgent(c *tool.Ctx) {
 	// A ticket room queues nothing itself: the caller's own members queue
 	// in their backing sessions, so that is what gets dropped.
 	if sess.Meta.TicketRoom != nil {
-		removed := 0
+		removed := cancelRoomRuns(id, actorID(c), true)
 		for _, b := range roomOwnBackings(c, id) {
 			removed += dequeueSession(b)
 		}
@@ -2631,6 +2631,9 @@ func killAgent(c *tool.Ctx) {
 	// their backing sessions, so stopping the room stops those — and only
 	// those, never another member's.
 	if sess.Meta.TicketRoom != nil {
+		// Runs of the caller's still waiting behind the room's lock have
+		// no backing turn yet to stop: cancel them first.
+		cancelRoomRuns(id, actorID(c), false)
 		stopped := []string{}
 		for _, b := range roomOwnBackings(c, id) {
 			if code, body := stopSessionRun(c, b); code != http.StatusOK {

@@ -34,7 +34,15 @@ type Deps struct {
 	// SessionUser returns the wick user of a session, "" when unknown:
 	// whose chats the chats op lists. Optional.
 	SessionUser func(sessionID string) string
+	// InRoom reports whether a session answers in a ticket room (or is a
+	// sub-agent under one): such a session reaches its ticket only, so no
+	// op here may set a teammate to work for it. Optional.
+	InRoom func(sessionID string) bool
 }
+
+// errInTicketRoom mirrors team.ErrInTicketRoom (this package does not
+// import team).
+var errInTicketRoom = errors.New("not available in a ticket room: this session reaches its ticket only — hand a room member a turn with @handle in the room")
 
 var errUnavailable = errors.New("team messaging is not configured on this server")
 
@@ -114,6 +122,9 @@ func Operations(deps Deps) []connector.Category {
 
 // caller resolves the hub and the calling agent from the SESSION.
 func (d Deps) caller(c *connector.Ctx) (*teamlink.Hub, string, error) {
+	if d.InRoom != nil && d.InRoom(c.SessionID()) {
+		return nil, "", errInTicketRoom
+	}
 	if d.Hub == nil || d.Hub() == nil || d.AgentOf == nil {
 		return nil, "", errUnavailable
 	}

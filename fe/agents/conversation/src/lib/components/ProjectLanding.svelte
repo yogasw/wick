@@ -249,6 +249,8 @@
 
   /* Which ticket's detail is open, if any. Read from ?ticket= on load so a
      link out of the conversation rail lands here. */
+  // The open ticket has a room: its own note says so, the Team banner hides.
+  let ticketHasRoom = $state(false);
   let openTicketId = $state<string | null>(
     new URLSearchParams(window.location.search).get("ticket"),
   );
@@ -573,7 +575,7 @@
       <!-- The page height is locked (each panel scrolls itself), so the
            ticket's long page scrolls in its own container. -->
       <div class="min-h-0 flex-1 overflow-y-auto">
-        {#if teamOn}
+        {#if teamOn && !ticketHasRoom}
           <div class="mb-3 flex items-center gap-3 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs dark:border-navy-600 dark:bg-navy-800" data-testid="open-in-team">
             <span class="min-w-0 flex-1 text-black-800 dark:text-black-600">Need several agents on this ticket? That happens in Team.</span>
             <a
@@ -590,6 +592,7 @@
           onNewSession={newSessionInTicket}
           projectId={project.id}
           roomHref={teamOn ? teamTicketsHref(base, project.id, openTicketId) : undefined}
+          onRoom={(has) => (ticketHasRoom = has)}
         />
       </div>
     {:else if ticketEnabled && viewMode === "card" && boardView}

@@ -33,15 +33,20 @@
        Team › Tickets itself (Agents › Projects with a Team): the room row
        becomes a link there instead of a chat to open. */
     roomHref?: string;
+    /** Told whether the loaded ticket has a room (Agents › Projects shows one box, not two). */
+    onRoom?: (has: boolean) => void;
     /* Team › Tickets: the back link reads "Tickets" and the header names
        the ticket's project (📁). Elsewhere the defaults stand. */
     backLabel?: string;
     projectName?: string;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession, room, projectId, roomHref, backLabel = "Back to board", projectName }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, room, projectId, roomHref, onRoom, backLabel = "Back to board", projectName }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
+  $effect(() => {
+    onRoom?.(!!data?.room);
+  });
   let error = $state("");
 
   function load() {

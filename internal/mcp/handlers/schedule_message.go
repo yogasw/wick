@@ -69,6 +69,12 @@ func WickScheduleMessage(
 		rsp.ToolError(w, req.ID, "scheduling is unavailable on this transport", scheduleToolName)
 		return
 	}
+	// A session in a ticket room reaches its ticket only; a schedule would
+	// run later, elsewhere, with the person's full reach.
+	if sid := SessionIDFrom(r.Context()); sid != "" && team.InTicketRoom(layout, sid) {
+		rsp.ToolError(w, req.ID, team.ErrInTicketRoom.Error(), scheduleToolName)
+		return
+	}
 	action := strings.TrimSpace(argString(args, "action"))
 	switch action {
 	case "create":
@@ -735,7 +741,9 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 		if err != nil {
 			return "", fmt.Errorf("load session: %w", err)
 		}
-		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, target.SessionID) != nil {
+		// A ticket room (or a member's backing session) never takes a
+		// scheduled turn: it runs only through the room's own send.
+		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, target.SessionID) != nil || team.RefuseRoomSession(layout, target.SessionID) != nil {
 			// Match the title tools: don't leak that the session exists.
 			return "", fmt.Errorf("session not found: %s", target.SessionID)
 		}

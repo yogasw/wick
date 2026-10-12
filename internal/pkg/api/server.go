@@ -1207,6 +1207,10 @@ func NewServer() *Server {
 			return out, nil
 		},
 		SendFollowup: func(sessionID, text string) error {
+			// A ticket's room is attached to it, but never runs a provider.
+			if err := team.RefuseRoomSession(agentsLayout, sessionID); err != nil {
+				return err
+			}
 			return agentsPool.Send(context.Background(), sessionID, "", "ticket", "user", text)
 		},
 	})
@@ -1918,7 +1922,7 @@ func NewServer() *Server {
 		})
 		return teamHub
 	}
-	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf, SessionUser: agentstool.SessionUserOf}))
+	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf, SessionUser: agentstool.SessionUserOf, InRoom: agentstool.InTicketRoom}))
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
@@ -3139,6 +3143,9 @@ func NewServer() *Server {
 			if agentsPool == nil {
 				return false, errors.New("agent pool is not running")
 			}
+			if err := team.RefuseRoomSession(agentsLayout, sessionID); err != nil {
+				return false, err
+			}
 			if err := agentsPool.Send(ctx, sessionID, "", string(agentsession.OriginREST), "user", text); err != nil {
 				return false, err
 			}
@@ -3885,7 +3892,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.scheduleStore != nil && s.agentsPool != nil {
 			// Boot recovery is implicit — the first tick picks up anything
 			// that came due while wick was down.
-			go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).
+			go schedule.NewRunner(s.scheduleStore, roomGuardSender{Pool: s.agentsPool, layout: s.agentsLayout}, s.agentsLayout).
 				WithRunAsCheck(s.runAsUsable).
 				WithConnectorExecutor(s.scheduleConnExec).
 				Run(ctx)

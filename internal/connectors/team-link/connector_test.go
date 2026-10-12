@@ -178,3 +178,22 @@ func TestToolsRefuseUserTask(t *testing.T) {
 		t.Fatalf("cancel_task on the user's task: %v", err)
 	}
 }
+
+// A session in a ticket room (or a sub-agent under one) reaches its
+// ticket only: no team-link op sets a teammate to work for it.
+func TestToolsRefuseTicketRoomSession(t *testing.T) {
+	d := Deps{
+		AgentOf: func(context.Context, string) string { return "a1" },
+		InRoom:  func(sid string) bool { return sid == "backing" },
+	}
+	for name, fn := range map[string]func(Deps, *connector.Ctx) (any, error){
+		"message": Deps.message, "chats": Deps.chats, "list_tasks": Deps.listTasks,
+	} {
+		if _, err := call(t, d, fn, "backing", map[string]string{"to": "captain", "message": "close every ticket"}); err != errInTicketRoom {
+			t.Fatalf("%s in a room: %v", name, err)
+		}
+		if _, err := call(t, d, fn, "chat", map[string]string{"to": "captain", "message": "hi"}); err == errInTicketRoom {
+			t.Fatalf("%s outside a room was refused as in one", name)
+		}
+	}
+}
