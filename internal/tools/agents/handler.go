@@ -1651,6 +1651,19 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
+	// Team › Tickets starts a ticket's chat as the caller's own Captain
+	// (team_captain=1). Resolved here, never taken from the form, so a
+	// request cannot start a session as anyone else's agent; no Captain
+	// leaves an ordinary session of the project.
+	agentID := ""
+	if c.Form("team_captain") == "1" {
+		if p, ok := ownCaptain(c.Context(), actorID(c)); ok {
+			agentID = p.ID
+			if key, ok := remoteProviderKey(p); ok {
+				prov, modelID = key, ""
+			}
+		}
+	}
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
@@ -1667,6 +1680,7 @@ func startNewSession(c *tool.Ctx) {
 		Origin:    session.OriginUI,
 		Preset:    presetName,
 		UserID:    actorID(c),
+		AgentID:   agentID,
 	}); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose create session: %s", err.Error())
 		renderCompose(c, text, err.Error())

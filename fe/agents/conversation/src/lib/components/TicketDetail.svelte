@@ -4,7 +4,6 @@
      The session list plus "New session" is the reason tickets exist as
      their own entity — when a conversation goes wrong you start another one
      here, and the ticket's notes carry over. */
-  import type { Snippet } from "svelte";
   import type { TicketButton, TicketDetail } from "../types/agents.js";
   import { deleteTicket, detachSession, getTicket, runTicketAction, updateTicket } from "../api/tickets.js";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -23,30 +22,18 @@
     onOpenSession: (sessionId: string) => void;
     /* Starts a new session already attached to this ticket. */
     onNewSession: (ticketId: string) => void;
-    /* Drawn between the description and the sessions — Team › Tickets puts
-       the ticket's room there. Absent elsewhere. */
-    room?: Snippet;
     /* The ticket's project: named on every call, since a ticket id is
        unique per project only. */
     projectId?: string;
-    /* Where the ticket's room is read, when it has one and the page is not
-       Team › Tickets itself (Agents › Projects with a Team): the room row
-       becomes a link there instead of a chat to open. */
-    roomHref?: string;
-    /** Told whether the loaded ticket has a room (Agents › Projects shows one box, not two). */
-    onRoom?: (has: boolean) => void;
     /* Team › Tickets: the back link reads "Tickets" and the header names
        the ticket's project (📁). Elsewhere the defaults stand. */
     backLabel?: string;
     projectName?: string;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession, room, projectId, roomHref, onRoom, backLabel = "Back to board", projectName }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, projectId, backLabel = "Back to board", projectName }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
-  $effect(() => {
-    onRoom?.(!!data?.room);
-  });
   let error = $state("");
 
   function load() {
@@ -161,7 +148,7 @@
      contract as the fields. */
   const SESSIONS_SHOWN = 5;
   let showAllSessions = $state(false);
-  /* The server already keeps the room's own session out of Sessions. */
+  /* A former ticket room is listed here as one more session. */
   const listedSessions = $derived(data?.sessions ?? []);
   const visibleSessions = $derived(
     showAllSessions ? listedSessions : listedSessions.slice(0, SESSIONS_SHOWN),
@@ -364,15 +351,6 @@
           >+ Add a description</button>
         {/if}
       </div>
-
-    {#if room}{@render room()}{:else if data.room}
-      <!-- No rooms here (one agent per session); say there is one, and
-           where it is read. -->
-      <div class="flex items-center gap-3 rounded-xl border border-white-300 bg-white-100 px-5 py-3 text-xs shadow-sm dark:border-navy-600 dark:bg-navy-700" data-testid="ticket-room-note">
-        <span class="min-w-0 flex-1 text-black-800 dark:text-black-600">👥 This ticket has a room · {data.room.members.length} member{data.room.members.length === 1 ? "" : "s"}, in Team › Tickets.</span>
-        {#if roomHref}<a class="shrink-0 font-medium text-green-600 hover:underline" href={roomHref}>Open the room ↗</a>{/if}
-      </div>
-    {/if}
 
     <!-- Sessions. Several per ticket is the normal case, not an edge one. -->
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">

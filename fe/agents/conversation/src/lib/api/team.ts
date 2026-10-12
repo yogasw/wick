@@ -324,6 +324,10 @@ export type AgentSessionItem = {
   owner_user_id?: string;
   owner_name?: string;
   mine?: boolean;
+  /** The ticket a Captain chat started in Team › Tickets works on. */
+  ticket_id?: string;
+  ticket_project_id?: string;
+  ticket_project_name?: string;
 };
 
 /** GET …/sessions?scope=all: every chat of a shared agent (owner's and each

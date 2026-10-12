@@ -5,15 +5,16 @@ const saveTeamSettings = vi.fn();
 vi.mock("../../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../../api/team.js")>()),
   saveTeamSettings: (...a: unknown[]) => saveTeamSettings(...a),
-  // The ticket page's room block: no room, no Team agents.
-  listAgentRoster: () => Promise.resolve({ agents: [], captain_id: "" }),
   runApi: <T,>(p: Promise<T>) => p,
 }));
 const getProjectOptions = vi.fn();
 vi.mock("../../../api/options.js", async (orig) => ({
   ...(await orig<typeof import("../../../api/options.js")>()),
   getProjectOptions: (...a: unknown[]) => getProjectOptions(...a),
+  getProviderOptions: () => Effect.succeed([]),
+  createSessionInProject: (...a: unknown[]) => createSessionInProject(...a),
 }));
+const createSessionInProject = vi.fn();
 
 /* The combined board's requests: one board per picked project, and the
    filter under the Team key. Effects, as the real client returns. */
@@ -24,7 +25,6 @@ const getTicket = vi.fn();
 vi.mock("../../../api/tickets.js", async (orig) => ({
   ...(await orig<typeof import("../../../api/tickets.js")>()),
   getTicket: (...a: unknown[]) => getTicket(...a),
-  getTicketRoom: () => Promise.resolve({ room: null }),
   getProjectTickets: (...a: unknown[]) => getProjectTickets(...a),
   getTicketFilter: (...a: unknown[]) => getTicketFilter(...a),
   saveTicketFilter: (...a: unknown[]) => saveTicketFilter(...a),
@@ -329,10 +329,36 @@ describe("TicketsPage", () => {
     expect(onRoute).toHaveBeenCalledWith({});
   });
 
-  test("the ticket page holds the room block next to its sessions", async () => {
+  test("the ticket page is the Agents ticket page plus its composer — no room block", async () => {
     mount(["p1"], { project: "p1", ticket: "T-7" });
-    expect((await screen.findByTestId("room-empty")).textContent).toContain("No room yet");
-    expect(screen.getByText("First chat")).toBeTruthy();
+    expect(await screen.findByText("First chat")).toBeTruthy();
+    expect(screen.queryByTestId("room-empty")).toBeNull();
+    expect(screen.queryByTestId("ticket-room-note")).toBeNull();
+    expect(screen.getByTestId("ticket-composer")).toBeTruthy();
+    expect(screen.getByTestId("ticket-composer-responder").textContent).toContain("your Captain");
+  });
+
+  test("sending starts a Captain session on the ticket and opens it", async () => {
+    createSessionInProject.mockResolvedValue("http://x/tools/agents/sessions/s-new");
+    const put: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : null;
+      const method = (init?.method ?? req?.method ?? "GET").toUpperCase();
+      if (method === "PUT") put.push(req ? req.url : String(input));
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    const { onOpenSession } = mount(["p1"], { project: "p1", ticket: "T-7" });
+    await screen.findByText("First chat");
+    const box = screen.getByTestId("ticket-composer").querySelector("textarea")!;
+    await fireEvent.input(box, { target: { value: "why 401?" } });
+    await fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith("s-new", "p1"));
+    // [base, text, files, provider, project, preset, teamCaptain]
+    expect(createSessionInProject.mock.calls[0][4]).toBe("p1");
+    expect(createSessionInProject.mock.calls[0][6]).toBe(true);
+    // Attached to the ticket before it opens.
+    expect(put.some((u) => u.includes("/api/tickets/T-7/sessions/s-new") && u.includes("project=p1"))).toBe(true);
+    vi.unstubAllGlobals();
   });
 
   test("a chat row on the ticket page goes to onOpenSession with its project", async () => {

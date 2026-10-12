@@ -184,6 +184,13 @@
             {#if lc}
               <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium " + lifecycleCls(lc)}>{lc}</span>
             {/if}
+            {#if s.ticket_id}
+              <span
+                class="truncate rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-800 dark:text-black-600"
+                title={`On ticket ${s.ticket_id} in ${s.ticket_project_name || s.ticket_project_id}`}
+                data-testid={"chat-ticket-" + s.id}
+              >🎫 {s.ticket_id} / 📁 {s.ticket_project_name || s.ticket_project_id}</span>
+            {/if}
             {#if viewTab === "all" && !s.agent_main}
               <span class="truncate text-xs text-black-800 dark:text-black-600">{mine ? "You" : s.owner_name || s.owner_user_id}</span>
             {/if}

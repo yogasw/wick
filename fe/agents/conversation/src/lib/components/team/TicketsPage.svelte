@@ -33,7 +33,9 @@
   import KanbanBoard from "../KanbanBoard.svelte";
   import TicketDetail from "../TicketDetail.svelte";
   import EmptyTicketOffer from "../EmptyTicketOffer.svelte";
-  import TicketRoom from "./TicketRoom.svelte";
+  import TicketComposer from "../TicketComposer.svelte";
+  import { getProviderOptions } from "../../api/options.js";
+  import type { ProviderOption } from "../../types/agents.js";
 
   type Props = {
     base: string;
@@ -53,8 +55,10 @@
     /** A chat row (board or ticket page) was clicked. Absent = open it in
         Agents › Projects. */
     onOpenSession?: (sessionId: string, projectId?: string) => void;
+    /** The caller's Captain, named on the ticket page's composer. */
+    captainName?: string;
   };
-  let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession }: Props = $props();
+  let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession, captainName = "" }: Props = $props();
 
   /* The last list read names the boards at once; the fresh one replaces it. */
   let projects = $state<ProjectOption[] | null>(cachedProjectOptions() ?? null);
@@ -70,6 +74,21 @@
     }
   });
   const nameOf = (id: string) => projects?.find((p) => p.id === id)?.name ?? id;
+
+  /* The ticket page's composer: the same one as Agents › Projects, with
+     the project's providers. Read once a ticket page is open. */
+  let providers = $state<ProviderOption[]>([]);
+  let providersRead = false;
+  $effect(() => {
+    if (!(route.project && route.ticket) || providersRead) return;
+    providersRead = true;
+    Effect.runPromise(getProviderOptions(base).pipe(Effect.provide(WickClientLayer)))
+      .then((p) => { providers = p ?? []; })
+      .catch(() => { /* the composer falls back to the server default */ });
+  });
+  const ticketProject = $derived(
+    projects?.find((p) => p.id === route.project) ?? (route.project ? ({ id: route.project, name: route.project } as ProjectOption) : null),
+  );
 
   /* Picker */
   let draft = $state<string[]>([]);
@@ -383,11 +402,10 @@
     else window.location.href = `${base}/sessions/${encodeURIComponent(id)}`;
   }
 
-  /* "+ New session" on a ticket page: the chat that joins a ticket is
-     started from the project's own ticket page (its composer), until the
-     room gives this page a composer of its own. */
-  function newSessionOn(project: string, ticketId: string) {
-    window.location.href = `${base}/sessions?project=${encodeURIComponent(project)}&ticket=${encodeURIComponent(ticketId)}`;
+  /* "+ New session" on a ticket page: the composer below already starts
+     one on this ticket, so the button puts the cursor there. */
+  function newSessionOn() {
+    document.querySelector<HTMLTextAreaElement>('[data-testid="ticket-composer"] textarea')?.focus();
   }
 
   /* A ticket a move just emptied: offered for deletion as on a project's
@@ -402,22 +420,33 @@
     <!-- Ticket page. A link to a ticket opens it even before (or without)
          its project being picked; a ticket that cannot be read says so
          inside TicketDetail. -->
-    <div class="p-4" data-testid="tickets-ticket" data-project={route.project} data-ticket={route.ticket}>
+    <div class="flex min-h-full flex-col gap-4 p-4" data-testid="tickets-ticket" data-project={route.project} data-ticket={route.ticket}>
       {#key route.project + "/" + route.ticket}
         <TicketDetail
           {base}
           ticketId={route.ticket}
           onBack={() => onRoute({})}
           onOpenSession={(sid) => openSession(sid, route.project)}
-          onNewSession={(tid) => newSessionOn(route.project ?? "", tid)}
+          onNewSession={newSessionOn}
           projectId={route.project}
           backLabel="Tickets"
           projectName={nameOf(route.project ?? "")}
-        >
-          {#snippet room()}
-            <TicketRoom {base} ticketId={route.ticket ?? ""} projectId={route.project ?? ""} projectName={nameOf(route.project ?? "")} />
-          {/snippet}
-        </TicketDetail>
+        />
+        <!-- The same composer as Agents › Projects; here the new session
+             answers as the caller's Captain. -->
+        {#if ticketProject}
+          <div class="mt-auto">
+            <TicketComposer
+              {base}
+              project={ticketProject}
+              {providers}
+              ticketId={route.ticket ?? null}
+              teamCaptain
+              {captainName}
+              onCreated={(sid) => openSession(sid, route.project)}
+            />
+          </div>
+        {/if}
       {/key}
     </div>
   {:else if settingsError}

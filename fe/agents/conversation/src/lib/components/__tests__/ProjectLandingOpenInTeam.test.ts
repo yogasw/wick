@@ -73,15 +73,13 @@ describe("ProjectLanding ticket page — Open in Team", () => {
     await waitFor(() => expect(screen.queryByTestId("open-in-team")).toBeNull());
   });
 
-  test("a ticket with a room says so and links to it; the room is not a chat here", async () => {
+  test("a ticket with a former room draws no room note; the page is the plain ticket page", async () => {
     team.on = true;
     room.on = true;
     render(ProjectLanding, { props });
-    const note = await screen.findByTestId("ticket-room-note");
-    expect(note.textContent).toContain("This ticket has a room · 2 members");
-    expect(note.querySelector("a")!.getAttribute("href")).toBe("/tools/agents/team/tickets/proj-42/T-7");
-    // One box, not two: the Team banner gives way to the room note.
-    await waitFor(() => expect(screen.queryByTestId("open-in-team")).toBeNull());
+    expect(await screen.findByTestId("open-in-team")).toBeTruthy();
+    expect(screen.queryByTestId("ticket-room-note")).toBeNull();
+    expect(screen.getByTestId("ticket-composer")).toBeTruthy();
     room.on = false;
   });
 });

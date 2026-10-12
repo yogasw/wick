@@ -117,6 +117,8 @@ export async function createSessionInProject(
   provider: string,
   projectId: string,
   preset = "",
+  /** Team › Tickets: answer as the caller's own Captain (server-resolved). */
+  teamCaptain = false,
 ): Promise<string> {
   const fd = new FormData();
   fd.append("message", message);
@@ -124,6 +126,7 @@ export async function createSessionInProject(
   fd.append("provider", provider);
   fd.append("project_id", projectId);
   if (preset) fd.append("preset", preset);
+  if (teamCaptain) fd.append("team_captain", "1");
   const res = await fetch(`${base}/`, { method: "POST", body: fd, credentials: "same-origin" });
   if (res.ok || res.redirected) return res.url;
   // The server answers a refused start with a plain-text reason; show it.

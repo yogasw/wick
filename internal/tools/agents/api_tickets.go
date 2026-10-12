@@ -623,15 +623,15 @@ func apiTicketDetail(c *tool.Ctx) {
 	// attach order, so the chat someone was just in sat wherever it
 	// happened to be added — a ticket with a long history buried it. Rows
 	// with no live session carry no timestamp and sink to the bottom.
-	room, hasRoom := findTicketRoom(projectID, tk)
-	if hasRoom {
+	// A room the ticket still has is one more row: the ticket page no
+	// longer draws rooms, so its thread is opened like any session on it
+	// (opening stays behind sessionAccessMW). Its members' backing
+	// sessions are never on the ticket, so they stay out.
+	if room, hasRoom := findTicketRoom(projectID, tk); hasRoom {
 		resp.Room = newRoomCards().cardOf(c.Context(), room)
 	}
 	resp.Sessions = make([]ticketSessionRow, 0, len(tk.Sessions))
 	for _, sid := range orderSidebarIDs(tk.Sessions, live, lc) {
-		if hasRoom && sid == room.ID {
-			continue
-		}
 		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
 	}
 

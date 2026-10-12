@@ -195,6 +195,12 @@ type TeamAgentSessionItem struct {
 	OwnerUserID string `json:"owner_user_id"`
 	OwnerName   string `json:"owner_name"`
 	Mine        bool   `json:"mine"`
+	// TicketID/TicketProjectID/TicketProjectName name the ticket the chat
+	// works on (a Captain chat started from Team › Tickets), "" when none:
+	// the drawer's 🎫 / 📁 chip.
+	TicketID          string `json:"ticket_id,omitempty"`
+	TicketProjectID   string `json:"ticket_project_id,omitempty"`
+	TicketProjectName string `json:"ticket_project_name,omitempty"`
 }
 
 // teamAgentSessionsAll is GET /api/team/agents/{id}/sessions?scope=all:
@@ -1973,12 +1979,44 @@ func teamAgentSessionItem(s session.Session, viewer string, names map[string]str
 	if name == "" {
 		name = s.Meta.UserID
 	}
-	return TeamAgentSessionItem{
+	it := TeamAgentSessionItem{
 		ID: s.ID, Label: s.Meta.Label, LastActive: timePtr(s.Meta.LastActive),
 		AgentMain: s.Meta.AgentMain, Status: string(s.Meta.Status),
 		Lifecycle: live.lifecycles[s.ID], Participants: s.Meta.PeopleCount(),
 		OwnerUserID: s.Meta.UserID, OwnerName: name, Mine: s.Meta.UserID == viewer,
 	}
+	if s.Meta.TicketID != "" && s.Meta.ProjectID != "" {
+		it.TicketID, it.TicketProjectID, it.TicketProjectName = s.Meta.TicketID, s.Meta.ProjectID, s.Meta.ProjectID
+		if globalMgr != nil {
+			if p, ok := globalMgr.Registry().Project(s.Meta.ProjectID); ok && p.Meta.Name != "" {
+				it.TicketProjectName = p.Meta.Name
+			}
+		}
+	}
+	return it
+}
+
+// ownCaptain is uid's own Captain when they have one that can run: a
+// ticket chat started in Team › Tickets answers as it.
+func ownCaptain(ctx context.Context, uid string) (entity.AgentPersona, bool) {
+	if globalTeam == nil || uid == "" {
+		return entity.AgentPersona{}, false
+	}
+	rows, err := globalTeam.List(ctx, uid)
+	if err != nil {
+		return entity.AgentPersona{}, false
+	}
+	return captainIn(rows)
+}
+
+// captainIn is the enabled Captain among rows, if any.
+func captainIn(rows []entity.AgentPersona) (entity.AgentPersona, bool) {
+	for _, p := range rows {
+		if p.IsCaptain && !p.Disabled {
+			return p, true
+		}
+	}
+	return entity.AgentPersona{}, false
 }
 
 // teamMainMu serialises main-chat moves, so an agent never ends up with

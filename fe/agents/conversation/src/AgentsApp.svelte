@@ -939,6 +939,7 @@
         onPicked={(s) => (ticketProjects = s.ticket_projects ?? [])}
         onRoute={(t) => go({ tickets: t })}
         onOpenSession={(id) => void openTicketSession(id)}
+        captainName={agents.find((a) => a.is_captain)?.name ?? ""}
       />
     </div>
   </section>

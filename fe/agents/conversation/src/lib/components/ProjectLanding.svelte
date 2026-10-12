@@ -1,14 +1,9 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { ProjectOption, ProviderOption, SessionListItem, ComposerCommand } from "../types/agents.js";
-  import { toastError } from "@wick-fe/common-stores";
+  import type { ProjectOption, ProviderOption, SessionListItem } from "../types/agents.js";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
-  import { searchProjectMentionPaths } from "../api/files.js";
-  import { listComposerCommands } from "../api/composer.js";
   import {
-    attachSession,
     boardQuery,
     getProjectTickets,
     getTicketFilter,
@@ -17,8 +12,7 @@
   } from "../api/tickets.js";
   import { boardGen, cachedBoard, cachedFilter, rememberBoard, rememberFilter } from "../ticketBoardCache.js";
   import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
-  import { Composer } from "@wick-fe/common-ui";
-  import { NOTIFY_KEY } from "../notify-pref.js";
+  import TicketComposer from "./TicketComposer.svelte";
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
   import { mergeRail, keepPushedOff } from "../railPaging.js";
@@ -62,108 +56,6 @@
   }: Props = $props();
 
   let search = $state("");
-  let selectedProvider = $state<string>("");
-
-  // A named instance is "type/name"; a default collapses to the bare type.
-  function providerKey(p: ProviderOption): string {
-    return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
-  }
-
-  // Resolve the project's configured default ("codex" or "codex/name") to a
-  // provider actually present in the list: exact key first, then bare type.
-  //
-  // The project's model rides along as the composer's packed
-  // "type/name::modelID" value, but ONLY on an exact instance match: the
-  // fallbacks land on a different instance, and a model id resolves against
-  // the registry of the instance it was chosen on.
-  function defaultProviderKey(): string {
-    if (providers.length === 0) return "";
-    const want = (project.defaultProvider ?? "").trim();
-    if (want) {
-      const exact = providers.find((p) => providerKey(p) === want);
-      if (exact) {
-        const key = providerKey(exact);
-        const model = (project.defaultModel ?? "").trim();
-        return model ? `${key}::${model}` : key;
-      }
-      const byType = providers.find((p) => p.type === want.split("/")[0]);
-      if (byType) return providerKey(byType);
-    }
-    return providerKey(providers[0]);
-  }
-
-  $effect(() => {
-    if (!selectedProvider && providers.length > 0) selectedProvider = defaultProviderKey();
-  });
-
-  // Live model loader — same contract as the conversation composer: split the
-  // "type/name" value and fetch that instance's current vendor models, falling
-  // back (composer-side) to the static list on error.
-  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
-    const slash = optionValue.indexOf("/");
-    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
-    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
-    return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
-  }
-
-  const providerSelect = $derived({
-    options: providers.map((p) => ({
-      label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
-      value: providerKey(p),
-      badge: p.usesAIRouter ? "AI Router" : undefined,
-      // Carry the model list so a multi-model provider (wick) shows the
-      // nested model picker here too — matching the conversation composer.
-      models: p.models,
-    })),
-    value: selectedProvider,
-    onChange: (v: string) => { selectedProvider = v; },
-    loadModels: loadProviderModels,
-    usageBase: base,
-  });
-
-  // Preset selector — same affordance as the new-session page, so an init
-  // from a project landing can override the preset before the session
-  // starts. "" = the default preset (or the project's configured default).
-  let presets = $state<string[]>([]);
-  let selectedPreset = $state<string>("");
-  $effect(() => {
-    Effect.runPromise(getPresetOptions(base).pipe(Effect.provide(WickClientLayer)))
-      .then((names) => { presets = names; })
-      .catch(() => { /* presets optional */ });
-  });
-  const presetSelect = $derived(
-    presets.length > 0
-      ? {
-          options: [
-            { label: "— preset (default) —", value: "" },
-            ...presets.map((n) => ({ label: n, value: n })),
-          ],
-          value: selectedPreset,
-          onChange: (v: string) => { selectedPreset = v; },
-        }
-      : undefined,
-  );
-
-  // `@` searches THIS project's folder; `/` shows skills only (pre-session).
-  function searchMentionFiles(query: string): Promise<string[]> {
-    return Effect.runPromise(searchProjectMentionPaths(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
-      .catch(() => [] as string[]);
-  }
-  let composerCommands = $state<ComposerCommand[]>([]);
-  $effect(() => {
-    const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
-    Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => {
-        // key: c.id — `value` is the skill's frontmatter name, which repeats
-        // across providers' skills dirs and would abort the keyed each block.
-        // This page is the worst case for it: with no provider selected yet
-        // providerType is "", so the server returns every provider's copy.
-        composerCommands = (res.commands ?? []).map((c) => ({
-          key: c.id, value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
-        }));
-      })
-      .catch(() => { /* commands optional */ });
-  });
 
   const chatCount = $derived(sessionTotal ?? sessions.length);
 
@@ -262,8 +154,6 @@
 
   /* Which ticket's detail is open, if any. Read from ?ticket= on load so a
      link out of the conversation rail lands here. */
-  // The open ticket has a room: its own note says so, the Team banner hides.
-  let ticketHasRoom = $state(false);
   let openTicketId = $state<string | null>(
     new URLSearchParams(window.location.search).get("ticket"),
   );
@@ -484,20 +374,6 @@
   const activeTicketLabel = $derived(
     activeTicket ? activeTicket.title || activeTicket.id : (activeTicketId ?? ""),
   );
-  /* The placeholder sits on ONE line that cannot wrap, so a long ticket
-     title would run past the input's right edge and hide the "/ commands"
-     hint after it. The footer below carries a longer cut and the full title
-     on hover, so nothing is lost by clipping it here. */
-  const activeTicketShort = $derived(
-    activeTicketLabel.length > 32 ? activeTicketLabel.slice(0, 32).trimEnd() + "…" : activeTicketLabel,
-  );
-  /* The footer line gets the same treatment with more room: a run-on title
-     (or a pasted id) must not stretch the banner to three lines. The full
-     title sits on the hover. */
-  const activeTicketBanner = $derived(
-    activeTicketLabel.length > 60 ? activeTicketLabel.slice(0, 60).trimEnd() + "…" : activeTicketLabel,
-  );
-
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
     ticketFilter = f;
@@ -510,35 +386,6 @@
     }, 400);
   }
   const setViewMode = (mode: "list" | "card") => applyFilter({ ...ticketFilter, view_mode: mode });
-
-  async function handleSend({ text, files }: { text: string; files: File[] }) {
-    try {
-      const url = await createSessionInProject(
-        base,
-        text,
-        files,
-        selectedProvider,
-        project.id,
-        selectedPreset,
-      );
-      // Attach before navigating: the new session must already belong to
-      // the ticket when it opens, or its first spawn would miss the
-      // ticket pointer and its notes.
-      const ticketId = activeTicketId;
-      if (ticketId) {
-        const sessionId = url.split("/").pop()?.split("?")[0] ?? "";
-        if (sessionId) {
-          await Effect.runPromise(
-            attachSession(base, ticketId, sessionId, project.id).pipe(Effect.provide(WickClientLayer)),
-          ).catch(() => { /* the session is still usable unattached */ });
-        }
-        pendingTicketId = null;
-      }
-      window.location.href = url;
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : "Failed to create session");
-    }
-  }
 </script>
 
 <!-- The page is full-bleed, but only the board and a ticket's page USE that
@@ -606,7 +453,7 @@
       <!-- The page height is locked (each panel scrolls itself), so the
            ticket's long page scrolls in its own container. -->
       <div class="min-h-0 flex-1 overflow-y-auto">
-        {#if teamOn && !ticketHasRoom}
+        {#if teamOn}
           <div class="mb-3 flex items-center gap-3 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs dark:border-navy-600 dark:bg-navy-800" data-testid="open-in-team">
             <span class="min-w-0 flex-1 text-black-800 dark:text-black-600">Need several agents on this ticket? That happens in Team.</span>
             <a
@@ -622,8 +469,6 @@
           onOpenSession={onSelectSession}
           onNewSession={newSessionInTicket}
           projectId={project.id}
-          roomHref={teamOn ? teamTicketsHref(base, project.id, openTicketId) : undefined}
-          onRoom={(has) => (ticketHasRoom = has)}
         />
       </div>
     {:else if ticketEnabled && viewMode === "card" && boardView}
@@ -656,42 +501,17 @@
     {/if}
   </div>
 
-  <!-- The floating composer: every view's reply box, bottom-centre like a
-       helpdesk's. Starting a chat from a ticket page joins that ticket; from
-       the list or board it is a plain new session in the project. Sticky, so
-       a long page never scrolls it away. -->
-  <div class="sticky bottom-0 z-10 mx-auto w-full max-w-3xl pb-1">
-    <div class="rounded-xl border border-white-300 bg-white-100 p-3 shadow-lg dark:border-navy-600 dark:bg-navy-700">
-      <Composer
-        onSend={handleSend}
-        placeholder={activeTicketId
-          ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
-          : "Ask anything…   / commands · @ files"}
-        notifyKey={NOTIFY_KEY}
-        provider={providerSelect}
-        preset={presetSelect}
-        onSearchFiles={searchMentionFiles}
-        commands={composerCommands}
-      />
-      <p class="mt-2 text-center text-[11px] text-black-600 dark:text-black-700">
-        {#if activeTicketId}
-          New session on <span
-            class="font-medium text-green-600 dark:text-green-400"
-            title={activeTicketLabel}
-            >{activeTicketBanner}</span
-          > — this chat joins the ticket and reads its notes.
-          <button
-            type="button"
-            onclick={() => { pendingTicketId = null; gotoTicket(null); }}
-            class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
-            >Start without a ticket</button
-          >
-        {:else}
-          New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override.
-        {/if}
-      </p>
-    </div>
-  </div>
+  <!-- The floating composer: every view's reply box. Starting a chat from
+       a ticket page joins that ticket; from the list or board it is a
+       plain new session in the project. -->
+  <TicketComposer
+    {base}
+    {project}
+    {providers}
+    ticketId={activeTicketId}
+    ticketLabel={activeTicketLabel}
+    onClearTicket={() => { pendingTicketId = null; gotoTicket(null); }}
+  />
 </div>
 
 <EmptyTicketOffer bind:this={emptyOffer} {base} onChanged={reloadBoard} />
