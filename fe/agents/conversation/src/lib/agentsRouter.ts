@@ -19,8 +19,9 @@ import { connTabOf, type ConnTab } from "./connectionTabs.js";
      /team/<handle>?panel=scheduled      Scheduled drawer
      /team/g/<group session id>          a group chat
      /team/g/<id>?panel=group-settings   its Settings drawer
-     /team/t                             Tickets: the selected projects' board
-     /team/t/<project id>/<ticket id>    one ticket on it
+     /team/tickets                       Tickets: the selected projects' board
+     /team/tickets/<project id>/<ticket id>
+                                         one ticket on it
      /team?panel=new                     the + Agent wizard
      /team?panel=new&project=<id>        the wizard converting that project
                                          ("Make this an agent…")
@@ -61,7 +62,7 @@ export type AgentsRoute = {
   panel: AgentsPanel | null;
   /** A group chat's session id (/team/g/<id>); then handle is null. */
   group?: string | null;
-  /** The Tickets page (/team/t…); then handle and group are null. No
+  /** The Tickets page (/team/tickets…); then handle and group are null. No
       project/ticket = the board, both = that ticket's page. */
   tickets?: TicketsRoute | null;
 };
@@ -69,6 +70,16 @@ export type AgentsRoute = {
 export type TicketsRoute = { project?: string; ticket?: string };
 
 const ROOT = "/team";
+
+/** Path words the app owns under /team, which no agent handle may take.
+    "g" never could (a handle has 2+ characters,
+    HANDLE_RE); "tickets" is also reserved by the server (team.ValidateHandle). */
+export const RESERVED_HANDLES: readonly string[] = ["tickets", "all", "here", "channel"];
+
+/** isReservedHandle says whether h is taken by the app or a group mention. */
+export function isReservedHandle(h: string): boolean {
+  return RESERVED_HANDLES.includes(h);
+}
 
 /** parseAgentsRoute reads one URL into a route. `base` is the tool prefix
     (data-base, e.g. "/tools/agents"). Anything it does not recognise falls
@@ -83,14 +94,15 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
   let handle: string | null = null;
   let group: string | null = null;
   let tickets: TicketsRoute | null = null;
-  // "g" and "t" are free to reserve: a handle has 2+ characters (HANDLE_RE).
+  // "g" is free to reserve: a handle has 2+ characters (HANDLE_RE);
+  // "tickets" is a reserved handle (isReservedHandle).
   if (seg === "g" && segs[1]) {
     try {
       group = decodeURIComponent(segs[1]);
     } catch {
       group = null;
     }
-  } else if (seg === "t") {
+  } else if (seg === "tickets") {
     // A ticket needs both ids; half of one (or a bad escape) is the board.
     tickets = {};
     if (segs[1] && segs[2]) {
@@ -145,7 +157,7 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
 export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   let path = base + ROOT;
   if (r.tickets) {
-    path += "/t";
+    path += "/tickets";
     if (r.tickets.project && r.tickets.ticket) path += "/" + encodeURIComponent(r.tickets.project) + "/" + encodeURIComponent(r.tickets.ticket);
   } else if (r.group) path += "/g/" + encodeURIComponent(r.group);
   else if (r.handle) path += "/" + encodeURIComponent(r.handle);

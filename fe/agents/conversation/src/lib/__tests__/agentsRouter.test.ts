@@ -1,5 +1,5 @@
 import { describe, it, test, expect } from "vitest";
-import { parseAgentsRoute, formatAgentsRoute, type AgentsRoute } from "../agentsRouter.js";
+import { parseAgentsRoute, formatAgentsRoute, isReservedHandle, type AgentsRoute } from "../agentsRouter.js";
 import { hiddenTabsFor } from "../agentMode.js";
 
 const B = "/tools/agents";
@@ -179,14 +179,22 @@ describe("group routes", () => {
 });
 
 describe("tickets routes", () => {
-  test("/team/t is the board; no agent, no group", () => {
-    expect(parseAgentsRoute("/tools/agents/team/t", "", B)).toEqual({ handle: null, session: null, panel: null, tickets: {} });
-    expect(parseAgentsRoute("/tools/agents/team/t/", "", B).tickets).toEqual({});
+  test("/team/tickets is the board; no agent, no group", () => {
+    expect(parseAgentsRoute("/tools/agents/team/tickets", "", B)).toEqual({ handle: null, session: null, panel: null, tickets: {} });
+    expect(parseAgentsRoute("/tools/agents/team/tickets/", "", B).tickets).toEqual({});
   });
-  test("/team/t/<project>/<ticket> names one ticket; half of one is the board", () => {
-    expect(parseAgentsRoute("/tools/agents/team/t/p%201/T-12", "", B).tickets).toEqual({ project: "p 1", ticket: "T-12" });
-    expect(parseAgentsRoute("/tools/agents/team/t/p1", "", B).tickets).toEqual({});
-    expect(parseAgentsRoute("/tools/agents/team/t/%E0%A4/T-1", "", B).tickets).toEqual({});
+  test("/team/tickets/<project>/<ticket> names one ticket; half of one is the board", () => {
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p%201/T-12", "", B).tickets).toEqual({ project: "p 1", ticket: "T-12" });
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1", "", B).tickets).toEqual({});
+    expect(parseAgentsRoute("/tools/agents/team/tickets/%E0%A4/T-1", "", B).tickets).toEqual({});
+  });
+  test("/team/t is not Tickets", () => {
+    expect(parseAgentsRoute("/tools/agents/team/t", "", B).tickets).toBeUndefined();
+    expect(parseAgentsRoute("/tools/agents/team/t/p1/T-1", "", B).tickets).toBeUndefined();
+  });
+  test("tickets is a reserved handle", () => {
+    expect(isReservedHandle("tickets")).toBe(true);
+    expect(isReservedHandle("ticket")).toBe(false);
   });
   test("a two-letter handle is still an agent", () => {
     const r = parseAgentsRoute("/tools/agents/team/tt", "", B);
@@ -194,7 +202,7 @@ describe("tickets routes", () => {
     expect(r.tickets).toBeUndefined();
   });
   test("the Team settings Tickets tab opens over the page; session is ignored", () => {
-    const r = parseAgentsRoute("/tools/agents/team/t", "?panel=team-settings&tab=tickets&session=s1", B);
+    const r = parseAgentsRoute("/tools/agents/team/tickets", "?panel=team-settings&tab=tickets&session=s1", B);
     expect(r).toEqual({ handle: null, session: null, panel: { kind: "team-settings", tab: "tickets" }, tickets: {} });
   });
   test("format is the inverse", () => {
@@ -208,9 +216,9 @@ describe("tickets routes", () => {
       const [path, qs = ""] = url.split("?");
       expect(parseAgentsRoute(path, qs ? "?" + qs : "", B)).toEqual(r);
     }
-    expect(formatAgentsRoute({ handle: null, session: null, panel: null, tickets: { project: "p 1", ticket: "T-12" } }, B)).toBe("/tools/agents/team/t/p%201/T-12");
+    expect(formatAgentsRoute({ handle: null, session: null, panel: null, tickets: { project: "p 1", ticket: "T-12" } }, B)).toBe("/tools/agents/team/tickets/p%201/T-12");
     expect(formatAgentsRoute({ handle: null, session: null, panel: { kind: "team-settings", tab: "tickets" }, tickets: {} }, B)).toBe(
-      "/tools/agents/team/t?panel=team-settings&tab=tickets",
+      "/tools/agents/team/tickets?panel=team-settings&tab=tickets",
     );
   });
 });

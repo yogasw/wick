@@ -120,7 +120,7 @@ func TestScopeOfMalformedGrantsDeny(t *testing.T) {
 
 func TestValidateHandle(t *testing.T) {
 	ok := []string{"captain", "ab", "a1", "log-investigator", "9x", "a234567890123456789012345678901"}
-	bad := []string{"", "a", "-ab", "Ab", "a_b", "a b", "all", "here", "channel", "a2345678901234567890123456789012"}
+	bad := []string{"", "a", "-ab", "Ab", "a_b", "a b", "all", "here", "channel", "tickets", "a2345678901234567890123456789012"}
 	for _, h := range ok {
 		if err := ValidateHandle(h); err != nil {
 			t.Errorf("ValidateHandle(%q) = %v, want nil", h, err)

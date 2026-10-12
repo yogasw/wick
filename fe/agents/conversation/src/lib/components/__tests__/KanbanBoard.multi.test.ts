@@ -141,8 +141,15 @@ const columnLabels = (c: HTMLElement) =>
 
 describe("KanbanBoard — several projects", () => {
   test("columns are the union of the projects' statuses, first project's order first", () => {
-    const { container } = renderMulti();
+    const { container } = renderMulti({ filter: { statuses: ["open", "in_progress", "done", "review"] } });
     expect(columnLabels(container)).toEqual(["Open", "In Progress", "Done", "Review"]);
+  });
+
+  // Done is terminal in both projects: collapsed until somebody opens it,
+  // and so never part of what a board button sends by default.
+  test("the terminal column starts collapsed on the combined board", () => {
+    const { container } = renderMulti();
+    expect(columnLabels(container)).toEqual(["Open", "In Progress", "Review"]);
   });
 
   test("cards carry their project's name", () => {
@@ -191,8 +198,8 @@ describe("KanbanBoard — several projects", () => {
     const fired = calls.filter((c) => c.url.includes("/board-actions/"));
     const a = fired.find((c) => c.url.includes("/api/projects/p-a/board-actions/b-sync-a"));
     const b = fired.find((c) => c.url.includes("/api/projects/p-b/board-actions/b-sync-b"));
-    expect(a!.body).toEqual({ assignee: "", statuses: ["open", "in_progress", "done"] });
-    expect(b!.body).toEqual({ assignee: "", statuses: ["open", "done", "review"] });
+    expect(a!.body).toEqual({ assignee: "", statuses: ["open", "in_progress"] });
+    expect(b!.body).toEqual({ assignee: "", statuses: ["open", "review"] });
     // One result panel per project.
     expect(await screen.findByText("Sync · 📁 Alpha")).toBeTruthy();
     expect(await screen.findByText("Sync · 📁 Beta")).toBeTruthy();
@@ -212,7 +219,7 @@ describe("KanbanBoard — several projects", () => {
     await fireEvent.change(sel, { target: { value: "p-b" } });
     expect(screen.queryByTestId("ticket-title-T-A1")).toBeNull();
     expect(screen.getByTestId("ticket-title-T-B1")).toBeTruthy();
-    expect(columnLabels(container)).toEqual(["Open", "Review", "Done"]);
+    expect(columnLabels(container)).toEqual(["Open", "Review"]);
     expect(screen.getByTestId("board-button-Sync").textContent).toBe("Sync");
     await fireEvent.click(screen.getByTestId("board-button-Sync"));
     await waitFor(() => expect(calls.filter((c) => c.url.includes("/board-actions/"))).toHaveLength(1));
@@ -240,6 +247,7 @@ describe("KanbanBoard — several projects", () => {
         { id: "p-a", name: "Alpha", board: twinA },
         { id: "p-b", name: "Beta", board: twinB },
       ],
+      filter: { statuses: ["open", "in_progress", "done", "review"] },
     });
     const cards = screen.getAllByTestId("ticket-card-T-4F2A");
     expect(cards).toHaveLength(2);
@@ -356,7 +364,7 @@ describe("KanbanBoard — several projects", () => {
   });
 
   test("a status move names the card's project (ticket ids are per project)", async () => {
-    const { container } = renderMulti();
+    const { container } = renderMulti({ filter: { statuses: ["open", "in_progress", "done", "review"] } });
     const src = screen.getByTestId("ticket-card-T-B1");
     const transfer = dt();
     await fireEvent.dragStart(src, { dataTransfer: transfer });

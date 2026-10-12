@@ -63,7 +63,7 @@ describe("ProjectLanding ticket page — Open in Team", () => {
     const box = await screen.findByTestId("open-in-team");
     const link = box.querySelector("a")!;
     expect(link.textContent).toContain("Open in Team › Tickets ↗");
-    expect(link.getAttribute("href")).toBe("/tools/agents/team/t/proj-42/T-7");
+    expect(link.getAttribute("href")).toBe("/tools/agents/team/tickets/proj-42/T-7");
   });
 
   test("without a Team, nothing changes", async () => {
@@ -79,7 +79,7 @@ describe("ProjectLanding ticket page — Open in Team", () => {
     render(ProjectLanding, { props });
     const note = await screen.findByTestId("ticket-room-note");
     expect(note.textContent).toContain("This ticket has a room · 2 members");
-    expect(note.querySelector("a")!.getAttribute("href")).toBe("/tools/agents/team/t/proj-42/T-7");
+    expect(note.querySelector("a")!.getAttribute("href")).toBe("/tools/agents/team/tickets/proj-42/T-7");
     // One box, not two: the Team banner gives way to the room note.
     await waitFor(() => expect(screen.queryByTestId("open-in-team")).toBeNull());
     room.on = false;

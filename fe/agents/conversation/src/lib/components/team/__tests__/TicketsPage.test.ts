@@ -41,6 +41,9 @@ vi.mock("../../../stores/sessionsStream.js", () => ({
 }));
 
 import { Effect } from "effect";
+import { boardQuery } from "../../../api/tickets.js";
+import { boardGen, rememberBoard, resetBoardCache } from "../../../ticketBoardCache.js";
+import { setViewerId } from "../../../viewer.js";
 import TicketsPage from "../TicketsPage.svelte";
 import type { TicketBoard } from "../../../types/agents.js";
 
@@ -95,6 +98,69 @@ describe("TicketsPage", () => {
   });
 
   const callsFor = (id: string) => getProjectTickets.mock.calls.filter((c) => c[1] === id);
+
+  test("every picked board is asked for at once, without waiting for the project list", async () => {
+    getProjectOptions.mockReturnValue(new Promise(() => {}));
+    getProjectTickets.mockReturnValue(Effect.never);
+    mount(["p1", "p2"]);
+    expect(await screen.findByTestId("tickets-splash")).toBeTruthy();
+    await waitFor(() => expect(callsFor("p1")).toHaveLength(1));
+    expect(callsFor("p2")).toHaveLength(1);
+  });
+
+  test("the splash shows only past its delay, then offers Retry when slow", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      getProjectTickets.mockReturnValue(Effect.never);
+      mount(["p1", "p2"]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(screen.getByTestId("tickets-splash")).toBeTruthy();
+      expect(screen.queryByText("Loading tickets…")).toBeNull();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(screen.getByText("Loading tickets…")).toBeTruthy();
+      expect(screen.getByTestId("tickets-splash-projects").textContent).toContain("Alpha");
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(screen.getByText("Still loading…")).toBeTruthy();
+      await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(callsFor("p1")).toHaveLength(2);
+      expect(callsFor("p2")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("every picked project failing: the reason and Retry, which loads them again", async () => {
+    getProjectTickets.mockReturnValue(Effect.fail(new Error("boom")));
+    mount(["p1", "p2"]);
+    const err = await screen.findByTestId("tickets-splash-error");
+    expect(err.textContent).toContain("boom");
+    getProjectTickets.mockImplementation((_b: string, id: string) =>
+      Effect.succeed(boardOf(id === "p1" ? "T-A" : "T-B", id === "p1" ? "Alpha ticket" : "Beta ticket")),
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("ticket-card-T-A")).toBeTruthy();
+    expect(screen.queryByTestId("tickets-splash")).toBeNull();
+  });
+
+  test("a cached board is drawn while its refetch is on the way", async () => {
+    setViewerId("u-1");
+    sessionStorage.clear();
+    resetBoardCache();
+    try {
+      const q = boardQuery({ rows: 3, untracked: false, untrackedLimit: 25, untrackedOwner: "me" });
+      rememberBoard("p1", q, boardOf("T-OLD", "Cached ticket"), boardGen("p1"));
+      getProjectTickets.mockReturnValue(Effect.never);
+      mount(["p1"]);
+      expect(await screen.findByTestId("ticket-card-T-OLD")).toBeTruthy();
+      expect(screen.queryByTestId("tickets-splash")).toBeNull();
+      expect(callsFor("p1")).toHaveLength(1);
+    } finally {
+      setViewerId("");
+      sessionStorage.clear();
+      resetBoardCache();
+    }
+  });
 
   test("a filter click keeps the board mounted and the project select where it was", async () => {
     mount(["p1", "p2"]);
@@ -235,7 +301,7 @@ describe("TicketsPage", () => {
     expect(screen.queryByTestId("tickets-board-error-p1")).toBeNull();
   });
 
-  test("a card opens its ticket page under /team/t/<project>/<ticket>", async () => {
+  test("a card opens its ticket page under /team/tickets/<project>/<ticket>", async () => {
     const { onRoute } = mount(["p1", "p2"]);
     await fireEvent.click(await screen.findByTestId("ticket-card-T-B"));
     expect(onRoute).toHaveBeenCalledWith({ project: "p2", ticket: "T-B" });

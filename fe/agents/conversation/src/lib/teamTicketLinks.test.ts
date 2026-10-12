@@ -29,8 +29,8 @@ describe("teamTicketLinks", () => {
   });
 
   test("teamTicketsHref: the board and a ticket's page", () => {
-    expect(teamTicketsHref("/tools/agents")).toBe("/tools/agents/team/t");
-    expect(teamTicketsHref("/tools/agents", "p 1", "T-7")).toBe("/tools/agents/team/t/p%201/T-7");
+    expect(teamTicketsHref("/tools/agents")).toBe("/tools/agents/team/tickets");
+    expect(teamTicketsHref("/tools/agents", "p 1", "T-7")).toBe("/tools/agents/team/tickets/p%201/T-7");
   });
 
   test("addTicketProject adds a missing project and saves the list", async () => {
@@ -69,12 +69,12 @@ describe("teamTicketLinks", () => {
     expect(go).not.toHaveBeenCalled();
   });
 
-  test("ticketJumpFor in Team without a host opener goes to /team/t/… by URL", () => {
+  test("ticketJumpFor in Team without a host opener goes to /team/tickets/… by URL", () => {
     const go = vi.fn();
     ticketJumpFor("/b", "p1", "T-7", {}, go).onJump();
-    expect(go).toHaveBeenCalledWith("/b/team/t/p1/T-7");
+    expect(go).toHaveBeenCalledWith("/b/team/tickets/p1/T-7");
     ticketJumpFor("/b", "p1", undefined, {}, go).onJump();
-    expect(go).toHaveBeenLastCalledWith("/b/team/t");
+    expect(go).toHaveBeenLastCalledWith("/b/team/tickets");
   });
 
   test("ticketJumpFor outside Team keeps the project board in Agents › Projects", () => {

@@ -44,6 +44,7 @@
     type BoardProject,
   } from "../ticketBoardMerge.js";
   import { roomAgentOptions, withRoomAgent } from "../ticketRoom.js";
+  import { activeStatusKeys, terminalKeys, toggledStatuses } from "../ticketBoardStatuses.js";
 
   type Props = {
     base: string;
@@ -189,17 +190,14 @@
     return dotAccents[index % dotAccents.length];
   }
 
-  /* An empty saved list means "all", which is what a board with nothing
-     switched off should keep meaning across a project that later renames or
-     adds a stage. Turning every chip off is spelled with the sentinel below
-     instead, so the two cannot be confused. */
+  /* An empty saved list means the default columns — every one but the
+     terminal stage (ticketBoardStatuses.ts says why) — and keeps meaning that
+     across a project that later renames or adds a stage. Turning every chip
+     off is spelled with the sentinel below instead, so the two cannot be
+     confused. */
   const NONE = " none";
-  const activeStatuses = $derived.by(() => {
-    const saved = filter.statuses;
-    if (!saved || saved.length === 0) return statusKeys;
-    if (saved.length === 1 && saved[0] === NONE) return [];
-    return saved;
-  });
+  const terminalStatusKeys = $derived(terminalKeys(view.statuses));
+  const activeStatuses = $derived(activeStatusKeys(filter.statuses, statusKeys, terminalStatusKeys, NONE));
 
   /* Search over the board that is already on screen.
 
@@ -228,8 +226,19 @@
      what arrived into its columns (and applies the local search). Filtering
      by status again here would hide nothing and would quietly mask a request
      that asked for the wrong thing. */
+  /* A search also reaches the collapsed terminal column: "where is the one
+     about the voucher" should not miss it because it is finished. Only a
+     column with a match opens, and only for the search — board buttons
+     still send activeStatuses. */
+  const columnKeys = $derived(
+    q === ""
+      ? activeStatuses
+      : statusKeys.filter(
+          (k) => activeStatuses.includes(k) || (terminalStatusKeys.includes(k) && items.some((t) => t.status === k && matches(t))),
+        ),
+  );
   const columns = $derived(
-    activeStatuses
+    columnKeys
       .filter((s) => statusKeys.includes(s))
       .map((s) => ({
         status: s,
@@ -285,7 +294,8 @@
         /* The saved filter, not the derived list: "" and "me" are the
            toolbar's own words, and the server resolves "me" against the
            clicker. activeStatuses is sent instead of filter.statuses so an
-           empty saved filter goes out as the columns it actually means —
+           empty saved filter goes out as the columns it actually means
+           (never the collapsed Done) —
            and every-chip-off keeps the sentinel, because an empty list
            reads as "no filter" on the wire and would send the whole board
            while the clicker is looking at nothing. */
@@ -349,12 +359,7 @@
   }
 
   function toggleStatus(s: string) {
-    const cur = new Set(activeStatuses);
-    if (cur.has(s)) cur.delete(s);
-    else cur.add(s);
-    const next = statusKeys.filter((x) => cur.has(x));
-    const all = next.length === statusKeys.length;
-    onFilter({ ...filter, statuses: all ? [] : next.length === 0 ? [NONE] : next });
+    onFilter({ ...filter, statuses: toggledStatuses(activeStatuses, s, statusKeys, terminalStatusKeys, NONE) });
   }
 
   /* ── new ticket ── */

@@ -57,6 +57,7 @@
   import TicketsPage from "./lib/components/team/TicketsPage.svelte";
   import { addTicketProject, sessionTarget, ticketsEntryShown } from "./lib/teamTicketLinks.js";
   import { projectCount, ticketsSubtitle } from "./lib/ticketProjects.js";
+  import { cachedTicketProjects, rememberTicketProjects } from "./lib/ticketBoardCache.js";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
@@ -178,8 +179,14 @@
   /** Project names for the Tickets header, once the page has read them. */
   let ticketNames = $state<Record<string, string>>({});
   /* Team › Tickets: the projects picked for it (Team settings), for the
-     row's count and the page; null until the settings have loaded. */
-  let ticketProjects = $state<string[] | null>(null);
+     row's count and the page; null until the settings have loaded. The
+     last selection read stands in meanwhile, so the boards are asked for
+     at once. */
+  const ticketProjectsSeen = cachedTicketProjects();
+  let ticketProjects = $state<string[] | null>(ticketProjectsSeen?.length ? ticketProjectsSeen : null);
+  $effect(() => {
+    if (ticketProjects) rememberTicketProjects($state.snapshot(ticketProjects));
+  });
 
   onMount(() => {
     load();
@@ -872,17 +879,14 @@
       />
     {/key}
   </section>
-  {:else if route.tickets && (!loaded || loadError)}
-  <!-- /team/t opened before the roster is in (or when it failed): say so
-       rather than leave the page blank until the redirect decides. -->
+  {:else if route.tickets && loadError}
+  <!-- /team/tickets when the roster failed: no Team is known, so no board. -->
   <section class="flex min-w-0 flex-1 items-center justify-center p-6" data-testid="tickets-roster-state">
-    {#if loadError}
-      <p class="text-sm text-neg-400">Couldn't load your Team: {loadError}</p>
-    {:else}
-      <p class="text-sm text-black-700 dark:text-black-600">Loading tickets…</p>
-    {/if}
+    <p class="text-sm text-neg-400">Couldn't load your Team: {loadError}</p>
   </section>
-  {:else if route.tickets && hasTickets}
+  {:else if route.tickets && (hasTickets || !loaded)}
+  <!-- Drawn before the roster is in, so the page's own reads start at
+       once; a roster with no Captain then sends the page to /team. -->
   <section class="flex min-w-0 flex-1 flex-col">
     <!-- The board has the Tickets header; a ticket's page has its own
          "← Tickets · id · 📁 project" row instead (mockup renderHeader). -->

@@ -9,6 +9,13 @@ import type {
   TicketDetail,
   TicketFilter,
 } from "../types/agents.js";
+import { forgetBoards } from "../ticketBoardCache.js";
+
+/* A write that can change a project's board drops its cached boards
+   (ticketBoardCache), once it has succeeded. No project named = every
+   project's, since the ticket's could be any of them. */
+const dropsBoards = (projectId?: string) =>
+  <A, E, R>(e: Effect.Effect<A, E, R>) => e.pipe(Effect.tap(() => Effect.sync(() => forgetBoards(projectId))));
 
 const DEFAULT_STATUSES = ["open", "in_progress", "waiting", "done"];
 
@@ -40,7 +47,9 @@ export type BoardOptions = {
   untrackedOwner?: string;
 };
 
-export const getProjectTickets = (base: string, projectId: string, opt: BoardOptions = {}) => {
+/** boardQuery is the query string getProjectTickets sends for opt: the
+    request itself, so it also names a cached board (ticketBoardCache). */
+export function boardQuery(opt: BoardOptions = {}): string {
   const q = new URLSearchParams();
   if (opt.rows !== undefined) q.set("rows", String(opt.rows));
   // Set even when empty: "?statuses=" is an explicit "no columns", which is
@@ -51,7 +60,11 @@ export const getProjectTickets = (base: string, projectId: string, opt: BoardOpt
   if (opt.untrackedLimit !== undefined) q.set("untracked_limit", String(opt.untrackedLimit));
   if (opt.untrackedAfter) q.set("untracked_after", opt.untrackedAfter);
   if (opt.untrackedOwner === "me") q.set("untracked_owner", "me");
-  const qs = q.toString();
+  return q.toString();
+}
+
+export const getProjectTickets = (base: string, projectId: string, opt: BoardOptions = {}) => {
+  const qs = boardQuery(opt);
   return apiGetE<TicketBoard>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/tickets${qs ? "?" + qs : ""}`,
   ).pipe(
@@ -90,7 +103,7 @@ export const createTicket = (
     fields?: Record<string, string>;
     session_id?: string;
   },
-) => apiPostE<TicketCard>(`${base}/api/projects/${encodeURIComponent(projectId)}/tickets`, body);
+) => apiPostE<TicketCard>(`${base}/api/projects/${encodeURIComponent(projectId)}/tickets`, body).pipe(dropsBoards(projectId));
 
 /* Ticket ids are unique per project only (an adopted external id can sit in
    two projects), so every per-ticket call that knows its project names it:
@@ -124,7 +137,7 @@ export const updateTicket = (
     fields?: Record<string, string>;
   },
   projectId?: string,
-) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}${inProject(projectId)}`, patch);
+) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}${inProject(projectId)}`, patch).pipe(dropsBoards(projectId));
 
 /** The receiver's own JSON reply, passed through by the server. Every field
     is optional — a receiver that answers `{}` is still a working receiver —
@@ -171,7 +184,7 @@ export type ActionResult = {
 export const runTicketAction = (base: string, ticketId: string, buttonId: string, projectId?: string) =>
   apiPostE<ActionResult>(
     `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}${inProject(projectId)}`,
-  );
+  ).pipe(dropsBoards(projectId));
 
 /** The list-toolbar twin of runTicketAction: the server POSTs the board's
     CURRENT filter — who it is narrowed to, which columns — plus the tickets
@@ -195,7 +208,7 @@ export const runBoardAction = (
   apiPostE<ActionResult>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/board-actions/${encodeURIComponent(buttonId)}`,
     { assignee: filter.assignee ?? "", statuses: filter.statuses ?? [] },
-  );
+  ).pipe(dropsBoards(projectId));
 
 /** Deleting a ticket either keeps its chats (they become untracked) or
     deletes them with it. The destructive shape has to be named: a ticket is
@@ -208,7 +221,7 @@ export const deleteTicket = (
 ) =>
   apiDeleteE<{ status: string; sessions_deleted: number; sessions_kept: number }>(
     `${base}/api/tickets/${encodeURIComponent(ticketId)}?sessions=${sessions}${inProject(projectId, "&")}`,
-  );
+  ).pipe(dropsBoards(projectId));
 
 /** A ticket the moved chat just left, when that emptied it — the caller is
     offered its removal rather than left with a husk on the board. */
@@ -218,12 +231,12 @@ type MoveResult = { status: string; emptied_ticket?: EmptiedTicket };
 export const attachSession = (base: string, ticketId: string, sessionId: string, projectId?: string) =>
   apiPutE<MoveResult>(
     `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}${inProject(projectId)}`,
-  );
+  ).pipe(dropsBoards(projectId));
 
 export const detachSession = (base: string, ticketId: string, sessionId: string, projectId?: string) =>
   apiDeleteE<MoveResult>(
     `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}${inProject(projectId)}`,
-  );
+  ).pipe(dropsBoards(projectId));
 
 /* ── standing answers to ticket prompts ──────────────────────────────── */
 

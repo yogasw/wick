@@ -1,16 +1,29 @@
 <script lang="ts">
-  /* Team › Tickets (/team/t…): the tickets of the projects picked in Team
+  /* Team › Tickets (/team/tickets…): the tickets of the projects picked in Team
      settings › Tickets, combined. Three states, by route and selection:
        - nothing picked yet: the picker (every project the caller can open
          with ticket mode on) and Done, which saves ticket_projects;
-       - /team/t: the combined board of the picked projects;
-       - /team/t/<project>/<ticket>: that ticket's page.
+       - /team/tickets: the combined board of the picked projects;
+       - /team/tickets/<project>/<ticket>: that ticket's page.
+     It is drawn at once, before the roster is in: the projects, the filter
+     and every picked board are read in parallel, and the last answers
+     (ticketBoardCache) are drawn while they are. With nothing cached, a
+     loading splash stands in until the first board arrives.
      The header (title + ⚙) is AgentsApp's. */
   import { onMount, untrack } from "svelte";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { runApi, saveTeamSettings, type TeamSettings } from "../../api/team.js";
-  import { getProjectTickets, getTicketFilter, saveTicketFilter } from "../../api/tickets.js";
+  import { boardQuery, getProjectTickets, getTicketFilter, saveTicketFilter } from "../../api/tickets.js";
+  import {
+    boardGen,
+    cachedBoard,
+    cachedFilter,
+    cachedProjectOptions,
+    rememberBoard,
+    rememberFilter,
+    rememberProjectOptions,
+  } from "../../ticketBoardCache.js";
   import type { TicketsRoute } from "../../agentsRouter.js";
   import type { ProjectOption, TicketBoard, TicketFilter, TicketSessionRow } from "../../types/agents.js";
   import { TEAM_FILTER_KEY, ticketProjectOptions, withProject } from "../../ticketProjects.js";
@@ -43,11 +56,14 @@
   };
   let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession }: Props = $props();
 
-  let projects = $state<ProjectOption[] | null>(null);
+  /* The last list read names the boards at once; the fresh one replaces it. */
+  let projects = $state<ProjectOption[] | null>(cachedProjectOptions() ?? null);
   let loadError = $state("");
   onMount(async () => {
+    if (projects) onProjects?.(projects);
     try {
       projects = await ticketProjectOptions(base);
+      rememberProjectOptions(projects);
       onProjects?.(projects);
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
@@ -92,8 +108,11 @@
 
   /* The combined filter, saved under its own key so a project's own
      board filter is never touched. */
-  let filter = $state<TicketFilter>({});
-  let filterLoaded = $state(false);
+  /* The filter read last time sends the boards' requests at once; the
+     saved one, when it differs, sends them again. */
+  const filterSeen = cachedFilter(TEAM_FILTER_KEY);
+  let filter = $state<TicketFilter>(filterSeen ?? {});
+  let filterLoaded = $state(filterSeen !== undefined);
   let untrackedOwner = $state<"me" | "all">("me");
   let trackedHere = $state(new Set<string>());
   const UNTRACKED_PAGE = 25;
@@ -101,7 +120,10 @@
 
   onMount(() => {
     Effect.runPromise(getTicketFilter(base, TEAM_FILTER_KEY).pipe(Effect.provide(WickClientLayer)))
-      .then((f) => { filter = f ?? {}; })
+      .then((f) => {
+        filter = f ?? {};
+        rememberFilter(TEAM_FILTER_KEY, $state.snapshot(filter));
+      })
       .catch(() => { /* the defaults are a fine board */ })
       .finally(() => { filterLoaded = true; });
   });
@@ -143,13 +165,22 @@
   });
 
   /* Per project, the newest load wins: a slow answer to an older request
-     (two quick reloads, a filter click mid-load) is dropped on arrival. */
+     (two quick reloads, a filter click mid-load) is dropped on arrival.
+     A board not drawn for this request yet is drawn from the cache first. */
   const loadSeq: Record<string, number> = {};
   function loadBoard(id: string) {
     const key = requestKey;
+    const query = boardQuery(boardOptions);
+    const gen = boardGen(id);
     const n = (loadSeq[id] = (loadSeq[id] ?? 0) + 1);
+    const cur = slotOf(id);
+    if (!cur.board || cur.key !== key) {
+      const seen = cachedBoard(id, query);
+      if (seen) slots[id] = { board: seen, key, more: [], moreNext: "" };
+    }
     Effect.runPromise(getProjectTickets(base, id, boardOptions).pipe(Effect.provide(WickClientLayer)))
       .then((b) => {
+        rememberBoard(id, query, b, gen);
         if (key !== requestKey || n !== loadSeq[id]) return; // superseded
         const cur = slotOf(id);
         // Same list, moved: a chat pushed off page one stays on the rail.
@@ -163,6 +194,46 @@
         if (slotOf(id).board) return;
         slots[id] = { ...slotOf(id), error: e instanceof Error ? e.message : String(e) };
       });
+  }
+
+  /* ── the loading splash ──
+     Only while nothing is drawn yet: shown past SPLASH_DELAY_MS, "Still
+     loading…" and Retry past SPLASH_SLOW_MS, and the reason with Retry
+     once every picked project has failed. A cached board skips it. */
+  const SPLASH_DELAY_MS = 150;
+  const SPLASH_SLOW_MS = 8_000;
+  let splashShown = $state(false);
+  let splashSlow = $state(false);
+  let splashTry = $state(0);
+  const splashError = $derived.by(() => {
+    const ids = selected ?? [];
+    if (ids.length === 0 || !ids.every((id) => slots[id]?.error)) return "";
+    return slots[ids[0]]?.error ?? "";
+  });
+  const splashPending = $derived(
+    !(route.project && route.ticket) && !settingsError && (selected === null || (selected.length > 0 && boardProjects.length === 0)),
+  );
+  $effect(() => {
+    if (!splashPending) {
+      splashShown = false;
+      splashSlow = false;
+      return;
+    }
+    splashTry; // Retry starts the slow clock again
+    splashSlow = false;
+    const show = setTimeout(() => { splashShown = true; }, SPLASH_DELAY_MS);
+    const slow = setTimeout(() => { splashSlow = true; }, SPLASH_SLOW_MS);
+    return () => {
+      clearTimeout(show);
+      clearTimeout(slow);
+    };
+  });
+  function retryAll() {
+    splashTry++;
+    for (const id of selected ?? []) {
+      if (slots[id]?.error) slots[id] = { ...slotOf(id), error: undefined };
+      loadBoard(id);
+    }
   }
 
   /* One more page of one project's rail. */
@@ -298,6 +369,7 @@
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
     filter = f;
+    rememberFilter(TEAM_FILTER_KEY, $state.snapshot(filter));
     clearTimeout(filterSaveTimer);
     filterSaveTimer = setTimeout(() => {
       Effect.runPromise(
@@ -354,7 +426,7 @@
       <button type="button" class="ml-2 font-medium text-green-600 hover:underline" onclick={() => onRetry?.()}>Retry</button>
     </div>
   {:else if selected === null}
-    <p class="p-4 text-sm {muted}">Loading…</p>
+    {@render splash()}
   {:else if selected.length === 0}
     <div class="mx-auto my-10 max-w-[480px] px-6 text-center" data-testid="tickets-picker">
       <div class="text-2xl" aria-hidden="true">🎫</div>
@@ -397,7 +469,7 @@
     <div class="flex h-full min-h-0 flex-col gap-2 p-4" data-testid="tickets-board">
       <!-- A row per project still on its way or refused; the board below
            draws whatever has arrived. -->
-      {#each selected as id (id)}
+      {#each boardProjects.length > 0 ? selected : [] as id (id)}
         {@const s = slots[id]}
         {#if s?.error}
           <div class="flex items-center gap-2 rounded-lg border border-neg-100 px-3 py-2 text-xs" data-testid={"tickets-board-error-" + id}>
@@ -408,8 +480,10 @@
           <p class="text-xs {muted}" data-testid={"tickets-board-loading-" + id}>Loading 📁 {nameOf(id)}…</p>
         {/if}
       {/each}
-      {#if boardProjects.length > 0}
-        <div class="min-h-0 flex-1">
+      {#if boardProjects.length === 0}
+        {@render splash()}
+      {:else}
+        <div class="tickets-fade-in min-h-0 flex-1">
           <KanbanBoard
             {base}
             projects={boardProjects}
@@ -429,5 +503,51 @@
     </div>
   {/if}
 </div>
+
+{#snippet splash()}
+  <!-- The first load with nothing cached: shown only past SPLASH_DELAY_MS
+       so a quick answer never flashes it. -->
+  <div class="flex h-full min-h-[240px] items-center justify-center p-6" data-testid="tickets-splash" aria-busy={splashError ? undefined : "true"}>
+    {#if splashError}
+      <div class="tickets-fade-in max-w-[420px] text-center" data-testid="tickets-splash-error">
+        <p class="text-sm font-medium text-neg-400">Couldn't load tickets</p>
+        <p class="mt-1 text-xs {muted}">{splashError}</p>
+        <button type="button" class="mt-3 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-semibold text-white-100 hover:bg-green-600" onclick={retryAll}>Retry</button>
+      </div>
+    {:else if splashShown}
+      <div class="tickets-fade-in max-w-[420px] text-center" role="status">
+        <svg class="mx-auto h-6 w-6 animate-spin text-green-500 motion-reduce:animate-none" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
+        </svg>
+        <p class="mt-3 text-sm font-medium text-black-900 dark:text-white-100">{splashSlow ? "Still loading…" : "Loading tickets…"}</p>
+        {#if selected?.length}
+          <p class="mt-1 truncate text-xs {muted}" data-testid="tickets-splash-projects">{selected.map((id) => "📁 " + nameOf(id)).join(" · ")}</p>
+        {/if}
+        {#if splashSlow}
+          <button type="button" class="mt-3 rounded-lg border border-white-300 px-3 py-1.5 text-xs font-medium text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-700" onclick={retryAll}>Retry</button>
+        {/if}
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+<style>
+  .tickets-fade-in {
+    animation: tickets-fade-in 180ms ease-out;
+  }
+  @keyframes tickets-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tickets-fade-in {
+      animation: none;
+    }
+  }
+</style>
 
 <EmptyTicketOffer bind:this={emptyOffer} {base} onChanged={reload} />

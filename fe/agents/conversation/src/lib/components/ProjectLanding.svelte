@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { ProjectOption, ProviderOption, SessionListItem, ComposerCommand } from "../types/agents.js";
   import { toastError } from "@wick-fe/common-stores";
   import { Effect } from "effect";
@@ -8,11 +9,13 @@
   import { listComposerCommands } from "../api/composer.js";
   import {
     attachSession,
+    boardQuery,
     getProjectTickets,
     getTicketFilter,
     saveTicketFilter,
     type EmptiedTicket,
   } from "../api/tickets.js";
+  import { boardGen, cachedBoard, cachedFilter, rememberBoard, rememberFilter } from "../ticketBoardCache.js";
   import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
   import { Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
@@ -221,8 +224,18 @@
      immediately request it again. */
   let filterLoaded = $state(false);
   $effect(() => {
+    // The filter read last time sends the board's request at once; the
+    // saved one, when it differs, sends it again.
+    const seen = cachedFilter(project.id);
+    if (seen) {
+      ticketFilter = seen;
+      filterLoaded = true;
+    }
     Effect.runPromise(getTicketFilter(base, project.id).pipe(Effect.provide(WickClientLayer)))
-      .then((f) => { ticketFilter = f ?? {}; })
+      .then((f) => {
+        ticketFilter = f ?? {};
+        rememberFilter(project.id, $state.snapshot(ticketFilter));
+      })
       .catch(() => { /* filter optional — the defaults are a fine board */ })
       .finally(() => { filterLoaded = true; });
   });
@@ -321,10 +334,27 @@
 
   function reloadBoard() {
     const key = boardRequestKey;
+    const pid = project.id;
+    const query = boardQuery(boardOptions);
+    const gen = boardGen(pid);
+    // Not drawn for this request yet: the last answer (ticketBoardCache)
+    // first, the fresh one when it comes.
+    // Untracked: the request effect calls this, and must not rerun on
+    // the board it sets.
+    untrack(() => {
+      if (!board || boardKeyLoaded !== key) {
+        const seen = cachedBoard(pid, query);
+        if (seen) {
+          board = seen;
+          boardKeyLoaded = key;
+        }
+      }
+    });
     Effect.runPromise(
-      getProjectTickets(base, project.id, boardOptions).pipe(Effect.provide(WickClientLayer)),
+      getProjectTickets(base, pid, boardOptions).pipe(Effect.provide(WickClientLayer)),
     )
       .then((b) => {
+        rememberBoard(pid, query, b, gen);
         if (key !== boardRequestKey) return; // superseded by a newer request
         // Same list, moved: a chat pushed off page one stays on the rail.
         if (board && boardKeyLoaded === key) {
@@ -471,6 +501,7 @@
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
     ticketFilter = f;
+    rememberFilter(project.id, $state.snapshot(ticketFilter));
     clearTimeout(filterSaveTimer);
     filterSaveTimer = setTimeout(() => {
       Effect.runPromise(

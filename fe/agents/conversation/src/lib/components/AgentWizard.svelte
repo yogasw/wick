@@ -27,6 +27,7 @@
   import { getProjectOptions, getProviderOptions, getProviderOptionModels } from "../api/options.js";
   import { createAgent, updateAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgents, runApi, type AgentItem, type AgentConnector, type ConnectorGrant, type MentionFrom } from "../api/team.js";
   import { HANDLE_RE, splitPick, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
+  import { isReservedHandle } from "../agentsRouter.js";
   import { PERSONA_KIND, personaInput, suggestedConnectors, draftGrants, draftMentionAllow, acceptsNewAgent, type PersonaDraft } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS } from "../mentionSettings.js";
   import { setOverride } from "../accessTiers.js";
@@ -269,7 +270,7 @@
     systemPrompt = CAPTAIN_STARTER.system_prompt;
   }
 
-  const handleOk = $derived(HANDLE_RE.test(handle));
+  const handleOk = $derived(HANDLE_RE.test(handle) && !isReservedHandle(handle));
   const handleTaken = $derived(taken.includes(handle));
   const personaOk = $derived(name.trim() !== "" && handleOk && !handleTaken);
 
@@ -505,6 +506,8 @@
           <p class="mt-1 text-xs text-neg-400">{handleError}</p>
         {:else if handleTaken}
           <p class="mt-1 text-xs text-neg-400">@{handle} is already taken by another agent.</p>
+        {:else if handle && isReservedHandle(handle)}
+          <p class="mt-1 text-xs text-neg-400">@{handle} is reserved. Pick another handle.</p>
         {:else if handle && !handleOk}
           <p class="mt-1 text-xs text-neg-400">Lowercase letters, digits and "-", 2–31 characters, starting with a letter or digit.</p>
         {/if}
