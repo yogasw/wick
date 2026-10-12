@@ -3892,7 +3892,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.scheduleStore != nil && s.agentsPool != nil {
 			// Boot recovery is implicit — the first tick picks up anything
 			// that came due while wick was down.
-			go schedule.NewRunner(s.scheduleStore, roomGuardSender{Pool: s.agentsPool, layout: s.agentsLayout}, s.agentsLayout).
+			go schedule.NewRunner(s.scheduleStore, agentstool.RoomGuardScheduleSender(s.agentsPool, s.agentsLayout), s.agentsLayout).
 				WithRunAsCheck(s.runAsUsable).
 				WithConnectorExecutor(s.scheduleConnExec).
 				Run(ctx)

@@ -61,9 +61,6 @@ const (
 	// roomRunsMax bounds one person's runs in a room: the one running and
 	// those waiting behind it. More is refused until one ends.
 	roomRunsMax = 4
-	// roomTurnTimeout ends a member's turn that never finishes, so a stuck
-	// run cannot hold its person's queue forever.
-	roomTurnTimeout = 30 * time.Minute
 	// errRoomSession refuses what a room (or a member's backing session)
 	// does not support through the generic session and ticket routes.
 	errRoomSession = "not supported in a ticket room"
@@ -154,7 +151,11 @@ func roomRemoveMember(tr *session.TicketRoom, agentID, owner string) error {
 }
 
 // foreignMention is "@owner/handle" at a line start: another person's agent.
-type foreignMention struct{ Owner, Handle string }
+type foreignMention struct {
+	Owner, Handle string
+	// Invalid: the mention named no handle; refused without its text.
+	Invalid bool
+}
 
 // foreignLabel names another person's agent in a system line: its name
 // when it is already in the room (roomForeignAgent), else its @handle —
@@ -199,10 +200,28 @@ func ownCaptainHint(own []teamlink.Peer) string {
 // foreignMentions lists, once each, the "@owner/handle" mentions at line
 // starts outside fenced code — agents of someone else, which never run on
 // the sender's message.
+// roomTurnTimeout ends a member's turn that never finishes, so a stuck
+// run cannot hold its person's queue forever. A var for tests.
+var roomTurnTimeout = 30 * time.Minute
+
+// roomBackingTurn runs one member turn in its backing session, and
+// stopRoomBacking ends what a backing session has running or queued.
+// Vars for tests.
+var (
+	roomBackingTurn = runBackingTurn
+	stopRoomBacking = stopRoomSession
+)
+
 // roomHandleRe is what a person or agent handle may look like when a
 // room's system line names it: anything else is someone's free text, and
 // a system line read by everyone's agents must not carry that.
-var roomHandleRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+// A person's handle is their e-mail's local part (personHandle), so it
+// takes every character a local part may hold but the "/" a mention uses
+// to split owner from agent; an agent's handle keeps the agent rule.
+var (
+	roomHandleRe      = regexp.MustCompile("^[a-z0-9!#$%&'*+=?^_`{|}~-][a-z0-9!#$%&'*+=?^_`{|}~.-]{0,63}$")
+	roomAgentHandleRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+)
 
 func foreignMentions(text string) []foreignMention {
 	var out []foreignMention
@@ -227,8 +246,10 @@ func foreignMentions(text string) []foreignMention {
 		}
 		seen[word] = true
 		f := foreignMention{Owner: strings.ToLower(owner), Handle: teamlink.NormalizeHandle(handle)}
-		if !roomHandleRe.MatchString(f.Owner) || !roomHandleRe.MatchString(f.Handle) {
-			continue // not a handle: free text, never echoed as a system line
+		if !roomHandleRe.MatchString(f.Owner) || !roomAgentHandleRe.MatchString(f.Handle) {
+			// Not a handle: free text, refused without echoing it into a
+			// system line every member's agent reads.
+			f = foreignMention{Invalid: true}
 		}
 		out = append(out, f)
 	}
@@ -501,7 +522,7 @@ func endTicketRooms(ctx context.Context, projectID, ticketID string) {
 			}
 		}
 		for i := len(doomed) - 1; i >= 0; i-- {
-			stopRoomSession(ctx, doomed[i])
+			stopRoomSession(ctx, doomed[i], "its ticket was deleted")
 			_ = globalMgr.DeleteSession(ctx, doomed[i])
 		}
 		if err := globalMgr.DeleteSession(ctx, s.ID); err != nil {
@@ -528,13 +549,13 @@ func roomOwnersOf(all map[string]session.Session, roomID string) map[string]bool
 // stopRoomSession ends whatever sid still has queued or running before
 // its files go: a backing session or sub-agent can be mid-turn when its
 // ticket is deleted. Best effort — the delete goes ahead either way.
-func stopRoomSession(ctx context.Context, sid string) {
-	if globalPool == nil {
+func stopRoomSession(ctx context.Context, sid, reason string) {
+	if globalPool == nil || sid == "" {
 		return
 	}
 	globalPool.DequeueSession(sid)
-	if err := globalPool.KillBy(sid, "", "wick", "its ticket was deleted"); err != nil {
-		log.Ctx(ctx).Warn().Err(err).Str("session", sid).Msg("ticket room: stop before delete failed")
+	if err := globalPool.KillBy(sid, "", "wick", reason); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("session", sid).Str("reason", reason).Msg("ticket room: stop failed")
 	}
 }
 
@@ -1095,7 +1116,7 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 	// session just made for it would be an orphan.
 	if _, ok := globalMgr.Registry().Session(sess.ID); !ok {
 		for _, id := range backing {
-			stopRoomSession(c.Context(), id)
+			stopRoomSession(c.Context(), id, "its ticket was deleted")
 			_ = globalMgr.DeleteSession(c.Context(), id)
 		}
 		c.JSON(http.StatusNotFound, map[string]string{"error": "room not found"})
@@ -1114,6 +1135,11 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 	announceRoomJoin(c, sess.ID, added)
 	rc := newRoomCards()
 	for _, f := range foreign {
+		if f.Invalid {
+			emitSystemEvent(sess.ID, store.KindMentionRefused, "That agent isn't one of yours — mention one of your own agents",
+				map[string]string{"from": "user", "reason": "another person's agent"})
+			continue
+		}
 		emitSystemEvent(sess.ID, store.KindMentionRefused, fmt.Sprintf("%s · @%s only takes instructions from @%s. Ask them, or %s.", foreignLabel(f, roomForeignAgent(c.Context(), tr, f, rc)), f.Owner, f.Owner, ownCaptainHint(own)),
 			map[string]string{"from": "user", "to": f.Owner + "/" + f.Handle, "reason": "another person's agent"})
 	}
@@ -1170,7 +1196,19 @@ func newRoomRun(ctx context.Context, sess session.Session, tk ticket.Ticket, sen
 			if !roomStillHas(roomID, p, sender) {
 				return "", errLeftRoom
 			}
-			return runBackingTurn(ctx, backing[p.ID], prompt)
+			reply, err := roomBackingTurn(ctx, backing[p.ID], prompt)
+			// Cut short, the stream's text is a partial answer: never
+			// posted as one. The backing's run is ended too, or the
+			// person's next turn would read this one's reply off it.
+			if cerr := ctx.Err(); cerr != nil {
+				if errors.Is(cerr, context.DeadlineExceeded) {
+					stopRoomBacking(context.WithoutCancel(ctx), backing[p.ID], "its room turn timed out")
+					return "", fmt.Errorf("no answer after %s", roomTurnTimeout)
+				}
+				stopRoomBacking(context.WithoutCancel(ctx), backing[p.ID], "stopped from its room")
+				return "", cerr
+			}
+			return reply, err
 		},
 		history: func() []store.ConversationTurn {
 			turns, _ := loadConversation(globalLayout, roomID)

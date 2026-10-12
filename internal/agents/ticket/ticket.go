@@ -219,17 +219,7 @@ var generatedIDRe = regexp.MustCompile(`^T-[` + idAlphabet + `]{4}$`)
 // character. Ids come from URLs and tool input, so every read through
 // Load / Exists checks it before joining id into a path; an id that fails
 // is simply not found.
-func ValidID(id string) bool {
-	if id == "" || len(id) > 128 || strings.HasPrefix(id, ".") || strings.Contains(id, "..") {
-		return false
-	}
-	for _, r := range id {
-		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
-			return false
-		}
-	}
-	return true
-}
+func ValidID(id string) bool { return project.ValidID(id) }
 
 // NormalizeID canonicalises a caller-supplied ticket id.
 //

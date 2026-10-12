@@ -1,8 +1,10 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/ticket"
 )
 
@@ -37,6 +39,38 @@ func (e ticketStreamEmitter) Emit(ev ticket.Event) {
 		e.next.Emit(ev)
 	}
 	publishTicketSignal(globalBcast, ev)
+	postRoomStatus(ev)
+}
+
+// postRoomStatus writes a status move into the ticket's room, whoever
+// made it (board, agent tool, sync): "Status → In review (by @yoga)". The
+// line runs nobody. Only a person is named; anything else made the move
+// on its own and is not credited by a name it could have typed.
+func postRoomStatus(ev ticket.Event) {
+	ch, ok := ev.Changes["status"]
+	if ev.Event != ticket.EventStatusChanged || !ok || globalMgr == nil {
+		return
+	}
+	pid := ev.ProjectID
+	if pid == "" {
+		pid = ev.Ticket.ProjectID
+	}
+	room, ok := findTicketRoom(pid, ev.Ticket)
+	if !ok {
+		return
+	}
+	label := func(key string) string { return key }
+	if p, ok := globalMgr.Registry().Project(pid); ok {
+		label = p.Meta.Ticket.StatusLabel
+	}
+	text := "Status → " + label(ch.To)
+	if ev.Actor.Type == ticket.ActorUser && ev.Actor.ID != "" {
+		if h := personHandle(context.Background(), ev.Actor.ID); roomHandleRe.MatchString(h) {
+			text += " (by @" + h + ")"
+		}
+	}
+	emitSystemEvent(room.ID, store.KindTicketStatus, text,
+		map[string]string{"from": ch.From, "to": ch.To, "by": ev.Actor.ID})
 }
 
 // publishTicketSignal publishes ev's signal on the global key. A board

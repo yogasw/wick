@@ -72,6 +72,7 @@ registerSystemEvent("group_member_added", { icon: "user-plus" });
 registerSystemEvent("group_member_removed", { icon: "ban" });
 // A ticket room's first line: nobody joined, so no user-plus.
 registerSystemEvent("ticket_room_opened", { icon: "info" });
+registerSystemEvent("ticket_status", { icon: "info" });
 registerSystemEvent("scheduled_fired", { icon: "clock" });
 // The old name of scheduled_fired, still in stored history.
 registerSystemEvent("routine_fired", { icon: "clock" });

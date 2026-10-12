@@ -9,6 +9,8 @@ describe("system event registry", () => {
     expect(getSystemEvent("routine_fired").icon).toBe("clock");
     // A room opening is not someone joining.
     expect(getSystemEvent("ticket_room_opened").icon).toBe("info");
+    expect(isSystemEventKind("ticket_status")).toBe(true);
+    expect(getSystemEvent("ticket_status").icon).toBe("info");
     expect(isSystemEventKind("access_changed")).toBe(true);
     expect(isSystemEventKind("persona_changed")).toBe(true);
     expect(isSystemEventKind("access_change_declined")).toBe(true);

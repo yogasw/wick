@@ -14,7 +14,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -691,7 +690,6 @@ func apiTicketUpdate(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
-	prevStatus := tk.Status
 	if req.Status != nil {
 		cfg := project.TicketConfig{}
 		if p, pok := globalMgr.Registry().Project(projectID); pok {
@@ -735,13 +733,6 @@ func apiTicketUpdate(c *tool.Ctx) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
-	}
-	// A room on the ticket gets a line for the move: it runs nobody.
-	if saved.Status != prevStatus {
-		if room, ok := findTicketRoom(projectID, saved); ok {
-			emitSystemEvent(room.ID, store.KindTicketStatus, fmt.Sprintf("Status → %s (by %s)", saved.Status, roomActorHandle(c)),
-				map[string]string{"from": prevStatus, "to": saved.Status, "by": actorID(c)})
-		}
 	}
 	// The SAVED ticket, so the card that just moved shows the time it moved
 	// and the board re-sorts on it without waiting for a reload.
