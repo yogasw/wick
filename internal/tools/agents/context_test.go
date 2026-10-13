@@ -89,3 +89,34 @@ func TestSafeJoinLinkedRepo(t *testing.T) {
 		t.Fatal("feature off: link must be refused")
 	}
 }
+
+// A link to a repo in another project is listed as a folder so Files can open
+// it; a plain link keeps its file-like entry.
+func TestReadDirEntriesLinkedRepoIsDir(t *testing.T) {
+	base := t.TempDir()
+	projects := filepath.Join(base, "projects")
+	cwd := filepath.Join(projects, "a", "files")
+	repo := filepath.Join(projects, "b", "files", "tool")
+	plain := filepath.Join(projects, "b", "files", "plain")
+	for _, d := range []string{cwd, filepath.Join(repo, ".git"), plain} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{"tool": repo, "plain": plain} {
+		if err := os.Symlink(target, filepath.Join(cwd, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scm.SetLinkRoot(projects)
+	t.Cleanup(func() { scm.SetLinkRoot("") })
+
+	got, _ := readDirEntries(cwd, "")
+	isDir := map[string]bool{}
+	for _, e := range got {
+		isDir[e.Name] = e.IsDir
+	}
+	if !isDir["tool"] || isDir["plain"] {
+		t.Fatalf("want tool=dir plain=file, got %v", isDir)
+	}
+}
