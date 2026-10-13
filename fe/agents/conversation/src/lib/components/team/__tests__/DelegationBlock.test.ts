@@ -291,6 +291,59 @@ describe("DelegationBlock", () => {
     expect(screen.queryByTestId("delegation-preview-progress")).toBeNull();
   });
 
+  /* P60 S1: under the chips, one row per working teammate with its
+     latest progress line. */
+  test("P60: a progress row per working task with progress", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a", progress: "Checking Loki for Audy pods" }),
+          task({ task_id: "b", to_handle: "vera", to_name: "Vera", progress: "Reading the client WA group" }),
+        ],
+      },
+    });
+    const rows = screen.getAllByTestId("delegation-progress-row");
+    expect(rows.map((r) => r.getAttribute("data-task-id"))).toEqual(["a", "b"]);
+    expect(rows[0].querySelector("b")!.textContent).toBe("Anton");
+    expect(rows[0].textContent).toContain("●");
+    expect(rows[0].textContent).toContain("Checking Loki for Audy pods");
+    expect(rows[1].querySelector("b")!.textContent).toBe("Vera");
+    expect(rows[1].querySelector(".font-mono")!.textContent).toBe(screen.getAllByTestId("chip-elapsed")[1].textContent);
+  });
+
+  test("P60: no progress row for a replied or failed task, nor a working one without progress", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "w", progress: "Checking Loki" }),
+          task({ task_id: "n", to_handle: "vera", to_name: "Vera" }),
+          task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done", reply: "done", progress: "stale" }),
+          task({ task_id: "f", to_handle: "rio", to_name: "Rio", state: "failed", summary: "boom", progress: "stale" }),
+        ],
+      },
+    });
+    expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["w"]);
+  });
+
+  test("P60: the row leaves when its teammate replies", async () => {
+    const r = render(DelegationBlock, { props: { tasks: [task({ progress: "Checking Loki" }), task({ task_id: "t2", to_handle: "vera", to_name: "Vera" })] } });
+    expect(screen.getAllByTestId("delegation-progress-row")).toHaveLength(1);
+    await r.rerender({ tasks: [task({ state: "completed", reply: "done", progress: "Checking Loki" }), task({ task_id: "t2", to_handle: "vera", to_name: "Vera" })] });
+    expect(screen.queryByTestId("delegation-progress-row")).toBeNull();
+  });
+
+  test("P60: no progress rows while collapsed, none for the open chip", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", progress: "Checking Loki" }), task({ task_id: "b", to_handle: "vera", to_name: "Vera", progress: "Reading the group" })] },
+    });
+    await fireEvent.click(screen.getAllByTestId("delegation-chip")[0]);
+    expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["b"]);
+    expect(screen.getByTestId("delegation-preview-progress").textContent).toContain("Checking Loki");
+    await fireEvent.click(screen.getByTestId("delegation-collapse"));
+    expect(screen.queryByTestId("delegation-progress-row")).toBeNull();
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(2);
+  });
+
   test("2b: a thread that fails to load still shows the last reply", async () => {
     const loadThread = vi.fn().mockRejectedValue(new Error("task not found"));
     render(DelegationBlock, { props: { tasks: [task({ state: "completed", reply: "found 3 errors", summary: "found 3 errors" })], loadThread } });

@@ -323,6 +323,23 @@
       {/each}
     </div>
 
+    {#if !collapsed}
+      <!-- P60 1: what each working teammate is doing now, one row per task;
+           an open chip already shows the same line in its section. -->
+      {#each tasks as t (t.task_id)}
+        {@const progress = taskProgress(t)}
+        {#if progress && !chipOpen(t)}
+          {@const el = chipElapsed(t, now, "duration")}
+          <div data-testid="delegation-progress-row" data-task-id={t.task_id} title={progress} class="flex items-center gap-1.5 px-3 pb-[5px] text-[11px] text-black-700">
+            <AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={14} />
+            <b class="shrink-0 text-[11px] font-semibold text-black-900 dark:text-white-100">{nameOf(t)}</b>
+            <span aria-hidden="true" class="text-green-600 dark:text-green-400">●</span><span class="min-w-0 flex-1 truncate">{progress}</span>
+            {#if el}<span class="shrink-0 font-mono text-[10px] text-black-700">{el}</span>{/if}
+          </div>
+        {/if}
+      {/each}
+    {/if}
+
     {#if !collapsed && onAnswer}
       {#each tasks as t (t.task_id)}
         {#if cardOpen(t)}
