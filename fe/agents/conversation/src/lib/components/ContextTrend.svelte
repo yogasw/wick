@@ -46,6 +46,10 @@
      reading refetches it quietly (same key, so no blur); only a new
      query blurs the chart while it loads. */
   let fetched = $state<{ key: string; data: SessionContext } | null>(null);
+  /* The query whose last fetch failed. It ends the loading state — a
+     chart blurred until the next poll looks frozen — and the chart keeps
+     the series it last drew. */
+  let failedKey = $state<string | null>(null);
   let lastReq = "";
   $effect(() => {
     if (!needsFetch || !loadSeries) return;
@@ -55,15 +59,24 @@
     lastReq = req;
     loadSeries(query).then(
       (d) => {
-        if (lastReq === req) fetched = { key, data: d };
+        if (lastReq === req) {
+          fetched = { key, data: d };
+          if (failedKey === key) failedKey = null;
+        }
       },
       () => {
         // Keep what is on screen; the next poll asks again.
-        if (lastReq === req) lastReq = "";
+        if (lastReq === req) {
+          lastReq = "";
+          failedKey = key;
+        }
       },
     );
   });
-  const loading = $derived(needsFetch && fetched?.key !== queryKey);
+  /* Waiting for (or failed to get) the series the controls ask for. */
+  const pending = $derived(needsFetch && fetched?.key !== queryKey);
+  const failed = $derived(pending && failedKey === queryKey);
+  const loading = $derived(pending && !failed);
   const source = $derived(needsFetch ? (fetched?.data ?? data) : data);
 
   const merged = $derived(metric === "usage" && scope === "all");
@@ -74,9 +87,9 @@
   /* While a new series loads the chart keeps the last one it drew. */
   let held = $state<View | null>(null);
   $effect(() => {
-    if (!loading) held = live;
+    if (!pending) held = live;
   });
-  const view = $derived(loading && held ? held : live);
+  const view = $derived(pending && held ? held : live);
   const n = $derived(view.list.length);
 
   /* The store keeps the last 500 points per provider; older ones are
@@ -330,6 +343,11 @@
     {/if}
     <div class="shim pointer-events-none text-link-400" aria-hidden="true"></div>
   </div>
+  {#if failed}
+    <p class="mt-1 text-[11px] text-red-600 dark:text-red-400" data-testid="context-load-error">
+      Couldn't load this series — showing the last one.
+    </p>
+  {/if}
   {#if legend.length > 0}
     <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-black-700 dark:text-black-600">
       {@render legendRow()}

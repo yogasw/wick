@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/svelte";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/svelte";
 import ContextPopover from "../ContextPopover.svelte";
 import type { SessionContext } from "../../api/context.js";
 
@@ -589,5 +589,84 @@ describe("ContextPopover — chart", () => {
     await fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByTestId("context-modal")).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+  });
+  it("mounts the big chart on <body> and removes it on close", async () => {
+    const { container } = render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }) } });
+    await fireEvent.click(screen.getByTestId("context-expand"));
+    const modal = screen.getByTestId("context-modal");
+    // Out of the panel's stacking context, straight under <body>.
+    expect(modal.parentElement).toBe(document.body);
+    expect(container.contains(modal)).toBe(false);
+    await fireEvent.click(within(modal).getByRole("button", { name: "Close" }));
+    expect(document.querySelector("[data-testid='context-modal']")).toBeNull();
+  });
+
+  it("removes the big chart from <body> when the panel goes away", async () => {
+    const { unmount } = render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }) } });
+    await fireEvent.click(screen.getByTestId("context-expand"));
+    expect(document.querySelector("[data-testid='context-modal']")).toBeTruthy();
+    unmount();
+    expect(document.querySelector("[data-testid='context-modal']")).toBeNull();
+  });
+
+  it("keeps the panel and the selection on a click inside the big chart", async () => {
+    const onClose = vi.fn();
+    render(ContextPopover, { props: { ...base, onClose, data: ctx({ turns: 403, ...SERIES }) } });
+    const el = chart();
+    await fireEvent.mouseDown(el, { clientX: 0 });
+    await fireEvent.mouseMove(el, { clientX: 300 });
+    await fireEvent.mouseUp(window);
+    expect(screen.getByTestId("context-selection")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("context-expand"));
+    const modal = screen.getByTestId("context-modal");
+    await fireEvent.mouseDown(within(modal).getByRole("dialog"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("context-modal")).toBeTruthy();
+    // Esc closes the big chart first and keeps the selection.
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("context-modal")).toBeNull();
+    expect(screen.getByTestId("context-selection")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    // A click truly outside still closes the panel.
+    await fireEvent.mouseDown(document.body);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("stops loading when the series fetch fails, keeping the last chart", async () => {
+    const loadSeries = vi.fn().mockRejectedValue(new Error("boom"));
+    render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }), loadSeries } });
+    await fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(loadSeries).toHaveBeenCalledWith({ trend: "all" });
+    await waitFor(() => expect(screen.getByTestId("context-load-error")).toBeTruthy());
+    expect(screen.getByTestId("context-chart").classList.contains("loading")).toBe(false);
+    // The chart drawn before the failed fetch is still there, and live.
+    expect(screen.getByTestId("context-span").textContent).toBe("turns 401–403");
+    await fireEvent.mouseMove(chart(), { clientX: 200 });
+    expect(readout()).toContain("turn 402");
+  });
+
+  it("does not let an Esc it used reach the side panel or drawer", async () => {
+    const onClose = vi.fn();
+    const outer = vi.fn();
+    window.addEventListener("keydown", outer);
+    try {
+      render(ContextPopover, { props: { ...base, onClose, data: ctx({ turns: 403, ...SERIES }) } });
+      const el = chart();
+      await fireEvent.mouseDown(el, { clientX: 0 });
+      await fireEvent.mouseMove(el, { clientX: 300 });
+      await fireEvent.mouseUp(window);
+      await fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByTestId("context-selection")).toBeNull();
+      expect(outer).not.toHaveBeenCalled();
+      // Options menu open: same.
+      await fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+      await fireEvent.click(screen.getByTestId("context-options"));
+      await fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("button", { name: "Total" })).toBeNull();
+      expect(outer).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", outer);
+    }
   });
 });

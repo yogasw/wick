@@ -156,15 +156,27 @@
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         // The chart takes Esc first: it clears a selection, closes its
-        // options or its big view, and the panel stays open.
-        if (trendEl?.escape()) return;
+        // options or its big view, and the panel stays open. Consumed
+        // here, it must not also close the side panel or the drawer
+        // behind — those listen on the window too, below this capture
+        // listener. The big view's own listener sits on the window as
+        // well, so stopPropagation (not Immediate) still lets it close.
+        if (trendEl?.escape()) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         onClose();
       }
     }
     function onDown(e: MouseEvent) {
-      if (el && !el.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      // The big chart is mounted on <body>, outside this box, but it is
+      // still part of the panel: a click in it is not a click outside.
+      if (t instanceof Element && t.closest("[data-context-modal]")) return;
+      if (el && !el.contains(t)) onClose();
     }
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onDown, true);

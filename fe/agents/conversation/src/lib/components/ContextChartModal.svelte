@@ -11,6 +11,7 @@
     brief, dayOf, niceTicks, paletteOf, peakOf, readout, runsOf, selectionSummary, usd,
   } from "../contextSeries.js";
   import { clock24 } from "@wick-fe/common-ui";
+  import { portal } from "../portal.js";
 
   type Props = {
     view: View;
@@ -272,7 +273,16 @@
   });
 </script>
 
-<div bind:this={el} class="ctx-modal fixed inset-0 z-50 flex items-center justify-center" data-testid="context-modal">
+<!-- Mounted on <body>: inside the panel it could never rise above the
+     roster sidebar. data-context-modal tells the panel a click in here is
+     not a click outside it. -->
+<div
+  bind:this={el}
+  use:portal
+  class="ctx-modal fixed inset-0 z-50 flex items-center justify-center"
+  data-testid="context-modal"
+  data-context-modal
+>
   <div
     class="ctx-mbox flex flex-col rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg"
     role="dialog"
