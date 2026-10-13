@@ -78,6 +78,7 @@
   // The head's chevron: chips stay, the open sections below them hide.
   let collapsed = $state(false);
   let collapseBtn = $state<HTMLButtonElement>();
+  let chipEls = $state<Record<string, HTMLButtonElement>>({});
   let selected = $state<string | null>(null);
   // "Answer instead" on a task the agent is handling opens its card too.
   let answerOpen = $state<Record<string, boolean>>({});
@@ -288,6 +289,7 @@
         <span class="inline-flex items-center gap-1">
           <button
             type="button"
+            bind:this={chipEls[t.task_id]}
             data-testid="delegation-chip"
             data-status={s}
             data-open={open}
@@ -335,12 +337,13 @@
             type="button"
             data-testid="delegation-progress-row"
             data-task-id={t.task_id}
-            aria-label={`Open ${nameOf(t)}'s task`}
+            aria-label={`Open ${nameOf(t)}'s task` + (progress ? `: ${progress}` : "")}
             title={progress || undefined}
-            onclick={() => {
-              // Same as the chip: a collapsed block opens on this task.
-              if (collapsed) { collapsed = false; selected = t.task_id; }
-              else selected = t.task_id;
+            onclick={async () => {
+              // The row leaves the DOM; keep keyboard focus on its chip.
+              selected = t.task_id;
+              await tick();
+              chipEls[t.task_id]?.focus();
             }}
             class="flex w-full items-center gap-1.5 px-3 pb-[5px] text-left text-[11px] text-black-700 hover:opacity-80 focus:outline-none focus-visible:ring-1 focus-visible:ring-green-500"
           >

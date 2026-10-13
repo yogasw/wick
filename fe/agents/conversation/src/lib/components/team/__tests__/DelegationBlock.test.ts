@@ -337,9 +337,13 @@ describe("DelegationBlock", () => {
     const row = screen.getAllByTestId("delegation-progress-row")[1];
     expect(row.tagName).toBe("BUTTON");
     expect(row.getAttribute("aria-label")).toBe("Open Vera's task");
+    expect(screen.getAllByTestId("delegation-progress-row")[0].getAttribute("aria-label")).toBe("Open Anton's task: Checking Loki");
     await fireEvent.click(row);
+    await tick();
     expect(screen.getAllByTestId("delegation-preview")).toHaveLength(1);
     expect(screen.getAllByTestId("delegation-chip")[1].getAttribute("data-open")).toBe("true");
+    // The row left the DOM: focus moved to its chip, not the body.
+    expect(document.activeElement).toBe(screen.getAllByTestId("delegation-chip")[1]);
     expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["a"]);
   });
 
