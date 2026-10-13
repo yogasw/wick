@@ -43,6 +43,9 @@ type callbackPayload struct {
 type turn struct {
 	chatID int64
 	buf    strings.Builder
+	// interim follows the turn's team_message calls, for the Done to
+	// tell the lead's in-between line (agentchannels.InterimTurn).
+	interim agentchannels.InterimTurn
 }
 
 // Channel implements agentchannels.Channel for Telegram via long polling.
@@ -710,10 +713,17 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		text := tn.buf.String()
 		chatID := tn.chatID
 		tn.buf.Reset()
+		interim := tn.interim
+		tn.interim = agentchannels.InterimTurn{}
 		t.mu.Unlock()
 
 		if ev.ErrorMsg != "" {
 			t.postMessage(chatID, "Agent error: "+ev.ErrorMsg)
+			return
+		}
+		// The lead's in-between line while a teammate of the turn still
+		// works stays out of the chat; the answer comes in a later turn.
+		if interim.Drop(text) {
 			return
 		}
 		// No buttons here: a card becomes a numbered list, and a bare
@@ -729,9 +739,28 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 			t.postChunked(chatID, text)
 		}
 
+	case event.ToolUse:
+		// The switch is read here, outside t.mu (cached by the server).
+		hide := agentchannels.IsTeamSend(ev.ToolName, ev.ToolInput) && agentchannels.HidesInterim(sessionID)
+		t.mu.Lock()
+		if tn := t.turnLocked(sessionID); tn != nil {
+			tn.interim.Tool(ev.ToolName, ev.ToolInput, ev.ToolUseID, hide)
+		}
+		t.mu.Unlock()
+
+	case event.ToolResult:
+		t.mu.Lock()
+		if tn := t.turns[sessionID]; tn != nil {
+			tn.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text)
+		}
+		t.mu.Unlock()
+
 	case event.Error:
 		t.mu.Lock()
 		tn := t.turns[sessionID]
+		if tn != nil {
+			tn.interim = agentchannels.InterimTurn{}
+		}
 		t.mu.Unlock()
 		if tn == nil {
 			return

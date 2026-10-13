@@ -177,6 +177,10 @@ type turn struct {
 	// live edit. Cleared when the reply is settled.
 	sourceNames    map[string]string
 	sourceNamesSet bool
+	// interim follows the turn's team_message calls: while it holds, the
+	// live message is not edited and the Done decides whether the text
+	// is the lead's in-between line (agentchannels.InterimTurn).
+	interim agentchannels.InterimTurn
 	// editTicker flushes turn.buf to the live message every streamEditInterval
 	// while text is still streaming. Stopped (and set to nil) on Done/Error.
 	editTicker *time.Ticker
@@ -2720,6 +2724,11 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 		s.mu.Unlock()
 		return
 	}
+	if t.interim.Holding() {
+		// The turn delegated: its text waits for the Done.
+		s.mu.Unlock()
+		return
+	}
 	raw := t.buf.String()
 	channelID := t.channelID
 	threadTS := t.threadTS
@@ -3102,11 +3111,24 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		// "Reading slack.go", …). The label is held until the next phase; the
 		// animation ticker supplies the moving dots and the keep-alive.
 		s.setStatusLabel(sessionKey, toolStatusLabel(ev.ToolName, ev.ToolInput))
+		// A team_message send holds the turn's text until the Done; the
+		// switch is read here, outside s.mu (cached by the server).
+		hide := agentchannels.IsTeamSend(ev.ToolName, ev.ToolInput) && agentchannels.HidesInterim(sessionKey)
+		s.mu.Lock()
+		if t := s.turns[sessionKey]; t != nil {
+			t.interim.Tool(ev.ToolName, ev.ToolInput, ev.ToolUseID, hide)
+		}
+		s.mu.Unlock()
 
 	case event.ToolResult:
 		// Tool finished → back to the generic working phase while the agent
 		// decides the next step.
 		s.setStatusLabel(sessionKey, statusLabelWorking)
+		s.mu.Lock()
+		if t := s.turns[sessionKey]; t != nil {
+			t.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text)
+		}
+		s.mu.Unlock()
 
 	case event.Compaction, event.Notice:
 		// Something happened TO the session rather than in the reply. The
@@ -3138,8 +3160,17 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		t.buf.Reset()
 		t.hasStarted = false
 		t.running = false
+		interim := t.interim
+		t.interim = agentchannels.InterimTurn{}
 		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
+		// The lead's in-between line while a teammate of the turn still
+		// works stays out of the thread: the banner says who works, the
+		// answer comes in a later turn. A part the live message already
+		// showed before the call stays as it is.
+		if !hasError && interim.Drop(text) {
+			text = ""
+		}
 		// Bind again now that the session surely exists: a thread whose
 		// only message created the session was never bound, so the next
 		// turn it did not type (a sub-agent's result waking the leader)
@@ -3166,6 +3197,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.stopStatusAnimation(t)
 			s.stopEditTicker(t)
 			t.running = false
+			t.interim = agentchannels.InterimTurn{}
 		}
 		s.mu.Unlock()
 		if t == nil {
