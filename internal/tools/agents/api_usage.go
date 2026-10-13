@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -153,7 +154,9 @@ type SessionContextProviderDTO struct {
 	Totals   usagereport.Totals `json:"totals"`
 	LastAt   string             `json:"last_at,omitempty"`
 	// This provider's own trail, so a session that switched providers
-	// can be drawn as one curve, merged in time order.
+	// can be drawn as one curve, merged in time order. Only with
+	// ?providers=all, and never on the active row: the top level already
+	// carries that one, and this endpoint is polled.
 	ContextSeriesDTO
 }
 
@@ -216,11 +219,7 @@ func apiSessionContext(c *tool.Ctx) {
 		return
 	}
 
-	limit := contextTrendMax
-	if c.Query("trend") == "all" {
-		limit = 0
-	}
-	out := sessionContextOf(id, su, limit)
+	out := sessionContextOf(id, su, trendLimitOf(c.Query("trend")), queryAll(c.Query("providers")))
 	out.CanCompact = provider.CanCompact(provider.Type(contextProviderType(sess, out.Provider)))
 	if !out.CanCompact {
 		out.CompactNote = provider.CompactUnsupportedNote
@@ -228,9 +227,22 @@ func apiSessionContext(c *tool.Ctx) {
 	c.JSON(http.StatusOK, out)
 }
 
-// sessionContextOf builds the panel's answer from the ledger, every
-// provider's trail cut to the last limit points (0 = all of them).
-func sessionContextOf(id string, su *store.SessionUsage, limit int) SessionContextDTO {
+// queryAll reports a query value asking for "all", in any case.
+func queryAll(v string) bool { return strings.EqualFold(strings.TrimSpace(v), "all") }
+
+// trendLimitOf reads ?trend: "all" is every stored point, anything else
+// the default window.
+func trendLimitOf(v string) int {
+	if queryAll(v) {
+		return 0
+	}
+	return contextTrendMax
+}
+
+// sessionContextOf builds the panel's answer from the ledger: the active
+// provider's trail cut to the last limit points (0 = all of them), and
+// the other providers' trails too when allProviders is set.
+func sessionContextOf(id string, su *store.SessionUsage, limit int, allProviders bool) SessionContextDTO {
 	out := SessionContextDTO{SessionID: id, Turns: su.Turns, Totals: usagereport.TotalsOf(su.Totals)}
 	// The active provider is the one that answered most recently — not
 	// the session's configured provider, which may have been switched a
@@ -253,15 +265,16 @@ func sessionContextOf(id string, su *store.SessionUsage, limit int) SessionConte
 		if !p.LastAt.IsZero() {
 			row.LastAt = p.LastAt.UTC().Format(time.RFC3339)
 		}
-		row.ContextSeriesDTO = seriesOf(p, row.Totals.Total, limit)
-		out.Providers = append(out.Providers, row)
 		if name == active {
 			out.Provider, out.Model = name, p.Model
 			out.Used, out.Window = p.ContextUsed, p.ContextWindow
 			out.AutoCompact = p.AutoCompact
 			out.Pct = row.Pct
-			out.ContextSeriesDTO = row.ContextSeriesDTO
+			out.ContextSeriesDTO = seriesOf(p, row.Totals.Total, limit)
+		} else if allProviders {
+			row.ContextSeriesDTO = seriesOf(p, row.Totals.Total, limit)
 		}
+		out.Providers = append(out.Providers, row)
 	}
 	sortContextProviders(out.Providers, out.Provider)
 	return out
@@ -276,8 +289,8 @@ func seriesOf(p *store.ProviderUsage, total, limit int) ContextSeriesDTO {
 	// to anchor against — hovering a point once reported "total 0" for
 	// every point on every session because this was never called.
 	out.TrendSpent = trendSpentOf(p.Series, total, start)
-	out.TrendTurn = trendTurnOf(p.Series, p.Turns, start)
-	out.TrendSent, out.TrendCost = trendSendOf(p.Series, start)
+	out.TrendTurn = trendTurnOf(turnPoints(p.Series), p.Turns, start)
+	out.TrendSent, out.TrendCost = trendSendOf(p.Series, out.TrendTurn, start)
 	return out
 }
 
@@ -289,26 +302,46 @@ func trendStart(n, limit int) int {
 	return 0
 }
 
-// levelOnly reports a point that records a level and nothing else: a
-// turn that ended without usage, or a compaction. Turn points always
-// carry a model (UnknownModel when the vendor named none); points older
-// than that field still carry their flows.
-func levelOnly(pt store.UsagePoint) bool {
-	return pt.Model == "" && pointTokens(pt) == 0 && pt.CostUSD == 0
+// turnPoints marks which stored points are turns, the way the store
+// counted them: recordUsage adds a turn and a point together, while
+// recordLevelPoint and recordCompaction add a point and no turn.
+//
+// A turn point carries a model (UnknownModel when the vendor named
+// none) and a level-only point never does — but only since the model
+// field exists. Before it, a turn that reported no tokens and no cost
+// looks exactly like a level-only point, and the two cannot be told
+// apart. So every point before the first one with a model counts as a
+// turn: a compaction there is numbered like a turn, which mislabels that
+// one point, where skipping a real turn would shift the number of every
+// point before it.
+func turnPoints(series []store.UsagePoint) []bool {
+	first := len(series)
+	for i, pt := range series {
+		if pt.Model != "" {
+			first = i
+			break
+		}
+	}
+	out := make([]bool, len(series))
+	for i, pt := range series {
+		out[i] = i < first || pt.Model != "" || pointTokens(pt) > 0 || pt.CostUSD != 0
+	}
+	return out
 }
 
 // trendTurnOf numbers each point with the provider's real turn, counted
 // back from its turn total: the trail is capped, so counting forward
 // from the first surviving point would restart at 1. Level-only points
-// get nil and do not take a number.
-func trendTurnOf(series []store.UsagePoint, turns, start int) []*int {
-	if len(series) == 0 {
+// get nil and do not take a number; so does a point the count runs out
+// on (a ledger with fewer turns than turn points), never a number <= 0.
+func trendTurnOf(isTurn []bool, turns, start int) []*int {
+	if len(isTurn) == 0 {
 		return nil
 	}
-	out := make([]*int, len(series)-start)
+	out := make([]*int, len(isTurn)-start)
 	turn := turns
-	for i := len(series) - 1; i >= start; i-- {
-		if levelOnly(series[i]) {
+	for i := len(isTurn) - 1; i >= start; i-- {
+		if !isTurn[i] {
 			continue
 		}
 		if turn > 0 {
@@ -320,19 +353,20 @@ func trendTurnOf(series []store.UsagePoint, turns, start int) []*int {
 	return out
 }
 
-// trendSendOf returns what each turn sent and cost; nil for a level-only
-// point, which spent nothing it could report.
-func trendSendOf(series []store.UsagePoint, start int) ([]*int, []*float64) {
+// trendSendOf returns what each turn sent and cost, nil wherever the
+// point has no turn number (turn, aligned with series[start:]). Cost is
+// rounded to six decimals so float sums do not leak into the JSON.
+func trendSendOf(series []store.UsagePoint, turn []*int, start int) ([]*int, []*float64) {
 	if len(series) == 0 {
 		return nil, nil
 	}
 	sent := make([]*int, len(series)-start)
 	cost := make([]*float64, len(series)-start)
 	for i, pt := range series[start:] {
-		if levelOnly(pt) {
+		if turn[i] == nil {
 			continue
 		}
-		n, c := pointTokens(pt), pt.CostUSD
+		n, c := pointTokens(pt), math.Round(pt.CostUSD*1e6)/1e6
 		sent[i], cost[i] = &n, &c
 	}
 	return sent, cost

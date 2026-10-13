@@ -57,7 +57,7 @@ func TestSessionContextTrendTurnSkipsLevelOnly(t *testing.T) {
 	p.Input = 60
 	su := &store.SessionUsage{Turns: 3, Providers: map[string]*store.ProviderUsage{"claude/default": p}}
 
-	out := sessionContextOf("s1", su, contextTrendMax)
+	out := sessionContextOf("s1", su, contextTrendMax, false)
 	if got := intsOf(out.TrendTurn); !sameInts(got, []int{1, -1, 2, -1, 3}) {
 		t.Fatalf("trend_turn = %v", got)
 	}
@@ -90,7 +90,7 @@ func TestSessionContextTrendTurnCapped(t *testing.T) {
 	p := &store.ProviderUsage{Turns: 900, Series: series}
 	su := &store.SessionUsage{Turns: 900, Providers: map[string]*store.ProviderUsage{"claude/default": p}}
 
-	def := sessionContextOf("s1", su, contextTrendMax)
+	def := sessionContextOf("s1", su, contextTrendMax, false)
 	if len(def.Trend) != contextTrendMax || len(def.TrendTurn) != contextTrendMax {
 		t.Fatalf("default: want %d points, got %d / %d", contextTrendMax, len(def.Trend), len(def.TrendTurn))
 	}
@@ -101,7 +101,7 @@ func TestSessionContextTrendTurnCapped(t *testing.T) {
 		t.Fatalf("trend_total = %d, want %d", def.TrendTotal, store.UsageSeriesMax)
 	}
 
-	all := sessionContextOf("s1", su, 0)
+	all := sessionContextOf("s1", su, 0, false)
 	if len(all.Trend) != store.UsageSeriesMax || len(all.TrendSpent) != store.UsageSeriesMax {
 		t.Fatalf("all: want every stored point, got %d", len(all.Trend))
 	}
@@ -126,7 +126,22 @@ func TestSessionContextSeriesPerProvider(t *testing.T) {
 	}}
 	su := &store.SessionUsage{Turns: 3, Providers: map[string]*store.ProviderUsage{"claude/a": a, "codex/b": b}}
 
-	out := sessionContextOf("s1", su, contextTrendMax)
+	// Default: the old fields plus the active trail at the top level;
+	// no row repeats a trail.
+	def := sessionContextOf("s1", su, contextTrendMax, false)
+	for _, row := range def.Providers {
+		if row.Trend != nil || row.TrendTurn != nil || row.TrendTotal != 0 {
+			t.Fatalf("default: row %s carries a trail", row.Provider)
+		}
+	}
+	if !sameInts(def.Trend, []int{50}) {
+		t.Fatalf("default: top-level trend = %v", def.Trend)
+	}
+
+	out := sessionContextOf("s1", su, contextTrendMax, true)
+	if out.Providers[0].Trend != nil {
+		t.Fatal("?providers=all: the active row repeats the top-level trail")
+	}
 	if out.Provider != "codex/b" || len(out.Providers) != 2 || out.Providers[0].Provider != "codex/b" {
 		t.Fatalf("active/order wrong: %q %+v", out.Provider, out.Providers)
 	}
@@ -151,9 +166,98 @@ func TestSessionContextSeriesPerProvider(t *testing.T) {
 		}
 	}
 	rows := m["providers"].([]any)
+	if _, ok := rows[0].(map[string]any)["trend_turn"]; ok {
+		t.Fatalf("active row has a trail: %s", raw)
+	}
 	if _, ok := rows[1].(map[string]any)["trend_turn"]; !ok {
 		t.Fatalf("provider row has no trail: %s", raw)
 	}
 }
 
 func costNearAPI(a, b float64) bool { d := a - b; return d < 1e-9 && d > -1e-9 }
+
+// A ledger from before the model field: its points carry no model, and a
+// turn with no tokens is still a turn the store counted.
+func TestSessionContextTrendTurnOldLedger(t *testing.T) {
+	now := time.Now()
+	p := &store.ProviderUsage{Turns: 4, Series: []store.UsagePoint{
+		{At: now, ContextUsed: 100, Input: 10},
+		{At: now.Add(time.Minute), ContextUsed: 100}, // old turn, no tokens
+		{At: now.Add(2 * time.Minute), ContextUsed: 120, Input: 5},
+		turnPt(now.Add(3*time.Minute), 130, 7, 0.1), // model field from here on
+		levelPt(now.Add(4*time.Minute), 140),
+	}}
+	su := &store.SessionUsage{Turns: 4, Providers: map[string]*store.ProviderUsage{"claude/default": p}}
+	out := sessionContextOf("s1", su, contextTrendMax, false)
+	if got := intsOf(out.TrendTurn); !sameInts(got, []int{1, 2, 3, 4, -1}) {
+		t.Fatalf("trend_turn = %v, want 1 2 3 4 null", got)
+	}
+	if got := intsOf(out.TrendSent); !sameInts(got, []int{10, 0, 5, 7, -1}) {
+		t.Fatalf("trend_sent = %v", got)
+	}
+}
+
+// Fewer turns than turn points (a ledger written by an older build):
+// the oldest points get null, never a number <= 0.
+func TestSessionContextTrendTurnRunsOut(t *testing.T) {
+	now := time.Now()
+	p := &store.ProviderUsage{Turns: 2, Series: []store.UsagePoint{
+		turnPt(now, 1, 1, 0.1),
+		turnPt(now.Add(time.Minute), 2, 1, 0.1),
+		turnPt(now.Add(2*time.Minute), 3, 1, 0.1),
+	}}
+	su := &store.SessionUsage{Turns: 2, Providers: map[string]*store.ProviderUsage{"claude/default": p}}
+	out := sessionContextOf("s1", su, contextTrendMax, false)
+	if got := intsOf(out.TrendTurn); !sameInts(got, []int{-1, 1, 2}) {
+		t.Fatalf("trend_turn = %v, want null 1 2", got)
+	}
+	if out.TrendSent[0] != nil || out.TrendCost[0] != nil {
+		t.Fatal("a point without a turn number carries spend")
+	}
+}
+
+// A turn whose vendor named no model is stored under UnknownModel; with
+// no tokens it is still a turn, not a level-only point.
+func TestSessionContextTrendTurnUnknownModelZero(t *testing.T) {
+	now := time.Now()
+	p := &store.ProviderUsage{Turns: 2, Series: []store.UsagePoint{
+		turnPt(now, 1, 1, 0.1),
+		{At: now.Add(time.Minute), ContextUsed: 2, Model: store.UnknownModel},
+	}}
+	su := &store.SessionUsage{Turns: 2, Providers: map[string]*store.ProviderUsage{"codex/x": p}}
+	out := sessionContextOf("s1", su, contextTrendMax, false)
+	if got := intsOf(out.TrendTurn); !sameInts(got, []int{1, 2}) {
+		t.Fatalf("trend_turn = %v", got)
+	}
+	if got := intsOf(out.TrendSent); !sameInts(got, []int{1, 0}) {
+		t.Fatalf("trend_sent = %v", got)
+	}
+}
+
+// Cost is rounded so float sums do not reach the JSON.
+func TestSessionContextTrendCostRounded(t *testing.T) {
+	p := &store.ProviderUsage{Turns: 1, Series: []store.UsagePoint{turnPt(time.Now(), 1, 1, 0.1+0.2)}}
+	su := &store.SessionUsage{Turns: 1, Providers: map[string]*store.ProviderUsage{"claude/default": p}}
+	raw, _ := json.Marshal(sessionContextOf("s1", su, contextTrendMax, false))
+	if !strings.Contains(string(raw), `"trend_cost":[0.3]`) {
+		t.Fatalf("json: %s", raw)
+	}
+}
+
+// ?trend and ?providers: "all" in any case; anything else is the default.
+func TestSessionContextQueryParsing(t *testing.T) {
+	cases := []struct {
+		trend string
+		limit int
+	}{{"", contextTrendMax}, {"all", 0}, {"ALL", 0}, {" All ", 0}, {"500", contextTrendMax}, {"40", contextTrendMax}, {"x", contextTrendMax}}
+	for _, c := range cases {
+		if got := trendLimitOf(c.trend); got != c.limit {
+			t.Fatalf("trend=%q: limit %d, want %d", c.trend, got, c.limit)
+		}
+	}
+	for v, want := range map[string]bool{"": false, "all": true, "ALL": true, "active": false, "1": false} {
+		if got := queryAll(v); got != want {
+			t.Fatalf("providers=%q: %v, want %v", v, got, want)
+		}
+	}
+}
