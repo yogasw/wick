@@ -119,6 +119,17 @@ describe("isInterimText (P60 S2)", () => {
   test("all settled with a later answer → interim", () => {
     expect(isInterimText(a(short), settled, true)).toBe(true);
   });
+  test("a thinking-only turn is not a delegation", () => {
+    expect(isInterimText(a(short, [{ type: "thinking", text: "hmm" }]), working, false)).toBe(false);
+  });
+  test("a team_message call answering a task still counts as delegation only", () => {
+    const answer: TurnEvent = { type: "tool_use", tool_name: "mcp__wick__team_message", tool_use_id: "x", tool_input: '{"task_id":"t1","message":"yes"}' };
+    expect(isInterimText(a(short, [answer]), working, false)).toBe(true);
+    expect(isInterimText(a(short, [answer]), [], false)).toBe(false);
+  });
+  test("interimNote strips segment by segment", () => {
+    expect(interimNote("One.\n\nTwo.\nBoth are checking.", ["One.", "  ", "Two."])).toBe("Both are checking.");
+  });
   test("interimNote keeps only what the trace does not hold", () => {
     expect(interimNote("Asking them now. Both are checking.", ["Asking them now."])).toBe("Both are checking.");
     expect(interimNote("Both are checking.", [])).toBe("Both are checking.");

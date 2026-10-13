@@ -485,30 +485,30 @@
 
   /* P60 S2: a turn that only delegated keeps its in-between text in the
      trace, not the body (isInterimText). A turn from history has no events
-     until its trace is read: the guards decide meanwhile and the trace is
-     read once, so a turn that also did other work shows its text again;
-     a trace that fails to load shows it too. */
-  let interimReadFailed = $state(false);
+     until its trace is read: its text stays visible meanwhile (its tasks
+     may be tasksByTurn's guess) and, when the guards would hide it, the
+     trace is read once to confirm the tool calls. That read is kept apart
+     from traceEvents, so opening the trace still fetches it fresh; a read
+     that fails leaves the text where it is. */
+  let interimEvents = $state<TurnEvent[] | null>(null);
   let interimReading = false;
+  const decideEvents = $derived(traceEvents ?? interimEvents ?? safeEvents);
   const interimPending = $derived(
-    turn.role === "assistant" && delegated.length > 0 && traceEvents === null && safeEvents.length === 0 && canFetch && !interimReadFailed,
+    turn.role === "assistant" && delegated.length > 0 && traceEvents === null && interimEvents === null && safeEvents.length === 0 && canFetch,
   );
   const interim = $derived(
-    delegated.length > 0 &&
-      (interimPending
-        ? interimGuards(turn.text ?? "", delegated, laterAnswer)
-        : isInterimText({ role: turn.role, text: turn.text, events: resolvedTraceEvents }, delegated, laterAnswer)),
+    delegated.length > 0 && !interimPending &&
+      isInterimText({ role: turn.role, text: turn.text, events: decideEvents }, delegated, laterAnswer),
   );
   $effect(() => {
-    if (!interimPending || !interim || interimReading) return;
+    if (!interimPending || interimReading || !interimGuards(turn.text ?? "", delegated, laterAnswer)) return;
     interimReading = true;
     loadTrace!(turn.turn_id)
-      .then((ev) => { traceEvents ??= ev; })
-      .catch(() => { interimReadFailed = true; })
-      .finally(() => { interimReading = false; });
+      .then((ev) => { interimEvents = ev; })
+      .catch(() => { /* the text stays in the body */ });
   });
   const interimText = $derived(
-    interim ? interimNote(turn.text ?? "", traceBlocks.flatMap((b) => (b.kind === "text" ? [b.text] : []))) : "",
+    interim ? interimNote(turn.text ?? "", decideEvents.flatMap((e) => (e.type === "text" && e.text ? [e.text] : []))) : "",
   );
 
   async function toggleTrace() {

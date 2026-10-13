@@ -830,13 +830,45 @@ describe("ThreadMessage delegation block", () => {
     expect(screen.getByText("Sent them off.")).toBeDefined();
   });
 
-  test("P60 S2: a turn from history reads its trace once to decide", async () => {
+  test("P60 S2: a turn from history stays visible until its trace confirms; opening the trace fetches fresh", async () => {
     const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
-    const loadTrace = vi.fn().mockResolvedValue([...turn.events!, { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", tool_input: "{}" }]);
-    render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
-    expect(screen.queryByText("Sent them off.")).toBeNull();
-    await waitFor(() => expect(screen.getByText("Sent them off.")).toBeDefined());
+    const loadTrace = vi.fn().mockResolvedValue(turn.events!);
+    const { container } = render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    await waitFor(() => expect(screen.queryByText("Sent them off.")).toBeNull());
     expect(loadTrace).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByText(/show trace/));
+    await waitFor(() => expect(loadTrace).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(container.querySelector("[data-trace-blocks]")!.textContent).toContain("Sent them off."));
+  });
+
+  test("P60 S2: a history turn that also did other work, or whose trace fails to load, keeps its text", async () => {
+    const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const busy = vi.fn().mockResolvedValue([...turn.events!, { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", tool_input: "{}" }]);
+    const r = render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace: busy }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    await waitFor(() => expect(busy).toHaveBeenCalledTimes(1));
+    await tick();
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    r.unmount();
+    const failing = vi.fn().mockRejectedValue(new Error("gone"));
+    render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace: failing }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    await waitFor(() => expect(failing).toHaveBeenCalledTimes(1));
+    await tick();
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    expect(screen.queryByText(/failed to load trace/)).toBeNull();
+  });
+
+  test("P60 S2: no trace read for a turn without tasks or one that fails a guard", async () => {
+    const none = { forTurn: () => [], agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const loadTrace = vi.fn().mockResolvedValue(turn.events!);
+    const r = render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, none]]) });
+    r.unmount();
+    const ctx = { ...none, forTurn: (id: string) => (id === "turn-1" ? [task({})] : []) } as TeamTasksCtx;
+    render(ThreadMessage, { props: { turn: { ...turn, text: "Sent them off. Shall I wait?", events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    await tick();
+    await tick();
+    expect(loadTrace).not.toHaveBeenCalled();
+    expect(screen.getByText("Sent them off. Shall I wait?")).toBeDefined();
   });
 
   test("T16 S10: the block sums it up, the trace keeps the team_message card with a row per teammate", async () => {

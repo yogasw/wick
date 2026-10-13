@@ -17,7 +17,7 @@
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
-  import { foldTeamResults, isInterimText } from "../teamResults.js";
+  import { foldTeamResults, interimGuards, interimNote, isInterimText } from "../teamResults.js";
   import DelegationBlock from "./team/DelegationBlock.svelte";
   import TeamTraceRows from "./team/TeamTraceRows.svelte";
   import { liveBlockTasks } from "../teamTrace.js";
@@ -179,15 +179,24 @@
     ),
   ), blockTaskIds, teamNames));
 
-  /* P60 S2 guard 2: whether an assistant answer follows each turn. A turn
-     that only delegated keeps its in-between text in its trace while a
-     teammate works or once one exists (isInterimText). */
+  /* P60 S2 guard 2: whether a later answer of the chat's agent follows
+     each turn. A turn that only delegated keeps its in-between text in its
+     trace while a teammate works or once one exists (isInterimText). Not
+     an answer: another in-between text, or a reply to a teammate. A turn
+     from history without its events counts as in-between when it
+     delegated and passes the guards, so a doubtful case shows the text. */
   const laterAnswerAt = $derived.by(() => {
     const out: boolean[] = new Array(shownTurns.length);
     let seen = !!live?.text && !liveInterim;
     for (let i = shownTurns.length - 1; i >= 0; i--) {
       out[i] = seen;
-      if (shownTurns[i].role === "assistant" && (shownTurns[i].text ?? "").trim()) seen = true;
+      const t = shownTurns[i];
+      if (t.role !== "assistant" || !(t.text ?? "").trim() || t.speaker?.via === "mention") continue;
+      if ((t.source ?? "").trim().toLowerCase() === "subagent") continue;
+      const tasks = teamCtx ? teamCtx.forTurn(t.turn_id) : [];
+      const between = tasks.length > 0 &&
+        ((t.events ?? []).length > 0 ? isInterimText(t, tasks, out[i]) : interimGuards(t.text ?? "", tasks, out[i]));
+      if (!between) seen = true;
     }
     return out;
   });
@@ -215,7 +224,13 @@
         false,
       ),
   );
-  const liveSteps = $derived(liveNonTodoBlocks.length + (liveInterim ? 1 : 0));
+  /* Live text never lands in live.blocks (the thread store keeps it in
+     live.text), so the note is the whole text today; interimNote keeps it
+     right if a text segment ever does. */
+  const liveInterimText = $derived(
+    liveInterim && live ? interimNote(live.text, live.blocks.flatMap((b) => (b.kind === "text" ? [b.text] : []))) : "",
+  );
+  const liveSteps = $derived(liveNonTodoBlocks.length + (liveInterimText ? 1 : 0));
   const liveTaskById = $derived(new Map((teamCtx?.tasks?.() ?? []).map((t) => [t.task_id, t])));
   /* The working indicator is on from a turn's start to its end: while
      typing is up (hide debounced) or the live turn has not been committed.
@@ -440,8 +455,8 @@
                   <TraceNote kind={block.kind} text={(block as Extract<ThreadBlock, { kind: "thinking" | "text" }>).text} />
                 {/if}
               {/each}
-              {#if liveInterim && live?.text}
-                <TraceNote kind="text" text={live.text.trim()} />
+              {#if liveInterimText}
+                <TraceNote kind="text" text={liveInterimText} />
               {/if}
             </div>
           {/if}

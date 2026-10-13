@@ -457,6 +457,25 @@ describe("ConversationThread live delegation block", () => {
     expect(container.textContent).toContain("Should I wait?");
   });
 
+  test("P60 S2: live → committed keeps the in-between text out of the body, no flicker", async () => {
+    const text = "Asked both of them. Still checking.";
+    const blocks = [teamBlock("u1", "k1"), teamBlock("u2", "k2")];
+    state = { turns: [userTurn], live: { text, blocks } };
+    const body = (c: HTMLElement) => [...c.querySelectorAll("[data-turn-id], .rounded-2xl")].some((el) => !el.closest("[data-trace-blocks]") && el.textContent?.includes(text));
+    const { container, rerender } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(body(container)).toBe(false);
+    const committed: ConversationTurn = {
+      ...makeTurn("live-2", "assistant", text),
+      ts: "2026-10-10T10:03:00Z",
+      has_trace: true,
+      events: blocks.map((b) => (b.kind === "tool" ? { type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId, text: b.result } : { type: b.kind })),
+    };
+    state = { turns: [userTurn, committed], live: null };
+    await rerender({ ...state, typing: { active: false } });
+    expect(screen.getByTestId("delegation-block")).toBeDefined();
+    expect(container.textContent).not.toContain(text);
+  });
+
   test("P60 S2: a turn that also did other work keeps its live text", () => {
     state = { turns: [userTurn], live: { ...live, text: "Looked it up and asked them." } };
     const { container } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
@@ -496,6 +515,17 @@ describe("ConversationThread one UI per delegation (T16 S9)", () => {
     });
     expect(container.textContent).not.toContain("Asked the team.");
     expect(container.textContent).toContain("One answer.");
+  });
+
+  test("P60 S2: a later answer arriving while mounted moves the text into the trace; a teammate reply or another in-between text does not", async () => {
+    const turns = [makeTurn("u0", "user", "check it"), sender];
+    const { container, rerender } = render(ConversationThread, { props: { turns, live: null, typing: { active: false } }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(container.textContent).toContain("Asked the team.");
+    const mention: ConversationTurn = { ...makeTurn("m1", "assistant", "Sure, here you go."), speaker: { agent_id: "x", handle: "main", via: "mention" } };
+    await rerender({ turns: [...turns, mention], live: null, typing: { active: false } });
+    expect(container.textContent).toContain("Asked the team.");
+    await rerender({ turns: [...turns, mention, makeTurn("a2", "assistant", "One answer.")], live: null, typing: { active: false } });
+    expect(container.textContent).not.toContain("Asked the team.");
   });
 
   test("the batch prompt and the hand-off pill leave the thread; the block keeps the reply", () => {

@@ -125,8 +125,17 @@ export function isInterimText(
 
 /** The part of an interim text the trace does not hold yet: a text
     segment written before a tool call is a trace event already, the rest
-    (after the last call) is only on the turn. */
+    (after the last call) is only on the turn. Segments are matched one by
+    one: the store skips whitespace-only ones, so they need not join back
+    into the text. One not found → the whole text. */
 export function interimNote(text: string, segments: string[]): string {
-  const head = segments.join("");
-  return head && text.startsWith(head) ? text.slice(head.length).trim() : text.trim();
+  let rest = text;
+  for (const seg of segments) {
+    const s = seg.trim();
+    if (!s) continue;
+    const at = rest.indexOf(s);
+    if (at < 0) return text.trim();
+    rest = rest.slice(at + s.length);
+  }
+  return rest.trim();
 }
