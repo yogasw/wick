@@ -117,6 +117,10 @@ func TestClaudeTurnSpendErrorMovesBaseline(t *testing.T) {
 	if errEv.Type != Error {
 		t.Fatalf("want Error, got %v", errEv.Type)
 	}
+	// The error turn carries its own share, for the ledger.
+	if eu := errEv.Usage; eu == nil || eu.Input != 200 || eu.Output != 200 || eu.CacheRead != 4000 || !costNear(eu.CostUSD, 2) {
+		t.Fatalf("error turn: want only its difference, got %+v", errEv.Usage)
+	}
 	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":3.25,`+
 		`"usage":{"input_tokens":1,"output_tokens":1},`+
 		`"modelUsage":{"claude-opus-5":{"inputTokens":310,"outputTokens":320,"cacheReadInputTokens":6000}}}`)
@@ -158,5 +162,98 @@ func TestClaudeTurnSpendTurnScoped(t *testing.T) {
 	ev := parseDone(t, p, line)
 	if ev.Usage == nil || ev.Usage.Input != 10 || ev.Usage.Output != 5 {
 		t.Fatalf("want the turn's own numbers, got %+v", ev.Usage)
+	}
+}
+
+// TestClaudeTurnSpendErrorFirst: an error as the first result of a
+// process is charged in full, and the turn after it only its difference.
+func TestClaudeTurnSpendErrorFirst(t *testing.T) {
+	p := NewClaudeParser()
+	errEv := parseDone(t, p, `{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.5,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":100,"outputTokens":40,"cacheReadInputTokens":2000}}}`)
+	if errEv.Type != Error {
+		t.Fatalf("want Error, got %v", errEv.Type)
+	}
+	if eu := errEv.Usage; eu == nil || eu.Input != 100 || eu.Output != 40 || eu.CacheRead != 2000 || !costNear(eu.CostUSD, 0.5) {
+		t.Fatalf("first error: want the full totals, got %+v", errEv.Usage)
+	}
+	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.7,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":105,"outputTokens":50,"cacheReadInputTokens":2500}}}`)
+	if u := ev.Usage; u == nil || u.Input != 5 || u.Output != 10 || u.CacheRead != 500 || !costNear(u.CostUSD, 0.2) {
+		t.Fatalf("after error: want the difference, got %+v", ev.Usage)
+	}
+}
+
+// TestClaudeTurnSpendModelAbsentThenBack: a model missing from one frame
+// keeps its baseline, so when it comes back it is charged only its
+// difference, not its whole running total again.
+func TestClaudeTurnSpendModelAbsentThenBack(t *testing.T) {
+	p := NewClaudeParser()
+	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":1000,"outputTokens":100,"cacheReadInputTokens":90000}}}`)
+	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-haiku-4-5":{"inputTokens":30,"outputTokens":3}}}`)
+	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":1010,"outputTokens":130,"cacheReadInputTokens":95000}}}`)
+	if u := ev.Usage; u == nil || u.Model != "claude-opus-5" || u.Input != 10 || u.Output != 30 || u.CacheRead != 5000 {
+		t.Fatalf("model back: want only its difference, got %+v", ev.Usage)
+	}
+}
+
+// TestClaudeTurnSpendNewModel: a model first seen in turn 2 has no
+// baseline, so its totals are this turn's spend as they stand.
+func TestClaudeTurnSpendNewModel(t *testing.T) {
+	p := NewClaudeParser()
+	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-haiku-4-5":{"inputTokens":40,"outputTokens":4}}}`)
+	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-haiku-4-5":{"inputTokens":40,"outputTokens":4},`+
+		`"claude-opus-5":{"inputTokens":700,"outputTokens":70,"cacheReadInputTokens":7000,"contextWindow":1000000}}}`)
+	if u := ev.Usage; u == nil || u.Model != "claude-opus-5" || u.Input != 700 || u.Output != 70 || u.CacheRead != 7000 || u.Window != 1000000 {
+		t.Fatalf("new model: want its full totals, got %+v", ev.Usage)
+	}
+}
+
+// TestClaudeTurnSpendCostDropTokensUp: the cost is checked on its own; a
+// cost that went down is taken as it stands even while tokens climbed.
+func TestClaudeTurnSpendCostDropTokensUp(t *testing.T) {
+	p := NewClaudeParser()
+	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":4,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":100,"outputTokens":100}}}`)
+	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.3,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":120,"outputTokens":150}}}`)
+	if u := ev.Usage; u == nil || u.Input != 20 || u.Output != 50 || !costNear(u.CostUSD, 0.3) {
+		t.Fatalf("want token difference and the new cost as-is, got %+v", ev.Usage)
+	}
+}
+
+// TestClaudeTurnSpendMissingCost: a result without total_cost_usd costs
+// nothing and leaves the cost baseline alone, so the next priced result
+// is differenced against the last price actually reported.
+func TestClaudeTurnSpendMissingCost(t *testing.T) {
+	p := NewClaudeParser()
+	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":100,"outputTokens":100}}}`)
+	mid := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":110,"outputTokens":110}}}`)
+	if u := mid.Usage; u == nil || u.CostUSD != 0 || u.Input != 10 || u.Output != 10 {
+		t.Fatalf("no cost: want zero cost and the token difference, got %+v", mid.Usage)
+	}
+	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1.5,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-opus-5":{"inputTokens":115,"outputTokens":120}}}`)
+	if u := ev.Usage; u == nil || !costNear(u.CostUSD, 0.5) || u.Input != 5 || u.Output != 10 {
+		t.Fatalf("after missing cost: want cost 0.5 from the last price, got %+v", ev.Usage)
 	}
 }

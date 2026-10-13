@@ -315,7 +315,14 @@ func (p *ClaudeParser) turnSpend(r *claudeRaw) {
 			}
 			turn[name] = mu
 		}
-		p.spentModel = r.ModelUsage
+		// Merged per model, never replaced: a model missing from one
+		// frame still has its totals when it shows up again.
+		if p.spentModel == nil {
+			p.spentModel = make(map[string]claudeModelUsage, len(r.ModelUsage))
+		}
+		for name, mu := range r.ModelUsage {
+			p.spentModel[name] = mu
+		}
 		r.ModelUsage = turn
 	}
 	cost := r.CostUSD
@@ -749,11 +756,18 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		p.synthKind, p.synthReset, p.synthCoded = ErrNone, time.Time{}, false
 		// Error results carry the same running totals (error_max_turns,
 		// error_during_execution report what was spent before stopping),
-		// so they move the baseline too: otherwise the next turn would be
-		// charged for this one's spend a second time.
+		// so they move the baseline too and hand their own share to the
+		// ledger: otherwise that spend is lost, or charged to the next
+		// turn.
 		p.turnSpend(&raw)
+		u := raw.tokenUsage()
+		if u != nil && p.lastLevel > 0 {
+			u.ContextUsed = p.lastLevel
+		}
+		// The next turn measures itself; carrying this one's level over
+		// would report a stale window if that turn reports none.
+		p.lastLevel = 0
 		if raw.IsError {
-			p.lastLevel = 0
 			// error_during_execution puts the detail on stderr, leaving
 			// .result empty — fall back to subtype so the error isn't blank.
 			msg := raw.Result
@@ -776,15 +790,9 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 			if ev.ErrKind != ErrLimit {
 				ev.ResetAt = time.Time{}
 			}
+			ev.Usage = u
 			return ev, nil
 		}
-		u := raw.tokenUsage()
-		if u != nil && p.lastLevel > 0 {
-			u.ContextUsed = p.lastLevel
-		}
-		// The next turn measures itself; carrying this one's level over
-		// would report a stale window if that turn reports none.
-		p.lastLevel = 0
 		// A turn whose only reply was a limit notice can still end in a
 		// "success" result; carry the notice's kind so the end of the
 		// turn says what stopped it.
