@@ -311,7 +311,7 @@ describe("DelegationBlock", () => {
     expect(rows[1].querySelector(".font-mono")!.textContent).toBe(screen.getAllByTestId("chip-elapsed")[1].textContent);
   });
 
-  test("P60: no progress row for a replied or failed task, nor a working one without progress", () => {
+  test("P60: no progress row for a replied or failed task; a working one without progress reads working…", () => {
     render(DelegationBlock, {
       props: {
         tasks: [
@@ -322,14 +322,41 @@ describe("DelegationBlock", () => {
         ],
       },
     });
-    expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["w"]);
+    const rows = screen.getAllByTestId("delegation-progress-row");
+    expect(rows.map((r) => r.getAttribute("data-task-id"))).toEqual(["w", "n"]);
+    expect(rows[0].querySelector("[data-testid=delegation-progress-working]")).toBeNull();
+    expect(rows[1].querySelector("[data-testid=delegation-progress-working]")!.textContent).toBe("working…");
+    expect(rows[1].querySelector(".font-mono")!.textContent).toBe(screen.getAllByTestId("chip-elapsed")[1].textContent);
+  });
+
+  test("P60: a click on a progress row opens that task's chip", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", progress: "Checking Loki" }), task({ task_id: "b", to_handle: "vera", to_name: "Vera" })] },
+    });
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    const row = screen.getAllByTestId("delegation-progress-row")[1];
+    expect(row.tagName).toBe("BUTTON");
+    expect(row.getAttribute("aria-label")).toBe("Open Vera's task");
+    await fireEvent.click(row);
+    expect(screen.getAllByTestId("delegation-preview")).toHaveLength(1);
+    expect(screen.getAllByTestId("delegation-chip")[1].getAttribute("data-open")).toBe("true");
+    expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["a"]);
+  });
+
+  test("P60: Show all hides every progress row", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", progress: "Checking Loki" }), task({ task_id: "b", to_handle: "vera", to_name: "Vera" })] },
+    });
+    expect(screen.getAllByTestId("delegation-progress-row")).toHaveLength(2);
+    await fireEvent.click(screen.getByTestId("delegation-show-all"));
+    expect(screen.queryByTestId("delegation-progress-row")).toBeNull();
   });
 
   test("P60: the row leaves when its teammate replies", async () => {
     const r = render(DelegationBlock, { props: { tasks: [task({ progress: "Checking Loki" }), task({ task_id: "t2", to_handle: "vera", to_name: "Vera" })] } });
-    expect(screen.getAllByTestId("delegation-progress-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("delegation-progress-row").map((x) => x.getAttribute("data-task-id"))).toEqual(["t1", "t2"]);
     await r.rerender({ tasks: [task({ state: "completed", reply: "done", progress: "Checking Loki" }), task({ task_id: "t2", to_handle: "vera", to_name: "Vera" })] });
-    expect(screen.queryByTestId("delegation-progress-row")).toBeNull();
+    expect(screen.getAllByTestId("delegation-progress-row").map((x) => x.getAttribute("data-task-id"))).toEqual(["t2"]);
   });
 
   test("P60: no progress rows while collapsed, none for the open chip", async () => {
