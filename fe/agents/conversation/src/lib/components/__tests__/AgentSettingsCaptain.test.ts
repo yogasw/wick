@@ -1,7 +1,9 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 
-const updateAgent = vi.fn((_b: string, _id: string, body: unknown) => Promise.resolve({ ...worker, ...(body as object) }));
+// After Make Captain the server returns the agent as the Captain.
+const updateAgent = vi.fn((_b: string, _id: string, body: unknown) =>
+  Promise.resolve({ ...worker, ...(makeCaptain.mock.calls.length ? { is_captain: true, manage_agents: true } : {}), ...(body as object) }));
 const getAccessHistory = vi.fn(() => Promise.resolve({ items: [
   { id: "h1", actor: "@captain", status: "applied", diff: ["+Notion (read)"], decided_by: "Yoga", at: "2026-10-03T10:00:00Z" },
   { id: "h2", actor: "@captain", status: "declined", diff: ["-Slack"], decided_by: "Yoga", at: "2026-10-03T09:00:00Z" },
@@ -59,6 +61,35 @@ describe("AgentSettings › Captain", () => {
     await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
     // The transfer is its own call, never a PATCH of is_captain.
     expect(updateAgent.mock.calls.some((c) => "is_captain" in (c[2] as object))).toBe(false);
+  });
+
+  test("Make Captain gives your access by default: Run as Owner + Same as me", async () => {
+    const p = props(worker, "captain");
+    render(AgentSettings, { props: p });
+    const btn = screen.getByRole("button", { name: "Make Captain" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    await fireEvent.click(btn);
+    const give = await screen.findByTestId("captain-give-access");
+    expect((give.querySelector("input") as HTMLInputElement).checked).toBe(true);
+    expect(give.textContent).toContain("Give @worker your access");
+    expect(give.textContent).toContain("Run as: Owner · Connector access: Same as me. A Team lead works for you personally.");
+    expect(give.textContent).toContain("Today: Caller · Choose connectors · 0. Untick to keep that.");
+    await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
+    await waitFor(() => expect(lastBody()).toEqual({ run_as: "owner", access_mode: "owner" }));
+    expect(makeCaptain.mock.invocationCallOrder[0]).toBeLessThan(updateAgent.mock.invocationCallOrder.at(-1)!);
+    await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true, run_as: "owner", access_mode: "owner" })));
+  });
+
+  test("unticked, Make Captain moves only the role", async () => {
+    const p = props(worker, "captain");
+    render(AgentSettings, { props: p });
+    const btn = screen.getByRole("button", { name: "Make Captain" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    await fireEvent.click(btn);
+    await fireEvent.click((await screen.findByTestId("captain-give-access")).querySelector("input")!);
+    await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
+    await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
+    expect(updateAgent.mock.calls.some((c) => "run_as" in (c[2] as object) || "access_mode" in (c[2] as object))).toBe(false);
   });
 
   test("the Captain shows a read-only status, no Make Captain and no switch", () => {

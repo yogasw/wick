@@ -39,8 +39,9 @@
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel, type TicketsRoute } from "./lib/agentsRouter.js";
   import { connectorCaption, hiddenTabsFor, type AgentMode } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
+  import { makeCaptainWithAccess } from "./lib/captainAccess.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, makeCaptain, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
@@ -500,12 +501,12 @@
 
   /* Empty-Team page: hand the Captain role to one of the user's own
      agents (after the old Captain was deleted). */
-  async function claimCaptain(c: { id: string }) {
+  async function claimCaptain(c: { id: string }, giveAccess: boolean) {
     try {
-      const r = await runApi(makeCaptain(base, c.id));
-      onSaved(r.agent);
-      toastOk(`🧭 @${r.agent.handle} is now your Team's Captain`);
-      navigate({ handle: r.agent.handle, session: null, panel: null }, { replace: true });
+      const a = await makeCaptainWithAccess(base, c.id, giveAccess);
+      onSaved(a);
+      toastOk(`🧭 @${a.handle} is now your Team's Captain`);
+      navigate({ handle: a.handle, session: null, panel: null }, { replace: true });
     } catch (err) {
       toastError(err instanceof Error ? err.message : String(err));
     }

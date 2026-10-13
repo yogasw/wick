@@ -17,7 +17,7 @@
   import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
-    getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, makeCaptain, runApi,
+    getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
@@ -30,6 +30,7 @@
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
   import type { MentionFrom, CaptainCan } from "../api/team.js";
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf, captainBlock } from "../captainSettings.js";
+  import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
@@ -154,6 +155,8 @@
   let confirmCaptain = $state(false);
   let captainSaving = $state(false);
   let captainError = $state("");
+  // "Give @x your access": ticked each time the confirm opens.
+  let captainGiveAccess = $state(true);
   $effect(() => {
     if (view !== "captain" || agent.is_captain || remote) return;
     const id = agent.id;
@@ -167,12 +170,14 @@
     captainSaving = true;
     captainError = "";
     try {
-      const r = await runApi(makeCaptain(base, agent.id));
-      saved = r.agent;
-      draft.manage_agents = r.agent.manage_agents ?? r.agent.is_captain;
-      onSaved(r.agent);
+      const a = await makeCaptainWithAccess(base, agent.id, captainGiveAccess);
+      saved = a;
+      draft.manage_agents = a.manage_agents ?? a.is_captain;
+      draft.run_as = a.run_as ?? "caller";
+      draft.access_mode = normalizeAccessMode(a.access_mode);
+      onSaved(a);
       confirmCaptain = false;
-      toastOk(`@${r.agent.handle} is now your Team's Captain`);
+      toastOk(`@${a.handle} is now your Team's Captain`);
     } catch (err) {
       captainError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -910,7 +915,7 @@
           </span>
         </span>
         <span class="shrink-0 whitespace-nowrap">
-          <Button variant="secondary" disabled={captainShares === null || !!captainReason || captainSaving} onclick={() => { captainError = ""; confirmCaptain = true; }}>Make Captain</Button>
+          <Button variant="secondary" disabled={captainShares === null || !!captainReason || captainSaving} onclick={() => { captainError = ""; captainGiveAccess = true; confirmCaptain = true; }}>Make Captain</Button>
         </span>
       </div>
     {/if}
@@ -1090,6 +1095,10 @@
       {#if currentCaptain}<b>@{currentCaptain.handle}</b> stops being the Captain;{" "}{/if}<b>@{agent.handle}</b> takes over coordinating your Team.
     </p>
     <p class="text-xs text-black-800 dark:text-black-600">Only the role moves: names, personas, chats and memory stay as they are. Mentions set to "Captain only" now come from @{agent.handle}.</p>
+    <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100" data-testid="captain-give-access">
+      <input type="checkbox" class="mt-1" bind:checked={captainGiveAccess} />
+      <span>Give @{agent.handle} your access<br /><span class="text-xs text-black-800 dark:text-black-600">{OWNER_ACCESS_HINT} Today: {accessToday(saved)}. Untick to keep that.</span></span>
+    </label>
     {#if captainError}<p class="text-xs text-neg-400" role="alert">{captainError}</p>{/if}
   </div>
   {#snippet footer()}
