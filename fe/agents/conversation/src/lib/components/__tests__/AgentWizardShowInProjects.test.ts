@@ -36,6 +36,9 @@ async function pickModel() {
 async function toModelStep() {
   await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
   await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+  // No connector added: the first Next only warns (not on a convert).
+  const go = screen.queryByRole("button", { name: "Continue without connectors →" });
+  if (go) await fireEvent.click(go);
 }
 
 async function fillAndCreate() {
@@ -86,6 +89,7 @@ describe("AgentWizard › step 3 Model", () => {
     // Step 2 no longer creates.
     expect(screen.queryByRole("button", { name: "Create agent" })).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Continue without connectors →" }));
     expect(screen.getByTestId("aw-model-step")).toBeDefined();
     expect(screen.getByRole("button", { name: "Provider & model" }).textContent).toContain("Choose provider & model…");
     const create = screen.getByRole("button", { name: "Create agent" }) as HTMLButtonElement;

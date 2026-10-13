@@ -74,6 +74,7 @@ describe("AgentWizard › avatar style Image", () => {
     expect(screen.getByRole("button", { name: "Hexagon" }).getAttribute("aria-pressed")).toBe("true");
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Continue without connectors →" }));
     await fireEvent.click(screen.getByRole("button", { name: "Provider & model" }));
     await fireEvent.click(screen.getByRole("button", { name: /^Claude/ }));
     await fireEvent.click(await screen.findByText("Sonnet"));
@@ -100,6 +101,7 @@ describe("AgentWizard › avatar style Image", () => {
     await fireEvent.change(screen.getByTestId("avatar-image-file"), { target: { files: [file] } });
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Continue without connectors →" }));
     await fireEvent.click(screen.getByRole("button", { name: "Provider & model" }));
     await fireEvent.click(screen.getByRole("button", { name: /^Claude/ }));
     await fireEvent.click(await screen.findByText("Sonnet"));

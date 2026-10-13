@@ -8,7 +8,9 @@
        Access, starting empty (off until added) — or "Same as me" for the
        Captain — and who in the Team may hand the agent work, with the
        agents it can hand work to. A new agent runs as the caller with
-       include-new off; all of it is changed later in Settings.
+       include-new off — the Captain runs as its owner, since a Team lead
+       works for you personally; all of it is changed later in Settings.
+       Next with "Choose connectors" and none added warns once first.
      ✨ Generate fills every step it can from the brief: persona, the
        connectors it needs (read, or write where it must change things)
        and its mention policy, so Next → Next → Create is enough.
@@ -274,9 +276,23 @@
   const handleTaken = $derived(taken.includes(handle));
   const personaOk = $derived(name.trim() !== "" && handleOk && !handleTaken);
 
+  // Next on Access with nothing granted asks once ("No connectors."):
+  // usually a mistake. Adding one hides it; Continue moves on anyway.
+  let noConnAsked = $state(false);
+  const noConnWarn = $derived(noConnAsked && accessMode === "choose" && grantedCount === 0 && !convertProject);
+  let checklist = $state<ReturnType<typeof ConnectorChecklist>>();
+
   function next() {
     if (step === 1 && personaOk) step = 2;
-    else if (step === 2) step = 3;
+    else if (step === 2) {
+      if (accessMode === "choose" && grantedCount === 0 && !convertProject && !noConnAsked) noConnAsked = true;
+      else goStep(3);
+    }
+  }
+  // Leaving Access (either way) asks again next time.
+  function goStep(to: number) {
+    step = to;
+    noConnAsked = false;
   }
 
   /** withImage uploads the picked picture to the new agent and saves the
@@ -312,7 +328,7 @@
           ...(projectId ? { project_id: projectId } : {}),
           ...(convertProject && projectId === convertProject ? { convert: true } : {}),
           ...accessPayload(accessMode, $state.snapshot(grants) as ConnectorGrant[], includeNew),
-          run_as: "caller",
+          run_as: isCaptain ? "owner" : "caller",
           mention_from: mentionFrom,
           ...(mentionFrom === "list" ? { mention_allow: [...mentionAllow] } : {}),
           ...(convertProject && projectId === convertProject ? { use_global_prompt: useGlobalPrompt } : {}),
@@ -347,6 +363,8 @@
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
   const ghost =
     "rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600";
+  const outline =
+    "whitespace-nowrap rounded-lg border border-white-300 px-3 py-1.5 text-xs font-medium text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-600";
   const primary =
     "rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50";
 </script>
@@ -572,7 +590,11 @@
         <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">🔐 Connector access</h3>
         <p class="mt-0.5 text-xs text-black-800 dark:text-black-600" data-testid="aw-access-summary">
           {#if accessMode === "owner"}
-            <b class="text-black-900 dark:text-white-100">Same as you</b> — every connector you have, write included{isCaptain ? " (the Captain's default)" : ""}.
+            {#if isCaptain}
+              <b class="text-black-900 dark:text-white-100">Same as you</b> — every connector you have, write included, and it <b class="text-black-900 dark:text-white-100">runs as you</b> (the Captain's default: a Team lead works for you personally).
+            {:else}
+              <b class="text-black-900 dark:text-white-100">Same as you</b> — every connector you have, write included.
+            {/if}
           {:else if grantedCount === 0}
             <b class="text-black-900 dark:text-white-100">No connectors yet</b> — add the ones it needs below. Platform tools are on for every agent; System tools are for the Captain.
           {:else}
@@ -594,6 +616,7 @@
       </div>
     {/if}
     <ConnectorChecklist
+      bind:this={checklist}
       {catalog}
       loading={catalogLoading}
       loadError={catalogError}
@@ -605,6 +628,11 @@
       showIncludeNew={!!convertProject}
     />
     </section>
+    {#if noConnWarn}
+      <div class="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300" role="alert" data-testid="aw-no-connectors">
+        <b>⚠ No connectors.</b> @{handle || "this agent"} can't use any connector (Slack, Loki, Notion…) — only Platform tools. That is usually a mistake. Add the ones it needs, or continue if it really needs none.
+      </div>
+    {/if}
     <section class="space-y-3 rounded-xl border-2 border-green-500/60 p-3" data-testid="aw-mention-card">
       <div>
         <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">💬 Mentions</h3>
@@ -688,11 +716,16 @@
 
 <div class="flex items-center justify-between gap-2 px-6 py-4">
   {#if step > 1}
-    <button type="button" class={ghost} onclick={() => (step -= 1)}>← Back</button>
+    <button type="button" class={ghost} onclick={() => goStep(step - 1)}>← Back</button>
   {:else}
     <span></span>
   {/if}
-  {#if step < STEPS.length}
+  {#if step === 2 && noConnWarn}
+    <span class="flex gap-2">
+      <button type="button" class={outline} onclick={() => checklist?.openPicker()}>+ Add connectors</button>
+      <button type="button" class={primary} onclick={next}>Continue without connectors →</button>
+    </span>
+  {:else if step < STEPS.length}
     <button type="button" class={primary} disabled={!personaOk} onclick={next}>Next →</button>
   {:else}
     <button type="button" class={primary} disabled={!personaOk || !modelOk || saving} onclick={submit}>{saving ? "Creating…" : "Create agent"}</button>
