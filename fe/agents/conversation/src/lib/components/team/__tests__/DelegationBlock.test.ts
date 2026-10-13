@@ -804,6 +804,41 @@ describe("ThreadMessage delegation block", () => {
     await waitFor(() => expect(message).toHaveBeenCalledWith("t1", "hi"));
   });
 
+  /* P60 S2: the in-between text of a turn that only delegated lives in
+     its trace while a teammate works; it shows again once all settled
+     with no later answer. */
+  test("P60 S2: the in-between text moves into the trace, not the body", async () => {
+    const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const { container } = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(screen.getByTestId("asst-meta")).toBeDefined();
+    expect(screen.getByTestId("delegation-block")).toBeDefined();
+    expect(screen.queryByText("Sent them off.")).toBeNull();
+    await fireEvent.click(screen.getByText(/show trace/));
+    expect(container.querySelector("[data-trace-blocks]")!.textContent).toContain("Sent them off.");
+  });
+
+  test("P60 S2: settled with no later answer, or a turn that did other work, keeps the text in the body", async () => {
+    const settled = { forTurn: (id: string) => (id === "turn-1" ? [task({ state: "completed", reply: "ok" })] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const r = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, settled]]) });
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    await r.rerender({ turn, laterAnswer: true });
+    expect(screen.queryByText("Sent them off.")).toBeNull();
+    r.unmount();
+    const working = { ...settled, forTurn: (id: string) => (id === "turn-1" ? [task({})] : []) } as TeamTasksCtx;
+    const busy = { ...turn, events: [...turn.events!, { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", tool_input: "{}" }] } as ConversationTurn;
+    render(ThreadMessage, { props: { turn: busy }, context: new Map([[TEAM_TASKS_KEY, working]]) });
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+  });
+
+  test("P60 S2: a turn from history reads its trace once to decide", async () => {
+    const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const loadTrace = vi.fn().mockResolvedValue([...turn.events!, { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", tool_input: "{}" }]);
+    render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(screen.queryByText("Sent them off.")).toBeNull();
+    await waitFor(() => expect(screen.getByText("Sent them off.")).toBeDefined());
+    expect(loadTrace).toHaveBeenCalledTimes(1);
+  });
+
   test("T16 S10: the block sums it up, the trace keeps the team_message card with a row per teammate", async () => {
     const ctx: TeamTasksCtx = {
       forTurn: (id) => (id === "turn-1" ? [task({})] : []),

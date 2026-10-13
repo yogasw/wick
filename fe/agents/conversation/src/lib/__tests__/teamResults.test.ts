@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { foldTeamResults, isHandoffInBlock, teamResultOf } from "../teamResults.js";
+import { foldTeamResults, interimNote, isHandoffInBlock, isInterimText, teamResultOf } from "../teamResults.js";
+import type { TeamTaskItem, TurnEvent } from "../types/agents.js";
 
 const shown = new Set(["t1", "t2"]);
 const u = (text: string, source = "subagent") => ({ role: "user", source, text });
@@ -72,5 +73,55 @@ Reproduced on staging; the <follow-up> tag is mentioned here too.
     const out = foldTeamResults(turns, shown, { a: "Alpha" });
     expect(out.map((t) => t.team_update ?? t.text)).toEqual(["Updated with Alpha's reply", "answer"]);
     expect(foldTeamResults(turns, new Set())).toBe(turns);
+  });
+});
+
+describe("isInterimText (P60 S2)", () => {
+  const task = (state: string): TeamTaskItem => ({
+    task_id: "t1", context_id: "c1", to_agent_id: "a1", to_handle: "franky", to_name: "Franky",
+    title: "check", state, turns: 1, max_turns: 8, started_at: "2026-10-10T10:00:00Z", updated_at: "2026-10-10T10:00:00Z", age: "1m",
+  }) as TeamTaskItem;
+  const use = (name: string): TurnEvent => ({ type: "tool_use", tool_name: name, tool_use_id: name });
+  const delegating: TurnEvent[] = [use("mcp__wick__team_message"), { type: "tool_result", tool_use_id: "mcp__wick__team_message", text: '{"task_id":"t1"}' }, use("team_message")];
+  const a = (text: string, events: TurnEvent[] = delegating) => ({ role: "assistant", text, events });
+  const short = "Asked Franky and Atraxa.\nBoth are still checking.";
+  const working = [task("working"), task("completed")];
+  const settled = [task("completed"), task("failed")];
+
+  test("pure delegation + short text + a task working → interim", () => {
+    expect(isInterimText(a(short), working, false)).toBe(true);
+    expect(isInterimText(a(short), [task("input_required")], false)).toBe(true);
+  });
+  test("a line asking something stays", () => {
+    expect(isInterimText(a(short + "\nWant me to ping them again?"), working, false)).toBe(false);
+  });
+  test("a code fence or a table stays", () => {
+    expect(isInterimText(a(short + "\n```\nkubectl get pods\n```"), working, false)).toBe(false);
+    expect(isInterimText(a("| pod | state |\n|---|---|\n| a | ok |"), working, false)).toBe(false);
+  });
+  test("more than 600 chars stays", () => {
+    expect(isInterimText(a("x".repeat(600)), working, false)).toBe(true);
+    expect(isInterimText(a("x".repeat(601)), working, false)).toBe(false);
+  });
+  test("delegation plus another tool stays", () => {
+    expect(isInterimText(a(short, [...delegating, use("Bash")]), working, false)).toBe(false);
+  });
+  test("no delegation stays", () => {
+    expect(isInterimText(a(short, []), working, false)).toBe(false);
+    expect(isInterimText(a(short, [use("Read")]), working, false)).toBe(false);
+    expect(isInterimText({ role: "user", text: short, events: delegating }, working, false)).toBe(false);
+    expect(isInterimText(a("  "), working, false)).toBe(false);
+  });
+  test("all settled and no later answer: the text shows again", () => {
+    expect(isInterimText(a(short), settled, false)).toBe(false);
+    expect(isInterimText(a(short), [], false)).toBe(false);
+  });
+  test("all settled with a later answer → interim", () => {
+    expect(isInterimText(a(short), settled, true)).toBe(true);
+  });
+  test("interimNote keeps only what the trace does not hold", () => {
+    expect(interimNote("Asking them now. Both are checking.", ["Asking them now."])).toBe("Both are checking.");
+    expect(interimNote("Both are checking.", [])).toBe("Both are checking.");
+    expect(interimNote("Both are checking.", ["something else"])).toBe("Both are checking.");
   });
 });

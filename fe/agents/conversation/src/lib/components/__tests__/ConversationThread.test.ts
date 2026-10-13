@@ -441,6 +441,28 @@ describe("ConversationThread live delegation block", () => {
     }
   });
 
+  test("P60 S2: the running turn's in-between text sits in its trace, counted as a step; a question shows", async () => {
+    const text = "Asked both of them. Still checking.";
+    state = { turns: [userTurn], live: { text, blocks: [teamBlock("u1", "k1"), teamBlock("u2", "k2")] } };
+    const { container, rerender } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(screen.getByTestId("delegation-block")).toBeDefined();
+    expect(screen.queryByText(text)).toBeNull();
+    expect(container.querySelector("[data-live-trace-toggle]")!.textContent).toContain("3 steps");
+    await fireEvent.click(screen.getByText("show trace"));
+    expect(screen.getByText(text)).toBeDefined();
+    await fireEvent.click(screen.getByText("hide trace"));
+    state = { ...state, live: { ...state.live!, text: text + "\nShould I wait?" } };
+    await rerender({ ...state, typing: { active: true } });
+    expect(container.querySelector("[data-live-trace-toggle]")!.textContent).toContain("2 steps");
+    expect(container.textContent).toContain("Should I wait?");
+  });
+
+  test("P60 S2: a turn that also did other work keeps its live text", () => {
+    state = { turns: [userTurn], live: { ...live, text: "Looked it up and asked them." } };
+    const { container } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(container.textContent).toContain("Looked it up and asked them.");
+  });
+
   test("without the Team context the live turn renders as before", () => {
     render(ConversationThread, { props: { turns: [], live, typing: { active: true } } });
     expect(screen.queryByTestId("delegation-block")).toBeNull();
@@ -460,6 +482,21 @@ describe("ConversationThread one UI per delegation (T16 S9)", () => {
   const ctx: TeamTasksCtx = { forTurn: (id) => (id === "a1" ? [t1] : []), tasks: () => [t1], agents: () => ({ research: { name: "Research" } }), captainName: () => "Captain" };
   const wake = (text: string): ConversationTurn => ({ ...makeTurn("w" + text.length, "user", text), source: "subagent" });
   const handoff: ConversationTurn = { ...makeTurn("h1", "system", "handoff"), kind: "mention_handoff", extras: { from: "main", to: "research", state: "completed", task_id: "k1" } };
+
+  test("P60 S2: a settled delegation's in-between text shows until a later answer exists", () => {
+    const r = render(ConversationThread, {
+      props: { turns: [makeTurn("u0", "user", "check it"), sender], live: null, typing: { active: false } },
+      context: new Map([[TEAM_TASKS_KEY, ctx]]),
+    });
+    expect(r.container.textContent).toContain("Asked the team.");
+    r.unmount();
+    const { container } = render(ConversationThread, {
+      props: { turns: [makeTurn("u0", "user", "check it"), sender, makeTurn("a2", "assistant", "One answer.")], live: null, typing: { active: false } },
+      context: new Map([[TEAM_TASKS_KEY, ctx]]),
+    });
+    expect(container.textContent).not.toContain("Asked the team.");
+    expect(container.textContent).toContain("One answer.");
+  });
 
   test("the batch prompt and the hand-off pill leave the thread; the block keeps the reply", () => {
     const batch = wake('[team results · group b1 · 1 of 1 replied]\nResearch — completed [task k1]:\n<reply from="@research" task="k1" state="completed">\nPR is open\n</reply>');

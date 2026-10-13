@@ -5,6 +5,8 @@
    thread. A late reply that re-woke the agent stays as one small line,
    "Updated with Research's reply", right above the answer it refined.
    Pure, so ConversationThread stays layout. */
+import type { TeamTaskItem, TurnEvent } from "./types/agents.js";
+import { isTaskActive, isTeamMessageTool } from "./delegations.js";
 
 /** What a team-results prompt is: "hide" (its replies show in a block),
     "update" (a late reply: the label stays), or null (not one, or about a
@@ -81,4 +83,50 @@ export function foldTeamResults<T extends { role: string; source?: string; text?
     else if (r.kind === "update") out.push({ ...t, team_update: r.label });
   }
   return out;
+}
+
+/* P60 S2: the in-between text. After team_message returns, the provider
+   model writes a line of its own ("Asked Franky and Atraxa, both still
+   checking…") that says what the Delegated block already shows and goes
+   stale once they reply. Such text moves into the turn's trace; it is
+   never dropped. */
+
+/** Past this the text may carry a real answer: it stays in the body. */
+export const INTERIM_MAX = 600;
+
+/** Guard 1: no line asking the person something, no code fence, no
+    markdown table, short. Guard 2: a teammate of the turn still works, or
+    a later answer exists — all settled and nothing after it (a wake that
+    failed, a stopped session) shows the text again, so the agent is never
+    silent. */
+export function interimGuards(text: string, tasks: TeamTaskItem[], laterAnswer: boolean): boolean {
+  const body = text.trim();
+  if (!body || body.length > INTERIM_MAX) return false;
+  const lines = body.split("\n");
+  if (lines.some((l) => l.includes("?"))) return false;
+  if (/^\s*(```|~~~)/m.test(body)) return false;
+  if (lines.some((l) => /^\s*\|.*\|\s*$/.test(l)) && lines.some((l) => /^\s*\|?\s*:?-{3,}/.test(l))) return false;
+  return laterAnswer || tasks.some(isTaskActive);
+}
+
+/** isInterimText reads one assistant turn: its tool calls are team_message
+    calls only (at least one) and its text passes both guards. tasks = the
+    tasks that turn sent. A turn that did other work renders as before. */
+export function isInterimText(
+  turn: { role: string; text?: string; events?: TurnEvent[] | null },
+  tasks: TeamTaskItem[],
+  laterAnswer: boolean,
+): boolean {
+  if (turn.role !== "assistant") return false;
+  const tools = (turn.events ?? []).filter((e) => e.type === "tool_use").map((e) => e.tool_name);
+  if (tools.length === 0 || !tools.every(isTeamMessageTool)) return false;
+  return interimGuards(turn.text ?? "", tasks, laterAnswer);
+}
+
+/** The part of an interim text the trace does not hold yet: a text
+    segment written before a tool call is a trace event already, the rest
+    (after the last call) is only on the turn. */
+export function interimNote(text: string, segments: string[]): string {
+  const head = segments.join("");
+  return head && text.startsWith(head) ? text.slice(head.length).trim() : text.trim();
 }

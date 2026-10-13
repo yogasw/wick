@@ -28,6 +28,7 @@
   import { teamTraceOf, traceActive } from "../teamTrace.js";
   import { getTeamTasksCtx } from "../teamTasksContext.js";
   import { isTeamMessageTool, turnSpan } from "../delegations.js";
+  import { interimGuards, interimNote, isInterimText } from "../teamResults.js";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
@@ -81,8 +82,10 @@
     onJumpToTurn?: (turnId: string, fromTurnId?: string) => void;
     /** This bubble's quote lookup is in flight: spinner + "Finding message…". */
     jumpPending?: boolean;
+    /** A later assistant answer exists in the thread (P60 S2 guard 2). */
+    laterAnswer?: boolean;
   };
-  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -479,6 +482,34 @@
   const showMeta = $derived(delegated.length > 0 && !!teamCtx);
   const metaAgent = $derived(speakerAgent ?? agent);
   const metaSpan = $derived(showMeta ? turnSpan(delegated, turn.ts ? Date.parse(turn.ts) : turn.timestamp || NaN) : "");
+
+  /* P60 S2: a turn that only delegated keeps its in-between text in the
+     trace, not the body (isInterimText). A turn from history has no events
+     until its trace is read: the guards decide meanwhile and the trace is
+     read once, so a turn that also did other work shows its text again;
+     a trace that fails to load shows it too. */
+  let interimReadFailed = $state(false);
+  let interimReading = false;
+  const interimPending = $derived(
+    turn.role === "assistant" && delegated.length > 0 && traceEvents === null && safeEvents.length === 0 && canFetch && !interimReadFailed,
+  );
+  const interim = $derived(
+    delegated.length > 0 &&
+      (interimPending
+        ? interimGuards(turn.text ?? "", delegated, laterAnswer)
+        : isInterimText({ role: turn.role, text: turn.text, events: resolvedTraceEvents }, delegated, laterAnswer)),
+  );
+  $effect(() => {
+    if (!interimPending || !interim || interimReading) return;
+    interimReading = true;
+    loadTrace!(turn.turn_id)
+      .then((ev) => { traceEvents ??= ev; })
+      .catch(() => { interimReadFailed = true; })
+      .finally(() => { interimReading = false; });
+  });
+  const interimText = $derived(
+    interim ? interimNote(turn.text ?? "", traceBlocks.flatMap((b) => (b.kind === "text" ? [b.text] : []))) : "",
+  );
 
   async function toggleTrace() {
     if (traceOpen) {
@@ -912,6 +943,9 @@
                   {/if}
                 {/if}
               {/each}
+              {#if interimText}
+                <TraceNote kind="text" text={interimText} />
+              {/if}
               {#if teamTrace.mentions.length > 0}
                 <TeamTraceRows tasks={teamTrace.mentions} mention captainName={teamCtx?.captainName()} live={liveById} onOpen={teamCtx?.openChat} />
               {/if}
@@ -935,7 +969,7 @@
         />
       {/if}
 
-      {#if turn.text}
+      {#if turn.text && !interim}
         {#if isLateReply(turn)}
           <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
         {/if}

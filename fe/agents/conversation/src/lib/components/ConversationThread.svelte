@@ -17,7 +17,7 @@
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
-  import { foldTeamResults } from "../teamResults.js";
+  import { foldTeamResults, isInterimText } from "../teamResults.js";
   import DelegationBlock from "./team/DelegationBlock.svelte";
   import TeamTraceRows from "./team/TeamTraceRows.svelte";
   import { liveBlockTasks } from "../teamTrace.js";
@@ -179,6 +179,19 @@
     ),
   ), blockTaskIds, teamNames));
 
+  /* P60 S2 guard 2: whether an assistant answer follows each turn. A turn
+     that only delegated keeps its in-between text in its trace while a
+     teammate works or once one exists (isInterimText). */
+  const laterAnswerAt = $derived.by(() => {
+    const out: boolean[] = new Array(shownTurns.length);
+    let seen = !!live?.text && !liveInterim;
+    for (let i = shownTurns.length - 1; i >= 0; i--) {
+      out[i] = seen;
+      if (shownTurns[i].role === "assistant" && (shownTurns[i].text ?? "").trim()) seen = true;
+    }
+    return out;
+  });
+
   const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
   /* grouped §3 live asst-meta over the block: "Captain · 10:02 · split
      the question into 4 tasks — summary comes when they're back", from
@@ -191,6 +204,18 @@
      read from the live task list (T16 S6), as the stored trace will once
      the turn commits. */
   const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  /* The same rule on the running turn, on its text as it stands: a text
+     that grows past a guard shows at once, and the committed turn decides
+     the same way, so nothing flickers back. */
+  const liveInterim = $derived(
+    !!teamCtx && !!live?.text && liveTasks.length > 0 &&
+      isInterimText(
+        { role: "assistant", text: live.text, events: live.blocks.flatMap((b) => (b.kind === "tool" ? [{ type: "tool_use", tool_name: b.toolName }] : [])) },
+        liveTasks,
+        false,
+      ),
+  );
+  const liveSteps = $derived(liveNonTodoBlocks.length + (liveInterim ? 1 : 0));
   const liveTaskById = $derived(new Map((teamCtx?.tasks?.() ?? []).map((t) => [t.task_id, t])));
   /* The working indicator is on from a turn's start to its end: while
      typing is up (hide debounced) or the live turn has not been committed.
@@ -310,7 +335,7 @@
           <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
         </div>
       {:else}
-      <ThreadMessage {turn} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} />
+      <ThreadMessage {turn} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} />
       {/if}
     </div>
   {/each}
@@ -394,7 +419,7 @@
             </svg>
             <span>{liveTraceOpen ? "hide trace" : "show trace"}</span>
             {#if !liveTraceOpen}
-              <span class="text-black-500 dark:text-black-600">· {liveNonTodoBlocks.length} step{liveNonTodoBlocks.length === 1 ? "" : "s"}</span>
+              <span class="text-black-500 dark:text-black-600">· {liveSteps} step{liveSteps === 1 ? "" : "s"}</span>
             {/if}
             <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 transition-transform {liveTraceOpen ? 'rotate-90' : ''}" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
               <path d="M4.5 3l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -415,6 +440,9 @@
                   <TraceNote kind={block.kind} text={(block as Extract<ThreadBlock, { kind: "thinking" | "text" }>).text} />
                 {/if}
               {/each}
+              {#if liveInterim && live?.text}
+                <TraceNote kind="text" text={live.text.trim()} />
+              {/if}
             </div>
           {/if}
         {/if}
@@ -439,7 +467,7 @@
             onSummarize={teamCtx.summarize}
           />
         {/if}
-        {#if live?.text}
+        {#if live?.text && !liveInterim}
           <!-- renderLive owns innerHTML (no {@html}) so streaming tokens don't
                wipe already-rendered diagrams — prevents text↔image flicker. -->
           <div use:renderLive={live.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm"></div>
