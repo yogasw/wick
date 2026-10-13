@@ -114,6 +114,10 @@ type AgentPersona struct {
 	// answers name no teammate. nil = never set: on
 	// (team.ShowsTeammatesInChannels).
 	ChannelShowTeammates *bool `json:"channel_show_teammates"`
+	// ChannelHideInterim: the line the agent writes while its teammates
+	// work (after team_message) stays out of its channels; the final
+	// answer always posts. nil = never set: on (team.HidesInterimInChannels).
+	ChannelHideInterim *bool `json:"channel_hide_interim"`
 	// LastReadAt is when the owner last opened the agent's chat in the
 	// Team app; activity on the main session after it reads as unread.
 	// nil = never opened. Only the owner chats an agent from the app, so

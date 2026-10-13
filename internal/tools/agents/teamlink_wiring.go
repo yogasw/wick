@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -205,6 +206,7 @@ func SetOnTeamVisibilityChanged(f func(agentID string)) {
 // teamVisibilityChanged drops the cached reads and tells the server.
 func teamVisibilityChanged(agentID string) {
 	forgetShowTeammates()
+	forgetHideInterim()
 	if f := onTeamVisibilityChanged.Load(); f != nil {
 		go (*f)(agentID)
 	}
@@ -251,6 +253,59 @@ func teamShowsTeammatesCached(sessionID string) bool {
 
 // forgetShowTeammates drops the cached reads, after the setting changed.
 func forgetShowTeammates() { showTeammatesCache.Clear() }
+
+// TeamHidesInterim reports whether the Team agent of sessionID keeps its
+// in-between text out of channels (channel_hide_interim). A session of
+// no Team agent never delegates through team_message: false.
+func TeamHidesInterim(ctx context.Context, sessionID string) bool {
+	if globalTeam == nil {
+		return false
+	}
+	p := globalTeam.AgentFor(ctx, sessionID)
+	if p == nil {
+		return false
+	}
+	return team.HidesInterimInChannels(p.ChannelHideInterim)
+}
+
+// hideInterimCache holds the last read of TeamHidesInterim per session,
+// reused for showTeammatesTTL: a channel asks on every team_message call.
+var hideInterimCache sync.Map
+
+// TeamHidesInterimCached is TeamHidesInterim read at most once per
+// showTeammatesTTL per session, for the channels.
+func TeamHidesInterimCached(sessionID string) bool {
+	if v, ok := hideInterimCache.Load(sessionID); ok && time.Since(v.(showTeammatesSeen).at) < showTeammatesTTL {
+		return v.(showTeammatesSeen).show
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hide := TeamHidesInterim(ctx, sessionID)
+	hideInterimCache.Store(sessionID, showTeammatesSeen{show: hide, at: time.Now()})
+	return hide
+}
+
+// forgetHideInterim drops the cached reads, after the setting changed.
+func forgetHideInterim() { hideInterimCache.Clear() }
+
+// TeamTasksActive reports whether any of the tasks is still open in the
+// Hub (working, or asking its sender a question). No Hub: false, so the
+// channel posts the text.
+func TeamTasksActive(taskIDs []string) bool {
+	if globalTeamHub == nil {
+		return false
+	}
+	h := globalTeamHub()
+	if h == nil {
+		return false
+	}
+	for _, lt := range h.LiveTasks() {
+		if slices.Contains(taskIDs, lt.TaskID) {
+			return true
+		}
+	}
+	return false
+}
 
 // TeamHidesTeammates is the server's hidden probe for the background set.
 func TeamHidesTeammates(sessionID string) bool { return !teamShowsTeammatesCached(sessionID) }

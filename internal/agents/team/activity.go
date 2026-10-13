@@ -78,6 +78,13 @@ func ShowsTeammatesInChannels(set *bool) bool {
 	return set == nil || *set
 }
 
+// HidesInterimInChannels reads ChannelHideInterim with its default: on,
+// channels drop the in-between line a delegating turn writes while a
+// teammate of it still works.
+func HidesInterimInChannels(set *bool) bool {
+	return set == nil || *set
+}
+
 // TurnStatus is the roster status of a session: "running" only while a
 // turn is in flight. metaStatus is the persisted session status, which
 // the pool sets to running at spawn and back to idle only when the

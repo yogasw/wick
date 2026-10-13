@@ -1299,6 +1299,10 @@ func NewServer() *Server {
 		return teamSvc.SourceNames(context.Background(), sessionID)
 	}
 	agentchannels.CardNumberPostback = agentstool.ChannelNumberPostback
+	// The lead's in-between text stays out of Slack/Telegram while a
+	// teammate of its turn still works (channel_hide_interim).
+	agentchannels.HideInterim = agentstool.TeamHidesInterimCached
+	agentchannels.TasksActive = agentstool.TeamTasksActive
 	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
 		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)
 		if !ok {
