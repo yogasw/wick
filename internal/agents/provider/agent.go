@@ -167,6 +167,11 @@ type Agent struct {
 	// (TakeUnanswered) they died with the process — the person saw no
 	// reply, no event, nothing.
 	unanswered []string
+	// unansweredMid is how many of the trailing unanswered messages were
+	// sent while a turn was already open. The CLI folds those into its NEXT
+	// turn, so output of the turn already running is not an answer to them:
+	// only the end of that turn promotes them (turnEnded).
+	unansweredMid int
 }
 
 // ExitReason classifies why the subprocess ended. The pool uses this
@@ -536,7 +541,11 @@ func (a *Agent) Send(text string) error {
 	// check: a fast CLI's Done can arrive before the write returns, and
 	// StopIfIdle must never see an idle agent a message is going into.
 	prevSent, prevAt, prevErr, prevOpen, prevTurns := a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns
+	midTurn := a.turnOpen
 	a.unanswered = append(a.unanswered, text)
+	if midTurn {
+		a.unansweredMid++
+	}
 	a.noteSentLocked(text)
 	if a.asking || a.failingOver {
 		a.askSent = append(a.askSent, text)
@@ -548,6 +557,9 @@ func (a *Agent) Send(text string) error {
 		a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns = prevSent, prevAt, prevErr, prevOpen, prevTurns
 		if n := len(a.unanswered); n > 0 && a.unanswered[n-1] == text {
 			a.unanswered = a.unanswered[:n-1]
+			if midTurn && a.unansweredMid > 0 {
+				a.unansweredMid--
+			}
 		}
 		if n := len(a.askSent); n > 0 && a.askSent[n-1] == text {
 			a.askSent = a.askSent[:n-1]
@@ -628,6 +640,8 @@ func (a *Agent) noteSentLocked(text string) {
 func (a *Agent) turnEnded() {
 	a.mu.Lock()
 	a.turnOpen = false
+	// Messages folded into this turn now head the next one.
+	a.unansweredMid = 0
 	a.mu.Unlock()
 }
 
@@ -1433,9 +1447,15 @@ func (a *Agent) run(ctx context.Context) {
 				goto drained
 			}
 			line = l
-			// Any output means the process is working on what it was sent.
+			// Any output means the process is working on what it was sent,
+			// except what was sent while the turn producing it was already
+			// running: that waits for its own turn (see unansweredMid).
 			a.mu.Lock()
-			a.unanswered = nil
+			if keep := a.unansweredMid; keep > 0 && keep <= len(a.unanswered) {
+				a.unanswered = append([]string(nil), a.unanswered[len(a.unanswered)-keep:]...)
+			} else {
+				a.unanswered, a.unansweredMid = nil, 0
+			}
 			a.mu.Unlock()
 		case <-ctx.Done():
 			// Killed (Stop / respawn). Exit immediately. Do NOT block on
@@ -2016,7 +2036,7 @@ func (a *Agent) TakeUnanswered() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	msgs := a.unanswered
-	a.unanswered = nil
+	a.unanswered, a.unansweredMid = nil, 0
 	return msgs
 }
 
@@ -2046,6 +2066,13 @@ func (a *Agent) idleKill() {
 	a.mu.Lock()
 	a.idleKilled = true
 	a.noteStopCauseLocked("idle timer")
+	if !a.turnOpen {
+		// Every turn that was sent has ended: the process finished what it
+		// took, mid-turn messages included (the CLI folded them into the
+		// answer). An idle reap of a finished agent hands nothing back, or a
+		// reply already given would be re-delivered as "not answered".
+		a.unanswered, a.unansweredMid = nil, 0
+	}
 	proc := a.proc
 	a.mu.Unlock()
 	if a.store != nil && a.state != nil && a.state.Current() != state.Idle {

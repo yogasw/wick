@@ -179,3 +179,48 @@ func TestAgentOutputClearsUnansweredMessages(t *testing.T) {
 		t.Fatalf("unanswered after output: %q", got)
 	}
 }
+
+// A message sent while a turn is running is not answered by that turn's
+// output: the process never reads it before the idle kill, so it is handed
+// back. (The 2026-10-13 Slack thread case: a reply to a progress text
+// arrived mid-turn, the turn went silent, and the reply vanished.)
+func TestAgentMidTurnMessageSurvivesOutputOfRunningTurn(t *testing.T) {
+	r := newIdleKillRig(t, 80*time.Millisecond)
+	if err := r.a.Send("first"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`)
+	time.Sleep(20 * time.Millisecond)
+	if err := r.a.Send("follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"more of turn one"}]}}`)
+	if got := r.waitExit(t); got != ExitIdle {
+		t.Fatalf("exit reason %v", got)
+	}
+	got := r.a.TakeUnanswered()
+	if len(got) != 1 || got[0] != "follow-up" {
+		t.Fatalf("unanswered: %q, want only the mid-turn follow-up", got)
+	}
+}
+
+// Messages folded into a turn that then ended normally are answered: when the
+// finished agent is reaped, nothing is handed back (it would be re-delivered
+// as "your last message was not answered" after the reply was already sent).
+func TestAgentIdleReapAfterFinishedTurnHandsNothingBack(t *testing.T) {
+	r := newIdleKillRig(t, 80*time.Millisecond)
+	if err := r.a.Send("first"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`)
+	time.Sleep(20 * time.Millisecond)
+	if err := r.a.Send("follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"answer covering both"}]}}`)
+	r.say(t, `{"type":"result","subtype":"success","is_error":false,"result":"answer covering both"}`)
+	r.waitExit(t)
+	if got := r.a.TakeUnanswered(); len(got) != 0 {
+		t.Fatalf("unanswered after a finished turn: %q", got)
+	}
+}
