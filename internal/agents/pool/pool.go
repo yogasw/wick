@@ -1209,6 +1209,7 @@ func (p *Pool) preemptIdleSlot() bool {
 		Msg("pool: preempting idle slot for queued session")
 	go func() {
 		defer p.wg.Done()
+		victim.agent.NoteStopCause("preempted for a queued session")
 		_ = victim.agent.Stop()
 	}()
 	return true
@@ -2325,6 +2326,7 @@ func (p *Pool) HandoverBlockers() []string {
 			if pid, _ := turnProcess(g.e); pid != g.pid || processAlive(pid) {
 				return
 			}
+			g.e.agent.NoteStopCause("reaped: turn process already gone")
 			_ = g.e.agent.Stop()
 		}(g)
 	}
@@ -2435,6 +2437,7 @@ func (p *Pool) Stop() {
 		close(p.stopCh)
 	}
 	for _, e := range entries {
+		e.agent.NoteStopCause("pool shutdown")
 		_ = e.agent.Stop()
 	}
 	p.wg.Wait()
@@ -2619,6 +2622,7 @@ func (p *Pool) KillBy(sessionID, agentName, by, note string) error {
 		if by != "" && e.store != nil {
 			e.store.SetInterruptCause(by, note)
 		}
+		e.agent.NoteStopCause(killCause("Kill", by, note))
 		if err := e.agent.Stop(); err != nil {
 			log.Error().Str("session", e.sessID).Str("agent", e.agentNm).Err(err).Msg("pool.kill: agent.Stop failed")
 			return err
@@ -2684,11 +2688,24 @@ func (p *Pool) KillAgentBy(sessionID, agentName, by, note string) error {
 	if by != "" && e.store != nil {
 		e.store.SetInterruptCause(by, note)
 	}
+	e.agent.NoteStopCause(killCause("KillAgent", by, note))
 	if err := e.agent.Stop(); err != nil {
 		log.Error().Str("session", sessionID).Str("agent", agentName).Err(err).Msg("pool.killAgent: agent.Stop failed")
 		return err
 	}
 	return nil
+}
+
+// killCause is the stop cause a Kill/KillAgent leaves on the agent.
+func killCause(op, by, note string) string {
+	c := op
+	if by != "" {
+		c += " by " + by
+	}
+	if note != "" {
+		c += ": " + note
+	}
+	return c
 }
 
 // ReconcileDead scans active entries and Stops any whose subprocess is
@@ -2721,6 +2738,7 @@ func (p *Pool) ReconcileDead() {
 	for _, e := range dead {
 		log.Warn().Str("session", e.sessID).Str("agent", e.agentNm).
 			Int("pid", e.agent.PID()).Msg("pool.reconcile: subprocess dead, releasing slot")
+		e.agent.NoteStopCause("reconcile: subprocess looked dead")
 		_ = e.agent.Stop()
 	}
 }
@@ -2826,6 +2844,14 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 // exit is handled, so the caller cannot read a failover flag that
 // changed in between.
 func (p *Pool) HandleExitTurnEnds(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
+	turnEnds, _ := p.HandleExitOutcome(sessionID, agentName, reason, reasonDetail)
+	return turnEnds
+}
+
+// HandleExitOutcome is HandleExitTurnEnds that also says whether the exit
+// restarted the agent, so a delegation waiting on its turn keeps waiting
+// for the restarted process instead of closing on half a turn.
+func (p *Pool) HandleExitOutcome(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) (turnEnds, restarting bool) {
 	// A failover stopped this process on purpose; its turn goes on
 	// elsewhere, so there is nothing to heal, re-buffer or recover. A late
 	// exit of it must not release the entry of its replacement.
@@ -2833,13 +2859,13 @@ func (p *Pool) HandleExitTurnEnds(sessionID, agentName string, reason provider.E
 		if release {
 			p.onAgentExit(sessionID, agentName)
 		}
-		return false
+		return false, false
 	}
-	p.handleExit(sessionID, agentName, reason, reasonDetail)
-	return true
+	return true, p.handleExit(sessionID, agentName, reason, reasonDetail)
 }
 
-func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
+// handleExit reports whether the agent was restarted (recoverFromExit).
+func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
 	// ExitClean too: omp RPC / opencode report a missing resume as the
 	// turn's own error and exit clean, so the flag, not stderr, says so.
 	if reason == provider.ExitError || reason == provider.ExitClean {
@@ -2858,7 +2884,7 @@ func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReaso
 			if ok {
 				p.notifyLifecycle(entry.ctx, entry, sessionID, agentName)
 			}
-			return
+			return false
 		}
 	}
 	// An idle kill of a process that was sent messages and never wrote a
@@ -2882,7 +2908,7 @@ func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReaso
 	// restart and tell the agent what happened. Ordered after
 	// onAgentExit so the restart competes for a free slot like any other
 	// spawn rather than racing the one it just vacated.
-	p.recoverFromExit(sessionID, agentName, reason, reasonDetail)
+	return p.recoverFromExit(sessionID, agentName, reason, reasonDetail)
 }
 
 // recoverFromExit restarts an agent that died for no stated reason, and
@@ -2897,7 +2923,9 @@ func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReaso
 // it names the cause in the notice so the agent can act on it — a
 // host-OOM kill retried with a generic "carry on" would repeat the exact
 // allocation that got it killed.
-func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
+//
+// Reports whether a restart was started.
+func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
 	key := sessionKey(sessionID, agentName)
 	if reasonDetail == "" {
 		reasonDetail = "unexpected exit"
@@ -2909,7 +2937,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		p.mu.Lock()
 		p.clearCrashesLocked(key)
 		p.mu.Unlock()
-		return
+		return false
 	}
 
 	l := log.With().
@@ -2930,7 +2958,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		// (OOMDetail) — the agent needs the numbers to propose a smaller
 		// approach.
 		p.notifySession(sessionID, agentName, oomNotice(reasonDetail))
-		return
+		return false
 	}
 
 	p.mu.Lock()
@@ -2951,12 +2979,12 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		if !first {
 			l.Debug().Int("attempts", attempt).
 				Msg("pool.recover: still crashing after giving up; no restart, no notice")
-			return
+			return false
 		}
 		l.Error().Int("attempts", attempt).
 			Msg("pool.recover: repeated unexplained exits; giving up")
 		p.haltNotify(sessionID, agentName, haltNotice(reasonDetail, attempt))
-		return
+		return false
 	}
 
 	l.Warn().Int("attempt", attempt).Msg("pool.recover: unexplained exit; restarting")
@@ -2966,6 +2994,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 	// admission checks as any other. A separate spawn path here would be a
 	// second way to start an agent, and the two would drift.
 	p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt))
+	return true
 }
 
 // haltNotify tells the session that automatic restarts have stopped,

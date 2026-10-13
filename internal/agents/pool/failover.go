@@ -355,6 +355,7 @@ func (p *Pool) runFailover(j failoverJob) {
 		if j.store != nil {
 			j.store.SetInterruptCause("wick", "the provider stopped mid-turn ("+j.reason+"); the turn continues on "+j.target.Instance)
 		}
+		j.agent.NoteStopCause("failover: " + j.reason)
 		if err := j.agent.Stop(); err != nil {
 			l.Warn().Err(err).Msg("pool.failover: stopping the failed process")
 		}

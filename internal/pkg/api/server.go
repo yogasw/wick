@@ -683,11 +683,20 @@ func NewServer() *Server {
 			// A failover stopping the old process is not the turn's end:
 			// the turn carries on (and ends) on the next provider, so no
 			// synthetic Done may close a delegation or a channel reply.
-			if !agentsPool.HandleExitTurnEnds(sid, name, reason, reasonDetail) {
+			turnEnds, restarting := agentsPool.HandleExitOutcome(sid, name, reason, reasonDetail)
+			if !turnEnds {
 				return
 			}
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
-			agentsBcast.Publish(sid, name, doneEv)
+			// A crash ends the process, not necessarily the turn: the
+			// marker lets a waiting delegation keep waiting for a
+			// restarted agent, or fail as unfinished, instead of taking
+			// the narration so far as the answer.
+			bcastDone := doneEv
+			if reason == provider.ExitError || reason == provider.ExitOOM {
+				bcastDone.Raw = delegation.ExitDoneRaw(restarting)
+			}
+			agentsBcast.Publish(sid, name, bcastDone)
 			channelReg.DispatchAgentEvent(sid, doneEv)
 			// Catches a turn whose real Done never arrived because the
 			// agent exited first. Already-flushed turns are a no-op here:

@@ -85,6 +85,12 @@ type Agent struct {
 	// boundary (status stuck "running", nothing flushed).
 	idleKilled bool
 
+	// stopCause is why wick itself last stopped or killed a process of
+	// this agent, and stopCausePID which process it was. Read when an
+	// exit is reported, so a signal death says whether wick sent it.
+	stopCause    string
+	stopCausePID int
+
 	// sliceOOMAtSpawn snapshots the agents slice's oom counter when this
 	// spawn started. ClassifyExit diffs it against the counter at exit to
 	// attribute a kill to the aggregate slice ceiling — the slice counter
@@ -552,6 +558,41 @@ func (a *Agent) Send(text string) error {
 	return nil
 }
 
+// NoteStopCause records why wick is about to stop or kill the current
+// process. Callers with a more specific reason than Stop's default set it
+// right before Stop. Empty is ignored.
+func (a *Agent) NoteStopCause(cause string) {
+	if cause == "" {
+		return
+	}
+	a.mu.Lock()
+	a.noteStopCauseLocked(cause)
+	a.mu.Unlock()
+}
+
+// noteStopCauseLocked is NoteStopCause with a.mu held. A cause already
+// noted for the same process wins: the caller that set it knew more.
+func (a *Agent) noteStopCauseLocked(cause string) {
+	pid := 0
+	if a.proc != nil {
+		pid = a.proc.Pid()
+	}
+	if a.stopCause != "" && a.stopCausePID == pid {
+		return
+	}
+	a.stopCause, a.stopCausePID = cause, pid
+}
+
+// wickStopCause returns the cause wick noted for the process pid, or "".
+func (a *Agent) wickStopCause(pid int) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopCause == "" || a.stopCausePID != pid {
+		return ""
+	}
+	return a.stopCause
+}
+
 // StopIfIdle is Stop for an agent between turns, decided atomically: it
 // refuses (false) when a turn is open (Send opens it before writing) or a
 // message waits in the queue. Once it says yes, Send answers "agent not running",
@@ -564,6 +605,7 @@ func (a *Agent) StopIfIdle() bool {
 		return false
 	}
 	a.stopped = true
+	a.noteStopCauseLocked("idle reap (StopIfIdle)")
 	a.mu.Unlock()
 	_ = a.Stop()
 	return true
@@ -812,6 +854,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	// (agent dead, pool frees slot).
 	if a.running && a.proc != nil {
 		a.respawning = true
+		a.noteStopCauseLocked("respawn for the next turn")
 		if a.cancel != nil {
 			a.cancel()
 		}
@@ -982,6 +1025,7 @@ func (a *Agent) Stop() error {
 	// stopped latches first so any in-flight drainPending / Send bails out
 	// instead of respawning a fresh process after the kill.
 	a.stopped = true
+	a.noteStopCauseLocked("Stop()")
 	// respawn-mode (codex) is one process per turn: between turns the
 	// process is dead but the AGENT still owns its pool slot. Its reader
 	// exits via ExitClean (which the pool deliberately ignores to keep the
@@ -1680,6 +1724,27 @@ drained:
 			}
 		}
 	}
+	// Whether wick sent the signal is only answerable here: the exit code
+	// alone reads the same for a wick Stop and a kill from outside.
+	var sigNote string
+	if reason == ExitError {
+		exitPID := 0
+		if proc != nil {
+			exitPID = proc.Pid()
+		}
+		sig := ""
+		if waitErr != nil {
+			sig = exitSignalName(exitCode, waitErr.Error())
+		}
+		cause := a.wickStopCause(exitPID)
+		if sig != "" {
+			ev = ev.Str("signal", sig)
+		}
+		if cause != "" {
+			ev = ev.Str("wick_stop_cause", cause)
+		}
+		sigNote = exitSignalNote(sig, cause)
+	}
 	ev.Msg("agent.reader: subprocess exited")
 
 	// An OOM kill is indistinguishable from any other SIGKILL by exit code
@@ -1726,10 +1791,61 @@ drained:
 	default:
 		detail.ReasonDetail = "subprocess exited abnormally (no exit code or stderr captured)"
 	}
+	if sigNote != "" && oomDetail == "" {
+		detail.ReasonDetail += "; " + sigNote
+	}
 
 	// Chat visibility for kill/crash is handled inside exitReasonD so
 	// idle/stop paths (which only call exitReason) also surface a reason.
 	a.exitReasonD(detail)
+}
+
+// exitSignalName names the signal that ended a process: from the wait
+// error when the process itself was signalled ("signal: terminated"), or
+// from a 128+N exit code when a wrapper exited on its behalf. "" when the
+// exit was not a signal this recognises.
+func exitSignalName(exitCode int, waitErr string) string {
+	byText := map[string]string{
+		"signal: terminated": "SIGTERM",
+		"signal: killed":     "SIGKILL",
+		"signal: interrupt":  "SIGINT",
+		"signal: hangup":     "SIGHUP",
+		"signal: aborted":    "SIGABRT",
+	}
+	if name, ok := byText[strings.TrimSpace(waitErr)]; ok {
+		return name
+	}
+	switch exitCode {
+	case 128 + 1:
+		return "SIGHUP"
+	case 128 + 2:
+		return "SIGINT"
+	case 128 + 6:
+		return "SIGABRT"
+	case 128 + 9:
+		return "SIGKILL"
+	case 128 + 15:
+		return "SIGTERM"
+	}
+	return ""
+}
+
+// exitSignalNote is the clause added to a crash's reason detail: which
+// signal, and whether wick sent it. Never guesses an outside cause — with
+// no wick record it says only that none was recorded. "" when there is
+// neither a signal nor a wick record to report.
+func exitSignalNote(sig, wickCause string) string {
+	if sig == "" && wickCause == "" {
+		return ""
+	}
+	who := "dihentikan dari luar wick (bukan Stop/Kill wick): tidak ada Stop/Kill dari wick yang tercatat"
+	if wickCause != "" {
+		who = "dihentikan oleh wick: " + wickCause
+	}
+	if sig == "" {
+		return who
+	}
+	return sig + ", " + who
 }
 
 // ExitReasonName mirrors the ExitReason iota for log lines. Kept local
@@ -1929,6 +2045,7 @@ func (a *Agent) procBusy() bool {
 func (a *Agent) idleKill() {
 	a.mu.Lock()
 	a.idleKilled = true
+	a.noteStopCauseLocked("idle timer")
 	proc := a.proc
 	a.mu.Unlock()
 	if a.store != nil && a.state != nil && a.state.Current() != state.Idle {
