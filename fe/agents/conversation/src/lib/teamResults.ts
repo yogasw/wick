@@ -17,8 +17,11 @@ const BATCH_HEAD = /^\[team results · /;
 const UPDATE_HEAD = /^\[team results update · [^\]\n]*?· Updated with (.+?) · \d+ of \d+ replied\]/;
 // singleText / framedSingle: one task's reply or question.
 const SINGLE_HEAD = /^Reply from .+ \(@[a-z0-9][a-z0-9-]*\) \[task ([^\],\s]+)/;
-// A reply after fan_in first already answered.
-const FOLLOW_HEAD = /^Follow-up from (.+?) \[task ([^\],\s]+)/;
+// A reply after fan_in first already answered; Label() is "Name (@handle)".
+const FOLLOW_HEAD = /^Follow-up from (.+?)(?: \(@[a-z0-9][a-z0-9-]*\))? \[task ([^\],\s]+)/;
+// A real ride-along follow-up: its own "<follow-up>" line under "Follow-ups:".
+// The batch preamble names the tag mid-line, so a substring is not enough.
+const FOLLOW_UP_LINE = /^<follow-up>$/m;
 
 function taskIds(text: string): string[] {
   return [...text.matchAll(TASK_ID)].map((m) => m[1]);
@@ -42,9 +45,12 @@ export function teamResultOf(
   const inBlock = (ids: string[]) => ids.some((id) => shown.has(id));
   const upd = UPDATE_HEAD.exec(text);
   if (upd) return inBlock(taskIds(text)) ? { kind: "update", label: `Updated with ${namedLabel(upd[1], names)}` } : null;
-  // A batch prompt that also carries follow-ups keeps rendering: those
-  // are not rows of any block.
-  if (BATCH_HEAD.test(text)) return inBlock(taskIds(text)) && !text.includes("<follow-up>") ? { kind: "hide" } : null;
+  // Follow-ups riding along are not rows of any block: the prompt shrinks
+  // to one line instead of hiding.
+  if (BATCH_HEAD.test(text)) {
+    if (!inBlock(taskIds(text))) return null;
+    return FOLLOW_UP_LINE.test(text) ? { kind: "update", label: "Updated with follow-ups" } : { kind: "hide" };
+  }
   const fol = FOLLOW_HEAD.exec(text);
   if (fol) return shown.has(fol[2]) ? { kind: "update", label: `Updated with ${fol[1]}'s reply` } : null;
   const one = SINGLE_HEAD.exec(text);
