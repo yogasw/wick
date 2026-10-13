@@ -33,7 +33,7 @@ func interimHooks(t *testing.T, hide bool, open map[string]bool) {
 
 const interimLine = "Sudah saya tanyakan ke Franky."
 
-// playInterim sends text, team_message (tool), its result, then Done,
+// playInterim sends team_message (tool), its result, text, then Done,
 // and returns what the thread got.
 func playInterim(t *testing.T, tool, text string) string {
 	t.Helper()
@@ -42,9 +42,9 @@ func playInterim(t *testing.T, tool, text string) string {
 		api:   f.client(),
 		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
 	}
-	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: text})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: tool, ToolInput: `{"to":"@franky","message":"cek"}`, ToolUseID: "u1"})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "u1", Text: `{"task_id":"t1","state":"working"}`})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: text})
 	// A live edit tick while the turn holds posts nothing.
 	c.flushLiveMessage("slack-t1")
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Done})
@@ -151,14 +151,18 @@ func (f *liveFake) channel() *Channel {
 
 func callText(c mdCall) string { return c.vals.Get("text") + c.vals.Get("blocks") }
 
+// heldTail is the text the lead writes after team_message returns.
+const heldTail = " Masih dicek."
+
 // liveThenDelegate streams a partial line that a live edit posts, the rest
-// of it, then team_message and its result.
+// of it, team_message and its result, then the line after the call.
 func liveThenDelegate(c *Channel) {
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Sudah saya tanya"})
 	c.flushLiveMessage("slack-t1")
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "kan ke Franky."})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "team_message", ToolInput: `{"to":"@franky","message":"cek"}`, ToolUseID: "u1"})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "u1", Text: `{"task_id":"t1","state":"working"}`})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: heldTail})
 }
 
 // The live message showed the line cut mid-word: dropping the text
@@ -181,7 +185,8 @@ func TestInterimDropDeletesLiveMessage(t *testing.T) {
 	}
 }
 
-// chat.delete refused: the live message is completed instead.
+// chat.delete refused: the live message is completed instead, with the
+// turn's whole held text.
 func TestInterimDropDeleteFailsCompletesLiveMessage(t *testing.T) {
 	interimHooks(t, true, map[string]bool{"t1": true})
 	f := newLiveFake(t, true)
@@ -192,30 +197,8 @@ func TestInterimDropDeleteFailsCompletesLiveMessage(t *testing.T) {
 	if len(calls) != 3 || calls[1].method != "delete" || calls[2].method != "update" {
 		t.Fatalf("want post, delete, update, got %+v", calls)
 	}
-	if got := callText(calls[2]); !strings.Contains(got, interimLine) {
-		t.Fatalf("update carried %q, want the whole line", got)
-	}
-}
-
-// Text after the last team_message result is the answer: it posts, into
-// the live message that showed the line before the call.
-func TestInterimAnswerAfterResultPosts(t *testing.T) {
-	interimHooks(t, true, map[string]bool{"t1": true})
-	f := newLiveFake(t, false)
-	c := f.channel()
-	liveThenDelegate(c)
-	answer := "Deploy terakhir jam 10, sudah sehat."
-	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "\n\n" + answer})
-	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Done})
-	calls := f.got()
-	last := calls[len(calls)-1]
-	if last.method != "update" || callText(last) == "" || !strings.Contains(callText(last), answer) || strings.Contains(callText(last), "Franky") {
-		t.Fatalf("want the live message updated to the answer alone, got %+v", calls)
-	}
-	for _, cl := range calls {
-		if cl.method == "delete" {
-			t.Fatalf("answer turn deleted its message: %+v", calls)
-		}
+	if got := callText(calls[2]); !strings.Contains(got, interimLine+heldTail) {
+		t.Fatalf("update carried %q, want the whole held text", got)
 	}
 }
 
@@ -227,9 +210,9 @@ func TestInterimErrorPostsHeldText(t *testing.T) {
 		api:   f.client(),
 		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
 	}
-	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: interimLine})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "team_message", ToolInput: `{"to":"@franky"}`, ToolUseID: "u1"})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "u1", Text: `{"task_id":"t1","state":"working"}`})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: interimLine})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Done, ErrorMsg: "boom"})
 	if got := postedText(f); !strings.Contains(got, interimLine) || !strings.Contains(got, "boom") {
 		t.Fatalf("posted %q", got)

@@ -2993,8 +2993,8 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 // lead's in-between line (InterimTurn.Final). Text written before the
 // team_message call was usually flushed already, maybe cut mid-sentence:
 // the bot's own message is deleted, and when that fails it is updated to
-// head, the whole text before the call, so it is never left truncated.
-func (s *Channel) dropLiveReply(sessionKey, head string) {
+// text, the turn's whole held text, so it is never left truncated.
+func (s *Channel) dropLiveReply(sessionKey, text string) {
 	lk := s.liveLock(sessionKey)
 	lk.Lock()
 	defer lk.Unlock()
@@ -3026,7 +3026,7 @@ func (s *Channel) dropLiveReply(sessionKey, head string) {
 		s.mu.Unlock()
 		return
 	}
-	body := s.rewriteSources(sessionKey, stripSilentMarker(head))
+	body := s.rewriteSources(sessionKey, stripSilentMarker(text))
 	if body == "" || body == lastSent {
 		return
 	}
@@ -3181,7 +3181,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.setStatusLabel(sessionKey, statusLabelWorking)
 		s.mu.Lock()
 		if t := s.turns[sessionKey]; t != nil {
-			t.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text, t.buf.Len())
+			t.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text)
 		}
 		s.mu.Unlock()
 
@@ -3221,15 +3221,13 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Unlock()
 		// The lead's in-between line while a teammate of the turn still
 		// works stays out of the thread: the banner says who works, the
-		// answer comes in a later turn. Text after the last team_message
-		// result is the answer and posts. A live message that showed the
-		// line goes too (dropLiveReply).
+		// answer comes in a later turn. A live message that showed part
+		// of the line goes too (dropLiveReply).
 		if !hasError {
-			post, dropped := interim.Final(text)
-			if dropped && post == "" {
-				s.dropLiveReply(sessionKey, interim.Head(text))
+			if _, dropped := interim.Final(text); dropped {
+				s.dropLiveReply(sessionKey, text)
+				text = ""
 			}
-			text = post
 		} else if interim.Holding() && strings.TrimSpace(text) != "" {
 			// A turn that failed while holding posts its text, as a
 			// live message would have shown it, then the error.

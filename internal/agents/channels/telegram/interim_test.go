@@ -67,9 +67,9 @@ func turnSent(t *testing.T, evs ...event.AgentEvent) []string {
 
 func delegatingTurn(text, tool string) []event.AgentEvent {
 	return []event.AgentEvent{
-		{Type: event.TextDelta, Text: text},
 		{Type: event.ToolUse, ToolName: tool, ToolInput: `{"to":"@franky","message":"cek"}`, ToolUseID: "u1"},
 		{Type: event.ToolResult, ToolUseID: "u1", Text: `{"task_id":"t1","state":"working"}`},
+		{Type: event.TextDelta, Text: text},
 		{Type: event.Done},
 	}
 }
@@ -118,19 +118,6 @@ func TestInterimCodexToolHeld(t *testing.T) {
 	interimHooks(t, true, map[string]bool{"t1": true})
 	if sent := turnSent(t, delegatingTurn(interimLine, "wick.team_message")...); len(sent) != 0 {
 		t.Fatalf("in-between line posted: %q", sent)
-	}
-}
-
-// Text after the last team_message result is the answer: it posts, the
-// line before the call does not.
-func TestInterimAnswerAfterResultPosts(t *testing.T) {
-	interimHooks(t, true, map[string]bool{"t1": true})
-	answer := "Deploy terakhir jam 10, sudah sehat."
-	evs := delegatingTurn(interimLine, "team_message")
-	done := evs[len(evs)-1]
-	evs = append(evs[:len(evs)-1], event.AgentEvent{Type: event.TextDelta, Text: "\n\n" + answer}, done)
-	if sent := turnSent(t, evs...); len(sent) != 1 || sent[0] != answer {
-		t.Fatalf("sent %q", sent)
 	}
 }
 

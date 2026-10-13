@@ -101,7 +101,7 @@ func TestInterimTurnFinal(t *testing.T) {
 	// The line written before the call; the result lands after it.
 	var it InterimTurn
 	it.Tool("mcp__wick__team_message", `{"to":"@franky"}`, "u1", true)
-	it.Result("", "u1", result, len(text))
+	it.Result("", "u1", result)
 	if post, d := it.Final(text); !it.Holding() || !d || post != "" {
 		t.Fatalf("a task still working must drop the line: %q %v", post, d)
 	}
@@ -114,14 +114,14 @@ func TestInterimTurnFinal(t *testing.T) {
 	open["t1"] = true
 	off := InterimTurn{}
 	off.Tool("team_message", `{"to":"@franky"}`, "u1", false)
-	off.Result("", "u1", result, len(text))
+	off.Result("", "u1", result)
 	if off.Holding() || dropped(&off, text) {
 		t.Fatal("switch off: no hold")
 	}
 
 	mixed := InterimTurn{}
 	mixed.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	mixed.Result("", "u1", result, len(text))
+	mixed.Result("", "u1", result)
 	mixed.Tool("Bash", `{}`, "u2", true)
 	if mixed.Holding() || dropped(&mixed, text) {
 		t.Fatal("a turn that did other work is never held")
@@ -130,7 +130,7 @@ func TestInterimTurnFinal(t *testing.T) {
 	neutral := InterimTurn{}
 	neutral.Tool("ToolSearch", `{}`, "n1", true)
 	neutral.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	neutral.Result("", "u1", result, len(text))
+	neutral.Result("", "u1", result)
 	neutral.Tool("mcp__wick__todo", `{}`, "n2", true)
 	neutral.Tool("TodoWrite", `{}`, "n3", true)
 	neutral.Tool("mcp__wick__wick_set_title", `{}`, "n4", true)
@@ -140,14 +140,14 @@ func TestInterimTurnFinal(t *testing.T) {
 
 	codex := InterimTurn{}
 	codex.Tool("wick.team_message", `{"to":"@franky"}`, "u1", true)
-	codex.Result("wick.team_message", "u1", result, len(text))
+	codex.Result("wick.team_message", "u1", result)
 	if !codex.Holding() || !dropped(&codex, text) {
 		t.Fatal("wick.team_message must hold like team_message")
 	}
 
 	noTask := InterimTurn{}
 	noTask.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	noTask.Result("", "u1", `{"error":"no such teammate"}`, len(text))
+	noTask.Result("", "u1", `{"error":"no such teammate"}`)
 	if dropped(&noTask, text) {
 		t.Fatal("no task found: the line posts")
 	}
@@ -155,33 +155,5 @@ func TestInterimTurnFinal(t *testing.T) {
 	q := "Which one do you prefer?"
 	if dropped(&it, q) {
 		t.Fatal("guard 1: a question posts")
-	}
-}
-
-// Text that streams after the last team_message result is the answer:
-// it posts, only the in-between part before it is left out.
-func TestInterimTurnAnswerAfterResult(t *testing.T) {
-	withTasksActive(t, func([]string) bool { return true })
-	result := `{"task_id":"t1","state":"working"}`
-	head := "Saya tanyakan ke Franky dulu."
-	answer := "Jawabannya: deploy terakhir jam 10."
-
-	var it InterimTurn
-	it.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	it.Result("team_message", "u1", result, len(head))
-	post, d := it.Final(head + "\n\n" + answer)
-	if !d || post != answer {
-		t.Fatalf("Final = %q %v, want the answer alone", post, d)
-	}
-	if got := it.Head(head + "\n\n" + answer); got != head {
-		t.Fatalf("Head = %q", got)
-	}
-
-	// Nothing before the result: the whole text is the answer.
-	var bare InterimTurn
-	bare.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	bare.Result("team_message", "u1", result, 0)
-	if post, d := bare.Final(answer); d || post != answer {
-		t.Fatalf("Final = %q %v, want the answer posted whole", post, d)
 	}
 }

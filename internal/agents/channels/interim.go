@@ -116,7 +116,6 @@ type InterimTurn struct {
 	names []string        // the team_message sends
 	uses  map[string]bool // their tool_use ids, to pair the results
 	tasks []string        // the task ids those results name
-	cut   int             // text length at the last team_message result
 }
 
 // Tool records a ToolUse. hide is the session's switch, read by the
@@ -143,13 +142,10 @@ func (it *InterimTurn) Tool(name, input, useID string, hide bool) {
 }
 
 // Result records a ToolResult: a team_message result names its task.
-// at is the length of the turn's text so far: what comes after the last
-// team_message result is the answer, never in-between text.
-func (it *InterimTurn) Result(name, useID, text string, at int) {
+func (it *InterimTurn) Result(name, useID, text string) {
 	if !it.uses[useID] && !IsTeamMessageTool(name) {
 		return
 	}
-	it.cut = at
 	for _, m := range interimTaskID.FindAllStringSubmatch(text, -1) {
 		if !slices.Contains(it.tasks, m[1]) {
 			it.tasks = append(it.tasks, m[1])
@@ -162,25 +158,16 @@ func (it *InterimTurn) Result(name, useID, text string, at int) {
 func (it *InterimTurn) Holding() bool { return it.held && !it.other }
 
 // Final decides at turn end, outside the channel lock, and returns the
-// text to post. Only the text up to the last team_message result is
-// in-between text; what streamed after it is the answer and posts as
-// usual. That part is dropped only when it is in-between text
-// (IsInterimText) and a task the turn sent is still open (guard 2). All
-// settled, or no task found → the whole text posts, so the lead is never
-// silent. dropped reports that the part was left out.
+// text to post. The turn's whole text is judged: it is dropped only when
+// it is in-between text (IsInterimText) and a task the turn sent is still
+// open (guard 2). All settled, or no task found → it posts as usual, so
+// the lead is never silent. dropped reports that it was left out.
 func (it *InterimTurn) Final(text string) (post string, dropped bool) {
-	if !it.Holding() || len(it.tasks) == 0 || TasksActive == nil {
+	if !it.Holding() || !IsInterimText(it.names, text) || len(it.tasks) == 0 || TasksActive == nil {
 		return text, false
 	}
-	cut := min(max(it.cut, 0), len(text))
-	if !IsInterimText(it.names, text[:cut]) || !TasksActive(it.tasks) {
+	if !TasksActive(it.tasks) {
 		return text, false
 	}
-	return strings.TrimSpace(text[cut:]), true
-}
-
-// Head is the turn's text up to the last team_message result, trimmed:
-// the part Final leaves out.
-func (it *InterimTurn) Head(text string) string {
-	return strings.TrimSpace(text[:min(max(it.cut, 0), len(text))])
+	return "", true
 }

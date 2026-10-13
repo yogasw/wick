@@ -723,8 +723,9 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		}
 		// The lead's in-between line while a teammate of the turn still
 		// works stays out of the chat; the answer comes in a later turn.
-		// Text after the last team_message result is the answer and posts.
-		text, _ = interim.Final(text)
+		if _, dropped := interim.Final(text); dropped {
+			return
+		}
 		// No buttons here: a card becomes a numbered list, and a bare
 		// number reply is mapped back to the button (handleMessage).
 		text, _ = actioncard.Split(text, actioncard.PlainText)
@@ -750,7 +751,7 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	case event.ToolResult:
 		t.mu.Lock()
 		if tn := t.turns[sessionID]; tn != nil {
-			tn.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text, tn.buf.Len())
+			tn.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text)
 		}
 		t.mu.Unlock()
 
