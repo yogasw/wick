@@ -158,6 +158,10 @@ func doneLineUsage(result, model string, t turnTokens) []byte {
 			"output_tokens":               t.output,
 		}
 		if model != "" {
+			// The engine resets turnTokens every turn, so these already
+			// count this turn alone; usage_scope keeps ClaudeParser from
+			// differencing them as claude's process-wide running totals.
+			line["usage_scope"] = "turn"
 			line["modelUsage"] = map[string]any{model: map[string]any{
 				"inputTokens":          t.freshIn,
 				"cacheReadInputTokens": t.cacheRead,

@@ -77,6 +77,17 @@ type ClaudeParser struct {
 	// synthCoded: that message carried claude's own error code, which
 	// then outranks whatever the result's wording suggests.
 	synthCoded bool
+
+	// spentModel / spentCost are the previous `result` frame's per-model
+	// counters and total_cost_usd. Claude keeps ONE process alive for the
+	// whole session and those fields are running totals of that process,
+	// not of the turn: two turns 5 s apart read 20.29M and 20.41M cache
+	// read, $6.33 and $6.37, for +461 output tokens. A turn's own spend
+	// is the difference from this baseline (see turnSpend). The parser is
+	// built fresh per spawn, so the baseline lives exactly as long as the
+	// process whose totals it tracks.
+	spentModel map[string]claudeModelUsage
+	spentCost  float64
 }
 
 // claudeSyntheticModel is the model id claude stamps on an assistant
@@ -190,8 +201,9 @@ type claudeRaw struct {
 
 	// `result` carries the turn's token accounting. .usage is the LAST
 	// message's usage (what the context window currently holds);
-	// .modelUsage is per-model totals for the whole turn and is only
-	// read here for contextWindow.
+	// .modelUsage and total_cost_usd are per-model running totals of the
+	// whole PROCESS, which spans many turns; turnSpend turns them into
+	// this turn's share before anything reads them.
 	// `system subtype=compact_boundary` reports a compaction under
 	// .compact_metadata.
 	CompactMeta *claudeCompactMeta `json:"compact_metadata,omitempty"`
@@ -199,6 +211,10 @@ type claudeRaw struct {
 	Usage      *claudeUsage                `json:"usage,omitempty"`
 	ModelUsage map[string]claudeModelUsage `json:"modelUsage,omitempty"`
 	CostUSD    float64                     `json:"total_cost_usd,omitempty"`
+	// UsageScope "turn" says modelUsage / total_cost_usd already count
+	// this turn alone (the wick engine writes it), so they are not
+	// running totals to difference. Claude's own CLI never sets it.
+	UsageScope string `json:"usage_scope,omitempty"`
 
 	// `stream_event` (only when --include-partial-messages is set)
 	// wraps an Anthropic Messages-API streaming event in .event.
@@ -259,15 +275,56 @@ func (u claudeUsage) level() int {
 }
 
 // claudeModelUsage is one entry of the result frame's per-model totals.
-// Its counts are turn-wide sums — right for "what did this turn spend",
-// wrong for "how full is the window" (every iteration re-reads the same
-// cached prefix, so the sum far exceeds what the window held).
+// Claude sends them as running totals of the process; once turnSpend has
+// taken the difference they are turn-wide sums — right for "what did
+// this turn spend", wrong for "how full is the window" (every iteration
+// re-reads the same cached prefix, so the sum far exceeds what the
+// window held).
 type claudeModelUsage struct {
 	ContextWindow       int `json:"contextWindow"`
 	InputTokens         int `json:"inputTokens"`
 	OutputTokens        int `json:"outputTokens"`
 	CacheReadTokens     int `json:"cacheReadInputTokens"`
 	CacheCreationTokens int `json:"cacheCreationInputTokens"`
+}
+
+// turnSpend rewrites a `result` frame's modelUsage and total_cost_usd
+// from the process's running totals into this turn's own share, and
+// moves the baseline on. The first result of a process is taken whole.
+// A model whose counter went DOWN was reset under us (a CLI reset, a
+// model switch), so its new value is taken as it stands; the same goes
+// for the cost. The context level is not touched: it never came from
+// these counters.
+func (p *ClaudeParser) turnSpend(r *claudeRaw) {
+	if r.UsageScope == "turn" {
+		return
+	}
+	if len(r.ModelUsage) > 0 {
+		turn := make(map[string]claudeModelUsage, len(r.ModelUsage))
+		for name, mu := range r.ModelUsage {
+			prev, ok := p.spentModel[name]
+			if ok && mu.InputTokens >= prev.InputTokens && mu.OutputTokens >= prev.OutputTokens &&
+				mu.CacheReadTokens >= prev.CacheReadTokens && mu.CacheCreationTokens >= prev.CacheCreationTokens {
+				d := mu
+				d.InputTokens -= prev.InputTokens
+				d.OutputTokens -= prev.OutputTokens
+				d.CacheReadTokens -= prev.CacheReadTokens
+				d.CacheCreationTokens -= prev.CacheCreationTokens
+				turn[name] = d
+				continue
+			}
+			turn[name] = mu
+		}
+		p.spentModel = r.ModelUsage
+		r.ModelUsage = turn
+	}
+	cost := r.CostUSD
+	if cost >= p.spentCost {
+		r.CostUSD = cost - p.spentCost
+	}
+	if cost > 0 {
+		p.spentCost = cost
+	}
 }
 
 // contextUsage builds the end-of-turn context reading, or nil when the
@@ -295,10 +352,10 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 	}
 	out := &TokenUsage{ContextUsed: level, CostUSD: r.CostUSD}
 
-	// Flows come from modelUsage, which totals the WHOLE turn; .usage is
-	// only the last message and would under-report a turn that looped
-	// through several tool calls. Level comes from .usage for the
-	// opposite reason: modelUsage re-counts the cached prefix on every
+	// Flows come from modelUsage, which (after turnSpend) totals the WHOLE
+	// turn; .usage is only the last message and would under-report a turn
+	// that looped through several tool calls. Level comes from .usage for
+	// the opposite reason: modelUsage re-counts the cached prefix on every
 	// iteration, so its sum is far larger than the window ever held.
 	//
 	// Picking the model: a turn can touch more than one (a cheap model
@@ -690,6 +747,11 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		p.partialThinkingEmitted = false
 		synthKind, synthReset, synthCoded := p.synthKind, p.synthReset, p.synthCoded
 		p.synthKind, p.synthReset, p.synthCoded = ErrNone, time.Time{}, false
+		// Error results carry the same running totals (error_max_turns,
+		// error_during_execution report what was spent before stopping),
+		// so they move the baseline too: otherwise the next turn would be
+		// charged for this one's spend a second time.
+		p.turnSpend(&raw)
 		if raw.IsError {
 			p.lastLevel = 0
 			// error_during_execution puts the detail on stderr, leaving
