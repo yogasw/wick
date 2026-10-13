@@ -376,7 +376,9 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 	// entry with the most input tokens in the running totals, so a turn
 	// where only the side model worked keeps the main one; ties go to
 	// the smaller name, since map iteration order is random. The flows
-	// stay this turn's own share of the picked model.
+	// are every model's share of this turn summed: the side model's
+	// tokens were spent too, and dropping them would lose them from the
+	// ledger for good.
 	totals := r.modelTotal
 	if totals == nil {
 		totals = r.ModelUsage
@@ -389,10 +391,13 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 		}
 	}
 	if best >= 0 {
-		mu := r.ModelUsage[pick]
 		out.Model, out.Window = pick, totals[pick].ContextWindow
-		out.Input, out.CacheRead, out.CacheWrite = mu.InputTokens, mu.CacheReadTokens, mu.CacheCreationTokens
-		out.Output = mu.OutputTokens
+		for _, mu := range r.ModelUsage {
+			out.Input += mu.InputTokens
+			out.CacheRead += mu.CacheReadTokens
+			out.CacheWrite += mu.CacheCreationTokens
+			out.Output += mu.OutputTokens
+		}
 	}
 	if best < 0 {
 		// No modelUsage (a provider emitting claude-shaped lines may omit

@@ -260,7 +260,7 @@ func TestClaudeTurnSpendMissingCost(t *testing.T) {
 
 // TestClaudeTurnSpendSideModelKeepsMain: a turn where only the side
 // model did work still reports the main model and its window — the pick
-// goes by running totals — while the numbers are the side model's share.
+// goes by running totals — while the side model's tokens are still counted.
 func TestClaudeTurnSpendSideModelKeepsMain(t *testing.T) {
 	p := NewClaudeParser()
 	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1,`+
@@ -278,8 +278,8 @@ func TestClaudeTurnSpendSideModelKeepsMain(t *testing.T) {
 	if u.Model != "claude-opus-5" || u.Window != 1000000 {
 		t.Fatalf("want the main model kept, got %q / %d", u.Model, u.Window)
 	}
-	if u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || !costNear(u.CostUSD, 0.1) {
-		t.Fatalf("want opus's (empty) share this turn, got %+v", u)
+	if u.Input != 300 || u.Output != 30 || u.CacheRead != 0 || !costNear(u.CostUSD, 0.1) {
+		t.Fatalf("want haiku's tokens kept under opus, got %+v", u)
 	}
 
 	// All-zero totals: the pick must not depend on map order.
