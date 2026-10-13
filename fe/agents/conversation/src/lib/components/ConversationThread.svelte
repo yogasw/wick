@@ -192,7 +192,8 @@
       out[i] = seen;
       const t = shownTurns[i];
       if (t.role !== "assistant" || !(t.text ?? "").trim() || t.speaker?.via === "mention") continue;
-      if ((t.source ?? "").trim().toLowerCase() === "subagent") continue;
+      const src = (t.source ?? "").trim().toLowerCase();
+      if (src === "subagent" || src === "team") continue;
       const tasks = teamCtx ? teamCtx.forTurn(t.turn_id) : [];
       const between = tasks.length > 0 &&
         ((t.events ?? []).length > 0 ? isInterimText(t, tasks, out[i]) : interimGuards(t.text ?? "", tasks, out[i]));
