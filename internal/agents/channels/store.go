@@ -268,7 +268,7 @@ func (s DBStore) LoadSlack() (agentconfig.SlackChannelConfig, string, error) {
 	if err := s.configMap("slack", &cfg); err != nil {
 		return cfg, "", err
 	}
-	return cfg, cfg.PublicURL, nil
+	return cfg, "", nil
 }
 
 // LoadTelegram satisfies TelegramConfigStore.
@@ -312,7 +312,7 @@ func (s DBStore) LoadSlackForUser(userID string) (agentconfig.SlackChannelConfig
 	if err := s.configMapForUser("slack", userID, &cfg); err != nil {
 		return cfg, "", err
 	}
-	return cfg, cfg.PublicURL, nil
+	return cfg, "", nil
 }
 
 // LoadTelegramForUser loads the Telegram config for a specific user.
@@ -539,5 +539,5 @@ func (s DBStore) LoadSlackForAgent(agentID string) (agentconfig.SlackChannelConf
 		}
 	}
 	pkgentity.MapToStruct(m, &cfg)
-	return cfg, cfg.PublicURL, nil
+	return cfg, "", nil
 }

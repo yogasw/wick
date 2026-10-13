@@ -1294,8 +1294,9 @@ func (s *Channel) Status() []agentchannels.StatusField {
 		}
 	} else {
 		// http mode
+		pubURL = s.baseURL()
 		if pubURL == "" {
-			out = append(out, agentchannels.StatusField{Label: "Webhook", Value: "public URL not configured", Warn: true})
+			out = append(out, agentchannels.StatusField{Label: "Webhook", Value: "app URL not configured", Warn: true})
 		} else {
 			out = append(out, agentchannels.StatusField{
 				Label: "Webhook",
@@ -2228,9 +2229,16 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	meta := agentchannels.ParseMeta(ev.Text)
+	meta := slackMeta(ev.Text)
 	if meta.IsMeta {
-		s.handleMetaCmd(ctx, meta, ev.Channel, threadTS)
+		// A DM continues the sender's main chat, so its session is that
+		// chat, not one named after the thread: a link built on the thread
+		// name opens "session not found".
+		sessionID := s.sessionKey(threadTS)
+		if id := s.dmMainSession(ev); id != "" {
+			sessionID = id
+		}
+		s.handleMetaCmd(ctx, meta, ev.Channel, threadTS, sessionID)
 		return
 	}
 
@@ -2276,6 +2284,11 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
+	if old != nil {
+		// The reply streaming so far sits ABOVE this message. Take it down so
+		// the answer continues below it, as in the web chat.
+		s.moveLiveBelow(sessionID)
+	}
 	// A main chat is shared with the web app; binding it to this thread
 	// would send the web's answers here too.
 	if !dmMain {
@@ -2986,6 +2999,53 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	}
 	for _, chunk := range plan.continuations {
 		note(s.postReplyTS(channelID, threadTS, chunk))
+	}
+}
+
+// moveLiveBelow deletes the live reply of a turn a follow-up message just took
+// over, so the next flush posts the text gathered so far as a new message
+// below the follow-up instead of editing the one above it. The buffer is kept:
+// nothing is lost, only moved. When the delete is refused the old message is
+// left as it is (no longer edited) and the text still continues below.
+func (s *Channel) moveLiveBelow(sessionKey string) {
+	lk := s.liveLock(sessionKey)
+	lk.Lock()
+	defer lk.Unlock()
+	s.mu.Lock()
+	var channelID, liveTS string
+	if t := s.turns[sessionKey]; t != nil {
+		channelID, liveTS = t.channelID, t.liveTS
+	}
+	s.mu.Unlock()
+	if liveTS == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+	if err := s.withBackoffErr(func() error {
+		_, _, err := api.DeleteMessage(channelID, liveTS)
+		return err
+	}); err != nil {
+		// The old message stays as it is, frozen; the answer goes on below
+		// the follow-up. Editing it in place would leave it looking stuck.
+		log.Warn().Err(err).Str("channel", "slack").Str("session", sessionKey).
+			Msg("could not delete the live reply for a follow-up; leaving it and continuing below")
+	}
+	restart := false
+	s.mu.Lock()
+	if cur := s.turns[sessionKey]; cur != nil && cur.liveTS == liveTS {
+		cur.liveTS, cur.lastSent = "", ""
+		restart = cur.hasStarted
+	}
+	s.mu.Unlock()
+	if restart {
+		// The takeover stopped the old turn's ticker, and hasStarted is
+		// carried, so nothing else would re-post the text.
+		s.startEditTicker(sessionKey)
 	}
 }
 
@@ -4326,14 +4386,36 @@ func (s *Channel) userGroupMembers() ([]slackgo.UserGroup, error) {
 	return groups, nil
 }
 
-func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult, channelID, threadTS string) {
-	// Dashboard links point at the namespaced on-disk session id, not the
-	// bare threadTS — that's the folder the pool actually wrote.
-	sessionID := s.sessionKey(threadTS)
+// slackMeta is ParseMeta for Slack, where a command must start with "!". A "/"
+// is Slack's own slash-command syntax and never reaches the bot as a message,
+// and one prefix everywhere keeps what counts as a command exact.
+// metaHelpText is the reply to !help. Each command must be the whole message,
+// except !agent and !log, which take an argument.
+const metaHelpText = "*Perintah* (harus persis, diawali `!`):\n" +
+	"• `!link` / `!dashboard`: link sesi ini di dashboard\n" +
+	"• `!status`: status sesi\n" +
+	"• `!reset`: mulai konteks baru\n" +
+	"• `!log <N>`: N baris log gate terakhir\n" +
+	"• `!agent <nama>`: ganti agent\n" +
+	"• `!help`: daftar ini\n" +
+	"Pesan lain, termasuk yang hanya diawali kata-kata ini, dikirim ke agent seperti biasa."
+
+func slackMeta(text string) agentchannels.MetaResult {
+	if !strings.HasPrefix(strings.TrimSpace(text), "!") {
+		return agentchannels.MetaResult{}
+	}
+	return agentchannels.ParseMeta(text)
+}
+
+func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult, channelID, threadTS, sessionID string) {
+	// sessionID is the namespaced on-disk session id (or the main chat a DM
+	// continues), not the bare threadTS — the folder the pool actually wrote.
 	switch meta.Cmd {
 	case "dashboard", "link":
 		url := s.dashboardURL(sessionID)
 		s.postReply(channelID, threadTS, fmt.Sprintf("Dashboard: %s", url))
+	case "help":
+		s.postReply(channelID, threadTS, metaHelpText)
 	case "status":
 		s.postReply(channelID, threadTS, "_Use the dashboard to view real-time agent status._\n"+s.dashboardURL(sessionID))
 	case "reset":
@@ -4349,13 +4431,42 @@ func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult
 	}
 }
 
-func (s *Channel) dashboardURL(sessionID string) string {
+// appURL is the app's own configured address (the app_url setting), set once
+// at boot. It is THE base for every link a bot posts: one value for the whole
+// instance, not one per channel row.
+var appURL = func() string { return "" }
+
+// SetAppURL installs the resolver for the app URL.
+func SetAppURL(f func() string) {
+	if f != nil {
+		appURL = f
+	}
+}
+
+// baseURL is the address links are built on: the app URL, and only when that
+// is unset the channel row's own public_url (the older per-bot setting).
+func (s *Channel) baseURL() string {
+	if b := strings.TrimRight(strings.TrimSpace(appURL()), "/"); b != "" {
+		return b
+	}
 	s.cfgMu.Lock()
 	pubURL := s.pubURL
 	s.cfgMu.Unlock()
-	base := strings.TrimRight(pubURL, "/")
-	if base == "" {
-		return "(dashboard URL not configured — set PublicURL in Settings → Agents)"
+	return strings.TrimRight(strings.TrimSpace(pubURL), "/")
+}
+
+// dashboardURL is the session's page as a Slack link (<url|label>), so it is
+// one click rather than a pasted address.
+func (s *Channel) dashboardURL(sessionID string) string {
+	// A command is answered before any session exists: in a thread whose
+	// first message is "!link" there is nothing to open yet, and a link would
+	// land on "session not found".
+	if s.sessions != nil && !s.sessions.SessionExists(sessionID) {
+		return "Belum ada sesi di thread ini. Kirim pesan dulu, lalu ketik `!link` lagi."
 	}
-	return fmt.Sprintf("%s/tools/agents/sessions/%s", base, url.PathEscape(sessionID))
+	base := s.baseURL()
+	if base == "" {
+		return "Alamat dashboard belum diatur di Settings (app_url)."
+	}
+	return fmt.Sprintf("<%s/tools/agents/sessions/%s|Open session in the dashboard>", base, url.PathEscape(sessionID))
 }
