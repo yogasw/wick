@@ -216,6 +216,11 @@ type claudeRaw struct {
 	// running totals to difference. Claude's own CLI never sets it.
 	UsageScope string `json:"usage_scope,omitempty"`
 
+	// modelTotal keeps the frame's running totals once turnSpend has
+	// replaced ModelUsage with the turn's share; the model is picked by
+	// these, not by who happened to work this turn.
+	modelTotal map[string]claudeModelUsage
+
 	// `stream_event` (only when --include-partial-messages is set)
 	// wraps an Anthropic Messages-API streaming event in .event.
 	Event *claudeStreamEvent `json:"event,omitempty"`
@@ -323,6 +328,7 @@ func (p *ClaudeParser) turnSpend(r *claudeRaw) {
 		for name, mu := range r.ModelUsage {
 			p.spentModel[name] = mu
 		}
+		r.modelTotal = r.ModelUsage
 		r.ModelUsage = turn
 	}
 	cost := r.CostUSD
@@ -367,17 +373,26 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 	//
 	// Picking the model: a turn can touch more than one (a cheap model
 	// for a side task, the main one for the conversation). Take the
-	// entry with the most input tokens — map iteration order is random,
-	// so "first" would flap between turns.
-	best := -1
-	for name, mu := range r.ModelUsage {
+	// entry with the most input tokens in the running totals, so a turn
+	// where only the side model worked keeps the main one; ties go to
+	// the smaller name, since map iteration order is random. The flows
+	// stay this turn's own share of the picked model.
+	totals := r.modelTotal
+	if totals == nil {
+		totals = r.ModelUsage
+	}
+	best, pick := -1, ""
+	for name, mu := range totals {
 		weight := mu.InputTokens + mu.CacheReadTokens + mu.CacheCreationTokens
-		if weight > best {
-			best = weight
-			out.Model, out.Window = name, mu.ContextWindow
-			out.Input, out.CacheRead, out.CacheWrite = mu.InputTokens, mu.CacheReadTokens, mu.CacheCreationTokens
-			out.Output = mu.OutputTokens
+		if weight > best || (weight == best && name < pick) {
+			best, pick = weight, name
 		}
+	}
+	if best >= 0 {
+		mu := r.ModelUsage[pick]
+		out.Model, out.Window = pick, totals[pick].ContextWindow
+		out.Input, out.CacheRead, out.CacheWrite = mu.InputTokens, mu.CacheReadTokens, mu.CacheCreationTokens
+		out.Output = mu.OutputTokens
 	}
 	if best < 0 {
 		// No modelUsage (a provider emitting claude-shaped lines may omit

@@ -257,3 +257,39 @@ func TestClaudeTurnSpendMissingCost(t *testing.T) {
 		t.Fatalf("after missing cost: want cost 0.5 from the last price, got %+v", ev.Usage)
 	}
 }
+
+// TestClaudeTurnSpendSideModelKeepsMain: a turn where only the side
+// model did work still reports the main model and its window — the pick
+// goes by running totals — while the numbers are the side model's share.
+func TestClaudeTurnSpendSideModelKeepsMain(t *testing.T) {
+	p := NewClaudeParser()
+	parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-haiku-4-5":{"inputTokens":100,"outputTokens":10,"contextWindow":200000},`+
+		`"claude-opus-5":{"inputTokens":100,"outputTokens":200,"cacheReadInputTokens":50000,"contextWindow":1000000}}}`)
+	ev := parseDone(t, p, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1.1,`+
+		`"usage":{"input_tokens":1,"output_tokens":1},`+
+		`"modelUsage":{"claude-haiku-4-5":{"inputTokens":400,"outputTokens":40,"contextWindow":200000},`+
+		`"claude-opus-5":{"inputTokens":100,"outputTokens":200,"cacheReadInputTokens":50000,"contextWindow":1000000}}}`)
+	u := ev.Usage
+	if u == nil {
+		t.Fatal("want usage")
+	}
+	if u.Model != "claude-opus-5" || u.Window != 1000000 {
+		t.Fatalf("want the main model kept, got %q / %d", u.Model, u.Window)
+	}
+	if u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || !costNear(u.CostUSD, 0.1) {
+		t.Fatalf("want opus's (empty) share this turn, got %+v", u)
+	}
+
+	// All-zero totals: the pick must not depend on map order.
+	for i := 0; i < 20; i++ {
+		q := NewClaudeParser()
+		ev := parseDone(t, q, `{"type":"result","subtype":"success","is_error":false,`+
+			`"usage":{"input_tokens":0,"output_tokens":1},`+
+			`"modelUsage":{"b-model":{"outputTokens":1},"a-model":{"outputTokens":1},"c-model":{"outputTokens":1}}}`)
+		if ev.Usage == nil || ev.Usage.Model != "a-model" {
+			t.Fatalf("tie: want a-model, got %+v", ev.Usage)
+		}
+	}
+}
