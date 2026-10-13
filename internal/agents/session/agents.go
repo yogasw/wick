@@ -22,9 +22,10 @@ import (
 // type's last-known CLI session ID. Each type mints and owns its own
 // ids — the transcript stores are not interchangeable — so the outgoing
 // id is parked here on every switch and read back when the session
-// returns to that type. Keyed by type, not instance: two claude
-// instances read the same transcript store, so switching between them
-// must keep the id. See ProviderScope / ResumeIDForScope.
+// returns to that type. Each id is also kept under its full instance key
+// ("claude/work"): instances of a type with no HistoryCarrier keep
+// separate config dirs, so only the instance that minted an id can
+// resume it. See ProviderScope / ProviderInstance / ResumeIDForScope.
 type AgentEntry struct {
 	Name             string            `json:"name"`
 	Provider         string            `json:"provider"`
@@ -138,6 +139,16 @@ func ProviderScope(key string) string {
 		return key[:i]
 	}
 	return key
+}
+
+// ProviderInstance returns the full "type/name" key of a provider key;
+// a bare type is its default instance ("claude" → "claude/claude"), and
+// "" stays "".
+func ProviderInstance(key string) string {
+	if key == "" || strings.Contains(key, "/") {
+		return key
+	}
+	return key + "/" + key
 }
 
 // ResumeIDForScope finds the resume id recorded for a provider type,

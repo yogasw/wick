@@ -91,10 +91,10 @@ type failoverAware interface {
 type SwitchResult struct {
 	// From / To are the "type/name" keys the agent moved between.
 	From, To string
-	// HistoryCarries: the target resumes this conversation (same type,
-	// a resume id it can read). False for another type, a same-type
-	// target that cannot reach the transcript, or no transcript yet — the
-	// target then starts fresh and a continue must recap the turn.
+	// HistoryCarries: the target resumes this conversation (a resume id
+	// it can read). False for another type, another instance that cannot
+	// reach the transcript (or only resumes its own earlier turns), or no
+	// transcript yet — the continue must then recap the turn.
 	HistoryCarries bool
 	// Home is the agent's home after the switch.
 	Home string
@@ -208,8 +208,9 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 	// session (has a stored resume id), so the notice can say whether it will
 	// pick up its own past turns or start cold.
 	targetHasHistory := false
-	// sameScope reports whether the switch stays inside one provider type,
-	// where the transcript store is shared and the conversation carries over.
+	// sameScope reports whether the switch stays where the outgoing resume
+	// id is readable — the same instance, or another instance of a type
+	// whose HistoryCarrier can carry it — so the conversation carries over.
 	sameScope := false
 	// carry is the target type's answer for a same-type switch: whether
 	// (and how) the conversation reaches the target instance.
@@ -245,26 +246,41 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 				}
 				fromScope := session.ProviderScope(a.Provider)
 				toScope := session.ProviderScope(newKey)
-				sameScope = fromScope == toScope
+				// A type with no HistoryCarrier (claude, codex) gives each
+				// instance its own config dir and transcripts: an id is only
+				// resumable on the instance that minted it, so a move between
+				// two of its instances is a move between scopes.
+				instanceBound := !hasHistoryCarrier(toIns.Type)
+				sameScope = fromScope == toScope && (sameInstance || !instanceBound)
 				if a.CLISessionID != "" {
 					if loaded.Agents[i].ProviderSessions == nil {
 						loaded.Agents[i].ProviderSessions = map[string]string{}
 					}
-					// Park the outgoing id under its provider TYPE: any instance
-					// of that type reads the same transcript store, so any of
-					// them can resume it later.
+					// Park the outgoing id under its type (older readers, and
+					// types whose instances can carry it) and its instance.
 					loaded.Agents[i].ProviderSessions[fromScope] = a.CLISessionID
+					if a.Provider != "" {
+						loaded.Agents[i].ProviderSessions[fromKey] = a.CLISessionID
+					}
 				}
 				loaded.Agents[i].Provider = newKey
-				resumeID := session.ResumeIDForScope(loaded.Agents[i].ProviderSessions, toScope)
+				var resumeID string
+				switch {
+				case sameInstance:
+					resumeID = a.CLISessionID
+				case instanceBound:
+					resumeID = instanceResumeID(loaded.Agents[i].ProviderSessions, newKey, instances)
+				default:
+					resumeID = session.ResumeIDForScope(loaded.Agents[i].ProviderSessions, toScope)
+				}
 				targetHasHistory = resumeID != ""
-				// Within one type the id carries over — the conversation
-				// continues. Across types it becomes whatever the target type
-				// recorded before, or empty for a fresh start: handing codex an
-				// id claude minted only buys a failed spawn, since neither can
-				// read the other's store. Never blanked on a same-scope miss —
-				// an empty CLISessionID drops --resume from the next spawn and
-				// abandons a conversation still on disk.
+				// Within one scope the id carries over — the conversation
+				// continues. Across scopes it becomes whatever the target
+				// recorded before, or empty for a fresh start: handing an
+				// instance an id another one minted only buys a failed spawn
+				// ("No conversation found"). Never blanked on a same-scope
+				// miss — an empty CLISessionID drops --resume from the next
+				// spawn and abandons a conversation still on disk.
 				if resumeID != "" && sameScope {
 					carry = carriesOver(instanceFor(instances, fromKey), toIns, resumeID)
 					if carry.Reason != "" {
@@ -359,10 +375,9 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 		)
 	}
 
-	// Context carries over between instances of one provider type (shared
-	// transcript store, same resume id) but not across types. Say which of
-	// the three cases this switch is, so the user knows what the next turn
-	// will remember.
+	// Context carries over only where the resume id is readable (see
+	// sameScope). Say which case this switch is, so the user knows what
+	// the next turn will remember.
 	contextNote := switchNote(tag, carry, sameScope, targetHasHistory)
 
 	switch {
@@ -761,8 +776,8 @@ type HistoryCarry struct {
 // HistoryCarrier answers HistoryCarry for one provider type. Types whose
 // instances keep separate stores (omp per profile, opencode per data
 // folder) register one from their own package (RegisterHistoryCarrier in
-// init); a type without one shares a single store, so its history always
-// carries (claude, codex).
+// init); a type without one (claude, codex) binds each resume id to the
+// instance that minted it, so only the same instance resumes it.
 type HistoryCarrier func(from, to Instance, resumeID string) HistoryCarry
 
 var (
@@ -779,6 +794,42 @@ func RegisterHistoryCarrier(t Type, c HistoryCarrier) {
 		return
 	}
 	historyCarriers[t] = c
+}
+
+// hasHistoryCarrier reports whether t registered a HistoryCarrier.
+func hasHistoryCarrier(t Type) bool {
+	historyCarriersMu.RLock()
+	defer historyCarriersMu.RUnlock()
+	return historyCarriers[t] != nil
+}
+
+// instanceResumeID is the resume id key's own instance recorded. Data
+// written before ids were kept per instance has only the type key; that
+// id is taken only while no instance of the type has its own key yet and
+// the type has a single instance, so it cannot be another one's.
+func instanceResumeID(m map[string]string, key string, instances []Instance) string {
+	if id := m[key]; id != "" {
+		return id
+	}
+	scope := session.ProviderScope(key)
+	if m[scope] == "" {
+		return ""
+	}
+	for k, v := range m {
+		if v != "" && k != scope && session.ProviderScope(k) == scope {
+			return ""
+		}
+	}
+	n := 0
+	for _, ins := range instances {
+		if string(ins.Type) == scope {
+			n++
+		}
+	}
+	if n != 1 {
+		return ""
+	}
+	return m[scope]
 }
 
 // carriesOver is the registered carrier's answer for a same-type switch

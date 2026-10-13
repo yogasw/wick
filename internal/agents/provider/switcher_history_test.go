@@ -11,7 +11,8 @@ import (
 // A same-type switch asks the target type's registered HistoryCarrier
 // (omp and opencode register theirs from their own packages): "continuing"
 // only when it says the history is reachable, else "starting fresh" with
-// its reason and the id dropped. A type with no carrier always carries.
+// its reason and the id dropped. A type with no carrier never hands one
+// instance's id to another.
 func TestSwitchNoticeFollowsHistoryCarrier(t *testing.T) {
 	isolateConfig(t)
 	saveSeed(t, Instance{Type: TypeOMP, Name: "waba"})
@@ -60,7 +61,7 @@ func TestSwitchNoticeFollowsHistoryCarrier(t *testing.T) {
 		{"omp: unreachable", "s-omp-miss", "omp/waba", "omp/yoga", "omp-gone", "starting fresh on omp/yoga — omp transcript omp-gone", ""},
 		{"opencode: copied", "s-oc-ok", "opencode/a", "opencode/b", "ses_1", "copied into opencode/b", "ses_1"},
 		{"opencode: source gone", "s-oc-miss", "opencode/b", "opencode/a", "ses_2", "starting fresh on opencode/a", ""},
-		{"claude: no carrier, shared store", "s-cl", "claude/claude", "claude/work", "cl-1", "continuing the same conversation — claude/work resumes", "cl-1"},
+		{"claude: no carrier, id stays with its instance", "s-cl", "claude/claude", "claude/work", "cl-1", "claude/work won't see earlier turns", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

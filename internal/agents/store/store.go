@@ -1536,12 +1536,14 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 // and the new provider's next spawn resumes a conversation it never had
 // ("No conversation found with session ID: ..."). A stale event still
 // parks its id under its OWN type — that is where it belongs — but it
-// must not touch CLISessionID once the entry has moved to another type.
+// must not touch CLISessionID once the entry has moved to another
+// instance — even of the same type, whose config dir may differ.
 func (s *Store) persistCLISessionID(id string) error {
 	// Locked read-modify-write: a provider switch (or failover) may save
 	// agents.json at this very moment, at the end of the same turn.
 	return session.UpdateAgents(s.layout, s.sessionID, func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
 		scope := session.ProviderScope(s.provider)
+		inst := session.ProviderInstance(s.provider)
 		for i := range agents {
 			if agents[i].Name != s.agentName {
 				continue
@@ -1551,18 +1553,23 @@ func (s *Store) persistCLISessionID(id string) error {
 			// the entry currently points at, as it always did.
 			if scope == "" {
 				scope = session.ProviderScope(agents[i].Provider)
+				inst = session.ProviderInstance(agents[i].Provider)
 			}
-			sameScope := session.ProviderScope(agents[i].Provider) == scope
+			current := session.ProviderInstance(agents[i].Provider) == inst
 			if agents[i].ProviderSessions[scope] == id &&
-				(!sameScope || agents[i].CLISessionID == id) {
+				(inst == "" || agents[i].ProviderSessions[inst] == id) &&
+				(!current || agents[i].CLISessionID == id) {
 				return agents, false, nil // already up to date
 			}
 			if agents[i].ProviderSessions == nil {
 				agents[i].ProviderSessions = map[string]string{}
 			}
-			// Keyed by type: any instance of this type can resume it later.
+			// Under the type (older readers) and the instance that minted it.
 			agents[i].ProviderSessions[scope] = id
-			if sameScope {
+			if inst != "" {
+				agents[i].ProviderSessions[inst] = id
+			}
+			if current {
 				agents[i].CLISessionID = id
 				agents[i].LastActive = s.now().UTC()
 			}

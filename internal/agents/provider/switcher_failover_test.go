@@ -196,6 +196,9 @@ func TestApplySwitchFailover(t *testing.T) {
 			t.Fatalf("fresh target got no recap:\n%s", res.Continue)
 		}
 		// Same type with a readable transcript: carries.
+		RegisterHistoryCarrier(TypeCodex, func(from, to Instance, resumeID string) HistoryCarry {
+			return HistoryCarry{}
+		})
 		seedSession(t, layout, "s-h1-ok", "main", "codex/codex")
 		_ = session.SetCLISessionID(layout, "s-h1-ok", "main", "thread-1")
 		res, err = ApplySwitch(layout, "s-h1-ok", "main", "codex/gemini_flash", SwitchOptions{Failover: true, MsgKey: "m", ContinueFor: continueFor})
