@@ -119,6 +119,12 @@ type Agent struct {
 	// killed, so its later Done/Error are swallowed and nothing queued on
 	// it runs here.
 	failingOver bool
+	// asking: OnFailover is deciding on the failed turn right now. A
+	// message written to stdin meanwhile (or after the pool took the turn
+	// over) reaches a process the failover kills before it reads it, so
+	// it is kept in askSent too and TakePending hands it to the failover.
+	asking  bool
+	askSent []string
 	// modelOverride replaces cfg.ModelID once an auto-retry moved this
 	// agent off a refused model (modelretry.go); modelRetryMsg is the
 	// message being retried, modelRetries/modelTried its retries so far.
@@ -526,6 +532,9 @@ func (a *Agent) Send(text string) error {
 	prevSent, prevAt, prevErr, prevOpen, prevTurns := a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns
 	a.unanswered = append(a.unanswered, text)
 	a.noteSentLocked(text)
+	if a.asking || a.failingOver {
+		a.askSent = append(a.askSent, text)
+	}
 	a.mu.Unlock()
 	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
 	if _, err := proc.Stdin().Write([]byte(payload + "\n")); err != nil {
@@ -533,6 +542,9 @@ func (a *Agent) Send(text string) error {
 		a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns = prevSent, prevAt, prevErr, prevOpen, prevTurns
 		if n := len(a.unanswered); n > 0 && a.unanswered[n-1] == text {
 			a.unanswered = a.unanswered[:n-1]
+		}
+		if n := len(a.askSent); n > 0 && a.askSent[n-1] == text {
+			a.askSent = a.askSent[:n-1]
 		}
 		a.mu.Unlock()
 		return err
@@ -594,13 +606,14 @@ func (a *Agent) LastSent() string {
 }
 
 // TakePending hands over (and forgets) the messages queued behind the
-// running turn of a respawn-mode agent, for a failover to re-send them on
-// the next provider. nil for any other mode.
+// running turn of a respawn-mode agent, and those written to stdin while
+// OnFailover was deciding (append mode), for a failover to re-send them
+// on the next provider. Queued messages come first: they were sent first.
 func (a *Agent) TakePending() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	q := a.pendingQueue
-	a.pendingQueue = nil
+	q := append(a.pendingQueue, a.askSent...)
+	a.pendingQueue, a.askSent = nil, nil
 	return q
 }
 
@@ -632,10 +645,24 @@ func (a *Agent) askFailover(ev event.AgentEvent, text string) (event.AgentEvent,
 	if a.turns == 1 {
 		msgKey = a.cfg.FailoverMsgKey
 	}
+	if !rotated {
+		// From here on a message written to stdin is not in userMsg.
+		a.asking, a.askSent = true, nil
+	}
 	a.mu.Unlock()
 	if rotated {
 		return ev, false
 	}
+	defer func() {
+		// Taken over: what was written meanwhile stays for TakePending
+		// (the pool takes it again once the process is stopped).
+		a.mu.Lock()
+		a.asking = false
+		if !a.failingOver {
+			a.askSent = nil
+		}
+		a.mu.Unlock()
+	}()
 	var inflight []store.TurnEvent
 	if st != nil {
 		inflight = st.InFlightEvents()

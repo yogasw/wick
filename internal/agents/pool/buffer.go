@@ -29,6 +29,12 @@ type Buffer struct {
 
 	mu    sync.Mutex
 	lines []string
+	// retired: the pool dropped this buffer from its map (empty, its slot
+	// released). A caller that looked it up just before still holds it; a
+	// message it adds then goes to the session's live buffer through
+	// revive instead of an object nobody drains any more.
+	retired bool
+	revive  func(*Buffer) *Buffer
 }
 
 // NewBuffer reads any pending_input persisted on disk so we resume
@@ -46,6 +52,9 @@ func NewBuffer(layout config.Layout, sessionID string) (*Buffer, error) {
 // Append adds a new line and persists it to meta.PendingInput so a
 // crash before drain doesn't drop it.
 func (b *Buffer) Append(text string) error {
+	if live := b.live(); live != b {
+		return live.Append(text)
+	}
 	b.mu.Lock()
 	b.lines = append(b.lines, text)
 	snapshot := append([]string(nil), b.lines...)
@@ -58,6 +67,9 @@ func (b *Buffer) Append(text string) error {
 func (b *Buffer) Prepend(texts ...string) error {
 	if b == nil {
 		return errors.New("no buffer")
+	}
+	if live := b.live(); live != b {
+		return live.Prepend(texts...)
 	}
 	b.mu.Lock()
 	b.lines = append(append([]string(nil), texts...), b.lines...)
@@ -91,6 +103,51 @@ func (b *Buffer) Drain() (string, error) {
 		return combined, err
 	}
 	return combined, nil
+}
+
+// retireIfEmpty marks an empty buffer retired; false (kept) when it
+// holds messages. Caller holds the pool's mu.
+func (b *Buffer) retireIfEmpty() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.lines) > 0 {
+		return false
+	}
+	b.retired = true
+	return true
+}
+
+// live is the buffer a write goes to: b, unless the pool retired it.
+func (b *Buffer) live() *Buffer {
+	b.mu.Lock()
+	retired, revive := b.retired, b.revive
+	b.mu.Unlock()
+	if !retired || revive == nil {
+		return b
+	}
+	return revive(b)
+}
+
+// Lines returns a copy of what is buffered, without draining it.
+func (b *Buffer) Lines() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.lines...)
+}
+
+// DropHead removes text when it is the first buffered line — a failover
+// re-send its spawn never delivered. false = the head is something else
+// (already drained), nothing changed.
+func (b *Buffer) DropHead(text string) (bool, error) {
+	b.mu.Lock()
+	if len(b.lines) == 0 || b.lines[0] != text {
+		b.mu.Unlock()
+		return false, nil
+	}
+	b.lines = append([]string(nil), b.lines[1:]...)
+	snapshot := append([]string(nil), b.lines...)
+	b.mu.Unlock()
+	return true, b.persist(snapshot)
 }
 
 // Len reports the buffered line count without modifying state.

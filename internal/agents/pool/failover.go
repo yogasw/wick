@@ -42,6 +42,21 @@ type failoverRun struct {
 	mu     sync.Mutex
 	msgKey string
 	snap   provider.TurnSnapshot
+	// extra is what a hop re-sent behind its continue message: messages
+	// queued on the failed process and held meanwhile. A snapshot keeps
+	// only the run's first message, so the next hop re-sends these again.
+	extra []string
+}
+
+// resendMark is a failover re-send waiting for its spawn: the run it
+// carries on, where it came from (to go back to when the target cannot
+// start) and the wick text it put at the head of the buffer.
+type resendMark struct {
+	msgKey    string
+	from      string
+	fromModel string
+	target    string
+	cont      string
 }
 
 // failoverRunFor returns key's run memory, creating it.
@@ -222,8 +237,8 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 	}
 	l := log.With().Str("component", "pool").Str("session", req.SessionID).Str("agent", req.AgentName).Logger()
 
-	cur, ok := p.agentEntry(req.SessionID, req.AgentName)
-	if !ok {
+	sess, cur, ok := p.sessionAgent(req.SessionID, req.AgentName)
+	if !ok || skipsFailover(sess.Meta) {
 		return no
 	}
 	instances, err := provider.Load()
@@ -259,7 +274,7 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 		run.snap = run.snap.Combine(req.Snapshot)
 	} else {
 		run.msgKey = provider.FailoverMsgKey(req.Text, now.Format(time.RFC3339Nano))
-		run.snap = req.Snapshot
+		run.snap, run.extra = req.Snapshot, nil
 	}
 	st := cur.Failover.RunFor(run.msgKey, now)
 	t, ok := provider.PickTarget(provider.PickInput{
@@ -285,13 +300,14 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 	p.mu.Lock()
 	entry := p.active[key]
 	p.mu.Unlock()
-	job := failoverJob{req: req, from: failedKey, target: t, reason: reason, msgKey: run.msgKey, snap: run.snap, ctx: context.Background()}
+	job := failoverJob{req: req, from: failedKey, fromModel: cur.ModelID, target: t, reason: reason, msgKey: run.msgKey, snap: run.snap, extra: run.extra, ctx: context.Background()}
 	if entry != nil {
 		job.agent, job.store = entry.agent, entry.store
 		if entry.ctx != nil {
 			job.ctx = entry.ctx
 		}
 	}
+	p.failoverStage("deciding")
 	if !p.setFailingOver(key, job.agent) {
 		return no
 	}
@@ -310,16 +326,18 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 
 // failoverJob is one decided failover, handed to runFailover.
 type failoverJob struct {
-	req     provider.FailoverRequest
-	from    string
-	target  provider.Target
-	reason  string
-	msgKey  string
-	snap    provider.TurnSnapshot
-	ctx     context.Context
-	agent   *provider.Agent
-	store   *store.Store
-	pending []string
+	req       provider.FailoverRequest
+	from      string
+	fromModel string
+	target    provider.Target
+	reason    string
+	msgKey    string
+	snap      provider.TurnSnapshot
+	extra     []string
+	ctx       context.Context
+	agent     *provider.Agent
+	store     *store.Store
+	pending   []string
 }
 
 // runFailover carries a decided failover out: stop the old process
@@ -342,17 +360,23 @@ func (p *Pool) runFailover(j failoverJob) {
 		}
 		// Stop gives up waiting after a grace period; the exit hook may
 		// not have released the slot yet. Release it here — the late
-		// exit is recognised as retired and ignored.
+		// exit is recognised as retired and ignored, so the queue grant
+		// its exit hook would make happens here too.
 		p.mu.Lock()
 		e, ok := p.active[key]
 		stale := ok && e.agent == j.agent
 		p.mu.Unlock()
 		if stale {
 			p.releaseSlot(key)
+			p.tryGrantQueue()
 		}
+		// Written to the process after decideFailover took its queue:
+		// it never read them.
+		j.pending = append(j.pending, j.agent.TakePending()...)
 	}
 	p.failoverStage("stopped")
 	if p.failoverCanceled(key) {
+		p.requeueHeld(sid, j.pending)
 		p.endFailingOver(j.ctx, sid, name, false)
 		p.abortFailover(sid, name)
 		return
@@ -393,6 +417,9 @@ func (p *Pool) runFailover(j failoverJob) {
 	case err != nil:
 		l.Error().Err(err).Str("to", j.target.Instance).Msg("pool.failover: switch failed, the error stands")
 		p.abortFailover(sid, name, failedTurnError(j.req))
+		// Messages queued on the failed process go out with those held
+		// meanwhile, as they would have after the error.
+		p.requeueHeld(sid, j.pending)
 		p.endFailingOver(j.ctx, sid, name, true)
 		return
 	default:
@@ -400,27 +427,116 @@ func (p *Pool) runFailover(j failoverJob) {
 	}
 	p.failoverStage("switched")
 	if p.failoverCanceled(key) {
+		p.requeueHeld(sid, j.pending)
 		p.endFailingOver(j.ctx, sid, name, false)
 		p.abortFailover(sid, name)
 		return
 	}
+	// What follows the continue message: this hop's queue, after what an
+	// earlier hop of the run re-sent (its snapshot does not carry that).
+	extra := append(append([]string(nil), j.extra...), j.pending...)
 	p.foMu.Lock()
-	if p.foResendKey == nil {
-		p.foResendKey = map[string]string{}
+	if p.foResend == nil {
+		p.foResend = map[string]resendMark{}
 	}
-	p.foResendKey[key] = j.msgKey
+	p.foResend[key] = resendMark{msgKey: j.msgKey, from: j.from, fromModel: j.fromModel, target: normProviderKey(j.target.Instance), cont: cont}
 	p.foMu.Unlock()
+	if buf, err := p.bufferFor(sid); err == nil {
+		// Held messages go out behind it too: a further hop needs them.
+		extra = append(extra, buf.Lines()...)
+	}
+	p.foMu.Lock()
+	run := p.foRuns[key]
+	p.foMu.Unlock()
+	if run != nil {
+		run.mu.Lock()
+		if run.msgKey == j.msgKey {
+			run.extra = extra
+		}
+		run.mu.Unlock()
+	}
 	p.failoverStage("resending")
-	err = p.Resend(j.ctx, sid, name, append([]string{cont}, j.pending...)...)
+	err = p.Resend(j.ctx, sid, name, append(append([]string{cont}, j.extra...), j.pending...)...)
 	switch {
 	case errors.Is(err, errFailoverCanceled):
 		// Stopped by a person right before the re-send: end the turn.
+		p.takeResend(key)
+		p.requeueHeld(sid, j.pending)
 		p.abortFailover(sid, name)
 	case err != nil:
+		// A spawn that failed took the mark (and cleaned up after itself);
+		// an earlier failure left it.
+		p.takeResend(key)
 		l.Error().Err(err).Msg("pool.failover: re-send failed, the error stands")
 		p.endFailingOver(j.ctx, sid, name, false)
 		p.abortFailover(sid, name, failedTurnError(j.req))
 	}
+}
+
+// requeueHeld puts messages taken off a failed process back at the head
+// of the session's buffer when the failover does not re-send them: they
+// are a person's, already in conversation.jsonl, and go out with the next
+// spawn like anything else held.
+func (p *Pool) requeueHeld(sessionID string, texts []string) {
+	if len(texts) == 0 {
+		return
+	}
+	buf, err := p.bufferFor(sessionID)
+	if err == nil {
+		err = buf.Prepend(texts...)
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Int("messages", len(texts)).Msg("pool.failover: requeueing held messages failed")
+	}
+}
+
+// resendSpawnFailed cleans up after a failover re-send whose spawn on the
+// target failed: the continue message leaves the buffer (the turn's error
+// stands; replaying it with the next message would answer a stale turn).
+// When the provider itself failed to build or start (providerFault), the
+// target is also marked unavailable and the agent goes back to the
+// instance it failed over from — left on a target that cannot start,
+// every later message would fail the same way. Any other cause (the pool
+// closing, the session or its workspace failing to load) says nothing
+// about the target: the run ends and the agent stays where it is. Messages
+// of a person stay buffered for the next spawn.
+func (p *Pool) resendSpawnFailed(sessionID, agentName string, m resendMark, cause error, providerFault bool) {
+	l := log.With().Str("component", "pool").Str("session", sessionID).Str("agent", agentName).Logger()
+	if buf, err := p.bufferFor(sessionID); err == nil && m.cont != "" {
+		if _, err := buf.DropHead(m.cont); err != nil {
+			l.Warn().Err(err).Msg("pool.failover: dropping the continue message failed")
+		}
+	}
+	if !providerFault {
+		key := sessionKey(sessionID, agentName)
+		p.foMu.Lock()
+		delete(p.foRuns, key)
+		p.foMu.Unlock()
+		_ = session.EndFailoverRun(p.cfg.Layout, sessionID, agentName)
+		l.Info().Err(cause).Str("target", m.target).Msg("pool.failover: re-send not started, target left as is")
+		return
+	}
+	reason := "failed to start"
+	if cause != nil {
+		reason += ": " + cause.Error()
+	}
+	if ins, ok := instanceByTag(nil, m.target); ok {
+		provider.MarkInstanceUnhealthy(ins, provider.Health{Kind: event.ErrUnavailable, Reason: reason})
+	}
+	if m.from == "" {
+		return
+	}
+	_, err := provider.ApplySwitch(p.cfg.Layout, sessionID, agentName, m.from, provider.SwitchOptions{
+		Source:     "failover",
+		ModelID:    m.fromModel,
+		ReturnHome: true,
+		ExpectFrom: m.target,
+	})
+	if err != nil {
+		l.Warn().Err(err).Str("to", m.from).Msg("pool.failover: going back after a failed start")
+		return
+	}
+	l.Info().Str("from", m.target).Str("to", m.from).Msg("pool.failover: target failed to start, back where the turn failed")
 }
 
 // errFailoverCanceled is Resend's refusal when a person stopped the
@@ -447,6 +563,16 @@ func failedTurnError(req provider.FailoverRequest) event.AgentEvent {
 // on: evs (the original Error, when there is one) are recorded and
 // published, then the Done the old process's exit did not publish.
 func (p *Pool) abortFailover(sessionID, agentName string, evs ...event.AgentEvent) {
+	// The run is over: a later message starts its own, with nothing of
+	// this one's snapshot, tried set or re-send key.
+	key := sessionKey(sessionID, agentName)
+	p.foMu.Lock()
+	delete(p.foRuns, key)
+	delete(p.foResend, key)
+	p.foMu.Unlock()
+	_ = session.EndFailoverRun(p.cfg.Layout, sessionID, agentName)
+	// The old process's exit was retired and set no status: nothing runs.
+	_ = p.markStatus(sessionID, session.StatusIdle)
 	if len(evs) > 0 {
 		sto := store.New(store.Options{Layout: p.cfg.Layout, SessionID: sessionID, AgentName: agentName})
 		for _, ev := range evs {
@@ -501,13 +627,13 @@ func (p *Pool) Resend(ctx context.Context, sessionID, agentName string, texts ..
 	return p.spawnOrQueue(ctx, sessionID, agentName, "failover")
 }
 
-// takeResendKey hands a spawn the failover run it carries on (once).
-func (p *Pool) takeResendKey(key string) string {
+// takeResend hands a spawn the failover re-send it carries on (once).
+func (p *Pool) takeResend(key string) resendMark {
 	p.foMu.Lock()
 	defer p.foMu.Unlock()
-	k := p.foResendKey[key]
-	delete(p.foResendKey, key)
-	return k
+	m := p.foResend[key]
+	delete(p.foResend, key)
+	return m
 }
 
 // turnOK is provider.Options.OnTurnOK for an agent on instance tag: a
@@ -567,8 +693,8 @@ func (p *Pool) maybeReturnHome(sessionID, agentName string) bool {
 	if spawning || (alive && !entryIdle(entry)) {
 		return false
 	}
-	a, ok := p.agentEntry(sessionID, agentName)
-	if !ok || a.Failover == nil || a.Failover.HomeProvider == "" {
+	sess, a, ok := p.sessionAgent(sessionID, agentName)
+	if !ok || skipsFailover(sess.Meta) || a.Failover == nil || a.Failover.HomeProvider == "" {
 		return false
 	}
 	cur, home := normProviderKey(a.Provider), normProviderKey(a.Failover.HomeProvider)
@@ -662,7 +788,7 @@ func (p *Pool) maybeReturnHome(sessionID, agentName string) bool {
 		l.Info().Str("from", cur).Str("to", t.Instance).Bool("home", t.Home).Msg("pool.failover: back up the chain")
 		p.foMu.Lock()
 		delete(p.foRuns, key)
-		delete(p.foResendKey, key)
+		delete(p.foResend, key)
 		p.foMu.Unlock()
 	}
 	// Held messages stay buffered: the caller's own spawn drains them.
@@ -721,16 +847,37 @@ func healthyOrRefresh(key string, now time.Time) (bool, provider.Health) {
 
 // agentEntry reads one agent's entry from the session's agents.json.
 func (p *Pool) agentEntry(sessionID, agentName string) (session.AgentEntry, bool) {
+	_, a, ok := p.sessionAgent(sessionID, agentName)
+	return a, ok
+}
+
+// sessionAgent is agentEntry with the session it was read from.
+func (p *Pool) sessionAgent(sessionID, agentName string) (session.Session, session.AgentEntry, bool) {
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
-		return session.AgentEntry{}, false
+		return session.Session{}, session.AgentEntry{}, false
 	}
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
-			return a, true
+			return sess, a, true
 		}
 	}
-	return session.AgentEntry{}, false
+	return sess, session.AgentEntry{}, false
+}
+
+// failoverHook is the spawn's OnFailover: none for a session failover
+// leaves alone, so its turn errors reach the run as they are.
+func failoverHook(m session.Meta, decide func(provider.FailoverRequest) provider.FailoverVerdict) func(provider.FailoverRequest) provider.FailoverVerdict {
+	if skipsFailover(m) {
+		return nil
+	}
+	return decide
+}
+
+// skipsFailover: sessions failover leaves alone. A workflow run picks its
+// provider per node and reports a failed turn to the run; it never moves.
+func skipsFailover(m session.Meta) bool {
+	return m.Origin == session.OriginWorkflow
 }
 
 // normProviderKey is the "type/name" form of a provider key; a bare type

@@ -268,6 +268,7 @@ func SetModelIDIfEmpty(layout config.Layout, id, name, modelID string) error {
 			return false
 		}
 		a.ModelID = modelID
+		a.syncHomeModel()
 		return true
 	})
 }
@@ -315,8 +316,19 @@ func SetModelID(layout config.Layout, id, name, modelID string) error {
 	}
 	return updateAgent(layout, id, name, newIdleAgent, func(a *AgentEntry) bool {
 		a.ModelID = modelID
+		a.syncHomeModel()
 		return true
 	})
+}
+
+// syncHomeModel keeps the home's model in step with a pin set while the
+// agent is on its home: callers set the provider first (which records the
+// home with the pin it had then) and the model after. A pin set on a
+// stand-in is the stand-in's and leaves the home alone.
+func (a *AgentEntry) syncHomeModel() {
+	if a.Failover != nil && a.Failover.HomeProvider != "" && a.Failover.HomeProvider == a.Provider {
+		a.Failover.HomeModelID = a.ModelID
+	}
 }
 
 // newIdleAgent is the entry the creating setters add for an unknown name.

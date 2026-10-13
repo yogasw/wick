@@ -137,7 +137,13 @@ func (h Health) EffectiveUntil() time.Time {
 	if every <= 0 {
 		every = time.Duration(DefaultFailoverRecheckMinutes) * time.Minute
 	}
-	return h.Since.Add(every)
+	// From the latest failure, not the first: an account that keeps
+	// failing stays out until one interval passes without a failure.
+	last := h.failedAt()
+	if h.Since.After(last) {
+		last = h.Since
+	}
+	return last.Add(every)
 }
 
 // healthDir is where health.json lives; "" keeps the registry in memory

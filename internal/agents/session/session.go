@@ -41,6 +41,9 @@ const (
 	// project-scoped fire. Distinct so cleanup can tell disposable
 	// scheduler output from a conversation someone started.
 	OriginSchedule Origin = "schedule"
+	// OriginWorkflow marks a session a workflow run created for its agent
+	// nodes. Provider failover leaves these alone.
+	OriginWorkflow Origin = "workflow"
 )
 
 // Status is the high-level pool view: idle (no subprocess), queued

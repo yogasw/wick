@@ -199,8 +199,21 @@ func writeFileAtomic(path string, b []byte) {
 	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
 		return
 	}
+	// Synced before the rename: after a power loss the file is the old
+	// one or the new one, never empty.
 	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return
+	}
+	_, err = f.Write(b)
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
 		_ = os.Rename(tmp, path)
 	}
 }

@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/yogasw/wick/internal/agents/event"
 	"io"
 	"strings"
@@ -47,6 +48,8 @@ type turnSpawner struct {
 	turns  map[string][][]string
 	got    map[string][]string
 	spawns map[string]int
+	// failStart: instances whose spawn fails, as a missing binary would.
+	failStart map[string]bool
 }
 
 func (s *turnSpawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
@@ -56,7 +59,11 @@ func (s *turnSpawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (pro
 	}
 	s.mu.Lock()
 	s.spawns[name]++
+	fail := s.failStart[name]
 	s.mu.Unlock()
+	if fail {
+		return nil, errors.New("binary not found")
+	}
 	pr, pw := io.Pipe()
 	return &turnProc{s: s, name: name, r: pr, w: pw, done: make(chan struct{})}, nil
 }

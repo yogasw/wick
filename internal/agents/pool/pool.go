@@ -113,15 +113,15 @@ type Pool struct {
 	// foRuns the pool's memory of each one's failover run.
 	// foCancel marks a failover a person stopped (Kill) before its
 	// re-send, foRetired the process each failover stopped until its exit
-	// arrives, foResendKey the run a pending re-send spawn carries on.
+	// arrives, foResend the run a pending re-send spawn carries on.
 	// foStage is a test seam (nil in production).
-	foMu        sync.Mutex
-	foActive    map[string]bool
-	foRuns      map[string]*failoverRun
-	foCancel    map[string]bool
-	foRetired   map[string]*provider.Agent
-	foResendKey map[string]string
-	foStage     func(stage string)
+	foMu      sync.Mutex
+	foActive  map[string]bool
+	foRuns    map[string]*failoverRun
+	foCancel  map[string]bool
+	foRetired map[string]*provider.Agent
+	foResend  map[string]resendMark
+	foStage   func(stage string)
 }
 
 // PoolConfig knobs.
@@ -1244,7 +1244,23 @@ func composeSystemAddon(layout config.Layout, sess session.Session) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) error {
+func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (retErr error) {
+	// A failover re-send this spawn delivers. Taken first, so a spawn that
+	// fails at any step consumes it: the next message must not inherit the
+	// run. startErr is a failure reported in-band (failSpawn, nil return).
+	// providerFault tells the provider failing to build or start apart from
+	// the pool, the session or the host failing around it: only the former
+	// says anything about the target instance.
+	resend := p.takeResend(sessionKey(sessionID, agentName))
+	var startErr error
+	providerFault := false
+	if resend.msgKey != "" {
+		defer func() {
+			if cause := errors.Join(retErr, startErr); cause != nil {
+				p.resendSpawnFailed(sessionID, agentName, resend, cause, providerFault)
+			}
+		}()
+	}
 	// Whose turn caused this process to exist. Baked into the MCP credential
 	// below, and remembered on the entry so a later message from someone else
 	// can be told apart.
@@ -1394,13 +1410,14 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		MaxTurns:       maxTurns,
 		ThinkingTokens: thinkingTokens,
 		ModelID:        modelID,
-		OnFailover:     p.decideFailover,
-		FailoverMsgKey: p.takeResendKey(sessionKey(sessionID, agentName)),
+		OnFailover:     failoverHook(sess.Meta, p.decideFailover),
+		FailoverMsgKey: resend.msgKey,
 		OnTurnOK: func(sentAt time.Time) {
 			p.turnOK(sessionID, agentName, pType+"/"+pName, sentAt)
 		},
 	})
 	if err != nil {
+		providerFault = true
 		return err
 	}
 	a, st, sto := br.Agent, br.State, br.Store
@@ -1503,6 +1520,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// too would make /send return 500 and pop a toast — a double report the
 		// caller should not see. The Send "succeeds"; the session is already
 		// back to idle.
+		startErr = err
+		providerFault = true
 		p.failSpawn(ctx, key, sessionID, agentName, pType, pName, st, sto, err)
 		return nil
 	}
@@ -1553,6 +1572,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			// sat "running" with no process and the error only reached the
 			// HTTP caller, which the new-session composer swallowed.
 			l.Error().Err(err).Msg("pool.spawn: first send failed")
+			startErr = err
+			providerFault = true
 			p.failSpawn(ctx, key, sessionID, agentName, pType, pName, st, sto, err)
 			return nil
 		}
@@ -1722,7 +1743,7 @@ func (p *Pool) notifyUserMessage(sessionID, agentName, source, text string, send
 func (p *Pool) releaseSlot(key string) {
 	p.mu.Lock()
 	if e, ok := p.active[key]; ok {
-		delete(p.buffers, e.sessID)
+		p.dropBufferLocked(e.sessID)
 	}
 	delete(p.active, key)
 	p.mu.Unlock()
@@ -1734,7 +1755,7 @@ func (p *Pool) releaseSlot(key string) {
 func (p *Pool) releaseSlotIf(key string, agent *provider.Agent) {
 	p.mu.Lock()
 	if e, ok := p.active[key]; ok && e.agent == agent {
-		delete(p.buffers, e.sessID)
+		p.dropBufferLocked(e.sessID)
 		delete(p.active, key)
 	}
 	p.mu.Unlock()
@@ -1865,6 +1886,33 @@ func (p *Pool) endSpawn(key, sessionID string) {
 	}
 }
 
+// dropBufferLocked forgets sessionID's buffer when it is empty. One that
+// still holds messages stays: they were sent meanwhile (held during a
+// failover or a return, or buffered for a spawn) and the next spawn
+// drains them from memory — re-reading PendingInput from meta.json is
+// not safe, as another meta writer may have rewritten it since. Caller
+// holds p.mu.
+func (p *Pool) dropBufferLocked(sessionID string) {
+	if b, ok := p.buffers[sessionID]; ok && b.retireIfEmpty() {
+		delete(p.buffers, sessionID)
+	}
+}
+
+// reviveBuffer is a retired buffer's way back: the session's live buffer
+// when there is one, else old itself, registered again.
+func (p *Pool) reviveBuffer(sessionID string, old *Buffer) *Buffer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cur, ok := p.buffers[sessionID]; ok {
+		return cur
+	}
+	old.mu.Lock()
+	old.retired = false
+	old.mu.Unlock()
+	p.buffers[sessionID] = old
+	return old
+}
+
 // bufferFor returns or lazy-creates the per-session Buffer.
 func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 	p.mu.Lock()
@@ -1877,6 +1925,7 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 	if err != nil {
 		return nil, err
 	}
+	buf.revive = func(old *Buffer) *Buffer { return p.reviveBuffer(sessionID, old) }
 	p.mu.Lock()
 	if existing, ok := p.buffers[sessionID]; ok {
 		// Race: another caller created one. Use theirs.

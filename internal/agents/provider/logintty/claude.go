@@ -207,12 +207,14 @@ func claudeAccountEmail(dir string) string {
 // Email first — it survives a token refresh, so the key stays stable
 // across the day. Then a hash of the access token: an identical token
 // is literally the same upstream subject (a copied credential dir).
-// Only the hash is kept, never the token itself. Not logged in yet ->
+// Only hashes are kept, never the email or the token: the key is
+// written to health.json and the usage files. Not logged in yet ->
 // the dir, which can split but can never merge two accounts.
 func claudeUsageIdentity(env []string) string {
 	dir := claudeConfigDir(env)
 	if email := claudeAccountEmail(dir); email != "" {
-		return "claude:email:" + strings.ToLower(email)
+		sum := sha256.Sum256([]byte(strings.ToLower(email)))
+		return "claude:email:" + hex.EncodeToString(sum[:8])
 	}
 	if token, err := claudeAccessToken(dir); err == nil {
 		sum := sha256.Sum256([]byte(token))

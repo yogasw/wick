@@ -159,9 +159,10 @@ func TestUsageIdentityMergesSameAccount(t *testing.T) {
 	if ida != idb {
 		t.Errorf("identities differ for one account: %q vs %q", ida, idb)
 	}
-	// Case-folded, so a differently-cased email is still one account.
-	if ida != "claude:email:dev@abc.com" {
-		t.Errorf("identity = %q", ida)
+	// Case-folded, so a differently-cased email is still one account;
+	// hashed, so the address never reaches health.json or a usage file.
+	if !strings.HasPrefix(ida, "claude:email:") || strings.Contains(strings.ToLower(ida), "abc.com") {
+		t.Errorf("identity = %q, want a hashed email key", ida)
 	}
 }
 
