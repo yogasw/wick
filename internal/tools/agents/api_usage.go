@@ -124,18 +124,10 @@ type SessionContextDTO struct {
 	// Providers lists every provider this session used, newest reading
 	// first for the active one.
 	Providers []SessionContextProviderDTO `json:"providers"`
-	// Trend is the recent per-turn context level for the active provider,
-	// oldest first — the rise and fall the ring alone cannot show.
-	Trend []int `json:"trend,omitempty"`
-	// TrendAt timestamps those points, same order and length. A hovered
-	// point has to be able to say WHEN it was: "88k at turn 24" is only
-	// half an answer when the question is what made the window jump.
-	TrendAt []string `json:"trend_at,omitempty"`
-	// TrendSpent is the CUMULATIVE tokens this provider had spent by each
-	// of those points. The level says how full the window was; this says
-	// what it had cost to get there, which is the other half of every
-	// question asked about a step in the curve.
-	TrendSpent []int `json:"trend_spent,omitempty"`
+	// The active provider's trail, flattened into the top level for the
+	// sparkline: trend, trend_at, trend_spent and the rest. Every
+	// provider's own trail is on its row in Providers.
+	ContextSeriesDTO
 	// CanCompact reports whether /compact does anything on this
 	// session's provider. False for codex, whose exec mode has no slash
 	// commands at all — the panel must not offer a button that would
@@ -160,11 +152,45 @@ type SessionContextProviderDTO struct {
 	Turns    int                `json:"turns"`
 	Totals   usagereport.Totals `json:"totals"`
 	LastAt   string             `json:"last_at,omitempty"`
+	// This provider's own trail, so a session that switched providers
+	// can be drawn as one curve, merged in time order.
+	ContextSeriesDTO
+}
+
+// ContextSeriesDTO is one provider's per-turn trail as the panel draws
+// it. Every slice has one entry per point, oldest first; a level-only
+// point (a turn that ended without usage, a compaction) has null in
+// trend_turn, trend_sent and trend_cost.
+type ContextSeriesDTO struct {
+	// Trend is the per-turn context level — the rise and fall the ring
+	// alone cannot show.
+	Trend []int `json:"trend,omitempty"`
+	// TrendAt timestamps those points. A hovered point has to be able
+	// to say WHEN it was: "88k at turn 24" is only half an answer when
+	// the question is what made the window jump.
+	TrendAt []string `json:"trend_at,omitempty"`
+	// TrendSpent is the CUMULATIVE tokens this provider had spent by each
+	// of those points. The level says how full the window was; this says
+	// what it had cost to get there, which is the other half of every
+	// question asked about a step in the curve.
+	TrendSpent []int `json:"trend_spent,omitempty"`
+	// TrendTurn is the provider's real turn number of each point, counted
+	// back from its turn total — so it stays right after the stored trail
+	// was capped, instead of restarting at 1.
+	TrendTurn []*int `json:"trend_turn,omitempty"`
+	// TrendSent / TrendCost are what each turn itself put on the wire
+	// and cost.
+	TrendSent []*int     `json:"trend_sent,omitempty"`
+	TrendCost []*float64 `json:"trend_cost,omitempty"`
+	// TrendTotal is how many points are stored, whatever was returned:
+	// the trail is capped at store.UsageSeriesMax.
+	TrendTotal int `json:"trend_total,omitempty"`
 }
 
 // contextTrendMax caps the trend the API returns. The composer draws a
 // sparkline, not a chart — more points would be invisible and would make
-// a frequently-polled endpoint fat for nothing.
+// a frequently-polled endpoint fat for nothing. ?trend=all lifts it for
+// the panel's "All" range.
 const contextTrendMax = 40
 
 // apiSessionContext serves GET /api/sessions/{id}/context.
@@ -190,6 +216,21 @@ func apiSessionContext(c *tool.Ctx) {
 		return
 	}
 
+	limit := contextTrendMax
+	if c.Query("trend") == "all" {
+		limit = 0
+	}
+	out := sessionContextOf(id, su, limit)
+	out.CanCompact = provider.CanCompact(provider.Type(contextProviderType(sess, out.Provider)))
+	if !out.CanCompact {
+		out.CompactNote = provider.CompactUnsupportedNote
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// sessionContextOf builds the panel's answer from the ledger, every
+// provider's trail cut to the last limit points (0 = all of them).
+func sessionContextOf(id string, su *store.SessionUsage, limit int) SessionContextDTO {
 	out := SessionContextDTO{SessionID: id, Turns: su.Turns, Totals: usagereport.TotalsOf(su.Totals)}
 	// The active provider is the one that answered most recently — not
 	// the session's configured provider, which may have been switched a
@@ -197,6 +238,9 @@ func apiSessionContext(c *tool.Ctx) {
 	// window that actually exists.
 	active := activeContextProvider(su.Providers)
 	for name, p := range su.Providers {
+		if p == nil {
+			continue
+		}
 		row := SessionContextProviderDTO{
 			Provider: name,
 			Model:    p.Model,
@@ -209,27 +253,89 @@ func apiSessionContext(c *tool.Ctx) {
 		if !p.LastAt.IsZero() {
 			row.LastAt = p.LastAt.UTC().Format(time.RFC3339)
 		}
+		row.ContextSeriesDTO = seriesOf(p, row.Totals.Total, limit)
 		out.Providers = append(out.Providers, row)
 		if name == active {
 			out.Provider, out.Model = name, p.Model
 			out.Used, out.Window = p.ContextUsed, p.ContextWindow
 			out.AutoCompact = p.AutoCompact
 			out.Pct = row.Pct
-			out.Trend, out.TrendAt = trendOf(p.Series)
-			// The spend behind each point. Built here and not inside
-			// trendOf because it needs the provider's exact total to
-			// anchor against — and it was written, tested, and then
-			// never called, which is why hovering a point reported
-			// "total 0" for every point on every session.
-			out.TrendSpent = trendSpentOf(p.Series, row.Totals.Total)
+			out.ContextSeriesDTO = row.ContextSeriesDTO
 		}
 	}
 	sortContextProviders(out.Providers, out.Provider)
-	out.CanCompact = provider.CanCompact(provider.Type(contextProviderType(sess, out.Provider)))
-	if !out.CanCompact {
-		out.CompactNote = provider.CompactUnsupportedNote
+	return out
+}
+
+// seriesOf is one provider's trail, the last limit points (0 = all).
+func seriesOf(p *store.ProviderUsage, total, limit int) ContextSeriesDTO {
+	start := trendStart(len(p.Series), limit)
+	out := ContextSeriesDTO{TrendTotal: len(p.Series)}
+	out.Trend, out.TrendAt = trendOf(p.Series, start)
+	// The spend behind each point. It needs the provider's exact total
+	// to anchor against — hovering a point once reported "total 0" for
+	// every point on every session because this was never called.
+	out.TrendSpent = trendSpentOf(p.Series, total, start)
+	out.TrendTurn = trendTurnOf(p.Series, p.Turns, start)
+	out.TrendSent, out.TrendCost = trendSendOf(p.Series, start)
+	return out
+}
+
+// trendStart is the index of the first point returned out of n stored.
+func trendStart(n, limit int) int {
+	if limit > 0 && n > limit {
+		return n - limit
 	}
-	c.JSON(http.StatusOK, out)
+	return 0
+}
+
+// levelOnly reports a point that records a level and nothing else: a
+// turn that ended without usage, or a compaction. Turn points always
+// carry a model (UnknownModel when the vendor named none); points older
+// than that field still carry their flows.
+func levelOnly(pt store.UsagePoint) bool {
+	return pt.Model == "" && pointTokens(pt) == 0 && pt.CostUSD == 0
+}
+
+// trendTurnOf numbers each point with the provider's real turn, counted
+// back from its turn total: the trail is capped, so counting forward
+// from the first surviving point would restart at 1. Level-only points
+// get nil and do not take a number.
+func trendTurnOf(series []store.UsagePoint, turns, start int) []*int {
+	if len(series) == 0 {
+		return nil
+	}
+	out := make([]*int, len(series)-start)
+	turn := turns
+	for i := len(series) - 1; i >= start; i-- {
+		if levelOnly(series[i]) {
+			continue
+		}
+		if turn > 0 {
+			n := turn
+			out[i-start] = &n
+		}
+		turn--
+	}
+	return out
+}
+
+// trendSendOf returns what each turn sent and cost; nil for a level-only
+// point, which spent nothing it could report.
+func trendSendOf(series []store.UsagePoint, start int) ([]*int, []*float64) {
+	if len(series) == 0 {
+		return nil, nil
+	}
+	sent := make([]*int, len(series)-start)
+	cost := make([]*float64, len(series)-start)
+	for i, pt := range series[start:] {
+		if levelOnly(pt) {
+			continue
+		}
+		n, c := pointTokens(pt), pt.CostUSD
+		sent[i], cost[i] = &n, &c
+	}
+	return sent, cost
 }
 
 // activeContextProvider names the provider whose window the meter shows.
@@ -292,13 +398,9 @@ func pctOf(used, window int) float64 {
 // trendOf returns the recent levels and when each was recorded. Both,
 // because a hovered point that cannot say WHEN it was only answers half
 // the question the curve raises.
-func trendOf(series []store.UsagePoint) ([]int, []string) {
+func trendOf(series []store.UsagePoint, start int) ([]int, []string) {
 	if len(series) == 0 {
 		return nil, nil
-	}
-	start := 0
-	if len(series) > contextTrendMax {
-		start = len(series) - contextTrendMax
 	}
 	levels := make([]int, 0, len(series)-start)
 	at := make([]string, 0, len(series)-start)
@@ -327,13 +429,9 @@ func pointTokens(pt store.UsagePoint) int {
 // the history that fell off the end. Subtracting from a known total
 // keeps the newest points right — and the newest points are the ones
 // somebody is pointing at.
-func trendSpentOf(series []store.UsagePoint, total int) []int {
+func trendSpentOf(series []store.UsagePoint, total, start int) []int {
 	if len(series) == 0 {
 		return nil
-	}
-	start := 0
-	if len(series) > contextTrendMax {
-		start = len(series) - contextTrendMax
 	}
 	out := make([]int, len(series)-start)
 	after := 0
