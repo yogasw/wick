@@ -13,7 +13,45 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
+
+// linkRoot is the only tree a symlinked repo may live in (wick's projects
+// dir). Empty means symlinks are never followed.
+var linkRoot atomic.Value // string
+
+// SetLinkRoot allows a symlink inside a session cwd to stand in for a repo
+// that lives under dir. Pass "" to turn it off.
+func SetLinkRoot(dir string) {
+	if dir != "" {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = r
+		}
+	}
+	linkRoot.Store(dir)
+}
+
+// LinkedRepoTarget reports where symlink p really points when it is a link
+// to a git repo ROOT inside the link root. Anything else (a plain folder, a
+// repo elsewhere on the host, a broken link) is not linked: the session
+// boundary stays as strict as before for those.
+func LinkedRepoTarget(p string) (string, bool) {
+	root, _ := linkRoot.Load().(string)
+	if root == "" {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", false
+	}
+	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+		return "", false
+	}
+	if !strings.HasPrefix(real, root+string(filepath.Separator)) || !isRepoRoot(real) {
+		return "", false
+	}
+	return real, true
+}
 
 // maxScanDepth bounds how deep DiscoverRepos descends below the root.
 // Cloned repos normally sit one or two levels under the session cwd;
@@ -82,6 +120,22 @@ func DiscoverRepos(root string) ([]Repo, error) {
 			// Unreadable dir — skip it, keep walking the rest.
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			// A link to a repo is listed but never descended into, so a
+			// link loop cannot make the walk endless.
+			if _, ok := LinkedRepoTarget(p); ok && strings.Count(filepath.ToSlash(p), "/")-rootDepth <= maxScanDepth {
+				for len(enclosing) > 0 && !strings.HasPrefix(p, enclosing[len(enclosing)-1]+string(filepath.Separator)) {
+					enclosing = enclosing[:len(enclosing)-1]
+				}
+				rel := relSlash(abs, p)
+				name := filepath.Base(p)
+				if len(enclosing) > 0 {
+					name = rel
+				}
+				repos = append(repos, Repo{Rel: rel, Name: name})
 			}
 			return nil
 		}

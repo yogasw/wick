@@ -1,6 +1,12 @@
 package agents
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/yogasw/wick/internal/agents/scm"
+)
 
 func TestArtifactServeContentType(t *testing.T) {
 	if ct, inline := artifactServeContentType("a.png"); !inline || ct != "image/png" {
@@ -44,5 +50,42 @@ func TestScoreFilePath(t *testing.T) {
 	long, _ := scoreFilePath("a/deep/util.go", []string{"util"})
 	if !(short < long) {
 		t.Errorf("shorter path should rank better: short=%d long=%d", short, long)
+	}
+}
+
+// A link to a repo root in the projects dir is readable through safeJoin; a
+// link to anything else outside base is still refused.
+func TestSafeJoinLinkedRepo(t *testing.T) {
+	base := t.TempDir()
+	projects := filepath.Join(base, "projects")
+	cwd := filepath.Join(projects, "a", "files")
+	repo := filepath.Join(projects, "b", "files", "tool")
+	plain := filepath.Join(projects, "b", "files", "plain")
+	outside := filepath.Join(base, "elsewhere", "repo")
+	for _, d := range []string{cwd, filepath.Join(repo, ".git"), plain, filepath.Join(outside, ".git")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{"tool": repo, "plain": plain, "out": outside} {
+		if err := os.Symlink(target, filepath.Join(cwd, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scm.SetLinkRoot(projects)
+	t.Cleanup(func() { scm.SetLinkRoot("") })
+
+	realRepo, _ := filepath.EvalSymlinks(repo)
+	if got, err := safeJoin(cwd, "tool/.git"); err != nil || got != filepath.Join(realRepo, ".git") {
+		t.Fatalf("linked repo: got %q err=%v", got, err)
+	}
+	for _, rel := range []string{"plain", "out", "out/.git", "tool/../plain"} {
+		if _, err := safeJoin(cwd, rel); err == nil {
+			t.Fatalf("%s must stay refused", rel)
+		}
+	}
+	scm.SetLinkRoot("")
+	if _, err := safeJoin(cwd, "tool"); err == nil {
+		t.Fatal("feature off: link must be refused")
 	}
 }

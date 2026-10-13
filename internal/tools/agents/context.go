@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -91,9 +92,34 @@ func safeJoin(base, rel string) (string, error) {
 	}
 	sep := string(filepath.Separator)
 	if absFull != absBase && !strings.HasPrefix(absFull, absBase+sep) {
+		if linkedRepoContains(absBase, clean, absFull) {
+			return absFull, nil
+		}
 		return "", fmt.Errorf("path escapes session cwd")
 	}
 	return absFull, nil
+}
+
+// linkedRepoContains reports whether full, which resolved outside base, sits
+// inside a repo that a symlink under base points to (scm.LinkedRepoTarget:
+// a link to a repo root within wick's projects dir). It is the one
+// exception to the symlink rule: every other link out of base still fails.
+func linkedRepoContains(base, rel, full string) bool {
+	sep := string(filepath.Separator)
+	cur := base
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		cur = filepath.Join(cur, seg)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return false
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, ok := scm.LinkedRepoTarget(cur)
+		return ok && (full == target || strings.HasPrefix(full, target+sep))
+	}
+	return false
 }
 
 type contextFileEntry struct {

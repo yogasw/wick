@@ -468,6 +468,9 @@ func addRecursive(w *fsnotify.Watcher, root, rel string, b *watchBudget, l *zero
 		return
 	}
 	dir := watchDirFor(root, rel)
+	if real, ok := scm.LinkedRepoTarget(dir); ok {
+		dir = real // WalkDir does not follow a root that is itself a link
+	}
 	before := b.used
 	room := true
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {

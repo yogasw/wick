@@ -34,6 +34,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/schedule"
+	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
@@ -120,6 +121,8 @@ func SetBroadcaster(b *Broadcaster) { globalBcast = b }
 // it the store stays memory-only and a toggle dies with the engine goroutine.
 func SetLayout(l agentconfig.Layout) {
 	globalLayout = l
+	// A session may link a repo from a sibling project (see scm.LinkedRepoTarget).
+	scm.SetLinkRoot(l.ProjectsDir())
 	sessionoverride.SetSessionDirResolver(func(sessionID string) string {
 		if sessionID == "" || l == (agentconfig.Layout{}) {
 			return ""
