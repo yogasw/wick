@@ -3383,6 +3383,7 @@
             usageRefreshing={usageRechecking}
             usageRecheckWait={usageRecheckWait}
             onOpenUsage={openUsageFromContext}
+            loadSeries={(q) => fetchSessionContext(base, sessionId, q)}
           />
           {#if readOnly}
             <p class="mb-2 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" data-testid="read-only-chat">

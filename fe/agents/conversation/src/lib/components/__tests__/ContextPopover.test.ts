@@ -57,13 +57,15 @@ describe("ContextPopover", () => {
 
   it("shows what the whole session sent, next to the fill level", () => {
     // 206,510 total against a 210,886 fill: the two numbers answer
-    // different questions and the panel has to carry both. The tile is
-    // the one people mean by "how much has this session used".
+    // different questions. The spend is split into Fresh (input + cache
+    // write + output) and Cache read, with dollars as the headline.
     render(ContextPopover, { props: { ...base, data: ctx() } });
     const tile = screen.getByTestId("session-tokens");
-    expect(tile.textContent?.trim()).toBe("207k");
-    expect(tile.getAttribute("title")).toMatch(/206,510 tokens this session/);
-    expect(screen.getByText(/92% hit/)).toBeTruthy();
+    expect(tile.textContent?.trim()).toBe("17k");
+    expect(tile.getAttribute("title")).toMatch(/206,510 tokens in total/);
+    expect(screen.getByTestId("session-cache-read").textContent?.trim()).toBe("190k");
+    expect(screen.getByTestId("session-spent").textContent?.trim()).toBe("$0.27");
+    expect(screen.getByText(/92% cache hit/)).toBeTruthy();
   });
 
   it("offers no Compact button on a provider that cannot compact", () => {
@@ -157,6 +159,24 @@ describe("ContextPopover", () => {
     });
     render(ContextPopover, { props: { ...base, data } });
     expect(screen.getByText("codex/gpt")).toBeTruthy();
+    // Several providers: one Session total row under them.
+    expect(screen.getByTestId("context-session-total").textContent).toContain("Session total");
+  });
+
+  it("shows the active provider's turns in the headline, not the session's", () => {
+    const data = ctx({
+      turns: 15,
+      providers: [
+        { provider: "claude/opus", used: 1, window: 1_000_000, pct: 0, turns: 12, totals: { ...TOTALS, cost_usd: 5 } },
+        { provider: "codex/gpt", used: 1, window: 0, pct: 0, turns: 3, totals: { ...TOTALS, cost_usd: 1 } },
+      ],
+      totals: { ...TOTALS, cost_usd: 6 },
+    });
+    render(ContextPopover, { props: { ...base, data } });
+    expect(screen.getByTestId("session-spent").textContent?.trim()).toBe("$5.00");
+    const total = screen.getByTestId("context-session-total").textContent ?? "";
+    expect(total).toContain("15");
+    expect(total).toContain("$6.00");
   });
 });
 
@@ -178,16 +198,16 @@ describe("ContextPopover sparkline", () => {
         }),
       },
     });
-    const svg = screen.getByTestId("context-spark");
+    const svg = screen.getByTestId("context-chart");
     widen(svg);
     // Idle, the readout already describes the NEWEST turn — the one
     // anybody would hover first — rather than printing a label.
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 3/3");
+    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 12");
 
     // Far right of the curve = the newest turn.
     await fireEvent.mouseMove(svg, { clientX: 200 });
     const readout = screen.getByTestId("context-spark-readout");
-    expect(readout.textContent).toContain("turn 3/3");
+    expect(readout.textContent).toContain("turn 12");
     expect(readout.textContent).toContain("211k");
     // And the share of the window, which is the reason a step matters.
     expect(readout.textContent).toContain("21%");
@@ -195,25 +215,24 @@ describe("ContextPopover sparkline", () => {
 
   it("goes back to the summary when the cursor leaves", async () => {
     render(ContextPopover, { props: { ...base, data: ctx() } });
-    const svg = screen.getByTestId("context-spark");
+    const svg = screen.getByTestId("context-chart");
     widen(svg);
     await fireEvent.mouseMove(svg, { clientX: 0 });
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 1/3");
+    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 10");
     await fireEvent.mouseLeave(svg);
     // Back to the newest turn, and the invitation to hover another.
     const back = screen.getByTestId("context-spark-readout").textContent ?? "";
-    expect(back).toContain("turn 3/3");
-    expect(back).toMatch(/hover the curve/i);
+    expect(back).toContain("turn 12");
   });
 
   /* An older server sends no timestamps. The curve still has to work —
      degrading to "no clock" is fine, breaking is not. */
   it("works without timestamps", async () => {
     render(ContextPopover, { props: { ...base, data: ctx({ trend_at: undefined }) } });
-    const svg = screen.getByTestId("context-spark");
+    const svg = screen.getByTestId("context-chart");
     widen(svg);
     await fireEvent.mouseMove(svg, { clientX: 100 });
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 2/3");
+    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 11");
   });
 });
 
@@ -238,15 +257,15 @@ describe("ContextPopover sparkline deltas", () => {
         }),
       },
     });
-    const svg = screen.getByTestId("context-spark");
+    const svg = screen.getByTestId("context-chart");
     widen(svg);
     await fireEvent.mouseMove(svg, { clientX: 200 });
 
     const readout = screen.getByTestId("context-spark-readout").textContent ?? "";
-    expect(readout).toContain("turn 3/3");
+    expect(readout).toContain("turn 12");
     expect(readout).toContain("+280k"); // 400k - 120k: the drastic rise
-    expect(readout).toContain("258.00M"); // what that one turn put on the wire
-    expect(readout).toContain("270.00M"); // spent by then, in total
+    expect(readout).toContain("this turn 258M sent"); // what that one turn put on the wire
+    expect(readout).toContain("270M spent so far"); // spent by then, in total
   });
 
   /* The first point has no "before". A delta measured from nothing is
@@ -255,11 +274,11 @@ describe("ContextPopover sparkline deltas", () => {
     render(ContextPopover, {
       props: { ...base, data: ctx({ trend: [100_000, 120_000], trend_spent: [1_000, 2_000] }) },
     });
-    const svg = screen.getByTestId("context-spark");
+    const svg = screen.getByTestId("context-chart");
     widen(svg);
     await fireEvent.mouseMove(svg, { clientX: 0 });
     const readout = screen.getByTestId("context-spark-readout").textContent ?? "";
-    expect(readout).toContain("turn 1/2");
+    expect(readout).toContain("turn 11");
     expect(readout).not.toContain("+");
     expect(readout).not.toContain("turn ini");
   });
@@ -268,10 +287,10 @@ describe("ContextPopover sparkline deltas", () => {
      working, just without the spend line. */
   it("degrades without trend_spent", async () => {
     render(ContextPopover, { props: { ...base, data: ctx({ trend_spent: undefined }) } });
-    const svg = screen.getByTestId("context-spark");
+    const svg = screen.getByTestId("context-chart");
     widen(svg);
     await fireEvent.mouseMove(svg, { clientX: 200 });
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 3/3");
+    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 12");
   });
 });
 
@@ -386,7 +405,7 @@ describe("ContextPopover — live level", () => {
 describe("ContextPopover — the hover readout holds its height", () => {
   const props = {
     open: true,
-    data: ctx(),
+    data: ctx({ trend_spent: [1_000, 2_000, 3_000] }),
     loading: false,
     error: "",
     onRefresh: vi.fn(),
@@ -402,7 +421,7 @@ describe("ContextPopover — the hover readout holds its height", () => {
     // Both lines carry something. Reserving room for a line that then
     // renders blank trades one ugliness for another.
     expect(readout.querySelector("span.block")?.textContent?.trim()).toBeTruthy();
-    expect(readout.textContent).toMatch(/total/i);
+    expect(readout.textContent).toMatch(/spent so far/i);
   });
 
   it("shows the account quota in one line and jumps to /usage", async () => {
@@ -445,5 +464,130 @@ describe("ContextPopover — the hover readout holds its height", () => {
     unmount();
     render(ContextPopover, { props: { ...base, data: ctx({ provider: "oc", auto_compact: true }) } });
     expect(screen.getByTestId("auto-compact-note").textContent).toMatch(/auto-compact is on at oc/);
+  });
+});
+
+/* P63: real turn numbers, Last 40 | All, the Usage view and drag-select. */
+describe("ContextPopover — chart", () => {
+  const AT = ["2026-10-13T06:00:00Z", "2026-10-13T06:05:00Z", "2026-10-13T06:10:00Z", "2026-10-13T06:23:00Z"];
+  const SERIES = {
+    trend: [100_000, 150_000, 150_500, 397_412],
+    trend_turn: [401, null, 402, 403],
+    trend_sent: [1_000_000, null, 2_000_000, 1_200_000],
+    trend_cost: [0.1, null, 0.2, 0.38],
+    trend_spent: [10_000_000, 10_000_000, 12_000_000, 13_200_000],
+    trend_at: AT,
+    trend_total: 4,
+  };
+  function chart(width = 300) {
+    const el = screen.getByTestId("context-chart");
+    el.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width, height: 32, right: width, bottom: 32, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    return el;
+  }
+  const readout = () => screen.getByTestId("context-spark-readout").textContent ?? "";
+
+  it("labels points with the provider's real turn number", async () => {
+    render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }) } });
+    expect(screen.getByTestId("context-span").textContent).toBe("turns 401–403");
+    // Idle: the newest point.
+    expect(readout()).toContain("turn 403");
+    expect(readout()).toContain("397k");
+    expect(readout()).toContain("+247k");
+    expect(readout()).toContain("40%");
+    expect(readout()).toContain("this turn 1.2M sent");
+    // A level-only point takes no number and says why.
+    await fireEvent.mouseMove(chart(), { clientX: 100 });
+    expect(readout()).toContain("turn —");
+    expect(readout()).toContain("no usage reported");
+    // ...and does not shift the numbers after it.
+    await fireEvent.mouseMove(chart(), { clientX: 200 });
+    expect(readout()).toContain("turn 402");
+  });
+
+  it("asks for every stored point on All, and says when the cap is hit", async () => {
+    const loadSeries = vi.fn().mockResolvedValue(ctx({ turns: 600, ...SERIES, trend_total: 500 }));
+    render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }), loadSeries } });
+    expect(loadSeries).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(loadSeries).toHaveBeenCalledWith({ trend: "all" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "All (last 500)" })).toBeTruthy());
+    await fireEvent.click(screen.getByRole("button", { name: "Last 40" }));
+    expect(loadSeries).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads per-turn usage in Usage mode", async () => {
+    render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }) } });
+    expect(screen.queryByRole("button", { name: "This provider" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    expect(screen.getByRole("button", { name: "This provider" })).toBeTruthy();
+    expect(readout()).toContain("turn 403 · 1.2M sent · $0.38");
+  });
+
+  it("switches Per turn to a running total behind the options button", async () => {
+    render(ContextPopover, { props: { ...base, data: ctx({ turns: 403, ...SERIES }) } });
+    await fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    expect(screen.queryByRole("button", { name: "Total" })).toBeNull();
+    await fireEvent.click(screen.getByTestId("context-options"));
+    await fireEvent.click(screen.getByRole("button", { name: "Total" }));
+    // 1.0M + 0 + 2.0M + 1.2M across the range, $0.68.
+    expect(readout()).toContain("4.2M in this range · $0.68");
+    expect(screen.queryByRole("button", { name: "Total" })).toBeNull();
+  });
+
+  it("merges every provider in time order on All providers", async () => {
+    const other = {
+      provider: "codex/gpt", used: 1, window: 0, pct: 0, turns: 2, totals: TOTALS,
+      trend: [5_000, 6_000],
+      trend_turn: [1, 2],
+      trend_sent: [7_000, 8_000],
+      trend_cost: [0.01, 0.02],
+      trend_at: ["2026-10-13T06:01:00Z", "2026-10-13T06:30:00Z"],
+    };
+    const full = ctx({
+      turns: 405,
+      ...SERIES,
+      providers: [{ provider: "claude/opus", used: 1, window: 1_000_000, pct: 0, turns: 403, totals: TOTALS }, other],
+    });
+    const loadSeries = vi.fn().mockResolvedValue(full);
+    render(ContextPopover, { props: { ...base, data: ctx({ turns: 405, ...SERIES }), loadSeries } });
+    await fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    await fireEvent.click(screen.getByRole("button", { name: "All providers" }));
+    expect(loadSeries).toHaveBeenCalledWith({ providers: "all" });
+    await waitFor(() => expect(screen.getByTestId("context-span").textContent).toBe("2 providers"));
+    // Newest point is codex's turn 2, the session's turn 405.
+    expect(readout()).toContain("codex/gpt");
+    expect(readout()).toContain("turn 2 (session 405)");
+  });
+
+  it("summarises a dragged range, and Esc clears it without closing the panel", async () => {
+    const onClose = vi.fn();
+    render(ContextPopover, { props: { ...base, onClose, data: ctx({ turns: 403, ...SERIES }) } });
+    await fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    expect(screen.queryByTestId("context-selection")).toBeNull();
+    const el = chart();
+    await fireEvent.mouseDown(el, { clientX: 0 });
+    await fireEvent.mouseMove(el, { clientX: 300 });
+    await fireEvent.mouseUp(window);
+    const sum = screen.getByTestId("context-selection").textContent ?? "";
+    expect(sum).toContain("turns 401–403");
+    expect(sum).toContain("4.2M sent");
+    expect(sum).toContain("$0.68");
+    expect(sum).toContain("peak turn 402 (2.0M)");
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("context-selection")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("opens the big chart from the expand icon and closes it on Esc", async () => {
+    const onClose = vi.fn();
+    render(ContextPopover, { props: { ...base, onClose, data: ctx({ turns: 403, ...SERIES }) } });
+    await fireEvent.click(screen.getByTestId("context-expand"));
+    expect(screen.getByTestId("context-modal")).toBeTruthy();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("context-modal")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

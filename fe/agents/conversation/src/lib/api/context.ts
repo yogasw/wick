@@ -23,7 +23,34 @@ export type SessionContextProvider = {
   turns: number;
   totals: UsageTotals;
   last_at?: string;
+} & ContextSeries;
+
+/** One provider's per-turn trail, oldest first; every array has one
+ *  entry per point. A level-only point (a turn that ended without usage,
+ *  a compaction) has null in trend_turn, trend_sent and trend_cost. On a
+ *  provider row it is only present with ?providers=all, and never on the
+ *  active row: the top level carries that one. */
+export type ContextSeries = {
+  /** Per-turn context levels. */
+  trend?: number[];
+  /** Cumulative tokens this provider had spent by each point. */
+  trend_spent?: number[];
+  /** When each point was recorded. Optional: an older server does not
+   *  send it, and the curve is still readable without the clock. */
+  trend_at?: string[];
+  /** The provider's real turn number of each point. */
+  trend_turn?: (number | null)[];
+  /** What each turn itself sent, in tokens. */
+  trend_sent?: (number | null)[];
+  /** What each turn itself cost, in dollars. */
+  trend_cost?: (number | null)[];
+  /** Points stored, whatever was returned; the store caps the trail. */
+  trend_total?: number;
 };
+
+/** What the panel asks for beyond the default: every stored point
+ *  instead of the last 40, and the other providers' trails. */
+export type ContextQuery = { trend?: "all"; providers?: "all" };
 
 export type SessionContext = {
   session_id: string;
@@ -39,16 +66,6 @@ export type SessionContext = {
   turns: number;
   totals: UsageTotals;
   providers: SessionContextProvider[];
-  /** Recent per-turn context levels, oldest first. */
-  trend?: number[];
-  /** Cumulative tokens spent by each of those points, same order and
-   *  length. The level says how full the window was; this says what it
-   *  had cost to get there. */
-  trend_spent?: number[];
-  /** When each of those points was recorded, same order and length.
-   *  Optional: an older server does not send it, and the curve is still
-   *  readable without the clock. */
-  trend_at?: string[];
   /** Whether /compact does anything on this session's provider. False
    *  for codex: `codex exec` has no slash commands, so the request
    *  would reach the model as plain text and be answered with a claim
@@ -61,13 +78,18 @@ export type SessionContext = {
    *  fills, as it last reported (omp get_state, opencode config).
    *  Absent when the provider never said. */
   auto_compact?: boolean;
-};
+} & ContextSeries;
 
 export async function fetchSessionContext(
   base: string,
   sessionId: string,
+  query: ContextQuery = {},
 ): Promise<SessionContext> {
-  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/context`, {
+  const q = new URLSearchParams();
+  if (query.trend) q.set("trend", query.trend);
+  if (query.providers) q.set("providers", query.providers);
+  const qs = q.toString() ? `?${q}` : "";
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/context${qs}`, {
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new Error(`context: ${res.status}`);
