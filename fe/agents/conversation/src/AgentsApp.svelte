@@ -503,9 +503,10 @@
      agents (after the old Captain was deleted). */
   async function claimCaptain(c: { id: string }, giveAccess: boolean) {
     try {
-      const a = await makeCaptainWithAccess(base, c.id, giveAccess);
+      const { agent: a, accessFailed } = await makeCaptainWithAccess(base, c.id, giveAccess);
       onSaved(a);
-      toastOk(`🧭 @${a.handle} is now your Team's Captain`);
+      // A failed access update already toasted that the role moved.
+      if (!accessFailed) toastOk(`🧭 @${a.handle} is now your Team's Captain`);
       navigate({ handle: a.handle, session: null, panel: null }, { replace: true });
     } catch (err) {
       toastError(err instanceof Error ? err.message : String(err));

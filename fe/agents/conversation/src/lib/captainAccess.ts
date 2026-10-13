@@ -25,15 +25,17 @@ export function accessToday(a: Pick<AgentItem, "run_as" | "access_mode" | "allow
 
 /** makeCaptainWithAccess moves the Captain role to id and, with
     giveAccess, then sets it to run as the owner with Same as me. Returns
-    the agent as last saved; throws only when the role did not move. */
-export async function makeCaptainWithAccess(base: string, id: string, giveAccess: boolean): Promise<AgentItem> {
+    the agent as last saved; throws only when the role did not move.
+    accessFailed: the access update failed and was already toasted, so
+    the caller skips its own success toast. */
+export async function makeCaptainWithAccess(base: string, id: string, giveAccess: boolean): Promise<{ agent: AgentItem; accessFailed: boolean }> {
   const r = await runApi(makeCaptain(base, id));
-  if (!giveAccess || hasOwnerAccess(r.agent)) return r.agent;
+  if (!giveAccess || hasOwnerAccess(r.agent)) return { agent: r.agent, accessFailed: false };
   try {
-    return await runApi(updateAgent(base, r.agent.id, { ...OWNER_ACCESS }));
+    return { agent: await runApi(updateAgent(base, r.agent.id, { ...OWNER_ACCESS })), accessFailed: false };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     toastError(`@${r.agent.handle} is the Captain, but your access was not given`, `${why} Set it in Settings › Access.`);
-    return r.agent;
+    return { agent: r.agent, accessFailed: true };
   }
 }

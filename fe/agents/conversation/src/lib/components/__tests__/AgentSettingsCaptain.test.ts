@@ -21,6 +21,13 @@ vi.mock("../../api/team.js", async (orig) => ({
   makeCaptain: (b: string, id: string) => makeCaptain(b, id),
   runApi: <T,>(p: Promise<T>) => p,
 }));
+const toastOk = vi.fn();
+const toastError = vi.fn();
+vi.mock("@wick-fe/common-stores", async (orig) => ({
+  ...(await orig<typeof import("@wick-fe/common-stores")>()),
+  toastOk: (...a: unknown[]) => toastOk(...a),
+  toastError: (...a: unknown[]) => toastError(...a),
+}));
 vi.mock("../../api/options.js", () => ({
   getProviderOptions: () => Promise.resolve([]),
   getProjectOptions: () => Promise.resolve([]),
@@ -42,7 +49,7 @@ const props = (agent: AgentItem, tab: string) => ({
 const lastBody = () => updateAgent.mock.calls.at(-1)?.[2] as Record<string, unknown> | undefined;
 
 describe("AgentSettings › Captain", () => {
-  beforeEach(() => { updateAgent.mockClear(); getAccessHistory.mockClear(); makeCaptain.mockClear(); shareCount = 0; });
+  beforeEach(() => { updateAgent.mockClear(); getAccessHistory.mockClear(); makeCaptain.mockClear(); toastOk.mockClear(); toastError.mockClear(); shareCount = 0; });
 
   test("a teammate gets Make Captain, confirmed in a dialog naming the current Captain", async () => {
     const p = props(worker, "captain");
@@ -90,6 +97,59 @@ describe("AgentSettings › Captain", () => {
     await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
     await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
     expect(updateAgent.mock.calls.some((c) => "run_as" in (c[2] as object) || "access_mode" in (c[2] as object))).toBe(false);
+  });
+
+  test("untick then tick again: the access is given once, as Owner + Same as me", async () => {
+    const p = props(worker, "captain");
+    render(AgentSettings, { props: p });
+    const btn = screen.getByRole("button", { name: "Make Captain" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    await fireEvent.click(btn);
+    const box = (await screen.findByTestId("captain-give-access")).querySelector("input") as HTMLInputElement;
+    await fireEvent.click(box);
+    expect(box.checked).toBe(false);
+    await fireEvent.click(box);
+    expect(box.checked).toBe(true);
+    await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
+    await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ run_as: "owner", access_mode: "owner" })));
+    const accessCalls = updateAgent.mock.calls.filter((c) => "run_as" in (c[2] as object) || "access_mode" in (c[2] as object));
+    expect(accessCalls).toHaveLength(1);
+    expect(accessCalls[0][2]).toEqual({ run_as: "owner", access_mode: "owner" });
+    expect(toastOk).toHaveBeenCalledTimes(1);
+  });
+
+  test("unticked, Make Captain keeps unsaved Access edits", async () => {
+    // The Run as edit fails to autosave, so it stays an unsaved draft.
+    updateAgent.mockImplementationOnce(() => Promise.reject(new Error("offline")));
+    const p = props(worker, "access");
+    const { rerender } = render(AgentSettings, { props: p });
+    const runAs = (await screen.findByLabelText("Run as")) as HTMLSelectElement;
+    await fireEvent.change(runAs, { target: { value: "owner" } });
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ run_as: "owner" })));
+    await rerender({ ...p, tab: "captain" });
+    const btn = screen.getByRole("button", { name: "Make Captain" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    await fireEvent.click(btn);
+    await fireEvent.click((await screen.findByTestId("captain-give-access")).querySelector("input")!);
+    await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
+    await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
+    await rerender({ ...p, tab: "access" });
+    expect(((await screen.findByLabelText("Run as")) as HTMLSelectElement).value).toBe("owner");
+  });
+
+  test("a failed access update shows one error toast and no success toast", async () => {
+    updateAgent.mockImplementationOnce(() => Promise.reject(new Error("forbidden")));
+    const p = props(worker, "captain");
+    render(AgentSettings, { props: p });
+    const btn = screen.getByRole("button", { name: "Make Captain" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    await fireEvent.click(btn);
+    await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
+    await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith("@worker is the Captain, but your access was not given", "forbidden Set it in Settings › Access.");
+    expect(toastOk).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   test("the Captain shows a read-only status, no Make Captain and no switch", () => {

@@ -170,14 +170,18 @@
     captainSaving = true;
     captainError = "";
     try {
-      const a = await makeCaptainWithAccess(base, agent.id, captainGiveAccess);
+      const { agent: a, accessFailed } = await makeCaptainWithAccess(base, agent.id, captainGiveAccess);
       saved = a;
       draft.manage_agents = a.manage_agents ?? a.is_captain;
-      draft.run_as = a.run_as ?? "caller";
-      draft.access_mode = normalizeAccessMode(a.access_mode);
+      // Only a given access overrides the Access draft; unticked (or a
+      // failed update) keeps the user's unsaved edits.
+      if (captainGiveAccess && !accessFailed) {
+        draft.run_as = a.run_as ?? "caller";
+        draft.access_mode = normalizeAccessMode(a.access_mode);
+      }
       onSaved(a);
       confirmCaptain = false;
-      toastOk(`@${a.handle} is now your Team's Captain`);
+      if (!accessFailed) toastOk(`@${a.handle} is now your Team's Captain`);
     } catch (err) {
       captainError = err instanceof Error ? err.message : String(err);
     } finally {
