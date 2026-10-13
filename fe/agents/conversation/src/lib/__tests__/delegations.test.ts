@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, taskQuickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus, canSummarize, summarizeGroup, taskDuration } from "../delegations.js";
+import { PROGRESS_MAX, isTeamMessageTool, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, taskQuickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus, canSummarize, summarizeGroup, taskDuration } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -10,6 +10,11 @@ const turn = (id: string, role: string, ts: string, events: ConversationTurn["ev
   ({ turn_id: id, role, agent: "", provider: "", text: "", ts, timestamp: 0, truncated: false, interrupted: false, has_trace: false, events, attachments: [] }) as ConversationTurn;
 
 describe("delegations", () => {
+  test("isTeamMessageTool matches team_message under any namespace", () => {
+    for (const n of ["team_message", "mcp__wick__team_message", "wick.team_message"]) expect(isTeamMessageTool(n)).toBe(true);
+    for (const n of ["team_messages", "wick_team_message", "", undefined]) expect(isTeamMessageTool(n)).toBe(false);
+  });
+
   test("reads task ids from team_message results, MCP-wrapped too", () => {
     const ids = teamTaskIdsFromEvents([
       { type: "tool_use", tool_use_id: "u1", tool_name: "mcp__wick__team_message" },

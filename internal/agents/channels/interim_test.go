@@ -15,6 +15,9 @@ func TestIsInterimText(t *testing.T) {
 	}{
 		{"short status line", team, "Sudah saya tanyakan ke Franky dan Atraxa.", true},
 		{"bare tool name", []string{"team_message", "team_message"}, "Asked both.", true},
+		{"codex namespace", []string{"wick.team_message"}, "Asked both.", true},
+		{"neutral tools beside it", []string{"ToolSearch", "mcp__wick__todo", "TodoWrite", "wick.wick_set_title", "set_title", "team_message"}, "Asked both.", true},
+		{"neutral tools only", []string{"ToolSearch", "todo"}, "Asked both.", false},
 		{"no tool call", nil, "Asked both.", false},
 		{"other tool too", []string{"team_message", "Bash"}, "Asked both.", false},
 		{"similar name", []string{"team_messages"}, "Asked both.", false},
@@ -52,7 +55,33 @@ func withTasksActive(t *testing.T, f TasksActiveFn) {
 	TasksActive = f
 }
 
-func TestInterimTurnDrop(t *testing.T) {
+func TestIsTeamMessageTool(t *testing.T) {
+	for _, n := range []string{"team_message", "mcp__wick__team_message", "wick.team_message"} {
+		if !IsTeamMessageTool(n) {
+			t.Errorf("%s must match", n)
+		}
+	}
+	for _, n := range []string{"team_messages", "xteam_message", "wick_team_message", ""} {
+		if IsTeamMessageTool(n) {
+			t.Errorf("%s must not match", n)
+		}
+	}
+}
+
+func TestIsNeutralTool(t *testing.T) {
+	for _, n := range []string{"ToolSearch", "todo", "mcp__wick__todo", "TodoWrite", "wick_set_title", "mcp__wick__wick_set_title", "set_title", "wick.set_title"} {
+		if !IsNeutralTool(n) {
+			t.Errorf("%s must be neutral", n)
+		}
+	}
+	for _, n := range []string{"Bash", "todos", "Read", "team_message"} {
+		if IsNeutralTool(n) {
+			t.Errorf("%s must not be neutral", n)
+		}
+	}
+}
+
+func TestInterimTurnFinal(t *testing.T) {
 	open := map[string]bool{"t1": true}
 	withTasksActive(t, func(ids []string) bool {
 		for _, id := range ids {
@@ -64,43 +93,95 @@ func TestInterimTurnDrop(t *testing.T) {
 	})
 	text := "Sudah saya tanyakan ke Franky."
 	result := `{"type":"text","text":"{\"task_id\":\"t1\",\"state\":\"working\"}"}`
+	dropped := func(it *InterimTurn, text string) bool {
+		_, d := it.Final(text)
+		return d
+	}
 
+	// The line written before the call; the result lands after it.
 	var it InterimTurn
 	it.Tool("mcp__wick__team_message", `{"to":"@franky"}`, "u1", true)
-	it.Result("", "u1", result)
-	if !it.Holding() || !it.Drop(text) {
-		t.Fatal("a task still working must drop the line")
+	it.Result("", "u1", result, len(text))
+	if post, d := it.Final(text); !it.Holding() || !d || post != "" {
+		t.Fatalf("a task still working must drop the line: %q %v", post, d)
 	}
 
 	delete(open, "t1")
-	if it.Drop(text) {
+	if dropped(&it, text) {
 		t.Fatal("every task settled: the line posts")
 	}
 
 	open["t1"] = true
 	off := InterimTurn{}
 	off.Tool("team_message", `{"to":"@franky"}`, "u1", false)
-	off.Result("", "u1", result)
-	if off.Holding() || off.Drop(text) {
+	off.Result("", "u1", result, len(text))
+	if off.Holding() || dropped(&off, text) {
 		t.Fatal("switch off: no hold")
 	}
 
 	mixed := InterimTurn{}
 	mixed.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	mixed.Result("", "u1", result)
+	mixed.Result("", "u1", result, len(text))
 	mixed.Tool("Bash", `{}`, "u2", true)
-	if mixed.Holding() || mixed.Drop(text) {
+	if mixed.Holding() || dropped(&mixed, text) {
 		t.Fatal("a turn that did other work is never held")
+	}
+
+	neutral := InterimTurn{}
+	neutral.Tool("ToolSearch", `{}`, "n1", true)
+	neutral.Tool("team_message", `{"to":"@franky"}`, "u1", true)
+	neutral.Result("", "u1", result, len(text))
+	neutral.Tool("mcp__wick__todo", `{}`, "n2", true)
+	neutral.Tool("TodoWrite", `{}`, "n3", true)
+	neutral.Tool("mcp__wick__wick_set_title", `{}`, "n4", true)
+	if !neutral.Holding() || !dropped(&neutral, text) {
+		t.Fatal("neutral tools must not cancel the hold")
+	}
+
+	codex := InterimTurn{}
+	codex.Tool("wick.team_message", `{"to":"@franky"}`, "u1", true)
+	codex.Result("wick.team_message", "u1", result, len(text))
+	if !codex.Holding() || !dropped(&codex, text) {
+		t.Fatal("wick.team_message must hold like team_message")
 	}
 
 	noTask := InterimTurn{}
 	noTask.Tool("team_message", `{"to":"@franky"}`, "u1", true)
-	noTask.Result("", "u1", `{"error":"no such teammate"}`)
-	if noTask.Drop(text) {
+	noTask.Result("", "u1", `{"error":"no such teammate"}`, len(text))
+	if dropped(&noTask, text) {
 		t.Fatal("no task found: the line posts")
 	}
 
-	if it.Drop("Which one do you prefer?") {
+	q := "Which one do you prefer?"
+	if dropped(&it, q) {
 		t.Fatal("guard 1: a question posts")
+	}
+}
+
+// Text that streams after the last team_message result is the answer:
+// it posts, only the in-between part before it is left out.
+func TestInterimTurnAnswerAfterResult(t *testing.T) {
+	withTasksActive(t, func([]string) bool { return true })
+	result := `{"task_id":"t1","state":"working"}`
+	head := "Saya tanyakan ke Franky dulu."
+	answer := "Jawabannya: deploy terakhir jam 10."
+
+	var it InterimTurn
+	it.Tool("team_message", `{"to":"@franky"}`, "u1", true)
+	it.Result("team_message", "u1", result, len(head))
+	post, d := it.Final(head + "\n\n" + answer)
+	if !d || post != answer {
+		t.Fatalf("Final = %q %v, want the answer alone", post, d)
+	}
+	if got := it.Head(head + "\n\n" + answer); got != head {
+		t.Fatalf("Head = %q", got)
+	}
+
+	// Nothing before the result: the whole text is the answer.
+	var bare InterimTurn
+	bare.Tool("team_message", `{"to":"@franky"}`, "u1", true)
+	bare.Result("team_message", "u1", result, 0)
+	if post, d := bare.Final(answer); d || post != answer {
+		t.Fatalf("Final = %q %v, want the answer posted whole", post, d)
 	}
 }

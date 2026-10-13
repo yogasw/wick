@@ -3,7 +3,9 @@ package agents
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -41,5 +43,23 @@ func TestHideInterimSettingRoundTrip(t *testing.T) {
 	}
 	if TeamHidesInterimCached(sid) {
 		t.Fatal("cached read still hides after the change")
+	}
+}
+
+// A write drops the reads past the TTL, so the cache holds only recent
+// sessions.
+func TestStoreSwitchSeenPrunes(t *testing.T) {
+	var m sync.Map
+	m.Store("old", showTeammatesSeen{show: true, at: time.Now().Add(-2 * showTeammatesTTL)})
+	m.Store("fresh", showTeammatesSeen{show: true, at: time.Now()})
+	storeSwitchSeen(&m, "new", false)
+	if _, ok := m.Load("old"); ok {
+		t.Fatal("an entry past the TTL survived the write")
+	}
+	if _, ok := m.Load("fresh"); !ok {
+		t.Fatal("a fresh entry was dropped")
+	}
+	if v, ok := m.Load("new"); !ok || v.(showTeammatesSeen).show {
+		t.Fatal("the new read was not stored")
 	}
 }

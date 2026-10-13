@@ -233,6 +233,8 @@ func (t *turn) carryOver(old *turn) {
 	// post a fresh message and strand the streamed one mid-word.
 	t.liveTS = old.liveTS
 	t.lastSent = old.lastSent
+	// The hold goes with the text: the Done of this turn decides it.
+	t.interim = old.interim
 	// Background sub-agents outlive any one turn: the new turn inherits the
 	// set so it can put the banner back when it ends, and the old turn's
 	// keep-alive stops because this turn's own banner takes over.
@@ -2987,6 +2989,59 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	}
 }
 
+// dropLiveReply removes the live message of a turn whose text was the
+// lead's in-between line (InterimTurn.Final). Text written before the
+// team_message call was usually flushed already, maybe cut mid-sentence:
+// the bot's own message is deleted, and when that fails it is updated to
+// head, the whole text before the call, so it is never left truncated.
+func (s *Channel) dropLiveReply(sessionKey, head string) {
+	lk := s.liveLock(sessionKey)
+	lk.Lock()
+	defer lk.Unlock()
+	s.mu.Lock()
+	t := s.turns[sessionKey]
+	var channelID, liveTS, lastSent string
+	if t != nil {
+		channelID, liveTS, lastSent = t.channelID, t.liveTS, t.lastSent
+	}
+	s.mu.Unlock()
+	if liveTS == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+	err := s.withBackoffErr(func() error {
+		_, _, err := api.DeleteMessage(channelID, liveTS)
+		return err
+	})
+	if err == nil {
+		s.mu.Lock()
+		if cur := s.turns[sessionKey]; cur != nil && cur.liveTS == liveTS {
+			cur.liveTS, cur.lastSent = "", ""
+		}
+		s.mu.Unlock()
+		return
+	}
+	body := s.rewriteSources(sessionKey, stripSilentMarker(head))
+	if body == "" || body == lastSent {
+		return
+	}
+	shown := replyChunks(body)[0]
+	s.withBackoff(func() error {
+		_, _, _, err := api.UpdateMessage(channelID, liveTS, replyMsgOptions(shown, slackmd.NeedsBlock(lastSent))...)
+		return err
+	})
+	s.mu.Lock()
+	if cur := s.turns[sessionKey]; cur != nil && cur.liveTS == liveTS {
+		cur.lastSent = shown
+	}
+	s.mu.Unlock()
+}
+
 // replyPlan is the decision finalizeReply executes: whether to post the whole
 // text fresh (no live message), update the live message to first, and which
 // overflow chunks to post as continuation replies. Pure so it can be tested
@@ -3126,7 +3181,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.setStatusLabel(sessionKey, statusLabelWorking)
 		s.mu.Lock()
 		if t := s.turns[sessionKey]; t != nil {
-			t.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text)
+			t.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text, t.buf.Len())
 		}
 		s.mu.Unlock()
 
@@ -3166,10 +3221,19 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Unlock()
 		// The lead's in-between line while a teammate of the turn still
 		// works stays out of the thread: the banner says who works, the
-		// answer comes in a later turn. A part the live message already
-		// showed before the call stays as it is.
-		if !hasError && interim.Drop(text) {
-			text = ""
+		// answer comes in a later turn. Text after the last team_message
+		// result is the answer and posts. A live message that showed the
+		// line goes too (dropLiveReply).
+		if !hasError {
+			post, dropped := interim.Final(text)
+			if dropped && post == "" {
+				s.dropLiveReply(sessionKey, interim.Head(text))
+			}
+			text = post
+		} else if interim.Holding() && strings.TrimSpace(text) != "" {
+			// A turn that failed while holding posts its text, as a
+			// live message would have shown it, then the error.
+			s.NotifyState(sessionKey, "done", text)
 		}
 		// Bind again now that the session surely exists: a thread whose
 		// only message created the session was never bound, so the next
@@ -3193,15 +3257,22 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	case event.Error:
 		s.mu.Lock()
 		t := s.turns[sessionKey]
+		held := false
 		if t != nil {
 			s.stopStatusAnimation(t)
 			s.stopEditTicker(t)
 			t.running = false
+			held = t.interim.Holding()
 			t.interim = agentchannels.InterimTurn{}
 		}
 		s.mu.Unlock()
 		if t == nil {
 			return
+		}
+		if held {
+			// The held text shows before the error, as the live message
+			// would have shown it.
+			s.flushLiveMessage(sessionKey)
 		}
 		msg := ev.ErrorMsg
 		if msg == "" {

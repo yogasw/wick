@@ -247,8 +247,23 @@ func teamShowsTeammatesCached(sessionID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	show := TeamShowsTeammates(ctx, sessionID)
-	showTeammatesCache.Store(sessionID, showTeammatesSeen{show: show, at: time.Now()})
+	storeSwitchSeen(&showTeammatesCache, sessionID, show)
 	return show
+}
+
+// storeSwitchSeen records a read and drops the entries past
+// showTeammatesTTL, so a cache keyed by session never outgrows the
+// sessions read in the last TTL. A miss is at most once per TTL per
+// session, so the sweep stays cheap.
+func storeSwitchSeen(m *sync.Map, sessionID string, v bool) {
+	now := time.Now()
+	m.Range(func(k, e any) bool {
+		if now.Sub(e.(showTeammatesSeen).at) >= showTeammatesTTL {
+			m.Delete(k)
+		}
+		return true
+	})
+	m.Store(sessionID, showTeammatesSeen{show: v, at: now})
 }
 
 // forgetShowTeammates drops the cached reads, after the setting changed.
@@ -281,7 +296,7 @@ func TeamHidesInterimCached(sessionID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	hide := TeamHidesInterim(ctx, sessionID)
-	hideInterimCache.Store(sessionID, showTeammatesSeen{show: hide, at: time.Now()})
+	storeSwitchSeen(&hideInterimCache, sessionID, hide)
 	return hide
 }
 

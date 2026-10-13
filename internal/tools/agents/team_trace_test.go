@@ -92,3 +92,16 @@ func TestMergeTeamTrace_Unchanged(t *testing.T) {
 		t.Error("a turn that handed nothing off must come back as is")
 	}
 }
+
+func TestTeamTraceToolNamespaces(t *testing.T) {
+	for _, n := range []string{"team_message", "mcp__wick__team_message", "wick.team_message"} {
+		if !teamTraceTool.MatchString(n) {
+			t.Errorf("%s must match", n)
+		}
+	}
+	for _, n := range []string{"team_messages", "wick_team_message"} {
+		if teamTraceTool.MatchString(n) {
+			t.Errorf("%s must not match", n)
+		}
+	}
+}

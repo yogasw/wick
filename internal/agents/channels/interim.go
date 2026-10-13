@@ -18,8 +18,12 @@ import (
 const InterimMax = 600
 
 var (
-	// interimTeamTool is team_message under any MCP namespace.
-	interimTeamTool = regexp.MustCompile(`(^|__)team_message$`)
+	// interimTeamTool is team_message under any namespace
+	// (mcp__wick__team_message, wick.team_message).
+	interimTeamTool = regexp.MustCompile(`(^|__|\.)team_message$`)
+	// interimNeutralTool is bookkeeping that does no work of its own:
+	// it neither starts nor cancels the hold.
+	interimNeutralTool = regexp.MustCompile(`(^|__|\.)(ToolSearch|todo|TodoWrite|wick_set_title|set_title)$`)
 	// interimAnswer is a team_message input that answers a task rather
 	// than sending a new one.
 	interimAnswer = regexp.MustCompile(`"task_id"\s*:\s*"[^"\s]`)
@@ -56,6 +60,10 @@ func HidesInterim(sessionID string) bool {
 // IsTeamMessageTool reports a team_message call, any namespace.
 func IsTeamMessageTool(name string) bool { return interimTeamTool.MatchString(name) }
 
+// IsNeutralTool reports a bookkeeping call (ToolSearch, todo, TodoWrite,
+// wick_set_title / set_title), any namespace: it does not count as work.
+func IsNeutralTool(name string) bool { return interimNeutralTool.MatchString(name) }
+
 // IsTeamSend reports a team_message call that sends a new task: an
 // answer to a task (task_id set) is a reply, not a delegation.
 func IsTeamSend(name, input string) bool {
@@ -65,14 +73,20 @@ func IsTeamSend(name, input string) bool {
 // IsInterimText applies the tool rule and guard 1: the turn's tool calls
 // are team_message only (at least one), and its text asks nothing (no
 // line with "?"), has no code fence or markdown table, and is short.
+// Neutral calls (IsNeutralTool) are skipped.
 func IsInterimText(toolNames []string, text string) bool {
-	if len(toolNames) == 0 {
-		return false
-	}
+	team := false
 	for _, n := range toolNames {
+		if IsNeutralTool(n) {
+			continue
+		}
 		if !IsTeamMessageTool(n) {
 			return false
 		}
+		team = true
+	}
+	if !team {
+		return false
 	}
 	body := strings.TrimSpace(text)
 	if body == "" || len(body) > InterimMax {
@@ -102,11 +116,16 @@ type InterimTurn struct {
 	names []string        // the team_message sends
 	uses  map[string]bool // their tool_use ids, to pair the results
 	tasks []string        // the task ids those results name
+	cut   int             // text length at the last team_message result
 }
 
 // Tool records a ToolUse. hide is the session's switch, read by the
-// caller outside its lock (only needed when IsTeamSend).
+// caller outside its lock (only needed when IsTeamSend). A neutral call
+// changes nothing.
 func (it *InterimTurn) Tool(name, input, useID string, hide bool) {
+	if IsNeutralTool(name) {
+		return
+	}
 	if !IsTeamSend(name, input) {
 		it.other = true
 		return
@@ -124,10 +143,13 @@ func (it *InterimTurn) Tool(name, input, useID string, hide bool) {
 }
 
 // Result records a ToolResult: a team_message result names its task.
-func (it *InterimTurn) Result(name, useID, text string) {
+// at is the length of the turn's text so far: what comes after the last
+// team_message result is the answer, never in-between text.
+func (it *InterimTurn) Result(name, useID, text string, at int) {
 	if !it.uses[useID] && !IsTeamMessageTool(name) {
 		return
 	}
+	it.cut = at
 	for _, m := range interimTaskID.FindAllStringSubmatch(text, -1) {
 		if !slices.Contains(it.tasks, m[1]) {
 			it.tasks = append(it.tasks, m[1])
@@ -139,13 +161,26 @@ func (it *InterimTurn) Result(name, useID, text string) {
 // sent through team_message, the switch is on, and it did nothing else.
 func (it *InterimTurn) Holding() bool { return it.held && !it.other }
 
-// Drop decides at turn end, outside the channel lock: the held text is
-// dropped only when it is in-between text (IsInterimText) and a task the
-// turn sent is still open (guard 2). All settled, or no task found →
-// it posts as usual, so the lead is never silent.
-func (it *InterimTurn) Drop(text string) bool {
-	if !it.Holding() || !IsInterimText(it.names, text) || len(it.tasks) == 0 || TasksActive == nil {
-		return false
+// Final decides at turn end, outside the channel lock, and returns the
+// text to post. Only the text up to the last team_message result is
+// in-between text; what streamed after it is the answer and posts as
+// usual. That part is dropped only when it is in-between text
+// (IsInterimText) and a task the turn sent is still open (guard 2). All
+// settled, or no task found → the whole text posts, so the lead is never
+// silent. dropped reports that the part was left out.
+func (it *InterimTurn) Final(text string) (post string, dropped bool) {
+	if !it.Holding() || len(it.tasks) == 0 || TasksActive == nil {
+		return text, false
 	}
-	return TasksActive(it.tasks)
+	cut := min(max(it.cut, 0), len(text))
+	if !IsInterimText(it.names, text[:cut]) || !TasksActive(it.tasks) {
+		return text, false
+	}
+	return strings.TrimSpace(text[cut:]), true
+}
+
+// Head is the turn's text up to the last team_message result, trimmed:
+// the part Final leaves out.
+func (it *InterimTurn) Head(text string) string {
+	return strings.TrimSpace(text[:min(max(it.cut, 0), len(text))])
 }

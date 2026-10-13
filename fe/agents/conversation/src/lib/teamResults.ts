@@ -109,16 +109,25 @@ export function interimGuards(text: string, tasks: TeamTaskItem[], laterAnswer: 
   return laterAnswer || tasks.some(isTaskActive);
 }
 
+/** Bookkeeping calls (ToolSearch, todo, TodoWrite, wick_set_title /
+    set_title), any namespace: they do no work, so they neither make nor
+    break a pure delegation. The same rule as the channels' IsNeutralTool
+    (internal/agents/channels/interim.go). */
+export function isNeutralTool(name?: string): boolean {
+  return !!name && /(^|__|\.)(ToolSearch|todo|TodoWrite|wick_set_title|set_title)$/.test(name);
+}
+
 /** isInterimText reads one assistant turn: its tool calls are team_message
-    calls only (at least one) and its text passes both guards. tasks = the
-    tasks that turn sent. A turn that did other work renders as before. */
+    calls only (at least one, neutral calls skipped) and its text passes
+    both guards. tasks = the tasks that turn sent. A turn that did other
+    work renders as before. */
 export function isInterimText(
   turn: { role: string; text?: string; events?: TurnEvent[] | null },
   tasks: TeamTaskItem[],
   laterAnswer: boolean,
 ): boolean {
   if (turn.role !== "assistant") return false;
-  const tools = (turn.events ?? []).filter((e) => e.type === "tool_use").map((e) => e.tool_name);
+  const tools = (turn.events ?? []).filter((e) => e.type === "tool_use" && !isNeutralTool(e.tool_name)).map((e) => e.tool_name);
   if (tools.length === 0 || !tools.every(isTeamMessageTool)) return false;
   return interimGuards(turn.text ?? "", tasks, laterAnswer);
 }

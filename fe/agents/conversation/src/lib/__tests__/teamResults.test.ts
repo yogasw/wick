@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { foldTeamResults, interimNote, isHandoffInBlock, isInterimText, teamResultOf } from "../teamResults.js";
+import { foldTeamResults, interimNote, isHandoffInBlock, isInterimText, isNeutralTool, teamResultOf } from "../teamResults.js";
 import type { TeamTaskItem, TurnEvent } from "../types/agents.js";
 
 const shown = new Set(["t1", "t2"]);
@@ -102,6 +102,18 @@ describe("isInterimText (P60 S2)", () => {
   test("more than 600 chars stays", () => {
     expect(isInterimText(a("x".repeat(600)), working, false)).toBe(true);
     expect(isInterimText(a("x".repeat(601)), working, false)).toBe(false);
+  });
+  test("neutral tools neither cancel nor make a delegation", () => {
+    for (const n of ["ToolSearch", "todo", "mcp__wick__todo", "TodoWrite", "wick_set_title", "mcp__wick__wick_set_title", "set_title", "wick.set_title"]) {
+      expect(isNeutralTool(n)).toBe(true);
+      expect(isInterimText(a(short, [use(n), ...delegating]), working, false)).toBe(true);
+    }
+    expect(isNeutralTool("Bash")).toBe(false);
+    expect(isNeutralTool("todos")).toBe(false);
+    expect(isInterimText(a(short, [use("ToolSearch"), use("todo")]), working, false)).toBe(false);
+  });
+  test("codex's wick.team_message counts as delegation", () => {
+    expect(isInterimText(a(short, [use("wick.team_message")]), working, false)).toBe(true);
   });
   test("delegation plus another tool stays", () => {
     expect(isInterimText(a(short, [...delegating, use("Bash")]), working, false)).toBe(false);
