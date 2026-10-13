@@ -643,6 +643,24 @@ var mainChatLocks sync.Map
 
 func mainChatKey(userID, agentID string) string { return userID + "\x00" + agentID }
 
+// lockMainChat takes userID's lock for opening their main chat with
+// agentID and returns its unlock.
+func lockMainChat(userID, agentID string) func() {
+	mu, _ := mainChatLocks.LoadOrStore(mainChatKey(userID, agentID), &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
+}
+
+// accountInactive reports whether uid's account is gone or not approved.
+// With no auth service wired there is no account to read: not inactive.
+func accountInactive(ctx context.Context, uid string) bool {
+	u, err := lookupWorkflowOwner(ctx, uid)
+	if err != nil {
+		return globalAuth != nil
+	}
+	return u == nil || !u.Approved
+}
+
 // openMainChatFor opens agent.ChatUser's main chat with agent as opening
 // it from the Team roster does (createAgentChat), for a person who may
 // chat with it (agentChatMember) and never has: a Team task to it needs a
@@ -653,12 +671,14 @@ func openMainChatFor(ctx context.Context, agent teamlink.Peer) (session.Session,
 		return session.Session{}, noChat
 	}
 	p, err := globalTeam.Get(ctx, agent.ID)
-	if err != nil || !agentChatMember(ctx, p, agent.ChatUser) {
+	if err == nil && agent.ChatUser == p.OwnerUserID {
+		// The owner's main chat is theirs to open, as without a ChatUser.
+		return session.Session{}, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+	}
+	if err != nil || !agentChatMember(ctx, p, agent.ChatUser) || accountInactive(ctx, agent.ChatUser) {
 		return session.Session{}, noChat
 	}
-	mu, _ := mainChatLocks.LoadOrStore(mainChatKey(agent.ChatUser, agent.ID), &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	defer lockMainChat(agent.ChatUser, agent.ID)()
 	// Another task may have opened it while this one waited.
 	if s, ok := mainSessionOf(agent.ChatUser, agent.ID); ok {
 		return s, nil

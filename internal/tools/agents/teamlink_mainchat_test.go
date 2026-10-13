@@ -2,6 +2,8 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -117,5 +119,108 @@ func TestTeamTaskReusesRecipientMainChat(t *testing.T) {
 	}
 	if n := len(agentSessions("bob", p.ID)); n != 1 {
 		t.Fatalf("bob has %d chats, want 1", n)
+	}
+}
+
+// A share revoked or an agent turned off: the task gets the error and
+// no chat is opened.
+func TestTeamTaskRevokedOrDisabledKeepsError(t *testing.T) {
+	t.Run("revoked", func(t *testing.T) {
+		p, peer := sharedTeamAgent(t)
+		w, c := teamReq(t, &entity.User{ID: "u1"}, http.MethodDelete, "/", nil, map[string]string{"id": p.ID, "uid": "bob"})
+		apiTeamAgentShareRemove(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("unshare: %d", w.Code)
+		}
+		if _, err := mainChatOf(context.Background(), peer); err == nil || !strings.Contains(err.Error(), "has no chat with you yet") {
+			t.Fatalf("err = %v", err)
+		}
+		if n := len(agentSessions("bob", p.ID)); n != 0 {
+			t.Fatalf("bob has %d chats, want 0", n)
+		}
+	})
+	t.Run("disabled", func(t *testing.T) {
+		p, peer := sharedTeamAgent(t)
+		p.Disabled = true
+		if err := globalTeam.Update(context.Background(), &p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mainChatOf(context.Background(), peer); err == nil || !strings.Contains(err.Error(), "has no chat with you yet") {
+			t.Fatalf("err = %v", err)
+		}
+		if n := len(agentSessions("bob", p.ID)); n != 0 {
+			t.Fatalf("bob has %d chats, want 0", n)
+		}
+	})
+}
+
+// The owner named as ChatUser keeps the owner's error; nothing opened.
+func TestTeamTaskOwnerChatUserKeepsOwnerError(t *testing.T) {
+	withTeamWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	p := seedTeamAgent(t, "u1", "atraxa", "p1")
+	peer := teamlink.Peer{ID: p.ID, OwnerID: "u1", Handle: p.Handle, ChatUser: "u1"}
+	if _, err := mainChatOf(context.Background(), peer); err == nil || !strings.Contains(err.Error(), "its owner has to open it") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(agentSessions("u1", p.ID)); n != 0 {
+		t.Fatalf("owner has %d chats, want 0", n)
+	}
+}
+
+// A recipient whose account is not approved gets no chat opened.
+func TestTeamTaskInactiveRecipientKeepsError(t *testing.T) {
+	p, peer := sharedTeamAgent(t)
+	prev := lookupWorkflowOwner
+	lookupWorkflowOwner = func(_ context.Context, id string) (*entity.User, error) {
+		return &entity.User{ID: id, Approved: false}, nil
+	}
+	t.Cleanup(func() { lookupWorkflowOwner = prev })
+	if _, err := mainChatOf(context.Background(), peer); err == nil || !strings.Contains(err.Error(), "has no chat with you yet") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(agentSessions("bob", p.ID)); n != 0 {
+		t.Fatalf("bob has %d chats, want 0", n)
+	}
+}
+
+// Opening the agent from the roster while tasks open the same chat: one
+// main chat between them, the one every caller gets.
+func TestTeamTaskRacesRosterOpen(t *testing.T) {
+	p, peer := sharedTeamAgent(t)
+	bob := &entity.User{ID: "bob"}
+	const n = 6
+	ids := make([]string, 2*n)
+	errs := make([]error, 2*n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			s, err := mainChatOf(context.Background(), peer)
+			ids[i], errs[i] = s.ID, err
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			w, c := teamReq(t, bob, http.MethodPost, "/", map[string]any{"new": false}, map[string]string{"id": p.ID})
+			apiTeamAgentChat(c)
+			var out struct {
+				SessionID string `json:"session_id"`
+			}
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+				errs[n+i] = fmt.Errorf("roster open: %d %s", w.Code, w.Body)
+				return
+			}
+			ids[n+i] = out.SessionID
+		}(i)
+	}
+	wg.Wait()
+	for i := range ids {
+		if errs[i] != nil || ids[i] != ids[0] {
+			t.Fatalf("call %d: %q %v, want %q", i, ids[i], errs[i], ids[0])
+		}
+	}
+	if got := len(mainChatsOf("bob", p.ID)); got != 1 {
+		t.Fatalf("bob has %d main chats, want 1", got)
 	}
 }

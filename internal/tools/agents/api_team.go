@@ -1755,6 +1755,10 @@ func apiTeamAgentChat(c *tool.Ctx) {
 		return
 	}
 	if !body.New {
+		// Serialised with a Team task opening the same chat
+		// (openMainChatFor), so the two open one main chat.
+		unlock := lockMainChat(actorID(c), p.ID)
+		defer unlock()
 		if s, ok := mainSessionOf(actorID(c), p.ID); ok {
 			c.JSON(http.StatusOK, map[string]string{"session_id": s.ID})
 			return
