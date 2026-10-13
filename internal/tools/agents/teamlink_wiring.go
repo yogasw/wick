@@ -616,7 +616,7 @@ func (d teamDirectory) Get(ctx context.Context, agentID string) (teamlink.Peer, 
 type poolTurns struct{}
 
 func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (string, string, error) {
-	s, err := mainChatOf(agent)
+	s, err := mainChatOf(ctx, agent)
 	if err != nil {
 		return "", "", err
 	}
@@ -624,14 +624,54 @@ func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (s
 }
 
 // mainChatOf is the agent's main chat, or the error a turn reports
-// when it has none yet.
-func mainChatOf(agent teamlink.Peer) (session.Session, error) {
+// when it has none yet. A person the agent is shared with who never
+// opened it gets their main chat opened here (openMainChatFor).
+func mainChatOf(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
 	s, ok := mainSessionOf(chatUserOf(agent), agent.ID)
 	if !ok {
 		if agent.ChatUser != "" {
-			return s, fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
+			return openMainChatFor(ctx, agent)
 		}
 		return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+	}
+	return s, nil
+}
+
+// mainChatLocks serialises opening a person's main chat with an agent
+// (key mainChatKey), so tasks arriving together open one chat.
+var mainChatLocks sync.Map
+
+func mainChatKey(userID, agentID string) string { return userID + "\x00" + agentID }
+
+// openMainChatFor opens agent.ChatUser's main chat with agent as opening
+// it from the Team roster does (createAgentChat), for a person who may
+// chat with it (agentChatMember) and never has: a Team task to it needs a
+// chat to run in. Anyone else gets the error they always got.
+func openMainChatFor(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
+	noChat := fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
+	if globalTeam == nil || globalMgr == nil {
+		return session.Session{}, noChat
+	}
+	p, err := globalTeam.Get(ctx, agent.ID)
+	if err != nil || !agentChatMember(ctx, p, agent.ChatUser) {
+		return session.Session{}, noChat
+	}
+	mu, _ := mainChatLocks.LoadOrStore(mainChatKey(agent.ChatUser, agent.ID), &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	// Another task may have opened it while this one waited.
+	if s, ok := mainSessionOf(agent.ChatUser, agent.ID); ok {
+		return s, nil
+	}
+	id, err := createAgentChat(ctx, agent.ChatUser, p, true, uuid.New().String(), session.OriginUI, agentChatSetup{
+		target: func(projectID string) (string, string) { return userSessionTarget(ctx, agent.ChatUser, projectID) },
+	})
+	if err != nil {
+		return session.Session{}, fmt.Errorf("@%s: open your chat with it: %w", agent.Handle, err)
+	}
+	s, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		return session.Session{}, noChat
 	}
 	return s, nil
 }
@@ -775,7 +815,7 @@ func NoteSessionMessage(ctx context.Context, sessionID, role string) (func(deliv
 // (teamlink.ChatOpener). A remote agent's chat keeps its own remote
 // state, so a Slack remote starts a new thread there.
 func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, error) {
-	main, err := mainChatOf(agent)
+	main, err := mainChatOf(ctx, agent)
 	if err != nil {
 		return "", err
 	}

@@ -1778,6 +1778,26 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 // createTeamAgentSessionID is createTeamAgentSession under a chosen id and
 // origin — a Slack thread a schedule answers into is keyed by its thread.
 func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id string, origin session.Origin) (string, error) {
+	return createAgentChat(c.Context(), actorID(c), p, main, id, origin, agentChatSetup{
+		target: func(projectID string) (string, string) { return resolveSessionTarget(c, "", "", projectID) },
+		created: func(id, label string) {
+			extras := agentCreatedExtras(p, label, actorName(c), "", connectorLabeler(c), "chat")
+			emitSystemEvent(id, store.KindAgentCreated, agentCreatedText(label, extras["created_by"], "", extras["grants_summary"]), extras)
+		},
+	})
+}
+
+// agentChatSetup is what creating an agent chat reads off whoever asked
+// for it: the provider with neither the project nor the owner naming one,
+// and the agent_created chip of an owner's new main chat (nil: none).
+type agentChatSetup struct {
+	target  func(projectID string) (prov, modelID string)
+	created func(id, label string)
+}
+
+// createAgentChat is createTeamAgentSessionID for actor without a request:
+// a Team task opens a recipient's main chat through it too.
+func createAgentChat(ctx context.Context, actor string, p entity.AgentPersona, main bool, id string, origin session.Origin, setup agentChatSetup) (string, error) {
 	projectID := p.ProjectID
 	if projectID != "" {
 		if _, ok := globalMgr.Registry().Project(projectID); !ok {
@@ -1786,11 +1806,11 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 			projectID = ""
 		}
 	}
-	prov, modelID := resolveSessionTarget(c, "", "", projectID)
+	prov, modelID := setup.target(projectID)
 	// A share recipient's chat runs on the owner's choice, never on the
 	// recipient's own provider list (which the provider gate may narrow):
 	// with no project default, it follows the owner's main chat.
-	if actor := actorID(c); actor != "" && actor != p.OwnerUserID && !projectHasProvider(projectID) {
+	if actor != "" && actor != p.OwnerUserID && !projectHasProvider(projectID) {
 		if prov2, model2, ok := mainChatProvider(p.OwnerUserID, p.ID); ok {
 			prov, modelID = prov2, model2
 		}
@@ -1810,12 +1830,12 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 			}
 		}
 	}
-	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
 		ID:        id,
 		ProjectID: projectID,
 		Origin:    origin,
 		Preset:    presetName,
-		UserID:    actorID(c),
+		UserID:    actor,
 		AgentID:   p.ID,
 		AgentMain: main,
 	}); err != nil {
@@ -1826,15 +1846,14 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 	}
 	if modelID != "" {
 		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
-			log.Ctx(c.Context()).Warn().Msgf("team agent chat set model id: %s", err.Error())
+			log.Ctx(ctx).Warn().Msgf("team agent chat set model id: %s", err.Error())
 		}
 	}
 	// A new main chat opens on the agent's arrival, so its first turn is
 	// the agent_created chip — the owner's only: it names the agent's
 	// access, which a share recipient does not see.
-	if main && p.OwnerUserID == actorID(c) {
-		extras := agentCreatedExtras(p, label, actorName(c), "", connectorLabeler(c), "chat")
-		emitSystemEvent(id, store.KindAgentCreated, agentCreatedText(label, extras["created_by"], "", extras["grants_summary"]), extras)
+	if main && p.OwnerUserID == actor && setup.created != nil {
+		setup.created(id, label)
 	}
 	// Titled after the agent so its conversations read as the agent's in
 	// the ordinary session list too. Best-effort: an untitled session is

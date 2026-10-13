@@ -1616,6 +1616,27 @@ func resolveSessionTarget(c *tool.Ctx, formValue, formModel, projectID string) (
 	return normalizeProviderKey("claude"), ""
 }
 
+// userSessionTarget is resolveSessionTarget with no form, for uid rather
+// than the request's caller: the project's default, else the first
+// provider uid may use, else claude.
+func userSessionTarget(ctx context.Context, uid, projectID string) (providerKey, modelID string) {
+	if projectID != "" {
+		if p, perr := project.Load(globalLayout, projectID); perr == nil {
+			if prov := strings.TrimSpace(p.Meta.Defaults.Provider); prov != "" {
+				return normalizeProviderKey(prov), strings.TrimSpace(p.Meta.Defaults.Model)
+			}
+		}
+	}
+	if u, err := lookupWorkflowOwner(ctx, uid); err == nil && u != nil {
+		for _, ps := range providerChoicesCached(ctx) {
+			if userCanAccessProvider(ctx, u, provider.Type(ps.Type), ps.Name) {
+				return normalizeProviderKey(ps.Type + "/" + ps.Name), ""
+			}
+		}
+	}
+	return normalizeProviderKey("claude"), ""
+}
+
 // modelWithProvider returns the model only when a provider accompanies it.
 //
 // A model id is scoped to one provider instance's registry, so a stored
