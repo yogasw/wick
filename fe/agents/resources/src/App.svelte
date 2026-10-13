@@ -9,6 +9,7 @@
   import TopTable from "$lib/TopTable.svelte";
   import ProcessExplorer from "$lib/ProcessExplorer.svelte";
   import WrapperPanel from "$lib/WrapperPanel.svelte";
+  import { agentOrigin, unresolvedTitle } from "$lib/origin.js";
   import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf, machineShare, guardKindLabel, quotaShare, cpuShare, coresLabel, humanCores } from "$lib/format.js";
   import Gauge from "$lib/components/Gauge.svelte";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
@@ -421,7 +422,7 @@
                          and only that service's unit can bound it.
                          Neutral rather than amber for exactly that
                          reason: nothing on this page can fix it. -->
-                    {#if a.from_wick}
+                    {#if agentOrigin(a) === "wick"}
                       <span
                         class="rounded border border-blue-600/30 px-1 py-px text-[10px] text-blue-700 dark:text-blue-400"
                         title="Spawned by this wick."
@@ -441,6 +442,43 @@
                         >
                           {a.user}
                         </span>
+                      {/if}
+                    {:else if agentOrigin(a) !== "outside"}
+                      <!-- Not in this wick's pool, but the process carries
+                           a wick MCP token — usually an agent the previous
+                           daemon is still finishing during a reload. Read
+                           from the token for display only; the server
+                           never sends the token itself. -->
+                      <span
+                        class="rounded border border-blue-600/30 px-1 py-px text-[10px] text-blue-700 dark:text-blue-400"
+                        title="A wick session, not tracked by this wick's pool — usually an agent the previous wick is still finishing after a reload."
+                      >
+                        wick
+                      </span>
+                      {#if agentOrigin(a) === "wick-unresolved"}
+                        <span
+                          class="rounded border border-amber-600/30 px-1 py-px text-[10px] text-amber-700 dark:text-amber-500"
+                          title={unresolvedTitle(a)}
+                        >
+                          !
+                        </span>
+                      {/if}
+                      {#if a.wick_session?.project}
+                        <span
+                          class="rounded border border-white-300 px-1 py-px text-[10px] text-black-700 dark:border-navy-500 dark:text-black-600"
+                          title="Project of this wick session."
+                        >
+                          project:{a.wick_session.project}
+                        </span>
+                      {/if}
+                      {#if a.wick_session?.title && a.wick_session.session_id}
+                        <a
+                          class="max-w-[16rem] truncate text-[10px] text-blue-600 hover:underline dark:text-blue-400"
+                          href={sessionHref(a.wick_session.session_id)}
+                          title={a.wick_session.title}
+                        >
+                          {a.wick_session.title}
+                        </a>
                       {/if}
                     {:else}
                       <span

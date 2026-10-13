@@ -33,7 +33,20 @@ export interface AgentRow {
   // and only while the pool still holds them.
   session_id?: string;
   agent_name?: string;
+  // The wick session a row the pool does not know belongs to, read from
+  // the MCP token the process was spawned with (typically an agent still
+  // owned by the previous daemon during a reload). Display only — never
+  // verified. Absent when no wick token was found: a real stranger.
+  wick_session?: WickSessionRow;
   processes?: ProcessRow[];
+}
+
+export interface WickSessionRow {
+  session_id?: string;
+  title?: string;
+  project_id?: string;
+  project?: string;
+  detected: boolean;
 }
 
 export interface ProcessRow {
