@@ -20,6 +20,9 @@ type PluginTestRow struct {
 	OwnerEmail string
 	// State is the displayed state: pending, active, expired, rejected, revoked.
 	State string
+	// Credential is the token that filed it, readable (PAT name …last4, or
+	// the agent session).
+	Credential string
 }
 
 templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
@@ -49,7 +52,7 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 					<table class="w-full text-sm">
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Requester</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Account (SSO)</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Connector · instance</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Bound to (IP · machine · token)</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">State</th>
@@ -72,20 +75,16 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 templ pluginTestRowFragment(row PluginTestRow) {
 	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
 		<td class="px-4 py-3">
-			<p class="font-medium text-black-900 dark:text-white-100">
-				if row.OwnerName != "" {
-					{ row.OwnerName }
-				} else {
-					{ row.OwnerEmail }
-				}
-			</p>
+			<p class="font-medium text-black-900 dark:text-white-100">{ row.OwnerName }</p>
+			<p class="text-xs text-black-800 dark:text-black-600">{ row.OwnerEmail }</p>
 			<p class="text-xs text-black-700 dark:text-black-600">
 				@ui.LocalTime(row.Req.CreatedAt, ui.TimeFormatISO)
 			</p>
 		</td>
 		<td class="px-4 py-3">
 			<p class="font-mono text-black-900 dark:text-white-100">{ row.Req.ConnectorKey }</p>
-			<p class="text-xs text-black-700 dark:text-black-600">{ row.Req.InstanceLabel }</p>
+			<a href={ templ.SafeURL("/manager/connectors/" + row.Req.ConnectorKey + "/" + row.Req.InstanceID) } class="text-xs text-green-600 hover:underline">{ row.Req.InstanceLabel }</a>
+			<p class="font-mono text-[11px] text-black-700 dark:text-black-600" title="same id wick_list shows">conn:{ row.Req.InstanceID }</p>
 			if row.Req.Operation != "" {
 				<p class="font-mono text-xs text-black-700 dark:text-black-600">op: { row.Req.Operation }</p>
 			}
@@ -93,7 +92,7 @@ templ pluginTestRowFragment(row PluginTestRow) {
 		<td class="px-4 py-3 font-mono text-xs text-black-700 dark:text-black-600">
 			<p class="text-black-900 dark:text-white-100">{ row.Req.RequestIP }</p>
 			<p>{ row.Req.Machine }</p>
-			<p>{ row.Req.Credential }</p>
+			<p>{ row.Credential }</p>
 			<p class="opacity-70">{ row.Req.Host }</p>
 		</td>
 		<td class="px-4 py-3 text-xs">

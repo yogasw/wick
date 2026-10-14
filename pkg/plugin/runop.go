@@ -35,9 +35,12 @@ import (
 //
 //   - --config <file.json>: a local JSON object of config keys (dummy or
 //     staging credentials). Never talks to wick.
-//   - --instance <id|label>: a real wick instance. The binary files a plugin
-//     test request with wick (WICK_BASE_URL plus a token) and waits until an
-//     admin approves it on Admin → Plugins → Development mode. With WICK_PAT
+//   - --instance <id|label>: a real wick instance. There is no separate
+//     "request" step: the first run files a plugin test request with wick
+//     (WICK_BASE_URL plus a token) and exits with a message; it never waits.
+//     Runs while the request is pending, or after it was rejected, are
+//     refused the same way. Once an admin approves it on Admin → Plugins →
+//     Development mode, the next run goes through. With WICK_PAT
 //     (a person) the instance's config then comes to this process and the op
 //     runs here, so breakpoints work. With WICK_CLI_TOKEN (an agent session
 //     on the wick host) wick runs this binary itself and only the masked
@@ -72,7 +75,6 @@ type runOpOptions struct {
 	instance   string
 	configFile string
 	wickURL    string
-	wait       time.Duration
 	raw        bool
 }
 
@@ -87,7 +89,6 @@ func RunOpMain(mod connector.Module, args []string, stdout, stderr io.Writer) in
 	fs.StringVar(&o.instance, "instance", "", "wick connector instance id or label to borrow the config from (needs admin approval)")
 	fs.StringVar(&o.configFile, "config", "", "local JSON file with the connector config (offline, no wick)")
 	fs.StringVar(&o.wickURL, "wick-url", os.Getenv("WICK_BASE_URL"), "wick base URL for --instance (default $WICK_BASE_URL)")
-	fs.DurationVar(&o.wait, "wait", 15*time.Minute, "how long to wait for admin approval")
 	fs.BoolVar(&o.raw, "raw", false, "print the result JSON compact instead of indented")
 	if err := fs.Parse(args); err != nil {
 		return runOpUsage
@@ -133,7 +134,7 @@ func RunOpMain(mod connector.Module, args []string, stdout, stderr io.Writer) in
 		var c *wickTestClient
 		if c, err = newWickTestClient(o); err == nil {
 			var v pluginTestView
-			if v, err = awaitApproval(ctx, c, mod.Meta.Key, o, stderr); err == nil {
+			if v, err = requireApproval(ctx, c, mod.Meta.Key, o); err == nil {
 				if c.agent {
 					// Agent session: wick runs this binary; nothing to run here.
 					out, rerr := runViaWick(ctx, c, v, o.op, rawInput)
@@ -299,6 +300,8 @@ type pluginTestView struct {
 	Instance   string     `json:"instance"`
 	ExpiresAt  *time.Time `json:"expires_at"`
 	ApproveURL string     `json:"approve_url"`
+	// Created is true when this call filed a new request.
+	Created bool `json:"created"`
 }
 
 // newWickTestClient builds the client for --instance from the environment.
@@ -355,9 +358,11 @@ func runOpClientSecret() (string, error) {
 	return secret, nil
 }
 
-// awaitApproval files (or reuses) a plugin test request and waits until an
-// admin approves it.
-func awaitApproval(ctx context.Context, c *wickTestClient, key string, o runOpOptions, stderr io.Writer) (pluginTestView, error) {
+// requireApproval files (or finds) this runner's plugin test request and
+// returns it only when it is approved. It never waits: a new, pending,
+// rejected, revoked or expired request is an error the caller prints, and
+// the person reruns once an admin has decided.
+func requireApproval(ctx context.Context, c *wickTestClient, key string, o runOpOptions) (pluginTestView, error) {
 	host, _ := os.Hostname()
 	if wd, err := os.Getwd(); err == nil {
 		host += ":" + wd
@@ -369,32 +374,16 @@ func awaitApproval(ctx context.Context, c *wickTestClient, key string, o runOpOp
 	}, &v); err != nil {
 		return v, err
 	}
-	deadline := time.Now().Add(o.wait)
-	announced := false
-	for v.State == "pending" {
-		if !announced {
-			fmt.Fprintf(stderr, "run-op: waiting for an admin to approve plugin test %s (%s · %s) at %s\n", v.ID, key, v.Instance, v.ApproveURL)
-			announced = true
-		}
-		if time.Now().After(deadline) {
-			return v, fmt.Errorf("not approved within %s (request %s stays pending; rerun to keep waiting)", o.wait, v.ID)
-		}
-		select {
-		case <-ctx.Done():
-			return v, ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-		if err := c.do(ctx, http.MethodGet, "/api/plugin-tests/"+v.ID, nil, &v); err != nil {
-			return v, err
-		}
+	switch {
+	case v.State == "active":
+		return v, nil
+	case v.State == "pending" && v.Created:
+		return v, fmt.Errorf("plugin test request %s filed (%s · %s, %s). Not run: ask an admin to approve it at %s, then run again", v.ID, key, v.Instance, c.machine, v.ApproveURL)
+	case v.State == "pending":
+		return v, fmt.Errorf("plugin test request %s is still waiting for approval at %s; refused until an admin approves it", v.ID, v.ApproveURL)
+	default:
+		return v, fmt.Errorf("plugin test request %s is %s; refused", v.ID, v.State)
 	}
-	if v.State != "active" {
-		return v, fmt.Errorf("plugin test %s is %s", v.ID, v.State)
-	}
-	if v.ExpiresAt != nil {
-		fmt.Fprintf(stderr, "run-op: approved — %s · %s, valid until %s\n", key, v.Instance, v.ExpiresAt.Local().Format(time.Kitchen))
-	}
-	return v, nil
 }
 
 // borrowInstanceConfig fetches an approved request's config into this

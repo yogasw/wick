@@ -66,26 +66,30 @@ dlv debug ./plugins/connector/<key> -- --run-op <op> --params-file p.json --inst
 | `--config <f.json>` | Config keys as a JSON object. Never talks to wick. |
 | `--instance <id\|label>` | Borrow a wick instance's config (see below). |
 | `--wick-url` | Defaults to `$WICK_BASE_URL`. The token comes from `$WICK_PAT`. |
-| `--wait 15m` | How long to wait for approval. |
 | `--raw` | Compact JSON output. |
 
 Values the op passes to `c.Mask` print as `[masked]`. Exit codes: 0 ok,
 1 op or wick error, 2 usage.
 
-**Borrowing a real instance (`--instance`).** The binary files a *plugin test
-request*; it shows up on **Admin → Plugins → Development mode**, where an admin
-approves it for 15 minutes to 2 hours (or rejects it). Until then the binary
-waits. Once approved, the requester's binary receives the instance's
-**plaintext** config and runs the op locally; reruns by the same user against
-the same instance reuse the approval until it expires. Guards:
+**Borrowing a real instance (`--instance`).** There is no separate request
+command: just run. The first run files a *plugin test request* and exits with
+a message saying so; it does not wait. The request shows up on **Admin →
+Plugins → Development mode**, where an admin approves it for 15 minutes to 2
+hours (or rejects it). Every run while it is pending, or after it was
+rejected, is refused. Once approved, the next run goes through: with a PAT the
+binary receives the instance's **plaintext** config and runs the op locally;
+with an agent session (`WICK_CLI_TOKEN`) wick runs the binary itself and only
+the masked result comes back. Guards:
 
 - the page's **Allow plugin test requests** switch is off by default;
-- only connector keys listed on that page can be requested;
-- the requester must be able to see the instance, and only that PAT owner can
-  fetch the config;
+- a request is bound to the token that filed it, the runner's
+  `<os user>@<hostname>`, a secret kept in the user cache dir, and the client
+  IP wick saw. Every use must match all four; another token (even of the same
+  user), machine or network files its own request;
+- the requester must be able to see the instance;
 - ops marked destructive are refused with `--instance` (use `--config`);
-- every config hand-out is counted on the request row; **Revoke**, turning the
-  switch off, or dropping the key from the list cuts it immediately.
+- every use is counted on the request row; **Revoke** or turning the switch
+  off cuts it immediately. The page keeps 7 days of requests.
 
 The credential itself does not expire with the approval: once handed out it
 stays valid until rotated. Only allow connectors whose credentials are safe on

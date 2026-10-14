@@ -135,7 +135,7 @@ func (h *Handler) pluginTestsPage(w http.ResponseWriter, r *http.Request) {
 			u, _ = h.repo.GetUser(ctx, q.UserID)
 			owners[q.UserID] = u
 		}
-		row := view.PluginTestRow{Req: q, State: pluginTestState(q, now)}
+		row := view.PluginTestRow{Req: q, State: pluginTestState(q, now), Credential: h.pluginTestCredentialLabel(ctx, q.Credential)}
 		if u != nil {
 			row.OwnerName, row.OwnerEmail = u.Name, u.Email
 		}
@@ -146,6 +146,23 @@ func (h *Handler) pluginTestsPage(w http.ResponseWriter, r *http.Request) {
 		Rows:    rows,
 	}
 	_ = view.PluginTestsPage(vm, login.GetUser(ctx)).Render(ctx, w)
+}
+
+// pluginTestCredentialLabel turns a stored credential ref into what the
+// admin reads: the PAT's name and last 4 characters, or the agent session.
+func (h *Handler) pluginTestCredentialLabel(ctx context.Context, ref string) string {
+	kind, id, _ := strings.Cut(ref, ":")
+	switch kind {
+	case "pat":
+		var t entity.PersonalAccessToken
+		if h.repo.db.WithContext(ctx).First(&t, "id = ?", id).Error == nil {
+			return "PAT \"" + t.Name + "\" …" + t.Last4
+		}
+		return "PAT (deleted)"
+	case "session":
+		return "agent session " + id
+	}
+	return ref
 }
 
 func (h *Handler) pluginTestsSettings(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +247,8 @@ type pluginTestView struct {
 	Instance     string     `json:"instance"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	ApproveURL   string     `json:"approve_url"`
+	// Created is set on the create call that filed a new request.
+	Created bool `json:"created,omitempty"`
 }
 
 func (h *Handler) toPluginTestView(q entity.PluginTestRequest) pluginTestView {
@@ -416,7 +435,9 @@ func (h *Handler) apiPluginTestCreate(w http.ResponseWriter, r *http.Request) {
 		pluginTestErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writePluginTestJSON(w, http.StatusCreated, h.toPluginTestView(q))
+	v := h.toPluginTestView(q)
+	v.Created = true
+	writePluginTestJSON(w, http.StatusCreated, v)
 }
 
 // ownPluginTest loads a request that belongs to the caller.
