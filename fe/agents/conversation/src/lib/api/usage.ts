@@ -3,8 +3,8 @@ import { parseSavedResets, type SavedResets, type WireSavedResets } from "@wick-
 
 /* Mirrors internal/tools/agents/api_composer_usage.go — GET
    /api/composer/usage. Backs the `/usage` popover: the session provider's
-   account + rate-limit windows, read from the server's shared, paced cache
-   (so opening the popover never costs an upstream request). */
+   account + rate-limit windows, read from the account's usage file (opening
+   the popover costs an upstream request only for an account with no file). */
 export type ComposerUsageWindow = {
   key: string;
   utilization: number;
@@ -167,8 +167,10 @@ export function normalizeUsageRefresh(w: {
 }
 
 /* model is the session's model pin; the server uses it only to mark which
-   account row this session runs on. */
-export const getComposerUsage = (base: string, provider: string, model = "") =>
+   account row this session runs on. opened=true marks the read that comes
+   from opening a panel: the server then probes once if the account has no
+   usage file yet. Polls leave it off. */
+export const getComposerUsage = (base: string, provider: string, model = "", opened = false) =>
   apiGetE<WireComposerUsage>(
-    `${base}/api/composer/usage?provider=${encodeURIComponent(provider)}${model ? `&model=${encodeURIComponent(model)}` : ""}`,
+    `${base}/api/composer/usage?provider=${encodeURIComponent(provider)}${model ? `&model=${encodeURIComponent(model)}` : ""}${opened ? "&open=1" : ""}`,
   );

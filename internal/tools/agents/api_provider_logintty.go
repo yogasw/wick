@@ -186,9 +186,7 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
 	defer cancel()
 
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)), instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
+	v := readInstanceUsage(ctx, ins)
 	body := map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "checking": v.Checking}
 	if sr := savedResetsDTOOf(v.SavedResets); sr != nil {
 		body["saved_resets"] = sr
@@ -253,9 +251,7 @@ func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
 		c.JSON(http.StatusOK, map[string]any{"supported": false, "accepted": false})
 		return
 	}
-	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
+	accepted, wait := refreshInstanceUsage(ins)
 	body := map[string]any{"supported": true, "accepted": accepted, "checking": accepted}
 	if !accepted {
 		body["wait_s"] = int(wait.Round(time.Second) / time.Second)

@@ -499,6 +499,14 @@ func (c *usageCache) entryLocked(key string) *usageEntry {
 	if !ok {
 		return nil
 	}
+	e := entryFromDisk(d)
+	c.entries[key] = e
+	return e
+}
+
+// entryFromDisk turns one account's usage file into a probe entry,
+// bookkeeping included.
+func entryFromDisk(d provider.UsageDisk) *usageEntry {
 	e := &usageEntry{
 		goodAt: d.ObservedAt, resets: d.SavedResets, fromDisk: true,
 		attemptedAt: d.AttemptedAt, fails: d.Fails, serverUntil: d.ServerUntil,
@@ -516,8 +524,39 @@ func (c *usageCache) entryLocked(key string) *usageEntry {
 	if e.serverUntil.After(e.nextAt) {
 		e.nextAt = e.serverUntil
 	}
-	c.entries[key] = e
 	return e
+}
+
+// peek serves the account's usage as the file holds it right now. It
+// never probes, not even for a cold account, and never writes the
+// in-memory entries: opening a panel is a read, nothing more.
+//
+// The memory entry and the in-flight flag are taken BEFORE the file, so
+// a probe that lands between the two reads shows up in the file the
+// caller is about to read, never as "checking" with the old number. When
+// both exist the newer attempt wins: a failed disk write (disk full)
+// must not hide a reading the process already holds.
+func (c *usageCache) peek(key string) usageView {
+	c.mu.Lock()
+	var mem *usageEntry
+	if m := c.entries[key]; m != nil {
+		cp := *m
+		mem = &cp
+	}
+	_, checking := c.inflight[key]
+	c.mu.Unlock()
+
+	e := mem
+	if c.load != nil {
+		if d, ok := c.load(key); ok {
+			if f := entryFromDisk(d); mem == nil || f.attemptedAt.After(mem.attemptedAt) {
+				e = f
+			}
+		}
+	}
+	v := c.serve(e)
+	v.Checking = checking
+	return v
 }
 
 // staleFromDiskLocked: the entry came from disk, is older than the TTL,
@@ -611,4 +650,30 @@ func (c *usageCache) autoRefresh(key string, fetch usageFetch, resets ...resetsF
 	}
 	c.mu.Unlock()
 	return c.schedule(key, fetch, true, time.Time{}, resets...)
+}
+
+// readInstanceUsage is THE read of an instance's rate-limit windows.
+// Every surface (providers list aside, which fans out over many
+// instances) goes through it, so the cache key, the credentials hint and
+// the saved-resets companion cannot drift between endpoints.
+func readInstanceUsage(ctx context.Context, ins provider.Instance) usageView {
+	env := provider.AccountEnv(ins)
+	return usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, env)
+	}, logintty.CredentialsChangedAt(ins.Type, env), instanceResetsFetch(ins.Type, env))
+}
+
+// refreshInstanceUsage is the Re-check counterpart of readInstanceUsage.
+func refreshInstanceUsage(ins provider.Instance) (accepted bool, wait time.Duration) {
+	env := provider.AccountEnv(ins)
+	return usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, env)
+	}, instanceResetsFetch(ins.Type, env))
+}
+
+// peekInstanceUsage is readInstanceUsage without the probe: the usage
+// file as it is now. For surfaces opened by a click (context panel,
+// /usage); the handler probes once only when the account has no file.
+func peekInstanceUsage(ins provider.Instance) usageView {
+	return usageProbes.peek(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)))
 }

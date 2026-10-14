@@ -564,10 +564,10 @@
     }, 1500);
   }
 
-  function loadUsage(silent = false) {
+  function loadUsage(silent = false, opened = false) {
     if (!activeProvider) return;
     if (!silent) usageLoading = true;
-    run(getComposerUsage(base, activeProvider, activeModelID).pipe(Effect.provide(WickClientLayer)))
+    run(getComposerUsage(base, activeProvider, activeModelID, opened).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         usageData = normalizeComposerUsage(res);
         // Same reading feeds the picker rings via the shared store.
@@ -591,7 +591,7 @@
       usageError = "No provider selected for this session.";
       return;
     }
-    loadUsage();
+    loadUsage(false, true);
   }
 
   /* Context window — read from the session's token ledger, so it costs
@@ -685,11 +685,11 @@
   function openContextPopover() {
     contextPopoverOpen = true;
     void loadContext();
-    // The one-line account quota in the context panel. A cache read on
-    // the server — opening the panel never costs an upstream request.
+    // The one-line account quota in the context panel: the usage file,
+    // plus one paced probe only when the account has no file yet.
     if (activeProvider) {
       usagePollsLeft = 20;
-      loadUsage(true);
+      loadUsage(true, true);
     }
   }
 

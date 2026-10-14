@@ -94,9 +94,7 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 
 	ctx, cancel := context.WithTimeout(ctx, connectionsUsageTimeout)
 	defer cancel()
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)), instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
+	v := readInstanceUsage(ctx, ins)
 
 	out.Checking, out.FetchedAt, out.NextAt = v.Checking, v.FetchedAt, v.NextAt
 	out.SavedResets = v.SavedResets

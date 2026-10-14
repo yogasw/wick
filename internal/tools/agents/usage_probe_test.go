@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
 	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 )
@@ -668,5 +669,66 @@ func TestUsageCacheSavedResetsDropWhenNoLongerReported(t *testing.T) {
 	}
 	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets != nil {
 		t.Fatalf("stale saved resets served after the account stopped reporting them: %+v", v.SavedResets)
+	}
+}
+
+// peek is a plain file read: it serves what is on disk, never probes,
+// and sees a file written after the cache already had an entry.
+func TestUsageCachePeekReadsFileWithoutProbing(t *testing.T) {
+	c, _ := clockedCache(time.Minute)
+	disk := map[string]provider.UsageDisk{}
+	c.load = func(k string) (provider.UsageDisk, bool) { d, ok := disk[k]; return d, ok }
+
+	if v := c.peek("k"); v.Known || v.Checking {
+		t.Fatalf("no file: want blank view, got %+v", v)
+	}
+
+	disk["k"] = provider.UsageDisk{
+		Key: "k", ObservedAt: time.Now(),
+		Windows: []provider.UsageDiskWindow{{Key: "five_hour", Utilization: 20}},
+	}
+	v := c.peek("k")
+	if !v.Known || len(v.Windows) != 1 || v.Windows[0].Utilization != 20 {
+		t.Fatalf("file written elsewhere not served: %+v", v)
+	}
+
+	disk["k"] = provider.UsageDisk{
+		Key: "k", ObservedAt: time.Now(),
+		Windows: []provider.UsageDiskWindow{{Key: "five_hour", Utilization: 55}},
+	}
+	if v := c.peek("k"); v.Windows[0].Utilization != 55 {
+		t.Fatalf("peek served a stale in-memory copy: %+v", v)
+	}
+	if len(c.entries) != 0 {
+		t.Fatalf("peek must not fill the in-memory entries: %d", len(c.entries))
+	}
+}
+
+// A reading the process holds must not be hidden by an older file (a
+// failed disk write), and a failed-only file must not look like data.
+func TestUsageCachePeekPrefersNewerMemoryOverFile(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	c.load = func(k string) (provider.UsageDisk, bool) {
+		return provider.UsageDisk{
+			Key: k, ObservedAt: clk.now().Add(-time.Hour), AttemptedAt: clk.now().Add(-time.Hour),
+			Windows: []provider.UsageDiskWindow{{Key: "five_hour", Utilization: 10}},
+		}, true
+	}
+	c.save = func(provider.UsageDisk) {} // the write "fails": file stays old
+	c.store("k", windows(70), nil)
+
+	if v := c.peek("k"); !v.Known || v.Windows[0].Utilization != 70 {
+		t.Fatalf("newer memory reading hidden by older file: %+v", v)
+	}
+}
+
+func TestUsageCachePeekFailedOnlyFileIsNotData(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	c.load = func(k string) (provider.UsageDisk, bool) {
+		return provider.UsageDisk{Key: k, AttemptedAt: clk.now(), LastError: "401"}, true
+	}
+	v := c.peek("k")
+	if v.Known != true || v.Err == nil || len(v.Windows) != 0 {
+		t.Fatalf("failed-only file: want Known with Err and no windows, got %+v", v)
 	}
 }
