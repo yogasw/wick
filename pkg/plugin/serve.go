@@ -51,6 +51,11 @@ func Serve(mod connector.Module) {
 	}
 
 	args := os.Args[1:]
+	// --run-op: run one op in-process and exit (go run / dlv debugging
+	// against a local or admin-approved config). See runop.go.
+	if hasRunOpFlag(args) {
+		os.Exit(RunOpMain(mod, args, os.Stdout, os.Stderr))
+	}
 	dump := false
 	signKey := ""
 	for i := 0; i < len(args); i++ {
