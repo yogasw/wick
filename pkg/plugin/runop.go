@@ -440,6 +440,9 @@ func runOpMachine() string {
 	return name + "@" + host
 }
 
+// runOpMaxResponse bounds a wick reply read by --instance runs.
+const runOpMaxResponse = 64 << 20
+
 type wickTestClient struct {
 	base, token, secret, machine string
 	agent                        bool // token is a wick_cli_ session token
@@ -471,7 +474,10 @@ func (c *wickTestClient) do(ctx context.Context, method, path string, body any, 
 		return fmt.Errorf("wick %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, runOpMaxResponse+1))
+	if len(raw) > runOpMaxResponse {
+		return fmt.Errorf("wick %s %s: response is over %d MB; the op returned too much — narrow its input", method, path, runOpMaxResponse>>20)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var e struct {
 			Error string `json:"error"`
