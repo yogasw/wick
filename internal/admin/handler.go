@@ -365,6 +365,15 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/access-tokens", admin(h.accessTokensAdminPage))
 	mux.Handle("POST /admin/access-tokens/{id}/revoke", admin(h.revokeTokenAdmin))
 
+	// Plugin test requests: the admin page decides, the /api routes are the
+	// CLI side (PAT bearer) a locally run plugin binary talks to.
+	mux.Handle("GET /admin/plugins/dev-mode", admin(h.pluginTestsPage))
+	mux.Handle("POST /admin/plugins/dev-mode/settings", admin(h.pluginTestsSettings))
+	mux.Handle("POST /admin/plugins/dev-mode/{id}/{action}", admin(h.pluginTestDecide))
+	mux.HandleFunc("POST /api/plugin-tests", h.apiPluginTestCreate)
+	mux.HandleFunc("GET /api/plugin-tests/{id}", h.apiPluginTestGet)
+	mux.HandleFunc("POST /api/plugin-tests/{id}/config", h.apiPluginTestConfig)
+
 	// OAuth connected apps (admin override view).
 	mux.Handle("GET /admin/connections", admin(h.connectionsAdminPage))
 	mux.Handle("POST /admin/connections/{userID}/{clientID}/disconnect", admin(h.disconnectGrantAdmin))

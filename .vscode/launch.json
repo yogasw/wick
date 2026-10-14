@@ -53,6 +53,21 @@
       "preLaunchTask": "plugin: install debug target → lab"
     },
     {
+      // Run ONE op in-process (--run-op) — no wick-lab, no reattach. Breakpoint
+      // the op handler and F5. --instance borrows a real instance's config
+      // after an admin approves it on /admin/plugins/dev-mode (needs WICK_BASE_URL
+      // + WICK_PAT in .env); swap it for "--config", "cfg.json" to stay offline.
+      // Change program + args for another connector/op.
+      "name": "plugin run-op (loki)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/loki",
+      "cwd": "${workspaceFolder}/plugins",
+      "envFile": "${workspaceFolder}/.env",
+      "args": ["--run-op", "labels", "--params", "{}", "--instance", "Loki"]
+    },
+    {
       // Same reattach setup as "plugin debug (loki)" for the official Notion
       // connector. Set WICK_DEBUG_PLUGIN=notion in .env, breakpoint in
       // plugins/connector/notion/{service,repo}.go op handlers, then run the

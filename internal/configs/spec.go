@@ -39,6 +39,8 @@ const (
 	KeyStartupScript        = "startup_script"
 	KeyStartupScriptEnabled = "startup_script_enabled"
 	KeyProfile              = "profile"
+	KeyPluginTestEnabled    = "plugin_test_enabled"
+	KeyPluginTestConnectors = "plugin_test_connectors"
 	DefaultProfile          = "full"
 )
 
@@ -131,6 +133,20 @@ func appDefaults() []entity.Config {
 			Value:       "false",
 			Description: "Set to true once the default admin password has been changed. Used to show a security warning on startup.",
 			Hidden:      true,
+		},
+		{
+			Key:         KeyPluginTestEnabled,
+			Type:        "bool",
+			Value:       "false",
+			Hidden:      true,
+			Description: "Allow plugin test requests: a locally built connector plugin (go run / dlv with --run-op) may ask to run against a real instance's config. Each request still needs admin approval on /admin/plugins/dev-mode.",
+		},
+		{
+			Key:         KeyPluginTestConnectors,
+			Type:        "text",
+			Value:       "",
+			Hidden:      true,
+			Description: "Comma-separated connector keys that plugin test requests may target (e.g. metabase,loki). Empty = none.",
 		},
 		{
 			Key:         KeyStartupScriptEnabled,

@@ -1,0 +1,131 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// PluginTestsVM is the Admin → Plugins → Development mode tab
+// (/admin/plugins/dev-mode): the master switch, the connector allowlist,
+// and every request (newest first).
+type PluginTestsVM struct {
+	Enabled    bool
+	Connectors string
+	Rows       []PluginTestRow
+}
+
+// PluginTestRow is one request joined with its requester's name/email.
+type PluginTestRow struct {
+	Req        entity.PluginTestRequest
+	OwnerName  string
+	OwnerEmail string
+	// State is the displayed state: pending, active, expired, rejected, revoked.
+	State string
+}
+
+templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
+	@AdminLayout("Admin · Plugins · Development mode", "plugins", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			@pluginsTabs("dev-mode")
+			<div>
+				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Development mode</h1>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					A connector plugin run from source (<span class="font-mono">go run ./plugins/connector/&lt;key&gt; --run-op …</span>, or under dlv) can ask to use a real instance's config. Each request waits here until an admin approves it for a limited time. While approved, the requester's local process receives the instance's <strong>plaintext</strong> credentials — only allow connectors whose credentials are safe to hand to a developer machine (read-only ones).
+				</p>
+			</div>
+			<form action="/admin/plugins/dev-mode/settings" method="POST" class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
+				<label class="flex items-center gap-2 text-sm font-medium text-black-900 dark:text-white-100">
+					<input type="checkbox" name="enabled" value="true" checked?={ vm.Enabled }/>
+					Allow plugin test requests
+				</label>
+				<label class="mt-4 block text-sm font-medium text-black-900 dark:text-white-100" for="pt-connectors">Allowed connector keys</label>
+				<input id="pt-connectors" name="connectors" value={ vm.Connectors } placeholder="metabase,loki" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100"/>
+				<p class="mt-1 text-xs text-black-700 dark:text-black-600">Comma-separated. A request for any other connector is refused before it reaches this list.</p>
+				<button type="submit" class="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-700">Save</button>
+			</form>
+			if len(vm.Rows) == 0 {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					No requests yet.
+				</div>
+			} else {
+				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Requester</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Connector · instance</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">From</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">State</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Config fetched</th>
+								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range vm.Rows {
+								@pluginTestRowFragment(row)
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</main>
+	}
+}
+
+templ pluginTestRowFragment(row PluginTestRow) {
+	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
+		<td class="px-4 py-3">
+			<p class="font-medium text-black-900 dark:text-white-100">
+				if row.OwnerName != "" {
+					{ row.OwnerName }
+				} else {
+					{ row.OwnerEmail }
+				}
+			</p>
+			<p class="text-xs text-black-700 dark:text-black-600">
+				@ui.LocalTime(row.Req.CreatedAt, ui.TimeFormatISO)
+			</p>
+		</td>
+		<td class="px-4 py-3">
+			<p class="font-mono text-black-900 dark:text-white-100">{ row.Req.ConnectorKey }</p>
+			<p class="text-xs text-black-700 dark:text-black-600">{ row.Req.InstanceLabel }</p>
+			if row.Req.Operation != "" {
+				<p class="font-mono text-xs text-black-700 dark:text-black-600">op: { row.Req.Operation }</p>
+			}
+		</td>
+		<td class="px-4 py-3 font-mono text-xs text-black-700 dark:text-black-600">{ row.Req.Host }</td>
+		<td class="px-4 py-3 text-xs">
+			<span class="font-medium text-black-900 dark:text-white-100">{ row.State }</span>
+			if row.State == "active" && row.Req.ExpiresAt != nil {
+				<p class="text-black-700 dark:text-black-600">until @ui.LocalTime(*row.Req.ExpiresAt, ui.TimeFormatISO)</p>
+			}
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
+			{ itoa(row.Req.FetchCount) }×
+			if row.Req.LastFetchAt != nil {
+				<p>last @ui.LocalTime(*row.Req.LastFetchAt, ui.TimeFormatISO)</p>
+			}
+		</td>
+		<td class="px-4 py-3 text-right">
+			switch row.State {
+				case "pending":
+					<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/approve") } method="POST" class="inline-flex items-center gap-2">
+						<select name="minutes" class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100">
+							<option value="15">15 min</option>
+							<option value="30" selected>30 min</option>
+							<option value="60">1 hour</option>
+							<option value="120">2 hours</option>
+						</select>
+						<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Approve</button>
+					</form>
+					<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/reject") } method="POST" class="mt-1">
+						<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Reject</button>
+					</form>
+				case "active":
+					<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/revoke") } method="POST">
+						<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Revoke</button>
+					</form>
+			}
+		</td>
+	</tr>
+}

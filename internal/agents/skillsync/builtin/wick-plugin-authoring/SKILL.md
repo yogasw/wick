@@ -60,6 +60,8 @@ cd plugins && go test ./service/my_service/   # or ./tool/..., ./job/..., ./conn
 
 `plugins/tool/example_counter` and `plugins/service/example_a2a_repeater` have `main_test.go` files to copy from.
 
+**Connector: run one op from source.** `go run ./connector/<key> --run-op <op> --params '<json>' --config cfg.json` runs the op in-process and prints the result (`dlv debug ./connector/<key> -- --run-op …` to breakpoint it). `--instance <id|label>` (with `WICK_BASE_URL` + `WICK_PAT`) borrows a real instance's config after an admin approves the request on Admin → Plugins → Development mode — off by default, allowlisted connector keys only, non-destructive ops only. Details: `docs/plugins/authoring-connector.md`.
+
 ## 5. Build, install, verify
 
 ```bash

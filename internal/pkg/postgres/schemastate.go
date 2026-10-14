@@ -60,6 +60,7 @@ var migratedModels = []any{
 	&entity.CustomConnector{},
 	&entity.CustomConnectorMCPServer{},
 	&entity.PersonalAccessToken{},
+	&entity.PluginTestRequest{},
 	&entity.PushSubscription{},
 	&entity.UserChannelIdentity{},
 	&entity.OAuthClient{},
