@@ -237,8 +237,8 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 	}
 	l := log.With().Str("component", "pool").Str("session", req.SessionID).Str("agent", req.AgentName).Logger()
 
-	sess, cur, ok := p.sessionAgent(req.SessionID, req.AgentName)
-	if !ok || skipsFailover(sess.Meta) {
+	_, cur, ok := p.sessionAgent(req.SessionID, req.AgentName)
+	if !ok {
 		return no
 	}
 	instances, err := provider.Load()
@@ -694,8 +694,8 @@ func (p *Pool) maybeReturnHome(sessionID, agentName string) bool {
 	if spawning || (alive && !entryIdle(entry)) {
 		return false
 	}
-	sess, a, ok := p.sessionAgent(sessionID, agentName)
-	if !ok || skipsFailover(sess.Meta) || a.Failover == nil || a.Failover.HomeProvider == "" {
+	_, a, ok := p.sessionAgent(sessionID, agentName)
+	if !ok || a.Failover == nil || a.Failover.HomeProvider == "" {
 		return false
 	}
 	cur, home := normProviderKey(a.Provider), normProviderKey(a.Failover.HomeProvider)
@@ -866,19 +866,11 @@ func (p *Pool) sessionAgent(sessionID, agentName string) (session.Session, sessi
 	return sess, session.AgentEntry{}, false
 }
 
-// failoverHook is the spawn's OnFailover: none for a session failover
-// leaves alone, so its turn errors reach the run as they are.
-func failoverHook(m session.Meta, decide func(provider.FailoverRequest) provider.FailoverVerdict) func(provider.FailoverRequest) provider.FailoverVerdict {
-	if skipsFailover(m) {
-		return nil
-	}
+// failoverHook is the spawn's OnFailover. Every session takes part, a
+// workflow run's too: its agent node waits through the failover for the
+// re-sent turn's Done, or fails on the Error an aborted failover publishes.
+func failoverHook(_ session.Meta, decide func(provider.FailoverRequest) provider.FailoverVerdict) func(provider.FailoverRequest) provider.FailoverVerdict {
 	return decide
-}
-
-// skipsFailover: sessions failover leaves alone. A workflow run picks its
-// provider per node and reports a failed turn to the run; it never moves.
-func skipsFailover(m session.Meta) bool {
-	return m.Origin == session.OriginWorkflow
 }
 
 // normProviderKey is the "type/name" form of a provider key; a bare type

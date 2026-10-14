@@ -191,11 +191,13 @@ func TestResendSpawnFailedNotProviderKeepsTarget(t *testing.T) {
 	}
 }
 
-// A workflow session neither fails over nor returns home.
-func TestFailoverSkipsWorkflowSessions(t *testing.T) {
+// A workflow run's agent node chats through the same pool as a room: a
+// limit on its provider moves the session to the chain's next target and
+// the node sees the target's turn, not the limit error.
+func TestFailoverCoversWorkflowSessions(t *testing.T) {
 	p, layout, sp, rec := failoverEnv(t, true, map[string][][]string{
 		"a": {foLimitLines("")},
-		"b": {foOKLines("never")},
+		"b": {foOKLines("done on b")},
 	}, false)
 	sess, err := session.Load(layout, "S")
 	if err != nil {
@@ -205,32 +207,29 @@ func TestFailoverSkipsWorkflowSessions(t *testing.T) {
 	if err := session.SaveMeta(layout, "S", sess.Meta); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Send(context.Background(), "S", "default", "ui", "user", "hello"); err != nil {
+	if err := p.Send(context.Background(), "S", "default", "workflow", "user", "hello"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return rec.count(event.Error) == 1 }, 10*time.Second)
-	if n := spawnCount(sp, "b"); n != 0 {
-		t.Fatalf("claude/b spawned %d times", n)
+	waitFor(t, func() bool { return len(sp.sent("b")) == 1 }, 10*time.Second)
+	if got := sp.sent("b")[0]; got != "hello" {
+		t.Fatalf("b got %q, want the original message", got)
 	}
-	if a := agentNow(t, layout); a.Provider != "claude/a" {
-		t.Fatalf("provider moved to %q", a.Provider)
+	if a := agentNow(t, layout); a.Provider != "claude/b" {
+		t.Fatalf("provider = %q, want claude/b", a.Provider)
 	}
-	if v := p.decideFailover(provider.FailoverRequest{SessionID: "S", AgentName: "default", Instance: "claude/a", Kind: event.ErrLimit, Text: "x"}); v.Rerun {
-		t.Fatal("decideFailover moved a workflow session")
+	if n := rec.count(event.Error); n != 0 {
+		t.Fatalf("%d Error events reached the run, want none", n)
 	}
 
-	// On a stand-in with a healthy home: a workflow session stays, any
-	// other returns.
+	// On a stand-in with a healthy home a workflow session returns, like
+	// any other.
 	p.Stop()
-	standIn := func() {
-		t.Helper()
-		if err := session.UpdateAgents(layout, "S", func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
-			agents[0].Provider = "claude/b"
-			agents[0].Failover = &session.FailoverState{HomeProvider: "claude/a"}
-			return agents, true, nil
-		}); err != nil {
-			t.Fatal(err)
-		}
+	if err := session.UpdateAgents(layout, "S", func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
+		agents[0].Provider = "claude/b"
+		agents[0].Failover = &session.FailoverState{HomeProvider: "claude/a"}
+		return agents, true, nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	saveInstance(t, provider.Instance{Type: provider.TypeClaude, Name: "a", Failover: &provider.FailoverConfig{
 		Enabled: true, ReturnHome: true, Triggers: provider.FailoverTriggers,
@@ -239,17 +238,8 @@ func TestFailoverSkipsWorkflowSessions(t *testing.T) {
 	provider.MarkHealthy(provider.HealthKey(provider.Instance{Type: provider.TypeClaude, Name: "a"}))
 	p2 := New(PoolConfig{MaxConcurrent: 4, IdleTimeout: 5 * time.Second, Layout: layout, Factory: p.cfg.Factory})
 	t.Cleanup(p2.Stop)
-	standIn()
-	if p2.maybeReturnHome("S", "default") {
-		t.Fatal("a workflow session returned home")
-	}
-	sess.Meta.Origin = session.OriginUI
-	if err := session.SaveMeta(layout, "S", sess.Meta); err != nil {
-		t.Fatal(err)
-	}
-	standIn()
 	if !p2.maybeReturnHome("S", "default") {
-		t.Fatal("control: a UI session did not return home")
+		t.Fatal("a workflow session did not return home")
 	}
 }
 
