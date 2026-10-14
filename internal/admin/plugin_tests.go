@@ -47,11 +47,18 @@ import (
 //  2. an admin approved this one request, and it has not expired or been
 //     revoked;
 //  3. the caller is the user who asked and can still see the instance;
-//  4. the caller holds the request's client secret — a random value the
-//     requesting binary keeps in a local file — so an approval is bound to
-//     the machine that asked, not just to a token that could leak.
+//  4. the request is bound to everything about who filed it, and each use
+//     must match all of it: the same bearer credential (that PAT, or that
+//     agent session — another token, even of the same user, files its own
+//     request), the same client secret (a random value the requesting
+//     binary keeps in a local file), the same machine ("<os user>@<host>")
+//     and the same client IP. Any mismatch is refused, never re-bound.
 
-const pluginTestMaxMinutes = 240
+const (
+	pluginTestMaxMinutes  = 240
+	pluginTestHistoryDays = 7
+	pluginTestHistoryRows = 100
+)
 
 func (h *Handler) pluginTestAllowed() error {
 	if !strings.EqualFold(strings.TrimSpace(h.configs.Get(configs.KeyPluginTestEnabled)), "true") {
@@ -111,7 +118,11 @@ func hashPluginTestSecret(secret string) string {
 func (h *Handler) pluginTestsPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var reqs []entity.PluginTestRequest
-	if err := h.repo.db.WithContext(ctx).Order("created_at desc").Limit(200).Find(&reqs).Error; err != nil {
+	// History is a short decision log (pending / allowed / denied / expired),
+	// not an archive: the last pluginTestHistoryDays days, capped.
+	if err := h.repo.db.WithContext(ctx).
+		Where("created_at > ? OR status = ?", time.Now().AddDate(0, 0, -pluginTestHistoryDays), entity.PluginTestPending).
+		Order("created_at desc").Limit(pluginTestHistoryRows).Find(&reqs).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -205,6 +216,9 @@ type pluginTestCreateBody struct {
 	// ClientSecret is the requesting machine's local secret; only its hash
 	// is stored, and every later use must present it again.
 	ClientSecret string `json:"client_secret"`
+	// Machine is "<os user>@<hostname>" of the runner; later uses send it in
+	// the X-Plugin-Test-Machine header.
+	Machine string `json:"machine"`
 }
 
 type pluginTestView struct {
@@ -233,6 +247,8 @@ type pluginTestCaller struct {
 	// agentSession is set when the bearer was a session-bound wick_cli_
 	// token: an agent acting for the session's owner.
 	agentSession string
+	// credential identifies the bearer itself (see PluginTestRequest.Credential).
+	credential string
 }
 
 // pluginTestAuth authenticates the caller. Two bearers are accepted: a
@@ -257,11 +273,13 @@ func (h *Handler) pluginTestAuth(r *http.Request) (pluginTestCaller, error) {
 			return pluginTestCaller{}, errors.New("wick_cli_ token is unknown or expired — mint a fresh one")
 		}
 		uid, c.agentSession = grant.UserID, grant.SessionID
+		c.credential = "session:" + grant.SessionID
 	} else {
-		var err error
-		if uid, err = h.tokens.Authenticate(r.Context(), tok); err != nil {
+		pat, err := h.tokens.AuthenticateToken(r.Context(), tok)
+		if err != nil {
 			return pluginTestCaller{}, errors.New("invalid token")
 		}
+		uid, c.credential = pat.UserID, "pat:"+pat.ID
 	}
 	u, err := h.auth.GetUserByID(r.Context(), uid)
 	if err != nil || u == nil || !u.Approved {
@@ -338,6 +356,12 @@ func (h *Handler) apiPluginTestCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secretHash := hashPluginTestSecret(body.ClientSecret)
+	machine := truncateStr(body.Machine, 200)
+	if machine == "" {
+		pluginTestErr(w, http.StatusBadRequest, errors.New("machine is required (the run-op binary sends <os user>@<hostname>; rebuild against a wick that has this feature)"))
+		return
+	}
+	ip := truncateStr(pluginTestClientIP(r), 64)
 	if err := h.pluginTestAllowed(); err != nil {
 		pluginTestErr(w, http.StatusForbidden, err)
 		return
@@ -349,12 +373,15 @@ func (h *Handler) apiPluginTestCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse a still-useful request for the same user + instance + machine, so
-	// repeated `go run` / dlv sessions inside one approval window need no new
-	// approval. Another machine (different secret) files its own request.
+	// Reuse a still-useful request only when EVERYTHING matches (user,
+	// instance, credential, secret, machine, IP), so repeated `go run` / dlv
+	// sessions inside one approval window need no new approval. Anything
+	// different — another token, another person, another machine or network
+	// — files its own request and waits for its own approval.
 	var existing []entity.PluginTestRequest
 	if err := h.repo.db.WithContext(ctx).
-		Where("user_id = ? AND instance_id = ? AND secret_hash = ? AND status IN ?", u.ID, inst.ID, secretHash,
+		Where("user_id = ? AND instance_id = ? AND credential = ? AND secret_hash = ? AND machine = ? AND request_ip = ? AND status IN ?",
+			u.ID, inst.ID, caller.credential, secretHash, machine, ip,
 			[]string{entity.PluginTestPending, entity.PluginTestApproved}).
 		Order("created_at desc").Find(&existing).Error; err != nil {
 		pluginTestErr(w, http.StatusInternalServerError, err)
@@ -379,7 +406,9 @@ func (h *Handler) apiPluginTestCreate(w http.ResponseWriter, r *http.Request) {
 		InstanceLabel: inst.Label,
 		Operation:     truncateStr(body.Operation, 120),
 		Host:          truncateStr(host, 300),
-		RequestIP:     truncateStr(pluginTestClientIP(r), 64),
+		Machine:       machine,
+		Credential:    caller.credential,
+		RequestIP:     ip,
 		SecretHash:    secretHash,
 		Status:        entity.PluginTestPending,
 	}
@@ -400,6 +429,10 @@ func (h *Handler) ownPluginTest(w http.ResponseWriter, r *http.Request) (*entity
 	var q entity.PluginTestRequest
 	if err := h.repo.db.WithContext(r.Context()).First(&q, "id = ?", r.PathValue("id")).Error; err != nil || q.UserID != caller.user.ID {
 		pluginTestErr(w, http.StatusNotFound, errors.New("request not found"))
+		return nil, caller, false
+	}
+	if q.Credential != caller.credential {
+		pluginTestErr(w, http.StatusForbidden, errors.New("this request was filed with another token; file your own request"))
 		return nil, caller, false
 	}
 	return &q, caller, true
@@ -429,6 +462,15 @@ func (h *Handler) usablePluginTest(w http.ResponseWriter, r *http.Request) (*ent
 	got := hashPluginTestSecret(r.Header.Get("X-Plugin-Test-Secret"))
 	if q.SecretHash == "" || subtle.ConstantTimeCompare([]byte(got), []byte(q.SecretHash)) != 1 {
 		pluginTestErr(w, http.StatusForbidden, errors.New("this approval belongs to the machine that filed the request (client secret mismatch)"))
+		return nil, caller, false
+	}
+	// Same machine and same network as the request, every time.
+	if strings.TrimSpace(r.Header.Get("X-Plugin-Test-Machine")) != q.Machine {
+		pluginTestErr(w, http.StatusForbidden, errors.New("this approval belongs to "+q.Machine+" (machine mismatch); file a new request from this machine"))
+		return nil, caller, false
+	}
+	if ip := truncateStr(pluginTestClientIP(r), 64); ip != q.RequestIP {
+		pluginTestErr(w, http.StatusForbidden, errors.New("this approval belongs to IP "+q.RequestIP+", not "+ip+"; file a new request"))
 		return nil, caller, false
 	}
 	// The switch is re-checked on every use: turning it off cuts every

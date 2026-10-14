@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -322,6 +323,7 @@ func newWickTestClient(o runOpOptions) (*wickTestClient, error) {
 		return nil, err
 	}
 	c.secret = secret
+	c.machine = runOpMachine()
 	return c, nil
 }
 
@@ -362,7 +364,8 @@ func awaitApproval(ctx context.Context, c *wickTestClient, key string, o runOpOp
 	}
 	var v pluginTestView
 	if err := c.do(ctx, http.MethodPost, "/api/plugin-tests", map[string]string{
-		"connector_key": key, "instance": o.instance, "operation": o.op, "host": host, "client_secret": c.secret,
+		"connector_key": key, "instance": o.instance, "operation": o.op, "host": host,
+		"client_secret": c.secret, "machine": c.machine,
 	}, &v); err != nil {
 		return v, err
 	}
@@ -437,10 +440,21 @@ func runViaWick(ctx context.Context, c *wickTestClient, v pluginTestView, op str
 	return out.Result, nil
 }
 
+// runOpMachine is "<os user>@<hostname>". wick binds an approval to it and
+// refuses a use from anything else.
+func runOpMachine() string {
+	host, _ := os.Hostname()
+	name := os.Getenv("USER")
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		name = u.Username
+	}
+	return name + "@" + host
+}
+
 type wickTestClient struct {
-	base, token, secret string
-	agent               bool // token is a wick_cli_ session token
-	http                *http.Client
+	base, token, secret, machine string
+	agent                        bool // token is a wick_cli_ session token
+	http                         *http.Client
 }
 
 func (c *wickTestClient) do(ctx context.Context, method, path string, body any, out any) error {
@@ -456,6 +470,9 @@ func (c *wickTestClient) do(ctx context.Context, method, path string, body any, 
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if c.secret != "" {
 		req.Header.Set("X-Plugin-Test-Secret", c.secret)
+	}
+	if c.machine != "" {
+		req.Header.Set("X-Plugin-Test-Machine", c.machine)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

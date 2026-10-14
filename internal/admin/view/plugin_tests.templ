@@ -6,8 +6,8 @@ import (
 )
 
 // PluginTestsVM is the Admin → Plugins → Development mode tab
-// (/admin/plugins/dev-mode): the master switch, the connector allowlist,
-// and every request (newest first).
+// (/admin/plugins/dev-mode): the master switch and the recent requests
+// (newest first).
 type PluginTestsVM struct {
 	Enabled bool
 	Rows    []PluginTestRow
@@ -29,7 +29,7 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 			<div>
 				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Development mode</h1>
 				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
-					A connector plugin run from source (<span class="font-mono">go run ./plugins/connector/&lt;key&gt; --run-op …</span>, or under dlv) can ask to test against a real instance. Each request waits here until you approve it for a limited time, and only works from the machine that filed it. A person (personal access token) receives the instance's <strong>plaintext</strong> config in their own process; an agent session never does — wick runs the candidate binary itself and the agent only gets the masked result. Approve only what you would let that person or agent see.
+					A connector plugin run from source (<span class="font-mono">go run ./plugins/connector/&lt;key&gt; --run-op …</span>, or under dlv) can ask to test against a real instance. Each request waits here until you approve it for a limited time, and is bound to whoever filed it: the same token, machine and IP. Any mismatch is refused; another person or token files its own request. History keeps the last 7 days. A person (personal access token) receives the instance's <strong>plaintext</strong> config in their own process; an agent session never does — wick runs the candidate binary itself and the agent only gets the masked result. Approve only what you would let that person or agent see.
 				</p>
 			</div>
 			<form action="/admin/plugins/dev-mode/settings" method="POST" class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
@@ -51,7 +51,7 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Requester</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Connector · instance</th>
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">From (IP seen by wick · self-reported host)</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Bound to (IP · machine · token)</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">State</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Used</th>
 								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
@@ -92,7 +92,9 @@ templ pluginTestRowFragment(row PluginTestRow) {
 		</td>
 		<td class="px-4 py-3 font-mono text-xs text-black-700 dark:text-black-600">
 			<p class="text-black-900 dark:text-white-100">{ row.Req.RequestIP }</p>
-			<p>{ row.Req.Host }</p>
+			<p>{ row.Req.Machine }</p>
+			<p>{ row.Req.Credential }</p>
+			<p class="opacity-70">{ row.Req.Host }</p>
 		</td>
 		<td class="px-4 py-3 text-xs">
 			<span class="font-medium text-black-900 dark:text-white-100">{ row.State }</span>

@@ -24,9 +24,18 @@ type PluginTestRequest struct {
 	Operation string `gorm:"type:varchar(120)"`
 	// Host is the machine/cwd the binary SAYS it runs on (self-reported).
 	Host string `gorm:"type:varchar(300)"`
-	// RequestIP is the client IP wick saw when the request was filed, and
-	// LastFetchIP the one that last fetched the config — observed by the
-	// server, unlike Host.
+	// Machine is the runner's "<os user>@<hostname>" sent with the request
+	// and again with every use; a different value is refused.
+	Machine string `gorm:"type:varchar(200)"`
+	// Credential is WHICH bearer filed the request: "pat:<token id>" for a
+	// personal access token, "session:<session id>" for an agent session.
+	// Every use must come with that same credential, so another token — of
+	// the same user or anyone else — cannot ride on this approval; it has to
+	// file (and get approved) its own request.
+	Credential string `gorm:"type:varchar(80)"`
+	// RequestIP is the client IP wick saw when the request was filed; every
+	// use must come from the same IP. LastFetchIP is the one that last used
+	// it — both observed by the server, unlike Host.
 	RequestIP   string `gorm:"type:varchar(64)"`
 	LastFetchIP string `gorm:"type:varchar(64)"`
 	// SecretHash is sha256 of a random secret the requesting binary keeps in
