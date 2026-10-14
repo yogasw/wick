@@ -132,6 +132,17 @@ func SetLayout(l agentconfig.Layout) {
 		}
 		return l.SessionDir(sessionID)
 	})
+	// Connector ops that return a file write it to <session cwd>/artifacts/.
+	connectors.SetArtifactDirResolver(func(sessionID string) (string, error) {
+		if err := storage.ValidateSessionID(sessionID); err != nil {
+			return "", err
+		}
+		sess, err := session.Load(l, sessionID)
+		if err != nil {
+			return "", err
+		}
+		return resolveSessionCwd(sess)
+	})
 }
 
 // SetSpawnLogger wires in the per-spawn jsonl writer/reader. The

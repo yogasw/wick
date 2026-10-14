@@ -2362,6 +2362,17 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		} else {
 			res.Status = entity.ConnectorRunStatusSuccess
 			res.ResponseJSON = maskOut(string(bytes))
+			// A file the op returned goes to the session's artifacts/
+			// folder after masking; only its path stays in the result
+			// (and in the run log).
+			if out, ferr := extractFileOutput(res.ResponseJSON, sessionID); ferr != nil {
+				res.Status = entity.ConnectorRunStatusError
+				res.ResponseJSON = ""
+				res.ErrorMessage = maskOut(ferr.Error())
+				execErr = ferr
+			} else {
+				res.ResponseJSON = out
+			}
 		}
 	}
 
