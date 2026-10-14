@@ -9,9 +9,8 @@ import (
 // (/admin/plugins/dev-mode): the master switch, the connector allowlist,
 // and every request (newest first).
 type PluginTestsVM struct {
-	Enabled    bool
-	Connectors string
-	Rows       []PluginTestRow
+	Enabled bool
+	Rows    []PluginTestRow
 }
 
 // PluginTestRow is one request joined with its requester's name/email.
@@ -30,7 +29,7 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 			<div>
 				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Development mode</h1>
 				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
-					A connector plugin run from source (<span class="font-mono">go run ./plugins/connector/&lt;key&gt; --run-op …</span>, or under dlv) can ask to use a real instance's config. Each request waits here until an admin approves it for a limited time. While approved, the requester's local process receives the instance's <strong>plaintext</strong> credentials — only allow connectors whose credentials are safe to hand to a developer machine (read-only ones).
+					A connector plugin run from source (<span class="font-mono">go run ./plugins/connector/&lt;key&gt; --run-op …</span>, or under dlv) can ask to test against a real instance. Each request waits here until you approve it for a limited time, and only works from the machine that filed it. A person (personal access token) receives the instance's <strong>plaintext</strong> config in their own process; an agent session never does — wick runs the candidate binary itself and the agent only gets the masked result. Approve only what you would let that person or agent see.
 				</p>
 			</div>
 			<form action="/admin/plugins/dev-mode/settings" method="POST" class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
@@ -38,9 +37,7 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 					<input type="checkbox" name="enabled" value="true" checked?={ vm.Enabled }/>
 					Allow plugin test requests
 				</label>
-				<label class="mt-4 block text-sm font-medium text-black-900 dark:text-white-100" for="pt-connectors">Allowed connector keys</label>
-				<input id="pt-connectors" name="connectors" value={ vm.Connectors } placeholder="metabase,loki" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100"/>
-				<p class="mt-1 text-xs text-black-700 dark:text-black-600">Comma-separated. A request for any other connector is refused before it reaches this list.</p>
+				<p class="mt-2 text-xs text-black-700 dark:text-black-600">Off by default. When on, anyone with access to an instance can file a request for it; nothing runs until you approve that request below. Turning this off cuts every approved request at once.</p>
 				<button type="submit" class="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-700">Save</button>
 			</form>
 			if len(vm.Rows) == 0 {
@@ -54,9 +51,9 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Requester</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Connector · instance</th>
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">From</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">From (IP seen by wick · self-reported host)</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">State</th>
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Config fetched</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Used</th>
 								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
 							</tr>
 						</thead>
@@ -93,7 +90,10 @@ templ pluginTestRowFragment(row PluginTestRow) {
 				<p class="font-mono text-xs text-black-700 dark:text-black-600">op: { row.Req.Operation }</p>
 			}
 		</td>
-		<td class="px-4 py-3 font-mono text-xs text-black-700 dark:text-black-600">{ row.Req.Host }</td>
+		<td class="px-4 py-3 font-mono text-xs text-black-700 dark:text-black-600">
+			<p class="text-black-900 dark:text-white-100">{ row.Req.RequestIP }</p>
+			<p>{ row.Req.Host }</p>
+		</td>
 		<td class="px-4 py-3 text-xs">
 			<span class="font-medium text-black-900 dark:text-white-100">{ row.State }</span>
 			if row.State == "active" && row.Req.ExpiresAt != nil {
@@ -104,6 +104,7 @@ templ pluginTestRowFragment(row PluginTestRow) {
 			{ itoa(row.Req.FetchCount) }×
 			if row.Req.LastFetchAt != nil {
 				<p>last @ui.LocalTime(*row.Req.LastFetchAt, ui.TimeFormatISO)</p>
+				<p class="font-mono">{ row.Req.LastFetchIP }</p>
 			}
 		</td>
 		<td class="px-4 py-3 text-right">

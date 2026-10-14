@@ -1835,6 +1835,12 @@ type ExecuteParams struct {
 	// disable rows, admin-only flags, OAuth accounts) are skipped — a
 	// session instance has none of that backing state.
 	SessionInstance *SessionInstanceTarget
+	// ModuleOverride, when non-nil, executes this module instead of the one
+	// registered for the row's key — a candidate plugin binary under an
+	// admin-approved plugin test request. Everything else is the row's: its
+	// config, access checks, op states, masking and run log. The override's
+	// Meta.Key must equal the row's key.
+	ModuleOverride *connector.Module
 }
 
 // SessionInstanceTarget describes an ephemeral session-workspace
@@ -1920,6 +1926,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
 		}
 		mod = m
+		if p.ModuleOverride != nil {
+			if p.ModuleOverride.Meta.Key != c.Key {
+				return nil, fmt.Errorf("candidate plugin %q cannot run against a %q instance", p.ModuleOverride.Meta.Key, c.Key)
+			}
+			mod = *p.ModuleOverride
+		}
 	}
 
 	// Type-level off-switch (manager header kebab). Disabling a connector

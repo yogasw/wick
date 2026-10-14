@@ -3,6 +3,8 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -32,11 +35,14 @@ import (
 //   - --config <file.json>: a local JSON object of config keys (dummy or
 //     staging credentials). Never talks to wick.
 //   - --instance <id|label>: a real wick instance. The binary files a plugin
-//     test request with wick (WICK_BASE_URL + a personal access token in
-//     WICK_PAT), waits until an admin approves it on /admin/plugins/dev-mode,
-//     then receives that instance's config. wick must have plugin tests
-//     switched on and this connector in its allowlist, and only ops not
-//     marked destructive may run this way.
+//     test request with wick (WICK_BASE_URL plus a token) and waits until an
+//     admin approves it on Admin → Plugins → Development mode. With WICK_PAT
+//     (a person) the instance's config then comes to this process and the op
+//     runs here, so breakpoints work. With WICK_CLI_TOKEN (an agent session
+//     on the wick host) wick runs this binary itself and only the masked
+//     result comes back. The approval is bound to this machine through a
+//     secret kept in the user cache dir, and only ops not marked destructive
+//     may run this way.
 //
 // Values the op passes to c.Mask come back as "[masked]" in the printed
 // result — the local process has no wick encryption key.
@@ -123,7 +129,23 @@ func RunOpMain(mod connector.Module, args []string, stdout, stderr io.Writer) in
 	if o.configFile != "" {
 		cfg, err = loadRunOpConfigFile(o.configFile)
 	} else {
-		cfg, instanceID, err = borrowInstanceConfig(ctx, mod.Meta.Key, o, stderr)
+		var c *wickTestClient
+		if c, err = newWickTestClient(o); err == nil {
+			var v pluginTestView
+			if v, err = awaitApproval(ctx, c, mod.Meta.Key, o, stderr); err == nil {
+				if c.agent {
+					// Agent session: wick runs this binary; nothing to run here.
+					out, rerr := runViaWick(ctx, c, v, o.op, rawInput)
+					if rerr != nil {
+						fmt.Fprintln(stderr, rerr)
+						return runOpErr
+					}
+					printRunOpResult(stdout, out, o.raw)
+					return runOpOK
+				}
+				cfg, instanceID, err = borrowInstanceConfig(ctx, c, v)
+			}
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -138,14 +160,18 @@ func RunOpMain(mod connector.Module, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, err)
 		return runOpErr
 	}
-	if !o.raw {
+	printRunOpResult(stdout, out, o.raw)
+	return runOpOK
+}
+
+func printRunOpResult(stdout io.Writer, out []byte, raw bool) {
+	if !raw {
 		var buf bytes.Buffer
 		if json.Indent(&buf, out, "", "  ") == nil {
 			out = buf.Bytes()
 		}
 	}
 	fmt.Fprintln(stdout, string(out))
-	return runOpOK
 }
 
 // loadRunOpParams turns the op input JSON object into the string map the
@@ -274,30 +300,72 @@ type pluginTestView struct {
 	ApproveURL string     `json:"approve_url"`
 }
 
-// borrowInstanceConfig files (or reuses) a plugin test request, waits for
-// approval, and fetches the instance config.
-func borrowInstanceConfig(ctx context.Context, key string, o runOpOptions, stderr io.Writer) (map[string]string, string, error) {
+// newWickTestClient builds the client for --instance from the environment.
+// WICK_PAT = a person: the config comes to this process. WICK_CLI_TOKEN (and
+// no PAT) = an agent session on the wick host: wick runs this binary itself
+// and only the masked result comes back.
+func newWickTestClient(o runOpOptions) (*wickTestClient, error) {
 	base := strings.TrimRight(strings.TrimSpace(o.wickURL), "/")
 	if base == "" {
-		return nil, "", errors.New("--instance needs the wick URL: set WICK_BASE_URL or pass --wick-url")
+		return nil, errors.New("--instance needs the wick URL: set WICK_BASE_URL or pass --wick-url")
 	}
-	pat := strings.TrimSpace(os.Getenv("WICK_PAT"))
-	if pat == "" {
-		return nil, "", errors.New("--instance needs a wick personal access token in WICK_PAT (create one at /profile/tokens)")
+	c := &wickTestClient{base: base, http: &http.Client{Timeout: 5 * time.Minute}}
+	if pat := strings.TrimSpace(os.Getenv("WICK_PAT")); pat != "" {
+		c.token = pat
+	} else if cli := strings.TrimSpace(os.Getenv("WICK_CLI_TOKEN")); cli != "" {
+		c.token, c.agent = cli, true
+	} else {
+		return nil, errors.New("--instance needs a token: WICK_PAT (a person, create one at /profile/tokens) or WICK_CLI_TOKEN (an agent session on the wick host)")
 	}
-	c := &wickTestClient{base: base, pat: pat, http: &http.Client{Timeout: 30 * time.Second}}
+	secret, err := runOpClientSecret()
+	if err != nil {
+		return nil, err
+	}
+	c.secret = secret
+	return c, nil
+}
 
+// runOpClientSecret returns this machine's run-op secret, creating it on
+// first use. wick stores only its hash with each request and wants the
+// secret back on every use, so an approval works only where it was asked
+// for. Kept in the user cache dir (0600), never sent anywhere else.
+func runOpClientSecret() (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("locate cache dir for the run-op secret: %w", err)
+	}
+	dir = filepath.Join(dir, "wick-runop")
+	path := filepath.Join(dir, "client-secret")
+	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
+		return strings.TrimSpace(string(b)), nil
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	secret := hex.EncodeToString(buf)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		return "", fmt.Errorf("write run-op secret: %w", err)
+	}
+	return secret, nil
+}
+
+// awaitApproval files (or reuses) a plugin test request and waits until an
+// admin approves it.
+func awaitApproval(ctx context.Context, c *wickTestClient, key string, o runOpOptions, stderr io.Writer) (pluginTestView, error) {
 	host, _ := os.Hostname()
 	if wd, err := os.Getwd(); err == nil {
 		host += ":" + wd
 	}
 	var v pluginTestView
 	if err := c.do(ctx, http.MethodPost, "/api/plugin-tests", map[string]string{
-		"connector_key": key, "instance": o.instance, "operation": o.op, "host": host,
+		"connector_key": key, "instance": o.instance, "operation": o.op, "host": host, "client_secret": c.secret,
 	}, &v); err != nil {
-		return nil, "", err
+		return v, err
 	}
-
 	deadline := time.Now().Add(o.wait)
 	announced := false
 	for v.State == "pending" {
@@ -306,37 +374,73 @@ func borrowInstanceConfig(ctx context.Context, key string, o runOpOptions, stder
 			announced = true
 		}
 		if time.Now().After(deadline) {
-			return nil, "", fmt.Errorf("not approved within %s (request %s stays pending; rerun to keep waiting)", o.wait, v.ID)
+			return v, fmt.Errorf("not approved within %s (request %s stays pending; rerun to keep waiting)", o.wait, v.ID)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, "", ctx.Err()
+			return v, ctx.Err()
 		case <-time.After(3 * time.Second):
 		}
 		if err := c.do(ctx, http.MethodGet, "/api/plugin-tests/"+v.ID, nil, &v); err != nil {
-			return nil, "", err
+			return v, err
 		}
 	}
 	if v.State != "active" {
-		return nil, "", fmt.Errorf("plugin test %s is %s", v.ID, v.State)
+		return v, fmt.Errorf("plugin test %s is %s", v.ID, v.State)
 	}
+	if v.ExpiresAt != nil {
+		fmt.Fprintf(stderr, "run-op: approved — %s · %s, valid until %s\n", key, v.Instance, v.ExpiresAt.Local().Format(time.Kitchen))
+	}
+	return v, nil
+}
 
+// borrowInstanceConfig fetches an approved request's config into this
+// process (person / PAT path).
+func borrowInstanceConfig(ctx context.Context, c *wickTestClient, v pluginTestView) (map[string]string, string, error) {
 	var cfgResp struct {
-		Configs   map[string]string `json:"configs"`
-		ExpiresAt *time.Time        `json:"expires_at"`
+		Configs map[string]string `json:"configs"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/api/plugin-tests/"+v.ID+"/config", nil, &cfgResp); err != nil {
 		return nil, "", err
 	}
-	if cfgResp.ExpiresAt != nil {
-		fmt.Fprintf(stderr, "run-op: using %s · %s (approval valid until %s)\n", key, v.Instance, cfgResp.ExpiresAt.Local().Format(time.Kitchen))
-	}
 	return cfgResp.Configs, v.InstanceID, nil
 }
 
+// runViaWick asks wick to run this very binary against the approved
+// instance (agent path). The config stays inside wick; the result comes back
+// already masked (wick_enc_ tokens).
+func runViaWick(ctx context.Context, c *wickTestClient, v pluginTestView, op string, rawInput []byte) ([]byte, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locate this binary: %w", err)
+	}
+	input := map[string]any{}
+	if len(bytes.TrimSpace(rawInput)) > 0 {
+		if err := json.Unmarshal(rawInput, &input); err != nil {
+			return nil, fmt.Errorf("op input must be a JSON object: %w", err)
+		}
+	}
+	var out struct {
+		RunID  string          `json:"run_id"`
+		Result json.RawMessage `json:"result"`
+		Error  string          `json:"error"`
+	}
+	err = c.do(ctx, http.MethodPost, "/api/plugin-tests/"+v.ID+"/run", map[string]any{
+		"binary": self, "operation": op, "input": input,
+	}, &out)
+	if err != nil {
+		return nil, err
+	}
+	if out.Error != "" {
+		return nil, errors.New(out.Error)
+	}
+	return out.Result, nil
+}
+
 type wickTestClient struct {
-	base, pat string
-	http      *http.Client
+	base, token, secret string
+	agent               bool // token is a wick_cli_ session token
+	http                *http.Client
 }
 
 func (c *wickTestClient) do(ctx context.Context, method, path string, body any, out any) error {
@@ -349,7 +453,10 @@ func (c *wickTestClient) do(ctx context.Context, method, path string, body any, 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.pat)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.secret != "" {
+		req.Header.Set("X-Plugin-Test-Secret", c.secret)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

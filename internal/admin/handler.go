@@ -373,6 +373,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.HandleFunc("POST /api/plugin-tests", h.apiPluginTestCreate)
 	mux.HandleFunc("GET /api/plugin-tests/{id}", h.apiPluginTestGet)
 	mux.HandleFunc("POST /api/plugin-tests/{id}/config", h.apiPluginTestConfig)
+	mux.HandleFunc("POST /api/plugin-tests/{id}/run", h.apiPluginTestRun)
 
 	// OAuth connected apps (admin override view).
 	mux.Handle("GET /admin/connections", admin(h.connectionsAdminPage))

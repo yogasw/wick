@@ -22,8 +22,17 @@ type PluginTestRequest struct {
 	InstanceLabel string `gorm:"type:varchar(200)"`
 	// Operation is the op the requester said they would run (informational).
 	Operation string `gorm:"type:varchar(120)"`
-	// Host is the machine/cwd the request came from (informational).
+	// Host is the machine/cwd the binary SAYS it runs on (self-reported).
 	Host string `gorm:"type:varchar(300)"`
+	// RequestIP is the client IP wick saw when the request was filed, and
+	// LastFetchIP the one that last fetched the config — observed by the
+	// server, unlike Host.
+	RequestIP   string `gorm:"type:varchar(64)"`
+	LastFetchIP string `gorm:"type:varchar(64)"`
+	// SecretHash is sha256 of a random secret the requesting binary keeps in
+	// a local file. Fetching the config needs that secret, so an approval
+	// only works on the machine that asked — a leaked PAT alone is not enough.
+	SecretHash string `gorm:"type:varchar(64)"`
 	// Status: pending | approved | rejected | revoked. Expiry is ExpiresAt,
 	// not a status, so an approved row simply stops working when time runs out.
 	Status      string `gorm:"type:varchar(16);not null;index"`
