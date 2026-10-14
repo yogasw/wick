@@ -252,7 +252,7 @@ type pluginTestView struct {
 }
 
 func (h *Handler) toPluginTestView(q entity.PluginTestRequest) pluginTestView {
-	base := strings.TrimRight(h.configs.Get(configs.KeyAppURL), "/")
+	base := strings.TrimRight(h.configs.AppURL(), "/")
 	return pluginTestView{
 		ID: q.ID, Status: q.Status, State: pluginTestState(q, time.Now()),
 		ConnectorKey: q.ConnectorKey, InstanceID: q.InstanceID, Instance: q.InstanceLabel,
