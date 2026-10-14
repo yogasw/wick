@@ -72,7 +72,7 @@ type Config struct {
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Use `field:a\|b\|c` (pipe-separated) to allow a set. Pure presentation hint — value is still seeded / saved normally. |
 | `mode=fixed` / `mode=expression` | Lock the workflow editor's Fixed ⇄ Expression toggle for this field. `mode=fixed` forces fixed-literal mode; `mode=expression` forces template mode. Omit the tag (default) to leave the toggle enabled. Pure presentation hint for the workflow canvas inspector — has no effect on the admin Settings page. Not persisted. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
-| `group=Title` / `group=Title\|Description` / `group=Title\|Description\|collapsed` | Group fields into a titled card on the admin Settings page. All fields sharing the same `Title` are rendered together under one card, in first-seen order. Fields with no `group` fall into the default "Configuration" card. The optional `Description` (pipe-separated) is written once at the top of the card — use it for a one-sentence summary of the group's purpose. A 3rd `\|collapsed` segment makes the card **start collapsed** (click the header to expand) — use for advanced/rarely-edited groups so the page opens clean; `Title\|\|collapsed` collapses with no description. Only the group's **first-seen** field needs to carry the description / collapsed flag. Not persisted. Pure presentation. |
+| `group=Title` / `group=Title\|Description` / `group=Title\|Description\|collapsed` | Group fields into a titled card on the admin Settings page. All fields sharing the same `Title` are rendered together under one card, in first-seen order. Fields with no `group` fall into the default "Configuration" card. The optional `Description` (pipe-separated) is written once at the top of the card — use it for a one-sentence summary of the group's purpose. A 3rd `\|collapsed` segment makes the card **start collapsed** (click the header to expand) — use for advanced/rarely-edited groups so the page opens clean; `Title\|\|collapsed` collapses with no description. The admin setting `config_groups_collapsed` (on by default) starts every named card collapsed anyway; `\|open` as the 3rd segment keeps a card open regardless, and the default Configuration card is never collapsed by it. Only the group's **first-seen** field needs to carry the description / collapsed flag. Not persisted. Pure presentation. |
 
 ## Key derivation
 
@@ -250,6 +250,9 @@ type Config struct {
 
     // Collapsed with no description: Title||collapsed
     Channel string `wick:"group=Custom binary||collapsed;desc=Branded channel."`
+
+    // Always open, even with config_groups_collapsed on: Title|Description|open
+    Endpoint string `wick:"group=Connection|Where to reach the API.|open;desc=Base URL."`
 }
 ```
 

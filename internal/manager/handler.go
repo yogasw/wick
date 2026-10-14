@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -15,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -69,6 +71,11 @@ func (h *Handler) RegisterConfigDecorator(toolKey string, fn func([]entity.Confi
 }
 
 func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, usersSvc *login.Service, tools []tool.Tool) *Handler {
+	if configsSvc != nil {
+		pkgentity.DefaultGroupsCollapsed = func() bool {
+			return !strings.EqualFold(strings.TrimSpace(configsSvc.Get(configs.KeyConfigGroupsCollapsed)), "false")
+		}
+	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		log.Warn().Err(err).Msg("manager oauth: failed to generate secret; using fallback")

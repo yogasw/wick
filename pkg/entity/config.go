@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -107,4 +108,37 @@ func VisibleWhenMatches(predicate string, values map[string]string) bool {
 		}
 	}
 	return false
+}
+
+// DefaultGroupsCollapsed reports the admin setting "config groups start
+// collapsed" (config_groups_collapsed). nil means off. Set once at boot.
+var DefaultGroupsCollapsed func() bool
+
+// EffectiveGroup is Group with that setting applied: a named group with no
+// third segment ("Title" or "Title|Desc") becomes "Title|Desc|collapsed".
+// A group that says so explicitly keeps its own choice — "Title|Desc|open"
+// stays open, "…|collapsed" stays collapsed — and rows with no group (the
+// default "Configuration" card) are never collapsed by the setting.
+func (c Config) EffectiveGroup() string {
+	g := strings.TrimSpace(c.Group)
+	if g == "" || DefaultGroupsCollapsed == nil || !DefaultGroupsCollapsed() {
+		return c.Group
+	}
+	parts := strings.SplitN(g, "|", 3)
+	if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+		return c.Group
+	}
+	for len(parts) < 2 {
+		parts = append(parts, "")
+	}
+	return parts[0] + "|" + parts[1] + "|collapsed"
+}
+
+// MarshalJSON sends the effective group, so the SPA config form follows the
+// collapsed-by-default setting without knowing about it.
+func (c Config) MarshalJSON() ([]byte, error) {
+	type plain Config
+	p := plain(c)
+	p.Group = c.EffectiveGroup()
+	return json.Marshal(p)
 }

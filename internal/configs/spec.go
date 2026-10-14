@@ -26,21 +26,22 @@ import (
 // than the string literal — renaming then becomes a one-line change
 // the compiler catches everywhere.
 const (
-	KeyAppName              = "app_name"
-	DefaultAppName          = "Wick Mini Tools"
-	KeyAppDescription       = "app_description"
-	DefaultAppDescription   = "A lightweight internal tooling platform — build, deploy, and run custom tools for your team in minutes."
-	KeyAppURL               = "app_url"
-	KeyAllowedOrigins       = "allowed_origins"
-	KeyDNSServers           = "dns_servers"
-	KeySessionSecret        = "session_secret"
-	KeyAdminPasswordChanged = "admin_password_changed"
-	KeyEncryptionKey        = "encryption_key"
-	KeyStartupScript        = "startup_script"
-	KeyStartupScriptEnabled = "startup_script_enabled"
-	KeyProfile              = "profile"
-	KeyPluginTestEnabled    = "plugin_test_enabled"
-	DefaultProfile          = "full"
+	KeyAppName               = "app_name"
+	DefaultAppName           = "Wick Mini Tools"
+	KeyAppDescription        = "app_description"
+	DefaultAppDescription    = "A lightweight internal tooling platform — build, deploy, and run custom tools for your team in minutes."
+	KeyAppURL                = "app_url"
+	KeyAllowedOrigins        = "allowed_origins"
+	KeyDNSServers            = "dns_servers"
+	KeySessionSecret         = "session_secret"
+	KeyAdminPasswordChanged  = "admin_password_changed"
+	KeyEncryptionKey         = "encryption_key"
+	KeyStartupScript         = "startup_script"
+	KeyStartupScriptEnabled  = "startup_script_enabled"
+	KeyProfile               = "profile"
+	KeyPluginTestEnabled     = "plugin_test_enabled"
+	KeyConfigGroupsCollapsed = "config_groups_collapsed"
+	DefaultProfile           = "full"
 )
 
 // generators maps app-level keys to the function that produces a fresh
@@ -139,6 +140,12 @@ func appDefaults() []entity.Config {
 			Value:       "false",
 			Hidden:      true,
 			Description: "Allow plugin test requests: a locally built connector plugin (go run / dlv with --run-op) may ask to run against a real instance's config. Each request still needs admin approval on Admin → Plugins → Development mode.",
+		},
+		{
+			Key:         KeyConfigGroupsCollapsed,
+			Type:        "bool",
+			Value:       "true",
+			Description: "Config pages: named groups (cards) of a connector, tool or job start collapsed — click a card to open it. The default Configuration card and groups tagged |open stay open.",
 		},
 		{
 			Key:         KeyStartupScriptEnabled,

@@ -59,6 +59,8 @@ const defaultGroupTitle = "Configuration"
 //	"Title"                     — card, always expanded
 //	"Title|Description"         — card with a shared blurb
 //	"Title|Description|collapsed" — card that starts collapsed (click to expand)
+//	"Title|Description|open"    — always starts open, even with the admin's
+//	                              config_groups_collapsed setting on
 //	"Title||collapsed"          — collapsed, no description
 //
 // The description is the place to write the context shared by every field in
@@ -92,7 +94,7 @@ func groupRows(rows []entity.Config) []fieldGroup {
 	idx := map[string]int{}
 	var out []fieldGroup
 	for _, r := range rows {
-		title, desc, collapsed := parseGroup(r.Group)
+		title, desc, collapsed := parseGroup(r.EffectiveGroup())
 		i, ok := idx[title]
 		if !ok {
 			i = len(out)
