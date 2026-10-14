@@ -11,6 +11,35 @@ import (
 type PluginTestsVM struct {
 	Enabled bool
 	Rows    []PluginTestRow
+	// Filter is the selected state tab ("" = all); Counts is the number of
+	// requests per state, over the unfiltered history.
+	Filter string
+	Counts map[string]int
+	Total  int
+}
+
+// pluginTestFilters are the state tabs, in display order.
+var pluginTestFilters = []struct{ Key, Label string }{
+	{"", "All"},
+	{"pending", "Pending"},
+	{"active", "Active"},
+	{"expired", "Expired"},
+	{"rejected", "Rejected"},
+	{"revoked", "Revoked"},
+}
+
+func pluginTestFilterCount(vm PluginTestsVM, key string) int {
+	if key == "" {
+		return vm.Total
+	}
+	return vm.Counts[key]
+}
+
+func pluginTestFilterHref(key string) templ.SafeURL {
+	if key == "" {
+		return templ.SafeURL("/admin/plugins/dev-mode")
+	}
+	return templ.SafeURL("/admin/plugins/dev-mode?state=" + key)
 }
 
 // PluginTestRow is one request joined with its requester's name/email.
@@ -43,12 +72,26 @@ templ PluginTestsPage(vm PluginTestsVM, user *entity.User) {
 				<p class="mt-2 text-xs text-black-700 dark:text-black-600">Off by default. When on, anyone with access to an instance can file a request for it; nothing runs until you approve that request below. Turning this off cuts every approved request at once.</p>
 				<button type="submit" class="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-700">Save</button>
 			</form>
+			<div class="mt-6 flex flex-wrap items-center gap-2">
+				for _, f := range pluginTestFilters {
+					<a
+						href={ pluginTestFilterHref(f.Key) }
+						class={ "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+							templ.KV("border-green-600 bg-green-600/10 text-green-600", vm.Filter == f.Key),
+							templ.KV("border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", vm.Filter != f.Key) }
+					>{ f.Label } <span class="opacity-70">{ itoa(pluginTestFilterCount(vm, f.Key)) }</span></a>
+				}
+			</div>
 			if len(vm.Rows) == 0 {
-				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
-					No requests yet.
+				<div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					if vm.Filter == "" {
+						No requests yet.
+					} else {
+						No { vm.Filter } requests.
+					}
 				</div>
 			} else {
-				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+				<div class="mt-4 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
 					<table class="w-full text-sm">
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
@@ -98,35 +141,57 @@ templ pluginTestRowFragment(row PluginTestRow) {
 		<td class="px-4 py-3 text-xs">
 			<span class="font-medium text-black-900 dark:text-white-100">{ row.State }</span>
 			if row.State == "active" && row.Req.ExpiresAt != nil {
-				<p class="text-black-700 dark:text-black-600">until @ui.LocalTime(*row.Req.ExpiresAt, ui.TimeFormatISO)</p>
+				<p class="text-black-700 dark:text-black-600">
+					until
+					@ui.LocalTime(*row.Req.ExpiresAt, ui.TimeFormatISO)
+				</p>
 			}
 		</td>
 		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
 			{ itoa(row.Req.FetchCount) }×
 			if row.Req.LastFetchAt != nil {
-				<p>last @ui.LocalTime(*row.Req.LastFetchAt, ui.TimeFormatISO)</p>
+				<p>
+					last
+					@ui.LocalTime(*row.Req.LastFetchAt, ui.TimeFormatISO)
+				</p>
 				<p class="font-mono">{ row.Req.LastFetchIP }</p>
 			}
 		</td>
 		<td class="px-4 py-3 text-right">
-			switch row.State {
-				case "pending":
-					<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/approve") } method="POST" class="inline-flex items-center gap-2">
-						<select name="minutes" class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100">
-							<option value="15">15 min</option>
-							<option value="30" selected>30 min</option>
-							<option value="60">1 hour</option>
-							<option value="120">2 hours</option>
-						</select>
-						<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Approve</button>
-					</form>
-					<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/reject") } method="POST" class="mt-1">
-						<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Reject</button>
-					</form>
-				case "active":
-					<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/revoke") } method="POST">
-						<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Revoke</button>
-					</form>
+			if row.State == "pending" || row.State == "active" {
+				<details class="relative inline-block text-left" data-row-action data-menu>
+					<summary
+						class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+						aria-label="More actions"
+					>
+						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor">
+							<circle cx="8" cy="3" r="1.5"></circle>
+							<circle cx="8" cy="8" r="1.5"></circle>
+							<circle cx="8" cy="13" r="1.5"></circle>
+						</svg>
+					</summary>
+					<div class="absolute right-0 z-20 mt-1 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 py-1 shadow-lg">
+						switch row.State {
+							case "pending":
+								<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/approve") } method="POST" class="flex items-center gap-2 px-3 py-1.5">
+									<select name="minutes" class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100">
+										<option value="15">15 min</option>
+										<option value="30" selected>30 min</option>
+										<option value="60">1 hour</option>
+										<option value="120">2 hours</option>
+									</select>
+									<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Approve</button>
+								</form>
+								<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/reject") } method="POST">
+									<button type="submit" class="block w-full px-3 py-1.5 text-left text-xs text-neg-400 hover:bg-white-200 dark:hover:bg-navy-800">Reject</button>
+								</form>
+							case "active":
+								<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/revoke") } method="POST">
+									<button type="submit" class="block w-full px-3 py-1.5 text-left text-xs text-neg-400 hover:bg-white-200 dark:hover:bg-navy-800">Revoke</button>
+								</form>
+						}
+					</div>
+				</details>
 			}
 		</td>
 	</tr>

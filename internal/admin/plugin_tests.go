@@ -128,6 +128,8 @@ func (h *Handler) pluginTestsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	owners := map[string]*entity.User{}
+	filter := r.URL.Query().Get("state")
+	counts := map[string]int{}
 	rows := make([]view.PluginTestRow, 0, len(reqs))
 	for _, q := range reqs {
 		u, seen := owners[q.UserID]
@@ -139,11 +141,18 @@ func (h *Handler) pluginTestsPage(w http.ResponseWriter, r *http.Request) {
 		if u != nil {
 			row.OwnerName, row.OwnerEmail = u.Name, u.Email
 		}
+		counts[row.State]++
+		if filter != "" && row.State != filter {
+			continue
+		}
 		rows = append(rows, row)
 	}
 	vm := view.PluginTestsVM{
 		Enabled: strings.EqualFold(h.configs.Get(configs.KeyPluginTestEnabled), "true"),
 		Rows:    rows,
+		Filter:  filter,
+		Counts:  counts,
+		Total:   len(reqs),
 	}
 	_ = view.PluginTestsPage(vm, login.GetUser(ctx)).Render(ctx, w)
 }
