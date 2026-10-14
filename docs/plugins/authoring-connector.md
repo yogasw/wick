@@ -51,9 +51,15 @@ breakpoint in the op handler and go:
 go run ./plugins/connector/<key> --run-op <op> \
   --params '{"field":"value"}' --config ./cfg.json
 
-# Against a real instance's config, after an admin approves it:
+# Against a real instance's config, after an admin approves it (a person):
 export WICK_BASE_URL=https://wick.example.com WICK_PAT=wick_pat_...
 go run ./plugins/connector/<key> --run-op <op> --params-file p.json --instance "Instance label"
+
+# Same, from an agent session on the wick host (no PAT, no plaintext config):
+# mint a token with the wick_cli_token MCP tool, then
+export WICK_BASE_URL=http://127.0.0.1:<port> WICK_CLI_TOKEN=wick_cli_...
+go build -o ./candidate ./plugins/connector/<key>
+./candidate --run-op <op> --params '{}' --instance "Instance label"
 
 # Same thing under the debugger:
 dlv debug ./plugins/connector/<key> -- --run-op <op> --params-file p.json --instance "Instance label"
@@ -65,7 +71,7 @@ dlv debug ./plugins/connector/<key> -- --run-op <op> --params-file p.json --inst
 | `--params '<json>'` / `--params-file <f>` | Op input as a JSON object. |
 | `--config <f.json>` | Config keys as a JSON object. Never talks to wick. |
 | `--instance <id\|label>` | Borrow a wick instance's config (see below). |
-| `--wick-url` | Defaults to `$WICK_BASE_URL`. The token comes from `$WICK_PAT`. |
+| `--wick-url` | Defaults to `$WICK_BASE_URL`. The token comes from `$WICK_PAT` (a person) or `$WICK_CLI_TOKEN` (an agent session on the wick host). |
 | `--raw` | Compact JSON output. |
 
 Values the op passes to `c.Mask` print as `[masked]`. Exit codes: 0 ok,
@@ -91,9 +97,55 @@ the masked result comes back. Guards:
 - every use is counted on the request row; **Revoke** or turning the switch
   off cuts it immediately. The page keeps 7 days of requests.
 
+**Development mode, step by step.**
+
+1. An admin turns on **Allow plugin test requests** on Admin → Plugins →
+   Development mode (once).
+2. Run the op with `--instance`. The first run prints
+   `plugin test request <id> filed (<key> · <instance>, <user@host>). Not run: …`
+   and exits 1.
+3. The admin sees the request with the **SSO account** (name + email), the
+   instance (linked to its settings page, with the `conn:<id>` that
+   `wick_list` shows), what it is bound to (IP · machine · token: PAT name
+   …last4 or `agent session <id>`) and the op, then approves it for 15 min –
+   2 h or rejects it.
+4. Run the same command again. Within the approval window every rerun from the
+   same token, machine and IP works without asking again.
+
+A person (PAT) gets the config into their own process, so breakpoints work.
+An agent session never sees the config: wick spawns the candidate binary
+itself, runs the op through the normal pipeline (access checks, masking, run
+log tagged `plugin_test`) and returns the masked result. That path only works
+from the wick host (loopback), since wick runs the binary file you name.
+
 The credential itself does not expire with the approval: once handed out it
 stays valid until rotated. Only allow connectors whose credentials are safe on
 a developer machine (read-only ones such as Metabase or Loki).
+
+## Returning a file instead of data
+
+An op whose answer is a file (an export, a report) should not put thousands of
+rows in its result. Attach the file with `connector.WithFile`; wick writes it
+to `artifacts/<name>.<format>` in the calling agent session's working
+directory (creating `artifacts/` when missing, sanitizing the name, adding a
+`-2`, `-3` … suffix instead of overwriting) and returns a `file` reference in
+its place:
+
+```go
+return connector.WithFile(map[string]any{"rows": len(rows)}, connector.FileOutput{
+    Name: c.Input("file_name"), Format: "csv", Content: csvText,
+}), nil
+// the caller gets: {"rows": 1234, "file": {"path": "artifacts/apps.csv", "format": "csv", "bytes": 52311}}
+```
+
+- Text formats only: `csv`, `tsv`, `json`, `ndjson`, `txt`; 60 MB at most.
+- The content passes the normal masking sweep before it is written, so values
+  given to `c.Mask` are masked inside the file too. For large files, mask
+  cells yourself with a fixed placeholder instead of `c.Mask` on every value.
+- It needs an agent session (the file goes into that session's folder); a call
+  without one fails with a clear error.
+- Make the format and file name required inputs, so the agent has to decide
+  where the output goes.
 
 ## Calling wick (Host API)
 

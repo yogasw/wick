@@ -60,7 +60,17 @@ cd plugins && go test ./service/my_service/   # or ./tool/..., ./job/..., ./conn
 
 `plugins/tool/example_counter` and `plugins/service/example_a2a_repeater` have `main_test.go` files to copy from.
 
-**Connector: run one op from source.** `go run ./connector/<key> --run-op <op> --params '<json>' --config cfg.json` runs the op in-process and prints the result (`dlv debug ./connector/<key> -- --run-op …` to breakpoint it). `--instance <id|label>` (with `WICK_BASE_URL` + `WICK_PAT`) uses a real instance: the first run only files a request and exits; once an admin approves it on Admin → Plugins → Development mode the next run goes through (pending/rejected runs are refused). Off by default, bound to the requesting token + machine + IP, non-destructive ops only. Details: `docs/plugins/authoring-connector.md`.
+**Connector: run one op from source.** `go run ./connector/<key> --run-op <op> --params '<json>' --config cfg.json` runs the op in-process and prints the result (`dlv debug ./connector/<key> -- --run-op …` to breakpoint it). Details: `docs/plugins/authoring-connector.md`.
+
+**Connector: test against a REAL instance (development mode).** Add `--instance "<label or id>"`. There is no separate request step and nothing waits:
+
+1. First run → files a request and exits 1 with `plugin test request <id> filed … Not run: ask an admin to approve it`. Tell the user the id and ask them to approve it on Admin → Plugins → Development mode (the switch "Allow plugin test requests" must be on).
+2. Any run while it is pending or after a reject → refused. Do not loop or poll; wait for the user to say it is approved.
+3. After approval → rerun the same command; it works until the approval expires (15 min–2 h).
+
+As an AGENT on the wick host: mint a token with `wick_cli_token`, build the candidate (`go build -o ./candidate ./connector/<key>`, through buildq on a shared host), then run it with `WICK_CLI_TOKEN=<token> WICK_BASE_URL=http://127.0.0.1:<port>` and NO `WICK_PAT`. wick spawns the binary itself and you only get the masked result — you never hold the instance's config. A person uses `WICK_PAT` instead and gets the config locally. The approval is bound to the token, `<os user>@<hostname>`, a local secret and the IP: a different token (even the same user's), machine or network must file its own request. Only non-destructive ops run this way.
+
+**Connector: return a file, not rows.** For exports/reports, return `connector.WithFile(summary, connector.FileOutput{Name, Format, Content})`. wick writes it to `artifacts/<name>.<format>` in the calling session's working directory (creates `artifacts/`, never overwrites) and replaces it with `{"file":{"path":"artifacts/…","format":…,"bytes":…}}`. Text formats only (csv, tsv, json, ndjson, txt), 60 MB cap, agent sessions only. Make `format` and `file_name` required inputs, and give the user the path — do not read the file back into the chat.
 
 ## 5. Build, install, verify
 
