@@ -1085,12 +1085,57 @@ func NewServer() *Server {
 			_ = agentsMgr.RefreshSession(sessionID)
 		},
 		OnSessionMeta: syncSessionMeta,
-		// Ticket auto-create: the project's rules can key off the opening
+		// Ticket auto-join, then auto-create: both can key off the opening
 		// text, which is only knowable here — not when the session was
 		// created. A project with no rules costs one meta read.
 		OnFirstUserMessage: func(sessionID, text string) {
 			sess, err := agentsession.Load(agentsLayout, sessionID)
 			if err != nil || sess.Meta.ProjectID == "" {
+				return
+			}
+			writeBackPointer := func(sid, ticketID string) {
+				s, lerr := agentsession.Load(agentsLayout, sid)
+				if lerr != nil {
+					return
+				}
+				s.Meta.TicketID = ticketID
+				if serr := agentsession.SaveMeta(agentsLayout, sid, s.Meta); serr == nil {
+					syncSessionMeta(sid)
+				}
+			}
+			// Auto-join first: a session born in a thread a ticket already
+			// lists belongs on that ticket, not on a new one. This runs
+			// before the pool spawns the agent, so the ticket pointer is in
+			// the prompt of the session's first turn.
+			joinIn := ticket.AutoJoinInput{
+				ParentSessionID: sess.Meta.ParentSessionID,
+				Room:            sess.Meta.TicketRoom != nil || sess.Meta.GroupSessionID != "",
+				FirstMessage:    text,
+			}
+			if ref := sess.Meta.ChannelRef; ref != nil {
+				joinIn.ChatID, joinIn.ThreadID = ref.ChatID, ref.ThreadID
+			}
+			joined := ticket.EvaluateAutoJoin(ticket.AutoJoinDeps{
+				Layout: agentsLayout,
+				LoadConfig: func(projectID string) (agentproject.TicketConfig, error) {
+					p, lerr := agentproject.Load(agentsLayout, projectID)
+					if lerr != nil {
+						return agentproject.TicketConfig{}, lerr
+					}
+					return p.Meta.Ticket, nil
+				},
+				WriteBackPointer: writeBackPointer,
+			}, sess.Meta.ProjectID, sessionID, joinIn)
+			if joined.Joined {
+				log.Info().Str("session", sessionID).Str("ticket", joined.Ticket.ID).
+					Str("rule", joined.Rule).Msg("session auto-joined its thread's ticket")
+				return
+			}
+			if len(joined.Ambiguous) > 0 {
+				// The thread is already a ticket's; a new one would only
+				// add a third card to the mix-up.
+				log.Warn().Str("session", sessionID).Strs("tickets", joined.Ambiguous).
+					Msg("ticket auto-join skipped: more than one ticket matches")
 				return
 			}
 			tk, made := ticket.EvaluateAutoCreate(ticket.AutoCreateDeps{
@@ -1105,16 +1150,7 @@ func NewServer() *Server {
 					}
 					return p.Meta.Ticket.AutoCreate, nil
 				},
-				WriteBackPointer: func(sid, ticketID string) {
-					s, lerr := agentsession.Load(agentsLayout, sid)
-					if lerr != nil {
-						return
-					}
-					s.Meta.TicketID = ticketID
-					if serr := agentsession.SaveMeta(agentsLayout, sid, s.Meta); serr == nil {
-						syncSessionMeta(sid)
-					}
-				},
+				WriteBackPointer: writeBackPointer,
 			}, sess.Meta.ProjectID, sessionID, ticket.AutoCreateInput{
 				Origin:       string(sess.Meta.Origin),
 				ChannelKind:  channelKindOf(sess.Meta),
