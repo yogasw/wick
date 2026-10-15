@@ -6,7 +6,7 @@ package config
 type TelegramChannelConfig struct {
 	// Enabled is the on/off switch on the Channels page, see
 	// SlackChannelConfig.Enabled.
-	Enabled        string `wick:"bool;default=true;hidden;key=enabled;desc=Run this Telegram bot. Off stops it right away and keeps it stopped across restarts; the token stays stored."`
+	Enabled        string `wick:"bool;default=true;hidden;key=enabled;desc=Run this Telegram bot. Off stops it right away and keeps it stopped across restarts. The token stays stored."`
 	BotToken       string `wick:"secret;hidden;key=bot_token;desc=Bot token from @BotFather (format: 123456:ABC-...)."`
 	AllowedIDs     string `wick:"kvlist;hidden;key=allowed_ids;desc=Allowed Telegram chat IDs. Leave empty to allow all chats."`
 	AskUserEnabled bool   `wick:"bool;hidden;key=ask_user_enabled;desc=Allow the ask_user MCP tool for sessions from this Telegram channel. Off = the agent gets an error and picks a default (recommended until the ask is rendered in Telegram — today the prompt only shows in the wick web UI)."`
