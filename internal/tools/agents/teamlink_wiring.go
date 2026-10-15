@@ -863,6 +863,12 @@ func poolSessionBusy(sessionID string) bool {
 // waits until the session runs nothing else, so the turn it starts is
 // its own (teamTurnGate).
 func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text string) (string, string, error) {
+	// globalPool.Send creates any session it does not find: a chat that
+	// is gone (deleted after CanTarget, or never existed) must fail, not
+	// come back as a new empty one.
+	if !globalPool.SessionExists(sessionID) {
+		return sessionID, "", errChatNotFound(sessionID)
+	}
 	release, err := teamTurnGate.Acquire(ctx, sessionID, teamlink.TaskIDFrom(ctx))
 	if err != nil {
 		return sessionID, "", err

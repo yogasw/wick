@@ -17,6 +17,10 @@ type SendToSessionInput struct {
 	ThreadTS  string `json:"thread_ts"  wick:"required;key=thread_ts;desc=Parent message ts of the thread to run the agent in (root ts, not a reply ts)"`
 	Text      string `json:"text"       wick:"required;textarea;desc=The message to hand the agent — written as an instruction, exactly as a person would type it in the thread"`
 	AutoReply bool   `json:"auto_reply" wick:"key=auto_reply;desc=Also switch ON 🤖 auto-reply for this thread so later human replies continue the same session without a mention"`
+	// RequireExisting turns "no session for this thread" into an error
+	// instead of a new, empty session. Off by default: first-check relies on
+	// this node to start the card's session.
+	RequireExisting bool `json:"require_existing" wick:"key=require_existing;desc=Only continue a session that already exists for this thread; when it is gone, fail with session not found instead of starting a new empty one"`
 }
 
 // SendToSessionOutput reports where the work went, not what the agent said —
@@ -52,6 +56,7 @@ func registerActionSendToSession(reg *integration.Registry, pick ChannelPicker) 
 				"The session runs as the wick user who OWNS this Slack instance, not as whoever triggered the workflow. An instance with no owner errors instead of falling back to admin access.",
 				"text must carry everything the agent needs (links, ids, which skill to use) — it starts with no view of the workflow's other nodes.",
 				"Re-running the workflow on the same thread continues the SAME session rather than starting a fresh one.",
+				"With require_existing: true a thread whose session no longer exists fails with `session <id> not found` — nothing is created and nothing is posted. Leave it off when this node is meant to START the thread's session (e.g. right after posting the card).",
 			},
 			PairWith: []string{"channel:slack.send_message", "channel:slack.add_reaction"},
 			InputSample: `{"channel":"C0BD4UHBQRJ","thread_ts":"1789014375.645429",` +
@@ -100,7 +105,8 @@ func registerActionSendToSession(reg *integration.Registry, pick ChannelPicker) 
 				return nil, err
 			}
 			autoReply := argBool(args, "auto_reply", false)
-			sessionID, isNew, err := ch.SendToThreadSession(ctx, channelID, threadTS, text, autoReply)
+			requireExisting := argBool(args, "require_existing", false)
+			sessionID, isNew, err := ch.SendToThreadSession(ctx, channelID, threadTS, text, autoReply, requireExisting)
 			if err != nil {
 				return nil, err
 			}

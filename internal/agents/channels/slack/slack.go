@@ -3663,8 +3663,14 @@ func (s *Channel) ArmAutoReply(channelID, threadTS string) error {
 // open onto the synthetic admin token would hand the agent more access than
 // anyone asked for. An instance with no owner therefore refuses.
 //
+// requireExisting makes a thread with no session on disk an error
+// ("session <id> not found") instead of a reason to create one: a caller
+// that means to continue a known conversation must not silently start an
+// empty one when that session is gone. Checked before anything is
+// registered, painted or sent, so a refusal leaves no trace in Slack.
+//
 // Returns the session key it sent to and whether that session was new.
-func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, text string, armAutoReply bool) (string, bool, error) {
+func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, text string, armAutoReply, requireExisting bool) (string, bool, error) {
 	if channelID == "" || threadTS == "" {
 		return "", false, fmt.Errorf("channel and thread ts are required")
 	}
@@ -3679,6 +3685,9 @@ func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, 
 		return "", false, fmt.Errorf("this slack instance has no owning wick user; cannot start a session on its behalf")
 	}
 	sessionID := s.sessionKey(threadTS)
+	if requireExisting && !s.sessionOnDisk(sessionID) {
+		return sessionID, false, fmt.Errorf("session %s not found", sessionID)
+	}
 
 	s.mu.Lock()
 	old := s.turns[sessionID]
