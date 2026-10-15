@@ -20,7 +20,7 @@ type SendToSessionInput struct {
 	// RequireExisting turns "no session for this thread" into an error
 	// instead of a new, empty session. Off by default: first-check relies on
 	// this node to start the card's session.
-	RequireExisting bool `json:"require_existing" wick:"key=require_existing;desc=Only continue a session that already exists for this thread; when it is gone, fail with session not found instead of starting a new empty one"`
+	RequireExisting bool `json:"require_existing" wick:"key=require_existing;desc=Only continue a session that already exists for this thread. When it is gone, fail with session not found instead of starting a new empty one"`
 }
 
 // SendToSessionOutput reports where the work went, not what the agent said —
