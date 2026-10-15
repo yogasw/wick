@@ -128,6 +128,12 @@ func loadWith(dir string, register registerFn, mgr *Manager, enabled func(string
 			log.Warn().Str("connector", f.Key).Err(err).Msg("connector plugin: skipped (verification failed)")
 			continue
 		}
+		// An already-installed plugin keeps loading even if a later wick
+		// tightened ValidateModule; a malformed VisibleWhen is fail-open
+		// (op visible), so warn rather than drop the whole connector.
+		if err := connector.ValidateModule(f.Manifest.Module); err != nil {
+			log.Warn().Str("connector", f.Key).Err(err).Msg("connector plugin: invalid module manifest")
+		}
 		register(BuildModule(f.Manifest.Module, getConn))
 		count++
 	}

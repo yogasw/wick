@@ -290,6 +290,70 @@ func (s *Service) SetAutoDeleteEmptyTickets(ctx context.Context, userID, choice 
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// ErrHiddenLimit is returned by SetConnectorHidden when the user already
+// hides entity.MaxHiddenConnectors instances that still exist.
+var ErrHiddenLimit = errors.New("hide limit reached")
+
+// SetConnectorHidden hides (hidden=true) or unhides one connector instance
+// for this user only, and returns the hidden list as saved. Idempotent:
+// hiding an already hidden id or unhiding an unknown one just returns the
+// list. Unhide never checks the id, so a deleted instance can still be
+// cleared.
+//
+// exists, when non-nil, reports whether an instance still exists; ids it
+// rejects are pruned when a hide would hit the cap, before ErrHiddenLimit
+// is decided. It is called before the write transaction, never inside it,
+// so it may query the database freely.
+//
+// The write goes through repo.UpdateMetadata, so quick hide clicks or a
+// second tab cannot drop each other's ids.
+func (s *Service) SetConnectorHidden(ctx context.Context, userID, connectorID string, hidden bool, exists func(id string) bool) ([]string, error) {
+	if connectorID == "" {
+		return nil, errors.New("connector id is required")
+	}
+	stale := map[string]bool{}
+	if hidden && exists != nil {
+		u, err := s.repo.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		cur := u.Metadata
+		if !cur.IsConnectorHidden(connectorID) && len(cur.HiddenConnectors) >= entity.MaxHiddenConnectors {
+			for _, id := range cur.HiddenConnectors {
+				if !exists(id) {
+					stale[id] = true
+				}
+			}
+		}
+	}
+	meta, err := s.repo.UpdateMetadata(ctx, userID, func(m *entity.UserMetadata) error {
+		seen := make(map[string]bool, len(m.HiddenConnectors))
+		list := make([]string, 0, len(m.HiddenConnectors)+1)
+		for _, id := range m.HiddenConnectors {
+			if id == "" || seen[id] || stale[id] || (!hidden && id == connectorID) {
+				continue
+			}
+			seen[id] = true
+			list = append(list, id)
+		}
+		if hidden && !seen[connectorID] {
+			if len(list) >= entity.MaxHiddenConnectors {
+				return ErrHiddenLimit
+			}
+			list = append(list, connectorID)
+		}
+		if len(list) == 0 {
+			list = nil
+		}
+		m.HiddenConnectors = list
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return meta.HiddenConnectors, nil
+}
+
 // SetPinnedAgentProject sets (or clears, when projectID is empty) the
 // user's pinned agents Project — their personal default. One per user.
 func (s *Service) SetPinnedAgentProject(ctx context.Context, userID, projectID string) error {

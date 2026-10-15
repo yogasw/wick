@@ -6,6 +6,7 @@
     getConnector,
     createConnectorRow,
     toggleConnectorDisabled,
+    setConnectorHidden,
     duplicateConnectorRow,
     deleteConnectorRow,
     reloadConnector,
@@ -103,6 +104,13 @@
       });
     }
     items.push({ label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) });
+    /* "Hide for me" is a per-viewer preference, not configuration — anyone
+       who can see the row may tuck it away, so no can_configure gate. */
+    items.push({
+      label: row.hidden_for_me ? "Unhide" : "Hide for me",
+      onclick: () => setHidden(row, !row.hidden_for_me),
+      disabled: hidingId !== "",
+    });
     if (row.can_configure !== false) {
       items.push({ label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) });
     }
@@ -334,6 +342,28 @@
     }
   }
 
+  /* Row id whose hide/unhide request is in flight; disables the menu item on
+     every row so a double click cannot race two requests. */
+  let hidingId = $state("");
+  /* Hidden rows stay out of the list until the viewer asks for them. */
+  let showHidden = $state(false);
+
+  async function setHidden(row: ConnectorRow, hidden: boolean) {
+    if (hidingId) return;
+    hidingId = row.id;
+    try {
+      const stored = await setConnectorHidden(connectorKey, row.id, hidden);
+      if (data?.rows) {
+        data.rows = data.rows.map((r) => (r.id === row.id ? { ...r, hidden_for_me: stored } : r));
+      }
+      toastOk(stored ? "Hidden for you" : "Visible again");
+    } catch (e) {
+      toastError(hidden ? "Hide failed" : "Unhide failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      hidingId = "";
+    }
+  }
+
   async function duplicateRow(row: ConnectorRow) {
     if (busy) return;
     busy = true;
@@ -544,6 +574,15 @@
   }
 
   let rows = $derived(data?.rows ?? []);
+  /* Rows the viewer hid for themselves: kept out of the list by default and
+     appended (dimmed) at the bottom when "Show hidden" is on. Account rows
+     render inside their parent, so they follow it. */
+  let hiddenCount = $derived(rows.filter((r) => r.hidden_for_me).length);
+  let shownRows = $derived(
+    showHidden
+      ? [...rows.filter((r) => !r.hidden_for_me), ...rows.filter((r) => r.hidden_for_me)]
+      : rows.filter((r) => !r.hidden_for_me),
+  );
 
   let mcpChip = $derived.by(() => {
     if (!data?.mcp || !data.mcp_status) return null;
@@ -657,19 +696,30 @@
     </div>
 
     <section>
-      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Instances</h2>
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Instances</h2>
+        {#if hiddenCount > 0}
+          <Button variant="ghost" size="sm" onclick={() => (showHidden = !showHidden)}>
+            {showHidden ? "Hide hidden" : `Show hidden (${hiddenCount})`}
+          </Button>
+        {/if}
+      </div>
       <p class="mt-1 text-sm text-black-800 dark:text-black-600">Each row carries its own credentials and label. MCP exposes one tool per (row × enabled operation).</p>
       {#if rows.length === 0}
         <div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center">
           <p class="text-sm text-black-700 dark:text-black-600">No rows yet. Click <strong>+ New row</strong> to create one.</p>
         </div>
+      {:else if shownRows.length === 0}
+        <div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center">
+          <p class="text-sm text-black-700 dark:text-black-600">Every row here is hidden for you. Click <strong>Show hidden</strong> to see them.</p>
+        </div>
       {:else}
         <!-- Dim the instances while the connector type is disabled — they're
              inert (hidden from the LLM) but still editable to fix config. -->
         <div class="mt-4 flex flex-col gap-2 pb-6 {data.disabled_type ? 'opacity-60' : ''}">
-          {#each rows as row (row.id)}
+          {#each shownRows as row (row.id)}
             {@const chip = statusChip(row)}
-            <div class="group relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">
+            <div class="group relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400 {row.hidden_for_me ? 'opacity-60' : ''}" data-hidden-for-me={row.hidden_for_me ? "" : undefined}>
               <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
                 <button type="button" class="absolute inset-0 z-0 rounded-xl" aria-label={`Open ${row.label}`} onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}`)}></button>
                 <div class="pointer-events-none relative min-w-0 flex-1">
@@ -677,6 +727,9 @@
                   <span class="mt-0.5 block truncate font-mono text-[10px] text-black-700 dark:text-black-600">{row.id}</span>
                 </div>
                 <div class="pointer-events-auto relative z-10 flex flex-wrap items-center gap-2 sm:flex-shrink-0">
+                  {#if row.hidden_for_me}
+                    <span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" title="Hidden from your list and from wick_list. Access is unchanged.">Hidden for you</span>
+                  {/if}
                   {#if (row.tags ?? []).length === 0}
                     {#if row.private}
                       <span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600" title="Visible to its owner and admins only. An admin can add a tag to share it.">

@@ -238,7 +238,7 @@ func YourAccess(sc *Scope, reach Reach) string {
 		b.WriteString("Connectors you may use (Write = every op, Read = read-only ops):\n")
 		for i, l := range lines {
 			if i == maxAccessListed {
-				fmt.Fprintf(&b, "- +%d more; wick_list shows them all.\n", len(lines)-maxAccessListed)
+				fmt.Fprintf(&b, "- +%d more; wick_list (include_hidden:true) shows them all.\n", len(lines)-maxAccessListed)
 				break
 			}
 			b.WriteString(l.text + "\n")

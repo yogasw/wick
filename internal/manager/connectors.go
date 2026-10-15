@@ -54,6 +54,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
 	mux.Handle("DELETE /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiClearConnectorConfig))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
+	// Per-user "hide for me": declutters the caller's own list only, so any
+	// viewer of the row may use it (auth, not configure).
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/hide", auth(h.apiSetConnectorHidden))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
 	// Per-instance auth probe: each MCP row holds its own token, so a

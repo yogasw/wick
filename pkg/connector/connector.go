@@ -146,6 +146,16 @@ type Operation struct {
 	// manager's config UI via the /test path, so the widget can still fetch
 	// its data. Use it for read-only "list options for a picker" helpers.
 	ConfigOnly bool
+	// VisibleWhen gates the op on the instance's own config, using the same
+	// "<field>:<a|b|c>" grammar as the config `visible_when=` tag (evaluated
+	// by entity.VisibleWhenMatches). When the instance's value for <field>
+	// (its default when unsaved) is not one of the listed values, the op is
+	// hidden from the agent surface (MCP, host API, session instances) and
+	// Execute refuses it — except from the manager's /test paths. Empty =
+	// always visible. ValidateModule rejects a malformed predicate.
+	//
+	//	op.VisibleWhen = "browser:chromium|moli"
+	VisibleWhen string
 	// Docs carries the opt-in self-documentation fields the workflow
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
 	// quirks, templateable fields, pair-with, common pitfalls).

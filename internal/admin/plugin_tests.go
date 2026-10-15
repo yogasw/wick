@@ -55,7 +55,7 @@ import (
 //     and the same client IP. Any mismatch is refused, never re-bound.
 
 const (
-	pluginTestMaxMinutes  = 240
+	pluginTestMaxMinutes  = 480
 	pluginTestHistoryDays = 7
 	pluginTestHistoryRows = 100
 )
@@ -202,7 +202,11 @@ func (h *Handler) pluginTestDecide(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "only a pending request can be approved", http.StatusConflict)
 			return
 		}
-		mins, _ := strconv.Atoi(r.FormValue("minutes"))
+		// A custom duration, when given, wins over the preset select.
+		mins, _ := strconv.Atoi(r.FormValue("custom_minutes"))
+		if mins <= 0 {
+			mins, _ = strconv.Atoi(r.FormValue("minutes"))
+		}
 		if mins <= 0 {
 			mins = 30
 		}
@@ -588,6 +592,9 @@ func (h *Handler) apiPluginTestRun(w http.ResponseWriter, r *http.Request) {
 		Binary:   bin,
 		Plugins:  wickplugin.VersionedPluginsFor(q.ConnectorKey),
 		Dispense: wickplugin.PluginName,
+		// The candidate runs from a build folder; point it at the installed
+		// plugin's data dir so it finds what that plugin already downloaded.
+		Env: []string{wickplugin.EnvDataDir + "=" + connplugin.DataDirFor(q.ConnectorKey)},
 	})
 	if err != nil {
 		pluginTestErr(w, http.StatusBadGateway, fmt.Errorf("start candidate plugin: %w", err))

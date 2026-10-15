@@ -46,6 +46,9 @@ export interface ConnectorRow {
      own token against the shared server URL, so Connect / Re-connect is a
      row action. start_url is empty when the caller may not configure. */
   mcp_auth?: ConnectorMCPAuth | null;
+  /* Per-user "Hide for me": the caller tucked this row away from their own
+     list (and wick_list). Purely cosmetic — access is unchanged. */
+  hidden_for_me?: boolean;
 }
 
 export interface ConnectorMCPAuth {
@@ -122,6 +125,11 @@ export interface ConnectorOp {
   system_disabled_reason: string;
   admin_only: boolean;
   category: string;
+  /** Config predicate (`field:a|b`) gating the op; empty when ungated. */
+  visible_when?: string;
+  /** True when this instance's config does not satisfy visible_when, so the
+      op is not exposed to agents (the admin table still lists it, greyed). */
+  hidden_by_config?: boolean;
 }
 
 export interface ConnectorCategory {
@@ -155,6 +163,8 @@ export interface ConnectorDetail {
   has_health_check: boolean;
   can_configure: boolean;
   is_admin: boolean;
+  /* True when the caller hid this instance for themselves ("Hide for me"). */
+  hidden_for_me?: boolean;
   /* When true the per-instance AI description is mandatory: the section is
      forced on and marked required, and a blank one keeps the instance
      needs_setup (mirrors Meta.RequireAIDescription). */

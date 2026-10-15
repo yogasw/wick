@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import ConnectorDetail from "../ConnectorDetail.svelte";
 import * as api from "$lib/api.js";
 import * as router from "$lib/router.js";
@@ -56,6 +56,24 @@ describe("ConnectorDetail", () => {
     expect(screen.getByText("Send")).toBeTruthy();
     expect(screen.getByText("Delete")).toBeTruthy();
     expect(screen.getByText("destructive")).toBeTruthy();
+  });
+
+  it("shows the Hidden for you badge and unhides through the API", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ hidden_for_me: true }));
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(false);
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.getByText("Hidden for you")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Unhide" }));
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", false));
+    await waitFor(() => expect(screen.queryByText("Hidden for you")).toBeNull());
+  });
+
+  it("omits the hidden badge for a visible instance", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.queryByText("Hidden for you")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unhide" })).toBeNull();
   });
 
   it("saves the label", async () => {

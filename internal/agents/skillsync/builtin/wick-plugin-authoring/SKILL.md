@@ -43,7 +43,7 @@ Then:
 
 Config fields come from a struct with `wick:"..."` tags via `entity.StructToConfigs(Config{})` (`desc=…`, `secret`, `required`, `url`; the field name becomes the snake_case key). Admins edit them in wick; never hard-code credentials.
 
-- **connector** — one input struct per operation; mark writes as destructive. Read config from the op's `Ctx`.
+- **connector** — one input struct per operation; mark writes as destructive. Read config from the op's `Ctx`. An op only some instance configs can serve sets `op.VisibleWhen = "<configKey>:<a|b>"` (e.g. `"browser:moli"`) so other instances never offer it.
 - **tool** — same `tool.Router` as a built-in tool (`r.GET("/", …)`, `c.HTML`, `c.Cfg`, `c.User()`). wick wraps `c.HTML` pages in its layout. In a webhook route `c.TokenUser()` returns the person the host verified: a wick PAT (`Authorization: Bearer`, checked first) or wick's own SSO JWT in `X-Wick-User` (a custom MCP connector with the `sso` scheme whose URL is this tool on this wick). The host binds that JWT through its `wick_url` claim, which must be on a wick host and this tool's `/tools/{key}` or a path under it, and requires a lifetime of at most 15 min. `aud` alone is not trusted. `User.Source` / header `X-Wick-Token-User-Source` is `pat` or `sso`. `c.TokenCaller()` additionally returns `system` (`system:wick`, wick listing tools at boot: role `system`, no email, no Host API call as a user); treat it as read-only. Client-sent `X-Wick-*` headers are dropped.
 - **job** — read config with `job.FromContext(ctx).Cfg("key")`, log progress with `job.Logf(ctx, …)` (it lands in the run history), return markdown. Honour `ctx`; nothing survives between runs.
 - **service** — see section 6.
@@ -66,7 +66,7 @@ cd plugins && go test ./service/my_service/   # or ./tool/..., ./job/..., ./conn
 
 1. First run → files a request and exits 1 with `plugin test request <id> filed … Not run: ask an admin to approve it`. Tell the user the id and ask them to approve it on Admin → Plugins → Development mode (the switch "Allow plugin test requests" must be on).
 2. Any run while it is pending or after a reject → refused. Do not loop or poll; wait for the user to say it is approved.
-3. After approval → rerun the same command; it works until the approval expires (15 min–2 h).
+3. After approval → rerun the same command; it works until the approval expires (15 min–8 h).
 
 As an AGENT on the wick host: mint a token with `wick_cli_token`, build the candidate (`go build -o ./candidate ./connector/<key>`, through buildq on a shared host), then run it with `WICK_CLI_TOKEN=<token> WICK_BASE_URL=http://127.0.0.1:<port>` and NO `WICK_PAT`. wick spawns the binary itself and you only get the masked result — you never hold the instance's config. A person uses `WICK_PAT` instead and gets the config locally. The approval is bound to the token, `<os user>@<hostname>`, a local secret and the IP: a different token (even the same user's), machine or network must file its own request. Only non-destructive ops run this way.
 
@@ -181,5 +181,5 @@ Then e.g. `h.GetUser(ctx, &hostpb.GetUserRequest{Id: id})`. Always handle `error
 - `Meta.Key` ≠ folder name → build fails. Changing the key later makes it a different plugin.
 - Building for the wrong OS/arch → install refuses with "has no build for …".
 - A service route without a matching `Routes` prefix is unreachable (404), and a `Public` prefix exposes everything under it — keep public prefixes narrow.
-- `wickplugin.DataDir` only resolves a persistent directory for connectors; a tool, job or service gets a temp directory, so keep durable state in a configured path or an external store.
+- `wickplugin.DataDir` only resolves a persistent directory for connectors; a tool, job or service gets a temp directory, so keep durable state in a configured path or an external store. wick passes a connector its data dir in `WICK_PLUGIN_DATA_DIR` (pool and development-mode candidate alike), so a candidate binary shares the installed plugin's downloads.
 - A job keeps nothing in memory between runs; a tool may be stopped when idle. Use a service when state must live in the process.

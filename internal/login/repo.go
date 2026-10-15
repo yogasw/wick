@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/yogasw/wick/internal/entity"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type repo struct {
@@ -173,6 +174,37 @@ func (r *repo) SetMetadata(ctx context.Context, userID string, meta entity.UserM
 	return r.db.WithContext(ctx).Model(&entity.User{}).
 		Where("id = ?", userID).
 		Update("metadata", meta).Error
+}
+
+// UpdateMetadata applies fn to the user's current metadata and saves the
+// result in one transaction, so two concurrent writers cannot overwrite
+// each other's change the way a GetUserByID + SetMetadata pair can. On
+// Postgres the read takes a row lock (SELECT … FOR UPDATE); sqlite has no
+// row locks but serializes write transactions, so the lock clause is
+// skipped there. An error from fn aborts without writing. Returns the
+// metadata as saved.
+func (r *repo) UpdateMetadata(ctx context.Context, userID string, fn func(*entity.UserMetadata) error) (entity.UserMetadata, error) {
+	var saved entity.UserMetadata
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		q := tx
+		if tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+			q = tx.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		var u entity.User
+		if err := q.Where("id = ?", userID).First(&u).Error; err != nil {
+			return err
+		}
+		meta := u.Metadata
+		if err := fn(&meta); err != nil {
+			return err
+		}
+		if err := tx.Model(&entity.User{}).Where("id = ?", userID).Update("metadata", meta).Error; err != nil {
+			return err
+		}
+		saved = meta
+		return nil
+	})
+	return saved, err
 }
 
 func (r *repo) SetPasswordHash(ctx context.Context, userID, hash string) error {

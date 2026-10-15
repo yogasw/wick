@@ -33,8 +33,12 @@ func grpcServerWithLimits(opts []grpc.ServerOption) *grpc.Server {
 }
 
 // DumpManifest returns json.Marshal(mod) — the manifest is the module
-// itself, so the plugin.json on disk can never drift from the binary.
+// itself, so the plugin.json on disk can never drift from the binary. A
+// module connector.ValidateModule rejects never makes it into a manifest.
 func DumpManifest(mod connector.Module) ([]byte, error) {
+	if err := connector.ValidateModule(mod); err != nil {
+		return nil, err
+	}
 	return json.Marshal(manifestModule(mod))
 }
 

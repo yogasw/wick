@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+-   **Connectors:** `Operation.VisibleWhen` hides an operation unless the instance's config matches a `field:a|b` predicate (the config `visible_when` grammar). Hidden ops are left out of every agent-facing listing and refused by `wick_execute` and workflow nodes, while the manager Test panel still runs them. The admin operations table shows them greyed with a "Hidden: requires …" chip and leaves them out of the count. Plugin manifests and installs reject a predicate naming an unknown or secret config key.
+-   **Connectors:** Hide for me. A user can hide a connector instance for themselves from the manager connector list; it is a display preference, not access. `wick_list` and `wick_search` skip the caller's hidden instances (and their accounts), report them as `hidden_count` + `hidden_note`, and accept `include_hidden: true` to list them anyway. Hidden instances still run by id through `wick_get` / `wick_execute`, and agent checklists and team grants are unchanged.
+-   **Playwright Browser:** `get_markdown` is now offered only on `moli` instances and `pdf` only on Chromium-based engines, via `VisibleWhen`. The plugin version is bumped to 0.14.0.
 
 ---
 

@@ -3,6 +3,8 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -52,6 +54,9 @@ type connectorRowJSON struct {
 	// Nil for built-ins, non-MCP defs, and MCP servers on any other auth
 	// scheme (those need no per-row login).
 	MCPAuth *connectorMCPAuthJSON `json:"mcp_auth"`
+	// HiddenForMe is true when the caller hid this instance for themselves
+	// (POST …/{id}/hide). Per caller: other users see their own value.
+	HiddenForMe bool `json:"hidden_for_me,omitempty"`
 }
 
 // connectorMCPAuthJSON drives one instance row's Connect / Re-connect
@@ -145,6 +150,11 @@ type connectorOpJSON struct {
 	SystemDisabledReason string `json:"system_disabled_reason"`
 	AdminOnly            bool   `json:"admin_only"`
 	Category             string `json:"category"`
+	// VisibleWhen is the op's config predicate (`field:a|b`); HiddenByConfig
+	// is true when this row's config does not satisfy it, so the op never
+	// reaches agents. The admin table still lists it, greyed.
+	VisibleWhen    string `json:"visible_when,omitempty"`
+	HiddenByConfig bool   `json:"hidden_by_config"`
 }
 
 // connectorCategoryJSON is the section header the operations table renders
@@ -216,6 +226,8 @@ type connectorDetailJSON struct {
 	// Session config: capability is module-level, allowed is per-instance.
 	SessionConfigCapable bool `json:"session_config_capable"`
 	SessionConfigAllowed bool `json:"session_config_allowed"`
+	// HiddenForMe: the caller hid this instance for themselves.
+	HiddenForMe bool `json:"hidden_for_me,omitempty"`
 }
 
 // apiConnectorRows serves GET /manager/api/connectors/{key}: the connector
@@ -250,6 +262,10 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 	// Resolved once: every row on this page is checked against the same
 	// caller, and account visibility reads these tags per row.
 	callerTags := h.userFilterTagIDs(ctx, user)
+	var hiddenSet map[string]bool
+	if user != nil {
+		hiddenSet = user.Metadata.HiddenConnectorSet()
+	}
 
 	customInfo := h.customDefInfo(ctx, key, user)
 	defID := ""
@@ -284,6 +300,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 			CanConfigure: h.canConfigureRow(user, &row),
 			EnableSSO:    row.EnableSSO,
 			MultiAccount: row.MultiAccount,
+			HiddenForMe:  hiddenSet[row.ID],
 		}
 		if mod.OAuth != nil {
 			rowJSON.OAuth = h.rowOAuthJSON(mod, row, user)
@@ -369,6 +386,8 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 				SystemDisabledReason: st.SystemDisabledReason,
 				AdminOnly:            st.AdminOnly,
 				Category:             cat.Title,
+				VisibleWhen:          op.VisibleWhen,
+				HiddenByConfig:       st.HiddenByConfig,
 			})
 		}
 	}
@@ -411,6 +430,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		AllowOthersSeeAccounts: row.AllowOthersSeeAccounts,
 		SessionConfigCapable:   mod.AllowSessionConfig,
 		SessionConfigAllowed:   row.AllowSessionConfig,
+		HiddenForMe:            user != nil && user.Metadata.IsConnectorHidden(row.ID),
 	})
 }
 
@@ -828,6 +848,67 @@ func (h *Handler) apiSetConnectorTypeDisabled(disabled bool) http.HandlerFunc {
 // apiDeleteConnectorRow serves
 // POST /manager/api/connectors/{key}/{id}/delete. Reuses deleteConnector's
 // gate + service calls (Delete + owner-tag cleanup).
+// apiSetConnectorHidden serves POST /manager/api/connectors/{key}/{id}/hide
+// with body {"hidden":bool}: hide or unhide one instance for the caller only.
+// Hiding needs a row the caller can see (404 otherwise, so the id is not
+// confirmed); unhiding skips that check so a deleted or no-longer-shared id
+// can still be cleared. Idempotent, unlike the /disable toggle, so a double
+// click cannot flip it back. Responds {"hidden":bool,"hidden_ids":[…]}; the
+// SPA takes hidden_ids as the new state.
+func (h *Handler) apiSetConnectorHidden(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	if h.users == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "user service unavailable"})
+		return
+	}
+	if user == nil || user.ID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
+	id := r.PathValue("id")
+	// Instances only: an account id (row/account) or a session workspace
+	// connector (sw_…) never matches a listed instance, so storing one would
+	// only waste a slot.
+	if id == "" || strings.Contains(id, "/") || strings.HasPrefix(id, "sw_") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only connector instances can be hidden"})
+		return
+	}
+	var body struct {
+		Hidden *bool `json:"hidden"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Hidden == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be {"hidden":true|false}`})
+		return
+	}
+	hidden := *body.Hidden
+	if hidden {
+		if _, errResp, ok := h.loadVisibleRow(r, user); !ok {
+			writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
+			return
+		}
+	}
+	exists := func(cid string) bool {
+		_, err := h.connectors.Get(ctx, cid)
+		return err == nil
+	}
+	ids, err := h.users.SetConnectorHidden(ctx, user.ID, id, hidden, exists)
+	if errors.Is(err, login.ErrHiddenLimit) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": fmt.Sprintf("hide limit reached (%d): unhide some first", entity.MaxHiddenConnectors),
+		})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hidden": hidden, "hidden_ids": ids})
+}
+
 func (h *Handler) apiDeleteConnectorRow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)

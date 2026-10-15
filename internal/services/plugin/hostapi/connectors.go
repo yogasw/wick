@@ -13,6 +13,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp/handlers"
+	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/plugin/proto/hostpb"
 )
@@ -166,10 +167,22 @@ func (r connectorRunner) ListInstances(ctx context.Context, p Principal, key str
 			inst.AccountIds = append(inst.AccountIds, a.ID)
 		}
 		if mod, ok := r.svc.Module(row.Key); ok {
+			// An op whose VisibleWhen this row's config does not meet is left
+			// out; Execute refuses it anyway.
+			var vals map[string]string
 			for _, op := range mod.AllOps() {
-				if !op.ConfigOnly {
-					inst.Ops = append(inst.Ops, op.Key)
+				if op.ConfigOnly {
+					continue
 				}
+				if op.VisibleWhen != "" {
+					if vals == nil {
+						vals = connector.EffectiveConfigValues(mod, r.svc.LoadConfigs(row))
+					}
+					if !connector.OpVisible(op, vals) {
+						continue
+					}
+				}
+				inst.Ops = append(inst.Ops, op.Key)
 			}
 		}
 		out = append(out, inst)

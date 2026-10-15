@@ -173,13 +173,25 @@ templ pluginTestRowFragment(row PluginTestRow) {
 					<div class="absolute right-0 z-20 mt-1 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 py-1 shadow-lg">
 						switch row.State {
 							case "pending":
-								<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/approve") } method="POST" class="flex items-center gap-2 px-3 py-1.5">
+								<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/approve") } method="POST" class="flex flex-wrap items-center gap-2 px-3 py-1.5">
 									<select name="minutes" class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100">
 										<option value="15">15 min</option>
 										<option value="30" selected>30 min</option>
 										<option value="60">1 hour</option>
 										<option value="120">2 hours</option>
+										<option value="240">4 hours</option>
+										<option value="480">8 hours</option>
 									</select>
+									<input
+										type="number"
+										name="custom_minutes"
+										min="1"
+										max="480"
+										placeholder="custom min"
+										title="Custom duration in minutes (max 480 = 8 hours)"
+										aria-label="Custom duration in minutes (max 480 = 8 hours)"
+										class="w-24 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100"
+									/>
 									<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Approve</button>
 								</form>
 								<form action={ templ.SafeURL("/admin/plugins/dev-mode/" + row.Req.ID + "/reject") } method="POST">

@@ -1559,7 +1559,9 @@ func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, ful
 		// (which reads this bool map) hides them from the LLM — they remain
 		// runnable from the config UI because Execute reads OperationStatesFull,
 		// where Enabled is untouched.
-		out[k] = st.Enabled && !st.ConfigOnly
+		// HiddenByConfig ops (VisibleWhen not met by this row's config) are
+		// collapsed the same way; Execute re-checks the predicate itself.
+		out[k] = st.Enabled && !st.ConfigOnly && !st.HiddenByConfig
 	}
 	// An agent's checklist can switch ops off for the catalog the LLM
 	// reads; Execute re-checks the same rule at dispatch.
@@ -1592,6 +1594,12 @@ type OpState struct {
 	// Execute (which reads this full state) leaves Enabled intact so /test can
 	// still run it.
 	ConfigOnly bool
+	// VisibleWhen mirrors connector.Operation.VisibleWhen; HiddenByConfig is
+	// true when the row's effective config does not satisfy it. Like
+	// ConfigOnly it leaves Enabled (the admin toggle) untouched and is only
+	// collapsed into false by OperationStates.
+	VisibleWhen    string
+	HiddenByConfig bool
 }
 
 // OperationStatesFull returns the full per-operation state map for a
@@ -1607,7 +1615,32 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	if err != nil {
 		return nil, err
 	}
-	return foldOpStates(mod, rows), nil
+	full := foldOpStates(mod, rows)
+	applyVisibleWhen(mod, func() map[string]string { return s.LoadConfigs(entity.Connector{ID: connectorID}) }, full)
+	return full, nil
+}
+
+// applyVisibleWhen marks every op whose VisibleWhen the row's config does
+// not satisfy as HiddenByConfig. stored loads the row's saved config
+// (LoadConfigs, an in-memory read) — only when some op has a predicate;
+// module defaults fill unsaved fields.
+func applyVisibleWhen(mod connector.Module, stored func() map[string]string, full map[string]OpState) {
+	var vals map[string]string
+	for _, op := range mod.AllOps() {
+		if op.VisibleWhen == "" {
+			continue
+		}
+		st, ok := full[op.Key]
+		if !ok {
+			continue
+		}
+		if vals == nil {
+			vals = connector.EffectiveConfigValues(mod, stored())
+		}
+		st.VisibleWhen = op.VisibleWhen
+		st.HiddenByConfig = !connector.OpVisible(op, vals)
+		full[op.Key] = st
+	}
 }
 
 // foldOpStates folds a connector's stored toggle rows over its module's
@@ -2070,6 +2103,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	} else {
 		configs = s.LoadConfigs(*c)
+	}
+
+	// VisibleWhen gates the op on the instance's own config (e.g. an op only
+	// one browser engine supports). It can only be checked here, once the
+	// config is loaded, and before the account token lands in the map. The
+	// manager's test paths stay open so an admin can still try the op.
+	if op.VisibleWhen != "" && p.Source != entity.ConnectorRunSourceTest && p.Source != entity.ConnectorRunSourcePluginTest &&
+		!connector.OpVisible(*op, connector.EffectiveConfigValues(mod, configs)) {
+		return nil, fmt.Errorf("operation %q is not available on this instance (requires %s)", p.OperationKey, op.VisibleWhen)
 	}
 
 	// Inject the selected account's token. Ownership and per-account op

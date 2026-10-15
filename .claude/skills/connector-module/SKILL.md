@@ -206,6 +206,15 @@ connector.OpConfigOnly(
 )
 ```
 
+**`Operation.VisibleWhen` — hide an op unless the instance config matches.** Some ops only work on some configurations of the same connector (an op one browser engine supports, an endpoint only one API mode has). Set `VisibleWhen` to a `"<configKey>:<a|b|c>"` predicate — the same grammar as the config tag `visible_when=` (`entity.VisibleWhenMatches`: exact match, `|` = OR):
+
+```go
+op := connector.Op("get_markdown", "Get Page Markdown", "…", getMarkdownInput{}, getMarkdown, wickdocs.Docs{})
+op.VisibleWhen = "browser:moli" // or "browser:chromium|cloakbrowser|moli"
+```
+
+Evaluated per instance against its effective config (saved values over `default=` seeds). When it does not match: the op is gone from every agent-facing listing (wick_list counts, wick_search, wick_get, the batch catalog, session instances, host API ListInstances) and `wick_execute` and the workflow connector node refuse it with `operation "<key>" is not available on this instance (requires <predicate>)` — except from the manager Test paths (`test` / `plugin_test`), which stay open. The admin op table still lists it greyed with a "Hidden: requires …" chip, keeps its enable toggle editable, and leaves it out of the "Operations N" count. `connector.ValidateModule` (run at manifest dump and plugin install) rejects a predicate without `:`, naming an unknown config key, naming a secret field, or with no non-empty value — but it cannot check the values themselves, so they must equal exactly what the config field stores. A handler may still re-check the config (defense in depth).
+
 The `html=<op>` widget always calls the backing op with the currently-selected value in an arg named `browser` (a fixed convention) and auto-selects when the op returns exactly one `data-op="__select"` option. Return `map[string]any{"html": "<markup>"}`; put clickable rows as `<... data-op="__select" data-arg="<value>">`.
 
 Beyond the picker convention, an `html=<op>` op can drive a richer config UI: return **`{"fields": {k:v}}`** to fill *other* config fields (e.g. a "paste a cURL → fill token_v2 + headers" button), and the connector's own named `<input>`/`<textarea>` values are sent to the op so it can render an input form + parse what the user typed. Style returned markup with **inline `style` using CSS variables** (`var(--color-navy-800)`, …), NOT Tailwind classes — runtime-returned HTML isn't scanned by the Tailwind build, so utility classes get purged and render unstyled. Full contract in the **`config-tags` skill's `§ html=<op> widget contract`**.
@@ -233,7 +242,7 @@ See [`internal/connectors/crudcrud/`](../../../internal/connectors/crudcrud/) fo
 4. **MUST** use `c.HTTP` as the starting client (carries a 30s default timeout from `pkg/connector.DefaultHTTPTimeout`). Replace it locally if you need a different transport, but document why.
 5. **SHOULD** wrap upstream errors with `fmt.Errorf("...: %w", err)` so the chain reads cleanly in the history detail panel.
 6. **SHOULD** transform the upstream response into a typed struct or map shape that's stable across upstream changes. Returning the raw upstream body works but means LLMs see noise (envelopes, pagination cursors, debug fields) and break when upstream tweaks the shape. See [`connectors-design.md` § 10.1](../../../internal/planning/archive/connectors-design.md).
-7. **SHOULD** mark destructive operations with `OpDestructive(...)` — the framework defaults the toggle off so it's an explicit admin opt-in. Mark config-form-helper ops (backing an `html=<op>` picker/status widget) with `OpConfigOnly(...)` so they never reach the LLM.
+7. **SHOULD** mark destructive operations with `OpDestructive(...)` — the framework defaults the toggle off so it's an explicit admin opt-in. Mark config-form-helper ops (backing an `html=<op>` picker/status widget) with `OpConfigOnly(...)` so they never reach the LLM. Gate an op that only some instance configs can serve with `Operation.VisibleWhen` instead of erroring at runtime.
 8. **MAY** emit progress with `c.ReportProgress(progress, total, message)` for long-running calls. Safe to call from any goroutine; no-op on the JSON transport.
 
 ### Anti-patterns

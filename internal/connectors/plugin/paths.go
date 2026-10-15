@@ -54,6 +54,15 @@ func DefaultDir() string {
 	return filepath.Join(RootDir(), wickplugin.KindFolder(wickplugin.KindConnector))
 }
 
+// DataDirFor is the persistent data dir of the connector plugin key:
+// <plugins root>/<key>, the sibling of the connectors/ dir. It is the same
+// path wickplugin.DataDir derives inside an installed binary, so wick passes
+// it as wickplugin.EnvDataDir and a binary run from elsewhere (a
+// development-mode candidate) shares the installed plugin's data.
+func DataDirFor(key string) string {
+	return filepath.Join(filepath.Dir(DefaultDir()), key)
+}
+
 // RunDir is where wick pins plugin Unix sockets: <appDataDir>/run, overridable
 // with WICK_PLUGIN_SOCKET_DIR. go-plugin creates the socket under here (0700)
 // instead of the OS temp dir.

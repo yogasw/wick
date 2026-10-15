@@ -70,6 +70,44 @@ type UserMetadata struct {
 	// ticket record itself. Deleting a ticket that still holds chats always
 	// asks, however this is set: that one takes conversations with it.
 	AutoDeleteEmptyTickets string `json:"auto_delete_empty_tickets,omitempty"`
+
+	// HiddenConnectors lists connector instance IDs this user hid "for me":
+	// a personal declutter of the connector list, never an access control.
+	// Hiding changes nothing for other users or for what this user may run.
+	// Capped at MaxHiddenConnectors since the bag is read on every request.
+	// Read through IsConnectorHidden / HiddenConnectorSet.
+	HiddenConnectors []string `json:"hidden_connectors,omitempty"`
+}
+
+// MaxHiddenConnectors caps HiddenConnectors. The whole metadata bag is
+// loaded with the user on every request, so the list must stay small.
+const MaxHiddenConnectors = 200
+
+// IsConnectorHidden reports whether the user hid connector instance id.
+func (m UserMetadata) IsConnectorHidden(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, h := range m.HiddenConnectors {
+		if h == id {
+			return true
+		}
+	}
+	return false
+}
+
+// HiddenConnectorSet returns HiddenConnectors as a lookup set for callers
+// that check many rows. Nil when nothing is hidden; reading a nil map is
+// safe, so callers need no guard.
+func (m UserMetadata) HiddenConnectorSet() map[string]bool {
+	if len(m.HiddenConnectors) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(m.HiddenConnectors))
+	for _, id := range m.HiddenConnectors {
+		set[id] = true
+	}
+	return set
 }
 
 // Answers for AutoDeleteEmptyTickets. Empty means "not decided — ask".

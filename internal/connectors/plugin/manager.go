@@ -285,7 +285,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		if !ok {
 			return nil, fmt.Errorf("no plugin binary registered for %q", key)
 		}
-		clientCfg.Cmd = m.pluginCommand(bin)
+		clientCfg.Cmd = m.pluginCommand(key, bin)
 		var env []string
 		env, release = wickplugin.HostProcessEnv(key, wickplugin.KindConnector)
 		clientCfg.Cmd.Env = append(clientCfg.Cmd.Env, env...)
@@ -310,13 +310,14 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	return &entry{client: client, conn: conn, lastUsed: m.now(), reattached: reattached}, nil
 }
 
-// pluginCommand passes the runtime DNS choice to connector plugins. The plugin
-// SDK configures its own Go resolver and Termux CA bundle, so plugins stay
-// native processes and do not require proot or filesystem bind mounts.
-func (m *Manager) pluginCommand(bin string) *exec.Cmd {
+// pluginCommand passes the plugin's data dir and the runtime DNS choice to
+// connector plugins. The plugin SDK configures its own Go resolver and Termux
+// CA bundle, so plugins stay native processes and do not require proot or
+// filesystem bind mounts.
+func (m *Manager) pluginCommand(key, bin string) *exec.Cmd {
 	cmd := safeexec.Command(bin)
 	// Plugins can be third-party binaries; none of them reads the daemon's DSN.
-	cmd.Env = envscrub.ScrubOSEnv()
+	cmd.Env = append(envscrub.ScrubOSEnv(), wickplugin.EnvDataDir+"="+DataDirFor(key))
 	if wickenv.IsTermux() && m.dnsServers != nil {
 		cmd.Env = append(cmd.Env, "WICK_DNS_SERVERS="+m.dnsServers())
 	}

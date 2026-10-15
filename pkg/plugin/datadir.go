@@ -5,13 +5,23 @@ import (
 	"path/filepath"
 )
 
+// EnvDataDir is the env var the host sets to the plugin's persistent data
+// directory (the same <appDataDir>/plugins/<key> the install layout implies).
+const EnvDataDir = "WICK_PLUGIN_DATA_DIR"
+
 // DataDir returns the persistent per-plugin work directory for the given plugin
 // key — the place a plugin should store downloaded assets, caches, and session
 // state so they SURVIVE (unlike os.TempDir(), which the OS / Storage Sense
 // wipes).
 //
-// It is resolved entirely plugin-side from the running binary's own location —
-// no env var, no host cooperation. Installed plugin binaries live at
+// When the host sets EnvDataDir (wick does for every connector it spawns, the
+// pool and a development-mode candidate alike), that value is used as-is: it
+// is already the full directory for this key. This is what lets a candidate
+// binary run from a build folder find the assets the installed plugin already
+// downloaded.
+//
+// Otherwise it is resolved plugin-side from the running binary's own
+// location. Installed plugin binaries live at
 //
 //	<appDataDir>/plugins/connectors/<key>/<key>[.exe]
 //
@@ -29,6 +39,9 @@ import (
 // <os-temp>/wick-plugins/<key> — good enough for throwaway runs, and the only
 // case where OS temp is acceptable.
 func DataDir(key string) string {
+	if d := os.Getenv(EnvDataDir); d != "" {
+		return d
+	}
 	exe, err := os.Executable()
 	if err == nil {
 		if resolved, ok := dataDirFromExe(exe, key); ok {
@@ -44,7 +57,7 @@ func DataDir(key string) string {
 // executable path. Returns ok=false when the layout isn't recognized, so
 // DataDir can fall back to temp.
 func dataDirFromExe(exe, key string) (string, bool) {
-	binDir := filepath.Dir(exe)         // .../plugins/connectors/<key>
+	binDir := filepath.Dir(exe)           // .../plugins/connectors/<key>
 	connectorsDir := filepath.Dir(binDir) // .../plugins/connectors
 	if filepath.Base(connectorsDir) != "connectors" {
 		return "", false

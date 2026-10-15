@@ -123,6 +123,13 @@ export async function toggleConnectorDisabled(key: string, id: string): Promise<
   return r.disabled;
 }
 
+/* Per-user "Hide for me" — idempotent set (not a toggle), so a double click
+   cannot flip it back. Returns the stored state. */
+export async function setConnectorHidden(key: string, id: string, hidden: boolean): Promise<boolean> {
+  const r = await apiPost<{ hidden: boolean; hidden_ids: string[] }>(`${rowBase(key, id)}/hide`, { hidden });
+  return r.hidden;
+}
+
 export async function deleteConnectorRow(key: string, id: string): Promise<void> {
   await apiPost(`${rowBase(key, id)}/delete`);
 }

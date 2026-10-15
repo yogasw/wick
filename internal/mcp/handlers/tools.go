@@ -68,13 +68,18 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
 				"(2) wick_get with the id to see its categories, then with a category to list its ops, then with an op key to get that op's input_schema, " +
 				"(3) wick_execute with tool_id + params. " +
-				"Pass session_id to also include this session's workspace connectors (ephemeral sw_… instances created via wick_session_workspace); in the wick agent the session is resolved automatically, so you normally do not need to pass it.",
+				"Pass session_id to also include this session's workspace connectors (ephemeral sw_… instances created via wick_session_workspace); in the wick agent the session is resolved automatically, so you normally do not need to pass it. " +
+				"Instances the user hid for themselves are skipped and counted in hidden_count/hidden_note; pass include_hidden:true before saying a connector does not exist (a hidden instance still works by id).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
 						"description": "Active wick agent session id. Pass it to include session-workspace connectors (sw_…). Resolved automatically inside the wick agent.",
+					},
+					"include_hidden": map[string]any{
+						"type":        "boolean",
+						"description": "Also list connectors you hid for yourself in the dashboard (Hide for me). Default false.",
 					},
 				},
 			},
@@ -90,7 +95,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Returns matching tools nested under their connector (id, description, status), with tool_id per hit. " +
 				"status is 'ready' or 'needs_setup' — do NOT call wick_execute on a needs_setup connector; tell the user to open the admin dashboard to complete setup. " +
 				"WORKFLOW: after finding a match, call wick_get with the connector id + the op key (selector) to get its input_schema, " +
-				"then wick_execute. Pass session_id to also search this session's workspace connectors.",
+				"then wick_execute. Pass session_id to also search this session's workspace connectors. " +
+				"Instances the user hid for themselves are skipped and matching ones counted in hidden_count/hidden_note; pass include_hidden:true to search them too.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -101,6 +107,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"session_id": map[string]any{
 						"type":        "string",
 						"description": "Active wick agent session id, as its OWN argument. Pass it to include this session's workspace connectors (sw_…) in results.",
+					},
+					"include_hidden": map[string]any{
+						"type":        "boolean",
+						"description": "Also list connectors you hid for yourself in the dashboard (Hide for me). Default false.",
 					},
 				},
 				"required": []string{"query"},

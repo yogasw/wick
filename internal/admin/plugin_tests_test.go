@@ -57,7 +57,12 @@ func pluginTestCall(t *testing.T, fn http.HandlerFunc, c ptCall) (int, map[strin
 
 func approvePluginTest(t *testing.T, h *Handler, id string) {
 	t.Helper()
-	req := httptest.NewRequest("POST", "/admin/plugins/dev-mode/"+id+"/approve", strings.NewReader("minutes=30"))
+	approvePluginTestForm(t, h, id, "minutes=30")
+}
+
+func approvePluginTestForm(t *testing.T, h *Handler, id, form string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/admin/plugins/dev-mode/"+id+"/approve", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetPathValue("id", id)
 	req.SetPathValue("action", "approve")
@@ -65,6 +70,30 @@ func approvePluginTest(t *testing.T, h *Handler, id string) {
 	rec := httptest.NewRecorder()
 	h.pluginTestDecide(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code, rec.Body.String())
+}
+
+// The approval window comes from the preset select, a custom duration wins
+// over it, and both are capped at 8 hours.
+func TestPluginTestApproveDuration(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	cases := []struct {
+		form string
+		want time.Duration
+	}{
+		{"minutes=480", 480 * time.Minute},
+		{"minutes=30&custom_minutes=300", 300 * time.Minute},
+		{"minutes=30&custom_minutes=9999", pluginTestMaxMinutes * time.Minute},
+		{"minutes=60&custom_minutes=", 60 * time.Minute},
+	}
+	for _, c := range cases {
+		q := entity.PluginTestRequest{UserID: "u-dev", ConnectorKey: "sso-admin", InstanceID: "i-1", Status: entity.PluginTestPending}
+		require.NoError(t, db.Create(&q).Error)
+		approvePluginTestForm(t, h, q.ID, c.form)
+		require.NoError(t, db.First(&q, "id = ?", q.ID).Error)
+		require.NotNil(t, q.ExpiresAt, c.form)
+		require.NotNil(t, q.DecidedAt, c.form)
+		require.Equal(t, c.want, q.ExpiresAt.Sub(*q.DecidedAt).Round(time.Second), c.form)
+	}
 }
 
 // The whole gate for a person (PAT): switch, per-request approval, owner-only,

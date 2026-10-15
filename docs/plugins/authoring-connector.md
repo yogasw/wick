@@ -16,6 +16,12 @@ echo 0.1.0 > connector/<key>/VERSION
 - `main.go` calls `wickplugin.Serve(Module())` — leave it.
 - `connector.go` holds `Meta` (`Key` = folder name, `_` not `-`), `Configs`
   (credentials, encrypted by wick) and the operations.
+- An op that only some instance configs can serve sets
+  `op.VisibleWhen = "<configKey>:<a|b>"` (e.g. `"browser:moli"`): instances
+  whose config does not match never show it to agents and refuse to run it.
+  `--dump-manifest` and `plugin install` reject a predicate naming an unknown
+  or secret config key. See
+  [Connector module](../guide/connector-module.md#hiding-an-op-by-instance-config-visiblewhen).
 
 ## Build and inspect
 
@@ -80,8 +86,8 @@ Values the op passes to `c.Mask` print as `[masked]`. Exit codes: 0 ok,
 **Borrowing a real instance (`--instance`).** There is no separate request
 command: just run. The first run files a *plugin test request* and exits with
 a message saying so; it does not wait. The request shows up on **Admin →
-Plugins → Development mode**, where an admin approves it for 15 minutes to 2
-hours (or rejects it). Every run while it is pending, or after it was
+Plugins → Development mode**, where an admin approves it for 15 minutes to 8
+hours (a preset or a custom number of minutes, or rejects it). Every run while it is pending, or after it was
 rejected, is refused. Once approved, the next run goes through: with a PAT the
 binary receives the instance's **plaintext** config and runs the op locally;
 with an agent session (`WICK_CLI_TOKEN`) wick runs the binary itself and only
@@ -108,7 +114,7 @@ the masked result comes back. Guards:
    instance (linked to its settings page, with the `conn:<id>` that
    `wick_list` shows), what it is bound to (IP · machine · token: PAT name
    …last4 or `agent session <id>`) and the op, then approves it for 15 min –
-   2 h or rejects it.
+   8 h (preset or custom minutes) or rejects it.
 4. Run the same command again. Within the approval window every rerun from the
    same token, machine and IP works without asking again.
 
@@ -116,7 +122,10 @@ A person (PAT) gets the config into their own process, so breakpoints work.
 An agent session never sees the config: wick spawns the candidate binary
 itself, runs the op through the normal pipeline (access checks, masking, run
 log tagged `plugin_test`) and returns the masked result. That path only works
-from the wick host (loopback), since wick runs the binary file you name.
+from the wick host (loopback), since wick runs the binary file you name. wick
+also sets `WICK_PLUGIN_DATA_DIR` to the installed plugin's data dir, so
+`wickplugin.DataDir` in the candidate finds what that plugin already
+downloaded instead of falling back to OS temp.
 
 The credential itself does not expire with the approval: once handed out it
 stays valid until rotated. Only allow connectors whose credentials are safe on

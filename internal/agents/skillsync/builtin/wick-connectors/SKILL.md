@@ -20,6 +20,8 @@ Four tools, used in order:
 | `wick_get` | Operations for one connector, then the input schema for one operation. |
 | `wick_execute` | Run an operation by `tool_id` + `params`. |
 
+`wick_list` / `wick_search` skip instances the user chose to **hide for themselves**. When some are hidden the reply carries `hidden_count` and `hidden_note`; call again with `include_hidden: true` before telling the user a connector does not exist. A hidden instance still works by id (`wick_get` / `wick_execute`).
+
 `wick_list` deliberately does **not** return per-operation input schemas — you only pay that token cost when you commit to a specific operation via `wick_get`.
 
 ```

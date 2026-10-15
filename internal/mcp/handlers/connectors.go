@@ -47,6 +47,11 @@ type ListResult struct {
 	// so the agent can proactively offer to spin one up. Add via
 	// wick_session_workspace action=add base_key=<base_key>.
 	SessionConfigBases []sessionBaseHint `json:"session_config_bases,omitempty"`
+	// HiddenCount is how many instances the caller hid for themselves
+	// (Hide for me) were left out; HiddenNote tells the agent how to get
+	// them back. Both omitted when nothing was skipped.
+	HiddenCount int    `json:"hidden_count,omitempty"`
+	HiddenNote  string `json:"hidden_note,omitempty"`
 }
 
 // sessionBaseHint names a connector the caller may clone into the current
@@ -76,6 +81,9 @@ type searchResult struct {
 	Connectors []searchGroup `json:"connectors"`
 	Total      int           `json:"total"`
 	Query      string        `json:"query"`
+	// HiddenCount counts only hidden instances that matched the query.
+	HiddenCount int    `json:"hidden_count,omitempty"`
+	HiddenNote  string `json:"hidden_note,omitempty"`
 }
 
 type toolDetail struct {
@@ -126,10 +134,22 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
 		return
 	}
+	// Hide for me is a per-user display preference, not access: it is
+	// applied here and never in VisibleCatalog, which also feeds the agent
+	// checklist and team grants. An account entry goes with its parent.
+	var hidden map[string]bool
+	if user != nil && !argBool(args, "include_hidden") {
+		hidden = user.Metadata.HiddenConnectorSet()
+	}
+	hiddenCount := 0
 	summaries := make([]connectorSummary, 0, len(catalog))
 	totalTools := 0
 	for _, e := range catalog {
 		row, mod, count := e.Row, e.Module, len(e.Ops)
+		if hidden[row.ID] {
+			hiddenCount++
+			continue
+		}
 		totalTools += count
 		// Always add the connector entry itself.
 		summaries = append(summaries, connectorSummary{
@@ -158,6 +178,7 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	// Session-workspace instances: ephemeral connectors scoped to the
 	// caller's session, listed only when a session_id is passed. They
 	// appear like brand-new connectors but live and die with the session.
+	// Never filtered by Hide for me: the user added them on purpose.
 	var sessionBases []sessionBaseHint
 	if sid := CallSession(r, args); sid != "" {
 		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, sid)
@@ -173,7 +194,39 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		TotalConnectors:    len(summaries),
 		TotalTools:         totalTools,
 		SessionConfigBases: sessionBases,
+		HiddenCount:        hiddenCount,
+		HiddenNote:         hiddenNote(hiddenCount),
 	})
+}
+
+// argBool reads an optional boolean argument, accepting the string "true"
+// as well since some providers send booleans as strings.
+func argBool(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	return false
+}
+
+// hiddenNote is the hint attached to wick_list / wick_search when instances
+// the caller hid for themselves were left out. Empty when none were.
+func hiddenNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d connector(s) hidden by you — pass include_hidden:true to see them", n)
+}
+
+// hiddenSetFromCtx returns the instance ids the authenticated caller hid for
+// themselves, or nil when there is no caller (synthetic/test transports).
+func hiddenSetFromCtx(ctx context.Context) map[string]bool {
+	if u := login.GetUser(ctx); u != nil {
+		return u.Metadata.HiddenConnectorSet()
+	}
+	return nil
 }
 
 // callerIdentity unpacks the two things the listing gates on — who is asking
@@ -214,6 +267,13 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		return
 	}
 	needle := strings.ToLower(query)
+	// Same Hide for me filter as wick_list; only hidden instances that
+	// would have matched are counted so the note stays relevant.
+	var hidden map[string]bool
+	if !argBool(args, "include_hidden") {
+		hidden = hiddenSetFromCtx(r.Context())
+	}
+	hiddenCount := 0
 	groups := make([]searchGroup, 0)
 	total := 0
 	for _, row := range rows {
@@ -260,6 +320,10 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		if status == "needs_setup" {
 			continue
 		}
+		if hidden[row.ID] {
+			hiddenCount++
+			continue
+		}
 		total += len(matched)
 		groups = append(groups, searchGroup{
 			ID:           row.ID,
@@ -279,7 +343,13 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		total += st
 	}
 
-	rsp.ToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
+	rsp.ToolJSON(w, req.ID, searchResult{
+		Connectors:  groups,
+		Total:       total,
+		Query:       query,
+		HiddenCount: hiddenCount,
+		HiddenNote:  hiddenNote(hiddenCount),
+	})
 }
 
 func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {

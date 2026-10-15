@@ -123,7 +123,13 @@ func sessionInstanceSummaries(svc *connectors.Service, layout agentconfig.Layout
 		if !ok {
 			continue
 		}
-		count := len(mod.AllOps())
+		visible := sessionOpVisible(mod, in.Config)
+		count := 0
+		for _, op := range mod.AllOps() {
+			if visible(op) {
+				count++
+			}
+		}
 		total += count
 		label := in.Label
 		if strings.TrimSpace(label) == "" {
@@ -172,9 +178,13 @@ func sessionInstanceSearch(svc *connectors.Service, layout agentconfig.Layout, s
 			label = mod.Meta.Name + " (session)"
 		}
 		matched := make([]searchTool, 0)
+		visible := sessionOpVisible(mod, in.Config)
 		ops := mod.AllOps()
 		for i := range ops {
 			op := ops[i]
+			if !visible(op) {
+				continue
+			}
 			hay := strings.ToLower(label + " " + mod.Meta.Name + " " + mod.Meta.Key + " " + op.Name + " " + op.Description)
 			if !strings.Contains(hay, needle) {
 				continue
@@ -224,12 +234,38 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 	if strings.TrimSpace(label) == "" {
 		label = mod.Meta.Name + " (session)"
 	}
-	// Session instances have no per-op disable state — every op is enabled.
+	// Session instances have no per-op disable state — every op the
+	// instance's config exposes is enabled.
+	visible := sessionOpVisible(mod, target.Config)
+	shown := map[string]bool{}
+	for _, op := range mod.AllOps() {
+		shown[op.Key] = visible(op)
+	}
 	detail, err := buildConnectorDetail(mod, instanceID, label, "", selector,
 		func(opKey string) string { return FormatToolID(instanceID, opKey) },
-		func(string) bool { return true })
+		func(opKey string) bool { return shown[opKey] })
 	if err != nil {
 		return connectorDetail{}, true, err
 	}
 	return detail, true, nil
+}
+
+// sessionOpVisible reports whether a session instance exposes an op to the
+// agent: config-only helpers never (as on real rows), and a VisibleWhen op
+// only while the instance's config — module defaults for unsaved fields —
+// satisfies it. Execute applies the same predicate.
+func sessionOpVisible(mod connector.Module, cfg map[string]string) func(connector.Operation) bool {
+	var vals map[string]string
+	return func(op connector.Operation) bool {
+		if op.ConfigOnly {
+			return false
+		}
+		if op.VisibleWhen == "" {
+			return true
+		}
+		if vals == nil {
+			vals = connector.EffectiveConfigValues(mod, cfg)
+		}
+		return connector.OpVisible(op, vals)
+	}
 }
