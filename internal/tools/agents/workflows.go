@@ -448,33 +448,100 @@ func sortOwnChannelsFirst(rows []wfchannel.Info, me string) []wfchannel.Info {
 }
 
 // visibleChannelInstances narrows the per-instance channel rows to the
-// ONE row per channel type the CURRENT user should pick from.
+// rows of each channel type the CURRENT user should pick from.
 //
-// One Slack bot is registered per owning user, so listing every instance
-// gives five rows that all read "slack" and all store the same value —
-// the user cannot tell which is theirs, and picking a different row
-// changes nothing. A node stores the channel TYPE, so one row per type is
-// the honest shape.
-//
-// Which instance labels that row: the caller's own if they have one,
-// otherwise the first registered — which is also the instance the engine
-// falls back to when a run has no triggering bot to resolve from.
+// Every instance the caller owns is listed: a person's legacy Channels bot
+// AND the Slack apps of their Team agents (see resolveAgentChannelOwners)
+// are different bots, and a node pins one of them by instance key — so
+// collapsing them to one row made a Team agent's bot impossible to pick.
+// Instances owned by somebody else stay collapsed to ONE row per type
+// (five rows reading "slack" that the caller cannot tell apart help no
+// one); that row is the first registered, which is also the instance the
+// engine falls back to when a run has no triggering bot to resolve from.
 func visibleChannelInstances(rows []wfchannel.Info, me string) []wfchannel.Info {
-	out := make([]wfchannel.Info, 0, len(rows))
-	at := map[string]int{}
+	own := map[string]bool{}
 	for _, r := range rows {
-		i, seen := at[r.Name]
-		if !seen {
-			at[r.Name] = len(out)
-			out = append(out, r)
-			continue
+		if r.OwnerUserID == me {
+			own[r.Name] = true
 		}
-		// Own instance wins over whichever happened to register first.
-		if r.OwnerUserID == me && out[i].OwnerUserID != me {
-			out[i] = r
+	}
+	out := make([]wfchannel.Info, 0, len(rows))
+	foreign := map[string]bool{}
+	for _, r := range rows {
+		switch {
+		case r.OwnerUserID == me:
+			out = append(out, r)
+		case own[r.Name] || foreign[r.Name]:
+			// The caller has their own bot of this type, or one foreign
+			// row already stands in for the rest.
+		default:
+			foreign[r.Name] = true
+			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// agentChannelSuffix marks a Team agent's own bot in the pickers, so it
+// reads apart from the same person's legacy Channels bot.
+const agentChannelSuffix = " (Team agent)"
+
+// resolveAgentChannelOwners gives a Team agent's channel instance the
+// owner it belongs to.
+//
+// An agent's Slack/Telegram app registers as "<type>-agent:<agent-id>", so
+// OwnerFromInstanceKey reports the AGENT id as the owner. That id is
+// nobody's user id: the instance never counted as the caller's own, and
+// the pickers hid it behind the caller's legacy bot. The agent_channels
+// row carries the real owner (UserID), so it is read from there. An agent
+// row whose owner is unknown keeps the agent id and stays foreign.
+func resolveAgentChannelOwners(rows []wfchannel.Info) []wfchannel.Info {
+	if globalDB == nil {
+		return rows
+	}
+	owners := map[string]string{}
+	load := func(list func() ([]entity.AgentChannel, error)) {
+		chs, err := list()
+		if err != nil {
+			log.Warn().Err(err).Msg("agents: loading agent channel owners failed")
+			return
+		}
+		for _, ch := range chs {
+			if ch.UserID != nil {
+				owners[ch.Type+":"+ch.Name] = *ch.UserID
+			}
+		}
+	}
+	needSlack, needTelegram := false, false
+	for _, r := range rows {
+		needSlack = needSlack || strings.HasPrefix(r.InstanceKey, agentchannels.AgentSlackType+":")
+		needTelegram = needTelegram || strings.HasPrefix(r.InstanceKey, agentchannels.AgentTelegramType+":")
+	}
+	if needSlack {
+		load(func() ([]entity.AgentChannel, error) { return agentchannels.ListAgentSlack(globalDB) })
+	}
+	if needTelegram {
+		load(func() ([]entity.AgentChannel, error) { return agentchannels.ListAgentTelegram(globalDB) })
+	}
+	out := make([]wfchannel.Info, len(rows))
+	for i, r := range rows {
+		if owner, ok := owners[r.InstanceKey]; ok {
+			r.OwnerUserID = owner
+			r.BotName += agentChannelSuffix
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// channelDrillKey names one instance's drill in the palette. Several
+// instances of one type can now be listed, so the type alone would let
+// the second overwrite the first's drill.
+func channelDrillKey(prefix string, ch wfchannel.Info) string {
+	if ch.InstanceKey == "" {
+		return prefix + ch.Name
+	}
+	return prefix + ch.Name + "@" + ch.InstanceKey
 }
 
 // workflowRegistryAPI returns JSON catalog the editor uses to hydrate
@@ -489,7 +556,7 @@ func workflowRegistryAPI(c *tool.Ctx) {
 	// The catalog carries EVERY registered instance (the editor picks which
 	// to show — its own by default, plus whatever a node already pinned),
 	// with the caller's own instances first.
-	rows := sortOwnChannelsFirst(globalWorkflowMgr.MCP.ChannelsList(), me)
+	rows := sortOwnChannelsFirst(resolveAgentChannelOwners(globalWorkflowMgr.MCP.ChannelsList()), me)
 	for _, info := range rows {
 		actionDescs := map[string]integration.ActionDescriptor{}
 		for _, ad := range globalWorkflowMgr.Integration.ActionsByChannel(info.Name) {
