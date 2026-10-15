@@ -142,6 +142,11 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// TeamHold marks the session as taken over by a person: while true, a
+	// Team message another AGENT sends to it is recorded (its handoff row)
+	// but no turn runs for it, and the task ends rejected. A person's own
+	// @mention still runs. Toggled by the team connector's takeover op.
+	TeamHold bool `json:"team_hold,omitempty"`
 	// ChannelRef binds the session to the chat thread it belongs to, so a
 	// reply can be delivered there even when the message did NOT arrive
 	// from that chat.

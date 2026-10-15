@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -228,5 +230,58 @@ func TestMessageFanInAndGroup(t *testing.T) {
 	}
 	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "e", "fan_in": "quorum"}); !errors.Is(err, teamlink.ErrBadFanIn) {
 		t.Fatalf("bad fan_in: %v", err)
+	}
+}
+
+// takeover: the session itself, a session of the caller's own user, or
+// (admin) any session; anyone else is refused and nothing is written.
+func TestTakeoverPermissions(t *testing.T) {
+	held := map[string]bool{}
+	users := map[string]string{"sess-cap": "u1", "sess-mine": "u1", "sess-theirs": "u2"}
+	d := Deps{
+		SessionUser: func(s string) string { return users[s] },
+		SetHold: func(_ context.Context, s string, on bool) error {
+			held[s] = on
+			return nil
+		},
+	}
+	run := func(ctx context.Context, chat, on string) (any, error) {
+		c := connector.NewCtx(ctx, "row", nil, map[string]string{"chat": chat, "on": on}, nil, nil, nil)
+		c.SetSessionID("sess-cap")
+		return d.takeover(c)
+	}
+	ctx := context.Background()
+	out, err := run(ctx, "", "true")
+	if err != nil || out.(map[string]any)["by"] != "self" || out.(map[string]any)["chat"] != "sess-cap" || !held["sess-cap"] {
+		t.Fatalf("self: %v, %v, held %v", out, err, held)
+	}
+	out, err = run(ctx, "sess-mine", "true")
+	if err != nil || out.(map[string]any)["by"] != "owner" || !held["sess-mine"] {
+		t.Fatalf("owner: %v, %v", out, err)
+	}
+	if _, err := run(ctx, "sess-theirs", "true"); !errors.Is(err, errTakeoverDenied) || held["sess-theirs"] {
+		t.Fatalf("other user's session: err %v, held %v", err, held)
+	}
+	admin := login.WithUser(ctx, &entity.User{ID: "u9", Role: entity.RoleAdmin}, nil)
+	out, err = run(admin, "sess-theirs", "true")
+	if err != nil || out.(map[string]any)["by"] != "admin" || !held["sess-theirs"] {
+		t.Fatalf("admin: %v, %v", out, err)
+	}
+	out, err = run(ctx, "", "false")
+	if err != nil || out.(map[string]any)["team_hold"] != false || held["sess-cap"] {
+		t.Fatalf("release: %v, %v", out, err)
+	}
+
+	// Another agent's session never sets or lifts a hold, even its
+	// owner's and even as an admin: the hold is there to stop it.
+	agents := map[string]string{"sess-cap": "verifier", "sess-mine": "franky"}
+	d.AgentOf = func(_ context.Context, s string) string { return agents[s] }
+	held["sess-mine"] = true
+	if _, err := run(admin, "sess-mine", "false"); !errors.Is(err, errTakeoverDenied) || !held["sess-mine"] {
+		t.Fatalf("other agent lifting the hold: err %v, held %v", err, held)
+	}
+	agents["sess-cap"] = "franky"
+	if out, err := run(ctx, "sess-mine", "false"); err != nil || out.(map[string]any)["by"] != "owner" || held["sess-mine"] {
+		t.Fatalf("same agent's other chat: %v, %v", out, err)
 	}
 }

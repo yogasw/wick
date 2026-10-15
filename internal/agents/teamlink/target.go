@@ -21,6 +21,13 @@ type SessionTargeter interface {
 	CanTarget(ctx context.Context, target Peer, callerSession, chat string) (ticket bool, err error)
 }
 
+// HoldChecker is optionally implemented by Turns: whether a person took
+// sessionID over (take over), so a Team turn another agent asks for there
+// must not run. nil holds nothing.
+type HoldChecker interface {
+	Held(ctx context.Context, sessionID string) bool
+}
+
 // SessionLabeler is optionally implemented by Turns: how a session reads
 // to an agent that gets a message from it — its id, and its Slack thread
 // when it has one.

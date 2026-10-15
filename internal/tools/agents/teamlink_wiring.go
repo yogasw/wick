@@ -1211,6 +1211,51 @@ func (poolTurns) MainSession(_ context.Context, agent teamlink.Peer) string {
 	return ""
 }
 
+// Held reports whether a person took sessionID over (teamlink.HoldChecker):
+// its Meta.TeamHold, from the registry, else from disk.
+func (poolTurns) Held(_ context.Context, sessionID string) bool {
+	if globalMgr != nil {
+		if s, ok := globalMgr.Registry().Session(sessionID); ok {
+			return s.Meta.TeamHold
+		}
+	}
+	if globalLayout.BaseDir == "" || storage.ValidateSessionID(sessionID) != nil {
+		return false
+	}
+	s, err := session.Load(globalLayout, sessionID)
+	return err == nil && s.Meta.TeamHold
+}
+
+// SetTeamHold switches sessionID's take over (Meta.TeamHold) on or off,
+// for the team connector's takeover op. Re-read from disk so the save
+// does not undo a write the session's own turn just made.
+func SetTeamHold(_ context.Context, sessionID string, on bool) error {
+	if globalLayout.BaseDir == "" {
+		return errors.New("sessions are not configured on this server")
+	}
+	if storage.ValidateSessionID(sessionID) != nil {
+		return errChatNotFound(sessionID)
+	}
+	fresh, err := session.Load(globalLayout, sessionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errChatNotFound(sessionID)
+		}
+		return err
+	}
+	if fresh.Meta.TeamHold == on {
+		return nil
+	}
+	fresh.Meta.TeamHold = on
+	if err := session.SaveMeta(globalLayout, sessionID, fresh.Meta); err != nil {
+		return err
+	}
+	if globalMgr != nil {
+		_ = globalMgr.RefreshSession(sessionID)
+	}
+	return nil
+}
+
 // chatUserOf is whose main chat with agent a turn runs in: a share
 // recipient's own, else the owner's.
 func chatUserOf(agent teamlink.Peer) string {

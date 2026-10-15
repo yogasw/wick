@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
@@ -45,11 +46,19 @@ type Deps struct {
 	// threadTS) as callerAgent asking from callerSession sees them.
 	// Optional: session_lookup is unavailable without it.
 	Lookup func(ctx context.Context, callerAgent, callerSession, channel, threadTS string) (any, error)
+	// SetHold switches a session's take over (session Meta.TeamHold) on
+	// or off; an error for a session that does not exist. Optional:
+	// takeover is unavailable without it.
+	SetHold func(ctx context.Context, sessionID string, on bool) error
 }
 
 // errInTicketRoom mirrors team.ErrInTicketRoom (this package does not
 // import team).
 var errInTicketRoom = errors.New("not available in a ticket room: this session reaches its ticket only — hand a room member a turn with @handle in the room")
+
+// errTakeoverDenied refuses takeover of a session that is neither the
+// caller's own nor its user's, for a caller who is no admin.
+var errTakeoverDenied = errors.New("take over only this session, a session of your own user, or (admin) any session")
 
 var errUnavailable = errors.New("team messaging is not configured on this server")
 
@@ -94,6 +103,11 @@ type getTaskInput struct {
 }
 
 type listTasksInput struct{}
+
+type takeoverInput struct {
+	Chat string `wick:"desc=The session to take over or release (session_id). Omit for this session."`
+	On   bool   `wick:"desc=true: take over (agent messages to the session are recorded, not run). false: back to auto."`
+}
 
 type sessionLookupInput struct {
 	Permalink string `wick:"desc=A Slack thread link, e.g. https://<workspace>.slack.com/archives/C0123/p1792044355318329 (a ?thread_ts= in it wins). Or pass channel and thread_ts instead."`
@@ -141,6 +155,13 @@ func Operations(deps Deps) []connector.Category {
 					"can_send (whether you may message it: message to=@<agent> chat=<chat>), reason when you may not, and chat. "+
 					"Only sessions of agents of your owner (or shared with them) are listed; hidden counts the others.",
 				sessionLookupInput{}, deps.sessionLookup, wickdocs.Docs{}),
+			connector.Op("takeover", "Take Over a Session",
+				"Put a session under manual control (on=true) or back to auto (on=false). While on, a Team message another agent sends to that session runs no turn: "+
+					"the sender's task ends rejected (\"session is under manual control (take over) — your message was recorded, not delivered\") and the handoff row records it. "+
+					"A person's own @mention still runs. "+
+					"Turn it on in your own session (chat omitted) when the user writes \"take over\" there, and off when they write \"lanjut auto\". "+
+					"chat=<session_id> targets another session: only one of your own user's (or any, for an admin). Returns {chat, team_hold, by}; by is self, owner or admin.",
+				takeoverInput{}, deps.takeover, wickdocs.Docs{}),
 		),
 	}
 }
@@ -242,6 +263,47 @@ func (d Deps) sessionLookup(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return d.Lookup(c.Context(), agentID, c.SessionID(), channel, ts)
+}
+
+func (d Deps) takeover(c *connector.Ctx) (any, error) {
+	if d.SetHold == nil {
+		return nil, errUnavailable
+	}
+	caller := c.SessionID()
+	chat := strings.TrimSpace(c.Input("chat"))
+	if chat == "" {
+		chat = caller
+	}
+	if chat == "" {
+		return nil, errors.New("pass chat: no session to take over")
+	}
+	// A take over holds off other agents, so none of them may lift or set
+	// it: an agent's session acts only on its own agent's sessions,
+	// whoever owns them (an admin's agent included).
+	if d.AgentOf != nil && caller != "" && chat != caller {
+		if ca := d.AgentOf(c.Context(), caller); ca != "" && ca != d.AgentOf(c.Context(), chat) {
+			return nil, errTakeoverDenied
+		}
+	}
+	by := ""
+	switch {
+	case chat == caller:
+		by = "self"
+	case d.SessionUser != nil && caller != "" && d.SessionUser(chat) != "" && d.SessionUser(chat) == d.SessionUser(caller):
+		by = "owner"
+	default:
+		if u := login.GetUser(c.Context()); u != nil && u.IsAdmin() {
+			by = "admin"
+		}
+	}
+	if by == "" {
+		return nil, errTakeoverDenied
+	}
+	on := c.InputBool("on")
+	if err := d.SetHold(c.Context(), chat, on); err != nil {
+		return nil, err
+	}
+	return map[string]any{"chat": chat, "team_hold": on, "by": by}, nil
 }
 
 var (

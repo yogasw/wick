@@ -130,6 +130,14 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		if sl, ok := h.Turns.(SessionLocator); ok && session == "" {
 			session = sl.MainSession(ctx, target)
 		}
+		// A session a person took over takes no turn another agent asks
+		// for: the handoff row still records the message, rejected. A
+		// person's own mention runs as usual.
+		if hc, ok := h.Turns.(HoldChecker); ok && session != "" && !e.userOrigin(ec) && hc.Held(ctx, session) {
+			e.audit(ctx, from, target, callerSession, session, ec, a2a.TaskStateRejected)
+			e.fail(ctx, ec, yield, ErrSessionHeld)
+			return
+		}
 		// The handoff row appears as soon as the task is picked up and is
 		// moved to its final state below (same task id, so one row).
 		e.audit(ctx, from, target, callerSession, session, ec, a2a.TaskStateWorking)
@@ -229,7 +237,7 @@ func (h *Hub) forSessionUser(ctx context.Context, user, chatUser string, from, t
 // reason.
 func (e *executor) fail(ctx context.Context, ec *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool, err error) {
 	state := a2a.TaskStateFailed
-	for _, refusal := range []error{ErrUnknownHandle, ErrNotShared, ErrUnknownChat, ErrNewChatUnsupported, ErrMentionsOff} {
+	for _, refusal := range []error{ErrUnknownHandle, ErrNotShared, ErrUnknownChat, ErrNewChatUnsupported, ErrMentionsOff, ErrSessionHeld} {
 		if errors.Is(err, refusal) {
 			state = a2a.TaskStateRejected
 		}
@@ -246,18 +254,8 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 		return
 	}
 	ev := Handoff{From: from.Handle, To: to.Handle, ToID: to.ID, ContextID: ec.ContextID, TaskID: string(ec.TaskID), State: state, FromSession: callerSession}
-	// The Hub's task is the source of truth; the message's mark covers a
-	// first turn that starts before Send registered the task. Either can
-	// only make the task the person's, which delivers less, never more.
-	e.hub.mu.Lock()
-	if ref := e.hub.tasks[ec.TaskID]; ref != nil && ref.userTask() {
+	if e.userOrigin(ec) {
 		ev.Origin = OriginUser
-	}
-	e.hub.mu.Unlock()
-	if ec.Message != nil {
-		if o, _ := ec.Message.Metadata[metaOrigin].(string); o == OriginUser {
-			ev.Origin = OriginUser
-		}
 	}
 	if ev.From == "" {
 		ev.From = "user"
@@ -267,6 +265,22 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 			e.hub.Notify.Audit(context.WithoutCancel(ctx), s, ev)
 		}
 	}
+}
+
+// userOrigin reports whether a person's @mention started the task. The
+// Hub's task is the source of truth; the message's mark covers a first
+// turn that starts before Send registered the task. Both are set by Send
+// for a person's mention only (SendInput.Human), never from model input.
+func (e *executor) userOrigin(ec *a2asrv.ExecutorContext) bool {
+	e.hub.mu.Lock()
+	ref := e.hub.tasks[ec.TaskID]
+	user := ref != nil && ref.userTask()
+	e.hub.mu.Unlock()
+	if !user && ec.Message != nil {
+		o, _ := ec.Message.Metadata[metaOrigin].(string)
+		user = o == OriginUser
+	}
+	return user
 }
 
 // Cancel marks the task canceled, with the reason Hub.CancelTask noted.

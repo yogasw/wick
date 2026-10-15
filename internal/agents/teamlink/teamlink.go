@@ -144,6 +144,9 @@ var (
 	// ErrMentionsOff refuses a turn the target's mention setting does not
 	// take from the caller (Peer.AcceptsFrom).
 	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
+	// ErrSessionHeld refuses an agent's turn in a session a person took
+	// over (HoldChecker): the handoff row records it, no turn runs.
+	ErrSessionHeld = errors.New("session is under manual control (take over) — your message was recorded, not delivered")
 	// ErrRemoteOwnerOnly refuses an agent's turn for a remote agent whose
 	// owner keeps it to themselves (Mention "Nobody", or the old usage
 	// "only_me"). Send returns it wrapped in an OwnerOnlyError that names

@@ -2016,7 +2016,7 @@ func NewServer() *Server {
 		})
 		return teamHub
 	}
-	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamCallerOf, SessionUser: agentstool.SessionUserOf, InRoom: agentstool.InTicketRoom, Lookup: agentstool.TeamSessionLookup}))
+	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamCallerOf, SessionUser: agentstool.SessionUserOf, InRoom: agentstool.InTicketRoom, Lookup: agentstool.TeamSessionLookup, SetHold: agentstool.SetTeamHold}))
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
