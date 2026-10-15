@@ -262,6 +262,33 @@ describe("ConnectorList Hide for me", () => {
     expect(screen.getByRole("menuitem", { name: "Hide for me" })).toBeTruthy();
   });
 
+  it("offers a one-click eye button that hides the row without opening it", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(true);
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    const eye = screen.getByRole("button", { name: "Hide from my wick_list" });
+    expect(eye.getAttribute("title")).toBe("Hide for me — only you stop seeing this in wick_list; others are not affected");
+    await fireEvent.click(eye);
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", true));
+    expect(router.push).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText("Prod")).toBeNull());
+  });
+
+  it("unhides a hidden row from its eye-off button", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [{ ...viewOnly, hidden_for_me: true }] }));
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(false);
+    render(ConnectorList, { connectorKey: "slack" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Show hidden (1)" }));
+    expect(screen.queryByRole("button", { name: "Hide from my wick_list" })).toBeNull();
+    const eyeOff = screen.getByRole("button", { name: "Show in my wick_list" });
+    expect(eyeOff.getAttribute("title")).toBe("Hidden for you — click to show it in your wick_list again");
+    await fireEvent.click(eyeOff);
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", false));
+    expect(router.push).not.toHaveBeenCalled();
+    await waitFor(() => expect(stores.toastOk).toHaveBeenCalledWith("Visible again"));
+  });
+
   it("hides the row through the API and tucks it away", async () => {
     vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
     vi.mocked(api.setConnectorHidden).mockResolvedValue(true);

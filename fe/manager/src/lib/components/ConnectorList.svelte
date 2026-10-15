@@ -805,6 +805,23 @@
                       Auth OK
                     </span>
                   {/if}
+                  <!-- One-click "Hide for me": same per-viewer preference as
+                       the kebab item, so it is offered whatever can_configure
+                       says. Eye = visible (click hides), eye-off = hidden. -->
+                  <button
+                    type="button"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-black-700 hover:bg-white-200 hover:text-black-900 disabled:opacity-50 dark:text-black-600 dark:hover:bg-navy-800 dark:hover:text-white-100"
+                    title={row.hidden_for_me ? "Hidden for you — click to show it in your wick_list again" : "Hide for me — only you stop seeing this in wick_list; others are not affected"}
+                    aria-label={row.hidden_for_me ? "Show in my wick_list" : "Hide from my wick_list"}
+                    disabled={hidingId !== ""}
+                    onclick={(e) => { e.stopPropagation(); setHidden(row, !row.hidden_for_me); }}
+                  >
+                    {#if row.hidden_for_me}
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="m2 2 20 20"/></svg>
+                    {:else}
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    {/if}
+                  </button>
                   <KebabMenu ariaLabel={`Actions for ${row.label}`} items={rowMenuItems(row)} />
                 </div>
               </div>
