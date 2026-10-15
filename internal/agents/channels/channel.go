@@ -14,6 +14,7 @@ package channels
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -236,6 +237,37 @@ type ThreadBinding struct {
 	ChatID   string // channel / room id inside that adapter
 	ThreadID string // thread within the chat (Slack thread_ts)
 	Instance string // which configured bot owns it
+	// LastSeenTS is the newest thread message the session has seen. The
+	// store only moves it forward: an empty or older value on write keeps
+	// the stored one, so a plain re-bind never resets it.
+	LastSeenTS string
+}
+
+// SlackTSAfter reports whether Slack message ts a ("1700000000.000100") is
+// newer than b. An empty b is older than everything. Seconds and the
+// fractional part compare as integers, so no float rounding is involved.
+func SlackTSAfter(a, b string) bool {
+	if a == "" {
+		return false
+	}
+	if b == "" {
+		return true
+	}
+	as, af, _ := strings.Cut(a, ".")
+	bs, bf, _ := strings.Cut(b, ".")
+	if len(as) != len(bs) {
+		return len(as) > len(bs)
+	}
+	if as != bs {
+		return as > bs
+	}
+	for len(af) < len(bf) {
+		af += "0"
+	}
+	for len(bf) < len(af) {
+		bf += "0"
+	}
+	return af > bf
 }
 
 // SessionStartHook fires once when a channel sees a brand-new session

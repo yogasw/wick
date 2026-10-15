@@ -531,14 +531,23 @@ func (s *Channel) sessionKey(threadTS string) string {
 // that starts it. Cheap to call on every message: the store skips the write
 // when nothing changed.
 func (s *Channel) persistThreadBinding(sessionID, channelID, threadTS string) {
+	s.persistThreadBindingSeen(sessionID, channelID, threadTS, "")
+}
+
+// persistThreadBindingSeen is persistThreadBinding that also records seenTS
+// as the newest thread message the session has seen ("" keeps the stored
+// one; the store never moves it back). It works before the session exists,
+// so a brand-new thread starts with its first message already seen.
+func (s *Channel) persistThreadBindingSeen(sessionID, channelID, threadTS, seenTS string) {
 	if s.sessions == nil || sessionID == "" || channelID == "" {
 		return
 	}
 	s.sessions.SetThreadBinding(sessionID, agentchannels.ThreadBinding{
-		Channel:  "slack",
-		ChatID:   channelID,
-		ThreadID: threadTS,
-		Instance: s.sessionPrefixSnapshot(),
+		Channel:    "slack",
+		ChatID:     channelID,
+		ThreadID:   threadTS,
+		Instance:   s.sessionPrefixSnapshot(),
+		LastSeenTS: seenTS,
 	})
 }
 
@@ -2471,8 +2480,17 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 	// A main chat is shared with the web app; binding it to this thread
 	// would send the web's answers here too.
+	//
+	// The waking message becomes the newest one seen; what the thread said
+	// since the PREVIOUS one is read back below as the catch-up block.
+	prevSeen := ""
 	if !dmMain {
-		s.persistThreadBinding(sessionID, ev.Channel, threadTS)
+		prevSeen = s.lastSeenTS(sessionID, ev.Channel, threadTS)
+		seen := ""
+		if agentchannels.SlackTSAfter(ev.TimeStamp, prevSeen) {
+			seen = ev.TimeStamp
+		}
+		s.persistThreadBindingSeen(sessionID, ev.Channel, threadTS, seen)
 	}
 
 	// Set the status (with our loading_messages) BEFORE spawning the agent —
@@ -2589,6 +2607,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 		if hook := s.onSessionStart; hook != nil {
 			hook(sessionID, "slack", ctxText)
+		}
+	} else if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS && cfg.ThreadCatchUpEnabled {
+		// An existing thread session only wakes on a mention or the 🤖
+		// switch: open the turn with what people said in between. A new
+		// session gets buildSessionContext instead (thread metadata, not
+		// its messages) and no catch-up.
+		if block := s.threadCatchUp(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen); block != "" {
+			userText = block + "\n\n" + userText
 		}
 	}
 

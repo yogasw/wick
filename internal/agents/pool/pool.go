@@ -86,6 +86,10 @@ type Pool struct {
 	// on disk (a channel binds on the message that creates the session);
 	// ensureSession writes them once the meta exists. key = session id.
 	pendingBindings sync.Map
+	// bindingLocks serialises SetThreadBinding per session (*sync.Mutex), so
+	// two Slack events for one thread cannot interleave their load-modify-
+	// save of the binding and move last_seen_ts back.
+	bindingLocks sync.Map
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState
@@ -686,20 +690,25 @@ func (p *Pool) ThreadBinding(sessionID string) (agentchannels.ThreadBinding, boo
 		return agentchannels.ThreadBinding{}, false
 	}
 	return agentchannels.ThreadBinding{
-		Channel:  r.Channel,
-		ChatID:   r.ChatID,
-		ThreadID: r.ThreadID,
-		Instance: r.Instance,
+		Channel:    r.Channel,
+		ChatID:     r.ChatID,
+		ThreadID:   r.ThreadID,
+		Instance:   r.Instance,
+		LastSeenTS: r.LastSeenTS,
 	}, true
 }
 
 // SetThreadBinding persists the binding on the session meta. Idempotent —
-// an unchanged binding writes nothing, so this can be called on every turn
-// without rewriting meta.json each time.
+// an unchanged binding writes nothing. LastSeenTS only moves forward within
+// the same thread; it changes once per Slack message that starts a turn.
 func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding) {
 	if sessionID == "" || b.ChatID == "" {
 		return
 	}
+	lk, _ := p.bindingLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	mu := lk.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
 		// The first message of a thread binds before Send creates the
@@ -708,6 +717,12 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 		// waking the leader — had nowhere to go. Hold it until the
 		// session exists.
 		if !storage.PathExists(p.cfg.Layout.SessionMeta(sessionID)) {
+			if prev, ok := p.pendingBindings.Load(sessionID); ok {
+				if pb := prev.(agentchannels.ThreadBinding); pb.ChatID == b.ChatID && pb.ThreadID == b.ThreadID &&
+					!agentchannels.SlackTSAfter(b.LastSeenTS, pb.LastSeenTS) {
+					b.LastSeenTS = pb.LastSeenTS
+				}
+			}
 			p.pendingBindings.Store(sessionID, b)
 			return
 		}
@@ -716,15 +731,22 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 	}
 	p.pendingBindings.Delete(sessionID)
 	cur := sess.Meta.ChannelRef
+	// Within the same thread the seen ts never moves back: an empty or older
+	// one keeps the stored value. A different thread starts unseen.
+	if cur != nil && cur.ChatID == b.ChatID && cur.ThreadID == b.ThreadID &&
+		!agentchannels.SlackTSAfter(b.LastSeenTS, cur.LastSeenTS) {
+		b.LastSeenTS = cur.LastSeenTS
+	}
 	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
-		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
+		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance && cur.LastSeenTS == b.LastSeenTS {
 		return
 	}
 	sess.Meta.ChannelRef = &session.ChannelRef{
-		Channel:  b.Channel,
-		ChatID:   b.ChatID,
-		ThreadID: b.ThreadID,
-		Instance: b.Instance,
+		Channel:    b.Channel,
+		ChatID:     b.ChatID,
+		ThreadID:   b.ThreadID,
+		Instance:   b.Instance,
+		LastSeenTS: b.LastSeenTS,
 	}
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — save failed")

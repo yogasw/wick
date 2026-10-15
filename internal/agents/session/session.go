@@ -313,6 +313,10 @@ type ChannelRef struct {
 	// Instance identifies WHICH configured bot owns the thread, so a
 	// multi-instance host replies as the one that was there.
 	Instance string `json:"instance,omitempty"`
+	// LastSeenTS is the newest message ts in the thread the session has
+	// already seen (the message that started a turn, or the bot's own
+	// reply). The next turn catches up on what was said after it.
+	LastSeenTS string `json:"last_seen_ts,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
