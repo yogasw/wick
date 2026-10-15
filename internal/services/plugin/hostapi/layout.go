@@ -386,6 +386,9 @@ func (l *LayoutData) AttachSession(ctx context.Context, userID string, in *hostp
 	if err := team.RefuseRoomSession(l.Layout, sessionID); err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
+	// No move over the Host API: a session already on another ticket is
+	// refused (FailedPrecondition, naming that ticket) rather than taken
+	// off it behind the user's back.
 	if err := ticket.AttachSession(l.Layout, tk.ProjectID, tk.ID, sessionID); err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}

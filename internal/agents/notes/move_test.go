@@ -79,7 +79,7 @@ func TestAttachToAnotherTicketMovesSessionAndNotes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ticket.AttachSession(l, "p1", b.ID, "s1"); err != nil {
+	if err := ticket.AttachSessionMove(l, "p1", b.ID, "s1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,6 +96,40 @@ func TestAttachToAnotherTicketMovesSessionAndNotes(t *testing.T) {
 	}
 	if got := bodies(t, l, Scope{ProjectID: "p1", TicketID: a.ID}); len(got) != 0 {
 		t.Fatalf("old ticket kept the moved note: %v", got)
+	}
+}
+
+// Without an explicit move, a session already on another ticket is refused
+// and nothing moves: not the session, not its notes.
+func TestAttachToAnotherTicketWithoutMoveChangesNothing(t *testing.T) {
+	l := moveLayout(t)
+	mkSession(t, l, "s1", "p1")
+	a, _ := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "first"})
+	b, _ := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "second"})
+	if err := ticket.AttachSession(l, "p1", a.ID, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(l, Scope{ProjectID: "p1", TicketID: a.ID}, AddOptions{Body: "learned on A", SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ticket.AttachSession(l, "p1", b.ID, "s1"); !ticket.IsSessionInOtherTicket(err) {
+		t.Fatalf("err = %v, want ErrSessionInOtherTicket", err)
+	}
+
+	loadedA, _ := ticket.Load(l, "p1", a.ID)
+	loadedB, _ := ticket.Load(l, "p1", b.ID)
+	if len(loadedA.Sessions) != 1 || loadedA.Sessions[0] != "s1" {
+		t.Fatalf("session left the old ticket: %v", loadedA.Sessions)
+	}
+	if len(loadedB.Sessions) != 0 {
+		t.Fatalf("session landed on the new ticket: %v", loadedB.Sessions)
+	}
+	if got := bodies(t, l, Scope{ProjectID: "p1", TicketID: a.ID}); len(got) != 1 || got[0] != "learned on A" {
+		t.Fatalf("notes left the old ticket: %v", got)
+	}
+	if got := bodies(t, l, Scope{ProjectID: "p1", TicketID: b.ID}); len(got) != 0 {
+		t.Fatalf("notes reached the new ticket: %v", got)
 	}
 }
 

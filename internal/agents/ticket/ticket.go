@@ -16,6 +16,7 @@ package ticket
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -551,16 +552,49 @@ func Exists(layout config.Layout, projectID, ticketID string) bool {
 	return storage.PathExists(layout.TicketFile(projectID, ticketID))
 }
 
+// ErrSessionInOtherTicket is returned by AttachSession when the session is
+// already on a different ticket. It names that ticket so the caller can say
+// where the session is, and nothing has been changed when it comes back.
+// Match it with errors.As.
+type ErrSessionInOtherTicket struct {
+	SessionID string
+	TicketID  string
+	Title     string
+}
+
+func (e *ErrSessionInOtherTicket) Error() string {
+	return fmt.Sprintf("session %s is already on ticket %s (%q)", e.SessionID, e.TicketID, e.Title)
+}
+
+// IsSessionInOtherTicket reports whether err is (or wraps) an
+// ErrSessionInOtherTicket.
+func IsSessionInOtherTicket(err error) bool {
+	var e *ErrSessionInOtherTicket
+	return errors.As(err, &e)
+}
+
 // AttachSession adds a session to a ticket and brings its notes along.
 // Idempotent: attaching one that is already there changes nothing, so a
 // retry after a partial failure is safe. Does not touch UpdatedAt — adding
 // a session is not an edit to the ticket's own state and should not reset
 // its staleness.
 //
-// When the session was on another ticket it is detached from that one
-// first, so a session is never on two tickets at once — that is what makes
-// dragging a session between cards a move rather than a copy.
+// A session that is already on another ticket is refused with
+// *ErrSessionInOtherTicket and left where it is: taking a session off a
+// ticket is a move, and a move has to be asked for (AttachSessionMove).
 func AttachSession(layout config.Layout, projectID, ticketID, sessionID string) error {
+	return attachSession(layout, projectID, ticketID, sessionID, false)
+}
+
+// AttachSessionMove is AttachSession that also takes the session off the
+// ticket it was on, carrying its notes across, so a session is never on two
+// tickets at once — that is what makes dragging a session between cards a
+// move rather than a copy.
+func AttachSessionMove(layout config.Layout, projectID, ticketID, sessionID string) error {
+	return attachSession(layout, projectID, ticketID, sessionID, true)
+}
+
+func attachSession(layout config.Layout, projectID, ticketID, sessionID string, move bool) error {
 	if sessionID == "" {
 		return fmt.Errorf("session id is required")
 	}
@@ -578,6 +612,9 @@ func AttachSession(layout config.Layout, projectID, ticketID, sessionID string) 
 	// before writing, so its notes can be carried across in one step.
 	from := ""
 	if prev, ok := FindBySession(layout, projectID, sessionID); ok {
+		if !move {
+			return &ErrSessionInOtherTicket{SessionID: sessionID, TicketID: prev.ID, Title: prev.Title}
+		}
 		from = prev.ID
 		if derr := detachOnly(layout, projectID, prev.ID, sessionID); derr != nil {
 			return derr

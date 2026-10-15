@@ -1,6 +1,7 @@
 package ticket
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -250,6 +251,46 @@ func TestAttachAndDetachSession(t *testing.T) {
 	// reconciling a stale back-pointer.
 	if err := DetachSession(l, "p1", tk.ID, "ghost"); err != nil {
 		t.Fatalf("detaching an absent session should be a no-op: %v", err)
+	}
+}
+
+// A session already on another ticket is refused, naming that ticket, and
+// stays where it was; the explicit move takes it across; the same ticket
+// again is still a no-op.
+func TestAttachSessionOnOtherTicket(t *testing.T) {
+	l := newLayout(t)
+	a, _ := Create(l, CreateOptions{ProjectID: "p1", Title: "first"})
+	b, _ := Create(l, CreateOptions{ProjectID: "p1", Title: "second"})
+	if err := AttachSession(l, "p1", a.ID, "sess-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := AttachSession(l, "p1", b.ID, "sess-a")
+	var other *ErrSessionInOtherTicket
+	if !errors.As(err, &other) {
+		t.Fatalf("err = %v, want *ErrSessionInOtherTicket", err)
+	}
+	if other.TicketID != a.ID || other.Title != "first" || !strings.Contains(err.Error(), "first") {
+		t.Fatalf("error does not name the old ticket: %+v (%v)", other, err)
+	}
+	gotA, _ := Load(l, "p1", a.ID)
+	gotB, _ := Load(l, "p1", b.ID)
+	if len(gotA.Sessions) != 1 || len(gotB.Sessions) != 0 {
+		t.Fatalf("refused attach changed something: a=%v b=%v", gotA.Sessions, gotB.Sessions)
+	}
+
+	// Same ticket again stays idempotent.
+	if err := AttachSession(l, "p1", a.ID, "sess-a"); err != nil {
+		t.Fatalf("re-attach to the same ticket: %v", err)
+	}
+
+	if err := AttachSessionMove(l, "p1", b.ID, "sess-a"); err != nil {
+		t.Fatal(err)
+	}
+	gotA, _ = Load(l, "p1", a.ID)
+	gotB, _ = Load(l, "p1", b.ID)
+	if len(gotA.Sessions) != 0 || len(gotB.Sessions) != 1 || gotB.Sessions[0] != "sess-a" {
+		t.Fatalf("move did not move: a=%v b=%v", gotA.Sessions, gotB.Sessions)
 	}
 }
 

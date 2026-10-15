@@ -511,7 +511,14 @@ func (h *handlers) attach(c *connector.Ctx) (any, error) {
 	if err := team.RefuseRoomSession(h.layout, sid); err != nil {
 		return nil, err
 	}
-	if err := ticket.AttachSession(h.layout, projectID, ticketID, sid); err != nil {
+	attach := ticket.AttachSession
+	if c.InputBool("move") {
+		attach = ticket.AttachSessionMove
+	}
+	if err := attach(h.layout, projectID, ticketID, sid); err != nil {
+		if ticket.IsSessionInOtherTicket(err) {
+			return nil, fmt.Errorf("%w; pass move=true to move it to %s", err, ticketID)
+		}
 		return nil, err
 	}
 	writeBackPointer(h.layout, sid, ticketID)

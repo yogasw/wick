@@ -1077,7 +1077,8 @@ func apiTicketAttachSession(c *tool.Ctx) {
 	}
 	from, hadFrom := ticket.FindBySession(globalLayout, projectID, sid)
 
-	if err := ticket.AttachSession(globalLayout, projectID, ticketID, sid); err != nil {
+	// Dropping a chat on a card is a move: it leaves the ticket it was on.
+	if err := ticket.AttachSessionMove(globalLayout, projectID, ticketID, sid); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

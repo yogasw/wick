@@ -186,6 +186,19 @@ func TestLayoutAttachSession(t *testing.T) {
 	if err := session.SaveMeta(l.Layout, "s-ada", sess.Meta); err != nil {
 		t.Fatal(err)
 	}
+	// It is still on dupe-1, and the Host API has no move: refused, naming
+	// that ticket, and left where it is.
+	err = l.AttachSession(ctx, "ada", &hostpb.AttachSessionRequest{TicketId: "one-1", ProjectId: "a", SessionId: "s-ada"})
+	codeIs(t, err, codes.FailedPrecondition, "session on another ticket")
+	if !strings.Contains(err.Error(), "dupe-1") {
+		t.Fatalf("refusal does not name the old ticket: %v", err)
+	}
+	if tk, _ := ticket.Load(l.Layout, "a", "dupe-1"); len(tk.Sessions) != 1 {
+		t.Fatalf("refused attach took the session off dupe-1: %v", tk.Sessions)
+	}
+	if err := ticket.DetachSession(l.Layout, "a", "dupe-1", "s-ada"); err != nil {
+		t.Fatal(err)
+	}
 	if err := l.AttachSession(ctx, "ada", &hostpb.AttachSessionRequest{TicketId: "one-1", ProjectId: "a", SessionId: "s-ada"}); err != nil {
 		t.Fatalf("group backing: %v", err)
 	}
