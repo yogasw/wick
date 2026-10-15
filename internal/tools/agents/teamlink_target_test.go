@@ -86,11 +86,39 @@ func TestPoolTurnsCanTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// slack-other is a Slack thread of the ticket but not its owner:
+	// a turn there would be posted in that thread, so it is refused.
+	if _, err := turns.CanTarget(ctx, peer, "slack-main", "slack-other"); !errors.Is(err, teamlink.ErrUnknownChat) || !strings.Contains(err.Error(), "owner_session") {
+		t.Fatalf("same ticket, not the owner: %v", err)
+	}
+	setTicketOwner(t, "p1", tk.ID, "slack-other")
 	if same, err := turns.CanTarget(ctx, peer, "slack-main", "slack-other"); err != nil || !same {
-		t.Fatalf("same ticket: ticket %v, err %v", same, err)
+		t.Fatalf("same ticket, the owner: ticket %v, err %v", same, err)
+	}
+	// From the owner back to another Slack thread of its ticket (the main
+	// thread the client reads): refused, also when it is the chat user's.
+	if _, err := turns.CanTarget(ctx, peer, "slack-other", "slack-main"); !errors.Is(err, teamlink.ErrUnknownChat) {
+		t.Fatalf("owner to a non-owner thread of the ticket: %v", err)
 	}
 	if same, err := turns.CanTarget(ctx, peer, "slack-main", "slack-card"); err != nil || same {
 		t.Fatalf("outside the ticket is the owner path only: ticket %v, err %v", same, err)
+	}
+}
+
+// setTicketOwner records sid as the ticket's owner_session, as the
+// first-check workflow does.
+func setTicketOwner(t *testing.T, pid, ticketID, sid string) {
+	t.Helper()
+	tk, err := ticket.Load(globalLayout, pid, ticketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Fields == nil {
+		tk.Fields = map[string]string{}
+	}
+	tk.Fields[ticket.OwnerSessionField] = sid
+	if err := ticket.Save(globalLayout, tk); err != nil {
+		t.Fatal(err)
 	}
 }
 

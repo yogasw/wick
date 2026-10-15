@@ -134,6 +134,10 @@ func TestTeamReadChatAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := readChat(t, verifier.ID, "verifier-chat", map[string]string{"to": "@franky", "chat": "slack-req"}); !errors.Is(err, teamlink.ErrUnknownChat) {
+		t.Fatalf("same ticket, not its owner: %v", err)
+	}
+	setTicketOwner(t, "p1", tk.ID, "slack-req")
 	res, err = readChat(t, verifier.ID, "verifier-chat", map[string]string{"to": "@franky", "chat": "slack-req"})
 	if err != nil {
 		t.Fatalf("same ticket: %v", err)

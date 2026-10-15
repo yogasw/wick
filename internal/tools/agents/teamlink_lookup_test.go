@@ -114,6 +114,10 @@ func TestTeamSessionLookupSelfNeedsTicket(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if f := mustRow(t, franky.ID, "slack-req", "slack-f"); f.CanSend || f.Reason == "" {
+		t.Fatalf("own chat in one ticket, not its owner: %+v", f)
+	}
+	setTicketOwner(t, "p1", tk.ID, "slack-f")
 	if f := mustRow(t, franky.ID, "slack-req", "slack-f"); !f.CanSend || f.Chat != "slack-f" || f.TicketID != tk.ID {
 		t.Fatalf("own chat in one ticket: %+v", f)
 	}

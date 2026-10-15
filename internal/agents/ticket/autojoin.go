@@ -17,6 +17,12 @@ import (
 // put a session born in one of those threads on the ticket.
 const ThreadsField = "threads"
 
+// OwnerSessionField is the ticket field naming the session that owns the
+// ticket's work — the one that answers the requester. Of the ticket's
+// Slack thread sessions it is the only one another chat of the ticket may
+// run a Team message in, since a Team turn there is posted in its thread.
+const OwnerSessionField = "owner_session"
+
 // Auto-join rules, reported back so the caller can log which one fired.
 const (
 	JoinByThread    = "thread"    // J1: the session's own thread is listed

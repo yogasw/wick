@@ -1075,11 +1075,20 @@ func errChatNotFound(id string) error {
 	return fmt.Errorf("session %s not found — pass a session_id that exists", id)
 }
 
+// errNotTicketOwner refuses a chat= naming a Slack thread session of the
+// asking chat's ticket that is not the ticket's owner_session: a Team turn
+// there is posted in that thread, which may be the one the client reads.
+func errNotTicketOwner(chat, ticketID string) error {
+	return fmt.Errorf("%w: session %s is a Slack thread of ticket %s but not its %s — through a ticket only the owner session can be messaged", teamlink.ErrUnknownChat, chat, ticketID, ticket.OwnerSessionField)
+}
+
 // CanTarget admits chat — a session that is not one of agent's own chats
 // — as a message's chat= (teamlink.SessionTargeter): it must exist, be a
 // top-level session that is no group backing or ticket room, belong to
 // agent (teamAgentOfSession), and be agent's chat user's, or in the same
-// ticket of chat's project as callerSession (ticket = true).
+// ticket of chat's project as callerSession (ticket = true). Through the
+// ticket a Slack thread session is admitted only as the ticket's
+// owner_session, never by falling back to the chat user path.
 func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSession, chat string) (bool, error) {
 	if storage.ValidateSessionID(chat) != nil {
 		return false, errChatNotFound(chat)
@@ -1098,6 +1107,9 @@ func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSessi
 	if callerSession != "" && m.ProjectID != "" {
 		if tk, ok := ticket.FindBySession(globalLayout, m.ProjectID, chat); ok {
 			if mine, ok := ticket.FindBySession(globalLayout, m.ProjectID, callerSession); ok && mine.ID == tk.ID {
+				if isSlackThreadSession(m) && strings.TrimSpace(tk.Fields[ticket.OwnerSessionField]) != chat {
+					return false, errNotTicketOwner(chat, tk.ID)
+				}
 				return true, nil
 			}
 		}
@@ -1106,6 +1118,12 @@ func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSessi
 		return false, nil
 	}
 	return false, teamlink.ErrUnknownChat
+}
+
+// isSlackThreadSession is whether a turn in the session m describes is
+// posted in a Slack thread.
+func isSlackThreadSession(m session.Meta) bool {
+	return m.Origin == session.OriginSlack || (m.ChannelRef != nil && m.ChannelRef.Channel == "slack")
 }
 
 // SessionLabel names sessionID to an agent a message from it reaches
