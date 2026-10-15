@@ -31,3 +31,20 @@ func TestEffectiveGroup(t *testing.T) {
 		t.Errorf("json: %s", b)
 	}
 }
+
+func TestStructToConfigsInternalFlag(t *testing.T) {
+	type cfg struct {
+		Token   string `wick:"secret;key=token"`
+		Expires string `wick:"hidden;internal;key=expires"`
+	}
+	rows := StructToConfigs(cfg{Expires: "2026-10-15T00:00:00Z"})
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (internal rows are still seeded)", len(rows))
+	}
+	if rows[0].Internal {
+		t.Error("token marked internal")
+	}
+	if !rows[1].Internal || !rows[1].Hidden || rows[1].Value != "2026-10-15T00:00:00Z" {
+		t.Errorf("expires row = %+v, want internal + hidden with its value", rows[1])
+	}
+}

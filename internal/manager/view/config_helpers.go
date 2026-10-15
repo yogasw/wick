@@ -89,11 +89,15 @@ func parseGroup(raw string) (title, desc string, collapsed bool) {
 // own slot so the templ can render simple fields as a grid and picker/kvlist
 // fields as sub-blocks under them. Rows with an empty Group collapse into
 // the default "Configuration" card at its first-seen position. The first
-// non-empty description seen for a group wins.
+// non-empty description seen for a group wins. Internal rows are dropped:
+// wick writes them itself, so no page renders them.
 func groupRows(rows []entity.Config) []fieldGroup {
 	idx := map[string]int{}
 	var out []fieldGroup
 	for _, r := range rows {
+		if r.Internal {
+			continue
+		}
 		title, desc, collapsed := parseGroup(r.EffectiveGroup())
 		i, ok := idx[title]
 		if !ok {

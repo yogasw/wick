@@ -19,7 +19,7 @@
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
   } from "../api/team.js";
-  import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
+  import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, showRotation, rotationLine, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
   import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
   import { CONN_TABS, CONN_MARK, CONN_MARK_LABEL, connState, defaultConnTab, type ConnTab, type ConnState } from "../connectionTabs.js";
 
@@ -32,7 +32,7 @@
   let loadError = $state("");
   let step = $state(1);
   let wizard = $state(false);
-  let draft = $state<TokenDraft>({ mode: "socket", bot_token: "", app_token: "", signing_secret: "" });
+  let draft = $state<TokenDraft>({ mode: "socket", bot_token: "", app_token: "", signing_secret: "", app_refresh_token: "", client_id: "", client_secret: "" });
   let busy = $state(false);
   let error = $state("");
   let health = $state<AgentSlackHealth | null>(null);
@@ -63,6 +63,7 @@
       slackMode = instant?.enabled && !status.connected ? "instant" : "custom";
       wizard = !status.connected;
       if (status.connected) draft.mode = status.mode;
+      draft.client_id = status.client_id ?? "";
       if (status.connected && status.online) void runHealth();
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
@@ -102,6 +103,8 @@
   }
 
   const tokenProblem = $derived(tokenError(draft, status));
+  const rotation = $derived(showRotation(draft, status));
+  const rotationBadge = $derived(rotationLine(status));
 
   let marks = $state<Partial<Record<ConnTab, ConnState>>>({});
   /* Slack is live through whichever app answers: its own, else Instant. */
@@ -134,7 +137,8 @@
     error = "";
     try {
       status = await runApi(connectAgentSlack(base, agent.id, connectBody(draft)));
-      draft.bot_token = draft.app_token = draft.signing_secret = "";
+      draft.bot_token = draft.app_token = draft.signing_secret = draft.app_refresh_token = draft.client_secret = "";
+      draft.client_id = status.client_id ?? "";
       wizard = false;
       toastOk(`@${agent.handle} is connected to Slack`);
       await runHealth();
@@ -267,10 +271,28 @@
             </div>
             {#if draft.mode === "socket"}
               <div>
-                <label class={label} for="sl-app">App token (xapp-…)</label>
+                <label class={label} for="sl-app">App token (xapp-… or xoxe.xapp-…)</label>
                 <input id="sl-app" type="password" autocomplete="off" class={input} bind:value={draft.app_token} placeholder={status?.secrets?.app_token ? MASKED : "xapp-…"} />
                 <p class="mt-1 {muted}" data-testid="hint-app">{TOKEN_HINTS.app_token}</p>
               </div>
+              {#if rotation}
+                <div class="space-y-3 rounded-lg border border-white-300 p-3 dark:border-navy-600" data-testid="slack-rotation">
+                  <p class="text-xs font-medium text-black-900 dark:text-white-100">Rotating token detected</p>
+                  <div>
+                    <label class={label} for="sl-refresh">Refresh token</label>
+                    <input id="sl-refresh" type="password" autocomplete="off" class={input} bind:value={draft.app_refresh_token} placeholder={status?.secrets?.app_refresh_token && !draft.app_token.trim() ? MASKED : "xoxe-1-…"} />
+                  </div>
+                  <div>
+                    <label class={label} for="sl-client-id">Client ID</label>
+                    <input id="sl-client-id" type="text" autocomplete="off" class={input} bind:value={draft.client_id} />
+                  </div>
+                  <div>
+                    <label class={label} for="sl-client-secret">Client Secret</label>
+                    <input id="sl-client-secret" type="password" autocomplete="off" class={input} bind:value={draft.client_secret} placeholder={status?.secrets?.client_secret ? MASKED : ""} />
+                  </div>
+                  <p class={muted} data-testid="hint-rotation">{TOKEN_HINTS.rotation}</p>
+                </div>
+              {/if}
             {:else}
               <div>
                 <label class={label} for="sl-sign">Signing secret</label>
@@ -301,10 +323,16 @@
         </div>
         <div class="flex flex-wrap items-center gap-2 {muted}">
           <span>Secrets:</span>
-          {#each [["bot_token", "bot token"], ["app_token", "app token"], ["signing_secret", "signing secret"]] as [k, lbl] (k)}
+          {#each [["bot_token", "bot token"], ["app_token", "app token"], ["signing_secret", "signing secret"], ["app_refresh_token", "refresh token"], ["client_secret", "client secret"]] as [k, lbl] (k)}
             {#if status.secrets?.[k as "bot_token"]}<span class="rounded bg-white-200 px-1.5 py-0.5 font-mono dark:bg-navy-600" data-testid="secret-{k}">{lbl} {MASKED}</span>{/if}
           {/each}
         </div>
+        {#if rotationBadge}
+          <div>
+            <span class="rounded-full bg-white-200 px-2 py-0.5 text-xs text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="slack-rotation-badge">{rotationBadge}</span>
+            {#if status.last_error}<p class="mt-1 text-xs text-neg-400" data-testid="slack-rotation-error">{status.last_error}</p>{/if}
+          </div>
+        {/if}
         <div class="flex flex-wrap gap-2">
           <Button size="sm" variant="ghost" onclick={runHealth}>Test again</Button>
           <Button size="sm" variant="ghost" onclick={() => { wizard = true; step = 2; }}>Replace tokens</Button>

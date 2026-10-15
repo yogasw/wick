@@ -688,7 +688,7 @@ export type SuggestedPrompt = { title: string; message: string };
 
 /* Connections › Slack (api_team_slack.go). Secrets never come back: the
    server answers whether each one is set, nothing more. */
-export type SlackSecretKey = "bot_token" | "app_token" | "signing_secret" | "app_config_token";
+export type SlackSecretKey = "bot_token" | "app_token" | "signing_secret" | "app_config_token" | "app_refresh_token" | "client_secret";
 export type AgentSlackStatus = {
   connected: boolean;
   online: boolean;
@@ -700,6 +700,12 @@ export type AgentSlackStatus = {
   app_id?: string;
   secrets: Partial<Record<SlackSecretKey, boolean>>;
   disabled: boolean;
+  /* Rotating = an xoxe.xapp- app token wick refreshes itself; times are RFC 3339. */
+  rotating?: boolean;
+  client_id?: string;
+  app_token_expires_at?: string;
+  last_refresh?: string;
+  last_error?: string;
 };
 export type AgentSlackConnect = Partial<{
   mode: "socket" | "http";
@@ -709,6 +715,9 @@ export type AgentSlackConnect = Partial<{
   app_config_token: string;
   app_id: string;
   dm_main_chat: boolean;
+  app_refresh_token: string;
+  client_id: string;
+  client_secret: string;
 }>;
 export type SlackMatrixItem = { name: string; status: SlackMatrixStatus; hint?: string };
 export type SlackMatrixStatus = "ok" | "warn" | "error" | "off" | "pending";

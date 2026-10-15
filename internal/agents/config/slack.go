@@ -12,10 +12,20 @@ package config
 // role family (anyone who passed access / workspace admins / a custom list)
 // allowed to resolve interactive gate buttons.
 type SlackChannelConfig struct {
-	Mode          string `wick:"dropdown=socket|http;hidden;key=mode;group=Connection|Transport credentials. Socket mode needs the bot + app token; HTTP mode needs the bot token + signing secret and a public URL.;desc=Connection mode."`
+	Mode          string `wick:"dropdown=socket|http;hidden;key=mode;group=Connection|Transport credentials. Socket mode needs the bot + app token. HTTP mode needs the bot token + signing secret and a public URL.;desc=Connection mode."`
 	BotToken      string `wick:"secret;hidden;key=bot_token;group=Connection;desc=Bot token (xoxb-...)."`
-	AppToken      string `wick:"secret;hidden;key=app_token;group=Connection;desc=App token (xapp-...). Required for socket mode."`
+	AppToken      string `wick:"secret;hidden;key=app_token;group=Connection;desc=App-level token (xapp-... or xoxe.xapp-... when token rotation is on). Required for socket mode."`
 	SigningSecret string `wick:"secret;hidden;key=signing_secret;group=Connection;desc=Signing secret. Required for http mode."`
+
+	// Token rotation (xoxe.xapp- app tokens). wick refreshes the app token
+	// itself through oauth.v2.access and writes the new pair back here.
+	AppRefreshToken string `wick:"secret;hidden;key=app_refresh_token;group=Token Rotation|Only needed when Token rotation is ON in your Slack app (app token starts with xoxe.xapp-). Leave empty otherwise.;desc=Refresh token (xoxe-1-...) issued with a rotating app-level token. Required when the app token starts with xoxe.xapp-."`
+	ClientID        string `wick:"hidden;key=client_id;group=Token Rotation;desc=Slack app Client ID (Basic Information - App Credentials). Required for a rotating app token."`
+	ClientSecret    string `wick:"secret;hidden;key=client_secret;group=Token Rotation;desc=Slack app Client Secret (Basic Information - App Credentials). Required for a rotating app token."`
+	// AppTokenExpiresAt is internal: RFC 3339 expiry of the current rotating
+	// app token, written by wick after each refresh. Never set by hand, and
+	// the `internal` flag keeps it off every config page.
+	AppTokenExpiresAt string `wick:"hidden;internal;key=app_token_expires_at;group=Token Rotation;desc=Internal - expiry of the current rotating app token (RFC 3339). Written by wick after each refresh."`
 
 	UsersMode       string `wick:"dropdown=all|whitelist;default=all;hidden;key=users_mode;group=Access Control|Who may trigger agents. Users, groups and bots are combined via OR (pass when any matches) and channels are an independent gate.;desc=Restrict which Slack users can trigger agents."`
 	AllowedUsers    string `wick:"picker=slack.users;hidden;key=allowed_users;visible_when=users_mode:whitelist;group=Access Control;desc=Allowed users."`

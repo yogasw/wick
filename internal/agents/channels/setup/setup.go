@@ -11,6 +11,8 @@
 package setup
 
 import (
+	"time"
+
 	"github.com/rs/zerolog/log"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
@@ -90,6 +92,37 @@ func WireIdentityCache(store any, channelType, ownerUserID string, ch agentchann
 	// getMe runs there) — with no sink wired yet, so persist it now.
 	if botID, botName, workspace := cache.BotIdentity(); botID != "" || botName != "" {
 		save(botID, botName, workspace)
+	}
+}
+
+// SlackAppTokenStore is the optional store seam a rotated Slack app token
+// pair is written back through. Kept out of SlackStore so existing fakes
+// keep compiling — a store without it leaves the pair in memory only.
+type SlackAppTokenStore interface {
+	SaveSlackAppTokenForUser(userID, accessToken, refreshToken string, expiresAt time.Time) error
+}
+
+// WireSlackAppTokenPersist makes ch store the app token pair it rotates on
+// its own channel row, and re-read that row before refreshing. Exported so
+// the dashboard's hot-add path wires what boot wires.
+func WireSlackAppTokenPersist(store any, ownerUserID string, ch *agentslack.Channel) {
+	if ts, ok := store.(SlackAppTokenStore); ok {
+		ch.SetPersistAppTokenFn(func(accessToken, refreshToken string, expiresAt time.Time) error {
+			return ts.SaveSlackAppTokenForUser(ownerUserID, accessToken, refreshToken, expiresAt)
+		})
+	}
+	type perUserLoader interface {
+		LoadSlackForUser(string) (agentconfig.SlackChannelConfig, string, error)
+	}
+	if l, ok := store.(perUserLoader); ok {
+		ch.SetLoadAppTokenFn(func() (string, string, time.Time, error) {
+			cfg, _, err := l.LoadSlackForUser(ownerUserID)
+			if err != nil {
+				return "", "", time.Time{}, err
+			}
+			exp, _ := time.Parse(time.RFC3339, cfg.AppTokenExpiresAt)
+			return cfg.AppToken, cfg.AppRefreshToken, exp, nil
+		})
 	}
 }
 
@@ -197,6 +230,7 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 		cachedBotID, cachedBotName, cachedTeam := loadCachedIdentity(store, "slack", uid)
 		ch := agentslack.NewWithOwnerCached(cfg, uid, cachedBotID, cachedBotName, cachedTeam)
 		WireIdentityCache(store, "slack", uid, ch)
+		WireSlackAppTokenPersist(store, uid, ch)
 		ch.SetSendFunc(sendFn)
 		ch.SetPublicURL(pubURL)
 		key := instanceKey("slack", ownerID)

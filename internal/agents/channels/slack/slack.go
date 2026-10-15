@@ -324,6 +324,21 @@ type Channel struct {
 	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
 	wickUserIDFn   WickUserIDFn     // optional; resolves Slack user ID → wick user ID
 
+	// App-token rotation (rotate.go). rot, persistAppToken, loadAppToken,
+	// pending, oauthURL, rotAliases and socketCancel are guarded by cfgMu;
+	// rotMu makes the refresh single-flight; socketCycled marks a socket
+	// run ended on purpose by cycleSocket.
+	rotMu           sync.Mutex
+	rot             rotationState
+	persistAppToken PersistAppTokenFn
+	loadAppToken    LoadAppTokenFn
+	pending         *rotatedPair // rotated pair the store does not hold yet
+	oauthURL        string       // oauth.v2.access base in tests; "" = slackOAuthURL
+	rotAliases      map[string]string
+	rotAliasOrder   []string
+	socketCancel    context.CancelFunc
+	socketCycled    atomic.Bool
+
 	// botTurns counts recent bot-triggered turns per session (allowBotTurn).
 	botTurnsMu sync.Mutex
 	botTurns   map[string][]time.Time
@@ -694,14 +709,34 @@ func (s *Channel) HTTPHandlers() map[string]http.Handler {
 // Also resolves the bot's own Slack user ID via auth.test so the footer
 // can render as a proper @mention ("Sent using <@UBOT123>").
 func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string) {
-	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
-	socket := newSocketClient(api)
-
 	s.cfgMu.Lock()
+	// sameLineage: the reload carries a token of the rotation lineage
+	// already in use. When the store holds the very token in use, the
+	// store wins (a refresh token, client ID or secret pasted since is
+	// taken). When it holds an OLDER token this instance already rotated
+	// away from (a failed or overwritten save), the newest pair in memory
+	// is kept — the older refresh token is spent — and queued to be
+	// written back.
+	cur := s.cfg
+	sameLineage := cfg.AppToken != "" && IsRotatingAppToken(cur.AppToken) &&
+		s.tokenOriginLocked(cfg.AppToken) == s.tokenOriginLocked(cur.AppToken)
+	storeIsOlder := sameLineage && cfg.AppToken != cur.AppToken
+	credsChanged := false
+	if storeIsOlder {
+		cfg.AppToken = cur.AppToken
+		cfg.AppRefreshToken = cur.AppRefreshToken
+		cfg.AppTokenExpiresAt = cur.AppTokenExpiresAt
+	} else if sameLineage {
+		credsChanged = cfg.AppRefreshToken != cur.AppRefreshToken ||
+			cfg.ClientID != cur.ClientID || cfg.ClientSecret != cur.ClientSecret
+	}
 	cachedFor := s.identityToken
 	botUserID, botUserName := s.botUserID, s.botUserName
 	teamName, teamDomain := s.teamName, s.teamDomain
 	s.cfgMu.Unlock()
+
+	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
+	socket := newSocketClient(api)
 
 	// The identity is CACHED — seeded from the channel row at boot and
 	// re-persisted whenever auth.test resolves it. A bot's name changes
@@ -729,6 +764,26 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	s.teamName = teamName
 	s.teamDomain = teamDomain
 	s.identityToken = cfg.BotToken
+	switch {
+	case !sameLineage:
+		// A different token: rotation state starts over from what the
+		// row says (a fresh paste carries no expiry, so it is refreshed
+		// at start).
+		s.rot = rotationState{}
+		s.pending = nil
+		if t, err := time.Parse(time.RFC3339, cfg.AppTokenExpiresAt); err == nil && IsRotatingAppToken(cfg.AppToken) {
+			s.rot.expiresAt = t
+		}
+	case storeIsOlder:
+		if s.pending == nil {
+			p := rotatedPair{access: cfg.AppToken, refresh: cfg.AppRefreshToken, expiresAt: s.rot.expiresAt}
+			s.pending = &p
+		}
+	case credsChanged && !s.rot.persistFailed:
+		// New credentials: the next refresh tries them, so the error
+		// about the old ones no longer applies.
+		s.rot.lastError = ""
+	}
 	sink := s.identitySink
 	s.cfgMu.Unlock()
 
@@ -884,6 +939,7 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	cfg := s.cfg
 	socket := s.socket
 	s.cfgMu.Unlock()
+	sockToken := cfg.AppToken // app token the current socket client was built with
 
 	if cfg.BotToken == "" {
 		return fmt.Errorf("slack: bot token is required")
@@ -905,8 +961,41 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 
 	s.setSocketState("starting")
 	log.Info().Str("channel", "slack").Str("bot", s.logBot()).Str("mode", "socket").Msg("starting")
+	// A cycle requested as the previous run ended must not make this run
+	// treat its first real socket failure as a planned swap.
+	s.socketCycled.Store(false)
 
 	go s.watchStart(runCtx, gen)
+
+	// A rotating app token with no known expiry (freshly pasted) is
+	// refreshed before connecting so its expiry becomes known; then the
+	// scheduler keeps it fresh. A failure is recorded and the current
+	// token is still tried.
+	rotating := IsRotatingAppToken(cfg.AppToken)
+	if rotating {
+		startFailed := false
+		if exp := s.AppTokenRotation().ExpiresAt; exp.IsZero() || time.Until(exp) < rotateLead {
+			_, rerr := s.refreshAppToken(runCtx, cfg.AppToken)
+			startFailed = rerr != nil
+			if runCtx.Err() != nil {
+				return nil
+			}
+			s.cfgMu.Lock()
+			socket = newSocketClient(s.api)
+			s.socket = socket
+			sockToken = s.cfg.AppToken
+			s.cfgMu.Unlock()
+		}
+		// Waited for on the way out, so a Reload never overlaps the
+		// previous run's scheduler.
+		rotDone := make(chan struct{})
+		go func() {
+			defer close(rotDone)
+			defer agentchannels.RecoverPanic("slack", "app token rotation")
+			s.rotateLoop(runCtx, startFailed)
+		}()
+		defer func() { <-rotDone }()
+	}
 
 	// slack-go reconnects on its own after a dropped connection, but gives
 	// up for good on a fatal one (invalid_auth, token_revoked, a 404 from
@@ -914,11 +1003,29 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	// until its settings are saved again; with it, a fresh client retries
 	// with backoff, so the bot comes back once the cause is fixed.
 	retry := socketRetryMin
+	fatalRefreshed := false
 	for {
 		started := time.Now()
-		err := s.runSocket(ctx, runCtx, socket)
+		sockCtx, sockCancel := context.WithCancel(runCtx)
+		s.cfgMu.Lock()
+		s.socketCancel = sockCancel
+		s.cfgMu.Unlock()
+		err := s.runSocket(ctx, sockCtx, socket)
+		sockCancel()
+		s.cfgMu.Lock()
+		s.socketCancel = nil
+		s.cfgMu.Unlock()
 		if runCtx.Err() != nil {
 			return nil
+		}
+		if s.socketCycled.Swap(false) {
+			// Ended on purpose after a token refresh: reconnect now.
+			s.cfgMu.Lock()
+			socket = newSocketClient(s.api)
+			s.socket = socket
+			sockToken = s.cfg.AppToken
+			s.cfgMu.Unlock()
+			continue
 		}
 		state := "disconnected"
 		if isFatalSocketErr(err) {
@@ -927,6 +1034,28 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 		s.setSocketState(state)
 		if time.Since(started) > socketRetryMax {
 			retry = socketRetryMin
+			fatalRefreshed = false
+		}
+		// An auth error on a rotating token most likely means it expired:
+		// refresh once and reconnect at once, before falling back to the
+		// normal backoff.
+		if rotating && !fatalRefreshed && isAuthErr(err) {
+			fatalRefreshed = true
+			// Single-flight on the token this socket used: when the
+			// scheduler already replaced it, this only reconnects.
+			if _, rerr := s.refreshAppToken(runCtx, sockToken); rerr == nil {
+				log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Err(err).
+					Msg("socket auth error, app token refreshed, reconnecting")
+				s.cfgMu.Lock()
+				socket = newSocketClient(s.api)
+				s.socket = socket
+				sockToken = s.cfg.AppToken
+				s.cfgMu.Unlock()
+				continue
+			}
+			if runCtx.Err() != nil {
+				return nil
+			}
 		}
 		log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Dur("retry_in", retry).
 			Msg("socket run stopped, reconnecting")
@@ -943,6 +1072,7 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 		s.cfgMu.Lock()
 		socket = newSocketClient(s.api)
 		s.socket = socket
+		sockToken = s.cfg.AppToken
 		s.cfgMu.Unlock()
 	}
 }
@@ -956,6 +1086,12 @@ func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Clie
 	for {
 		select {
 		case <-runCtx.Done():
+			if s.socketCycled.Load() {
+				// Cycled after a token refresh while the bot keeps
+				// running: let the old runner close, dropping what it
+				// still delivers (see drainSocket).
+				s.drainSocket(socket, done)
+			}
 			return nil
 		case err := <-done:
 			for {
@@ -971,6 +1107,40 @@ func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Clie
 				return <-done
 			}
 			s.handleSocketEvent(ctx, evt)
+		}
+	}
+}
+
+// socketDrainTimeout bounds how long a cycled socket may take to close.
+var socketDrainTimeout = 10 * time.Second
+
+// drainSocket waits (bounded) for a cancelled runner to stop, reading its
+// Events so it is never stuck sending one. Those events are dropped, not
+// handled: the old client's context is already cancelled, so its response
+// sender is gone and an ack through it never reaches Slack. Unacked, Slack
+// redelivers them on the new connection, where they are handled (and
+// acked) exactly once.
+func (s *Channel) drainSocket(socket *socketmode.Client, done <-chan error) {
+	t := time.NewTimer(socketDrainTimeout)
+	defer t.Stop()
+	dropped := 0
+	defer func() {
+		if dropped > 0 {
+			log.Info().Str("channel", "slack").Str("bot", s.logBot()).Int("events", dropped).
+				Msg("cycled socket: left unacked events for Slack to redeliver")
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		case _, ok := <-socket.Events:
+			if !ok {
+				return
+			}
+			dropped++
+		case <-t.C:
+			return
 		}
 	}
 }
@@ -992,7 +1162,7 @@ func isFatalSocketErr(err error) bool {
 		return false
 	}
 	switch err.Error() {
-	case "invalid_auth", "account_inactive", "not_authed", "token_revoked":
+	case "invalid_auth", "account_inactive", "not_authed", "token_revoked", "token_expired":
 		return true
 	}
 	var code slackgo.StatusCodeError
@@ -1379,6 +1549,12 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 	}()
 }
 
+// socketAckTimeout bounds one ack. slack-go queues acks on a small buffered
+// channel its runner drains; once that runner has stopped (a socket that
+// died, its buffered events still handled) a full queue would block an
+// unbounded Ack forever — and with it serve, Reload and hot-reload.
+var socketAckTimeout = 2 * time.Second
+
 // ack answers a socket request on the client currently in use; serve swaps
 // the client when it reconnects, so it is read under cfgMu.
 func (s *Channel) ack(evt socketmode.Event) {
@@ -1386,7 +1562,11 @@ func (s *Channel) ack(evt socketmode.Event) {
 	socket := s.socket
 	s.cfgMu.Unlock()
 	if socket != nil && evt.Request != nil {
-		socket.Ack(*evt.Request)
+		ctx, cancel := context.WithTimeout(context.Background(), socketAckTimeout)
+		defer cancel()
+		if err := socket.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil {
+			log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Msg("socket ack not queued")
+		}
 	}
 }
 

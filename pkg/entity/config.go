@@ -48,6 +48,12 @@ type Config struct {
 	// receives the same presentation hint the templ admin page already
 	// uses. Pure UI flag — no secret material here.
 	Hidden bool `gorm:"-" json:"hidden,omitempty"`
+	// Internal is set from the `wick:"internal"` tag. Not persisted. The row
+	// is a value wick writes for itself (e.g. a token expiry) — every config
+	// renderer skips it, including dedicated pages that do show Hidden rows,
+	// so it never gets a widget or a "required" badge. Code still loads and
+	// saves it like any other row.
+	Internal bool `gorm:"-" json:"internal,omitempty"`
 	// ColOptions holds per-column select options for kvlist rows. Not persisted.
 	// Key = column name; Value = pipe-separated "label::value" pairs (or just
 	// "value" when label == value). The kvlist component renders a <select>

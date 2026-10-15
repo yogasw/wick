@@ -19,6 +19,7 @@
 //   - GetChannelConfigMapForUser — load JSON config as map per user
 //   - SetChannelConfigKey        — update one key in JSON config (App Owner)
 //   - SetChannelConfigKeyForUser — update one key in JSON config per user
+//   - SetChannelConfigKeysForUser — update several keys in one write
 //   - ListChannelOwners          — list all enabled UserID values for a type
 //   - LoadSlackConfig            — typed load for Slack (App Owner)
 //   - LoadTelegramConfig         — typed load for Telegram (App Owner)
@@ -30,6 +31,7 @@ package channels
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -180,39 +182,50 @@ func GetChannelConfigMapForUser(db *gorm.DB, channelType, userID string) (map[st
 // SetChannelConfigKeyForUser updates one key in a user's channel config.
 // Creates the row if it doesn't exist. Pass userID="" for App Owner.
 func SetChannelConfigKeyForUser(db *gorm.DB, channelType, userID, key, value string) error {
+	return SetChannelConfigKeysForUser(db, channelType, userID, map[string]string{key: value})
+}
+
+// SetChannelConfigKeysForUser is SetChannelConfigKeyForUser for several
+// keys in one write, so they never land half-applied.
+func SetChannelConfigKeysForUser(db *gorm.DB, channelType, userID string, kv map[string]string) error {
 	if err := EnsureChannelForUser(db, channelType, userID); err != nil {
 		return err
 	}
-	var ch entity.AgentChannel
-	var err error
-	if userID == "" {
-		err = db.Where("type = ? AND user_id IS NULL", channelType).First(&ch).Error
-	} else {
-		err = db.Where("type = ? AND user_id = ?", channelType, userID).First(&ch).Error
-	}
-	if err != nil {
-		return err
-	}
-	m := map[string]string{}
-	if ch.Config != "" && ch.Config != "{}" {
-		if err := json.Unmarshal([]byte(ch.Config), &m); err != nil {
+	// Read and write in one transaction with the row locked, so two
+	// writers (a dashboard save, a token rotation) never undo each other.
+	return db.Transaction(func(tx *gorm.DB) error {
+		var ch entity.AgentChannel
+		q := tx.Clauses(clause.Locking{Strength: "UPDATE"})
+		var err error
+		if userID == "" {
+			err = q.Where("type = ? AND user_id IS NULL", channelType).First(&ch).Error
+		} else {
+			err = q.Where("type = ? AND user_id = ?", channelType, userID).First(&ch).Error
+		}
+		if err != nil {
 			return err
 		}
-	}
-	m[key] = value
-	data, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	enabled := m["bot_token"] != ""
-	if _, hasEnabled := m["enabled"]; hasEnabled {
-		enabled = m["enabled"] == "true"
-	}
-	return db.Model(&ch).Updates(map[string]any{
-		"config":     string(data),
-		"enabled":    enabled,
-		"updated_at": time.Now(),
-	}).Error
+		m := map[string]string{}
+		if ch.Config != "" && ch.Config != "{}" {
+			if err := json.Unmarshal([]byte(ch.Config), &m); err != nil {
+				return err
+			}
+		}
+		maps.Copy(m, kv)
+		data, err := json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		enabled := m["bot_token"] != ""
+		if _, hasEnabled := m["enabled"]; hasEnabled {
+			enabled = m["enabled"] == "true"
+		}
+		return tx.Model(&ch).Updates(map[string]any{
+			"config":     string(data),
+			"enabled":    enabled,
+			"updated_at": time.Now(),
+		}).Error
+	})
 }
 
 // ListChannelOwners returns all distinct UserID values (including nil for App Owner)
@@ -388,6 +401,36 @@ func (s DBStore) SaveBotIdentity(channelType, userID, botUserID, botName, teamNa
 	return nil
 }
 
+// SaveSlackAppTokenForUser stores a rotated Slack app token pair and its
+// expiry on a user's Slack channel row (userID "" = App Owner), the token
+// and refresh token encrypted like any secret saved from the dashboard.
+func (s DBStore) SaveSlackAppTokenForUser(userID, accessToken, refreshToken string, expiresAt time.Time) error {
+	kv, err := s.SlackAppTokenKeys(accessToken, refreshToken, expiresAt)
+	if err != nil {
+		return err
+	}
+	return SetChannelConfigKeysForUser(s.db, "slack", userID, kv)
+}
+
+// SlackAppTokenKeys is the config map slice a rotated app token pair is
+// written as, secrets encrypted when an encryptor is wired.
+func (s DBStore) SlackAppTokenKeys(accessToken, refreshToken string, expiresAt time.Time) (map[string]string, error) {
+	kv := map[string]string{"app_token": accessToken, "app_refresh_token": refreshToken, "app_token_expires_at": ""}
+	if !expiresAt.IsZero() {
+		kv["app_token_expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+	}
+	if s.Configs != nil {
+		for _, k := range []string{"app_token", "app_refresh_token"} {
+			enc, err := s.Configs.EncryptSecret(kv[k])
+			if err != nil {
+				return nil, err
+			}
+			kv[k] = enc
+		}
+	}
+	return kv, nil
+}
+
 // AgentSlackType is the agent_channels.type of a Team agent's own Slack
 // app (Custom mode). One row per agent: Name holds the agent id, UserID
 // the agent's owner. Config is the same JSON map a Slack row uses.
@@ -401,6 +444,36 @@ func AgentSlackRow(db *gorm.DB, agentID string) (entity.AgentChannel, bool, erro
 // AgentSlackConfig is AgentSlackRow's config map, still encrypted.
 func AgentSlackConfig(db *gorm.DB, agentID string) (map[string]string, error) {
 	return agentRowConfig(db, AgentSlackType, agentID)
+}
+
+// UpdateAgentSlackKeys merges kv into agentID's existing connection row in
+// one transaction with the row locked, leaving every other key and the
+// enabled flag as they are. Unlike SaveAgentSlack it never writes back a
+// map read earlier, so it cannot undo a concurrent token rotation.
+func UpdateAgentSlackKeys(db *gorm.DB, agentID string, kv map[string]string, del ...string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var ch entity.AgentChannel
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("type = ? AND name = ?", AgentSlackType, agentID).First(&ch).Error
+		if err != nil {
+			return err
+		}
+		m := map[string]string{}
+		if ch.Config != "" && ch.Config != "{}" {
+			if err := json.Unmarshal([]byte(ch.Config), &m); err != nil {
+				return err
+			}
+		}
+		maps.Copy(m, kv)
+		for _, k := range del {
+			delete(m, k)
+		}
+		data, err := json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&ch).Updates(map[string]any{"config": string(data), "updated_at": time.Now()}).Error
+	})
 }
 
 // SaveAgentSlack upserts agentID's connection row with m as its config.

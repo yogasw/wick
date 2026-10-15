@@ -161,11 +161,11 @@ func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 			t.Errorf("%s = %q, want only \"set\"", f.Key, f.Value)
 		}
 	}
-	want := []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates", "Connection", "Routing"}
+	want := []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates", "Connection", "Token Rotation", "Routing"}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Errorf("groups = %v, want %v", order, want)
 	}
-	if editable["Connection"] || editable["Routing"] {
+	if editable["Connection"] || editable["Token Rotation"] || editable["Routing"] {
 		t.Errorf("Connection/Routing editable: %v", editable)
 	}
 	if v, ok := settingValue(st, "bots_mode"); !ok || v != "none" {
@@ -207,10 +207,18 @@ func TestAgentSlackManifestAsksForEmailScope(t *testing.T) {
 // Every field of the Channels page schema reaches the Team card: the four
 // groups editable with the same tags, everything else read-only with a note.
 func TestAgentSlackSettingsCoverSchema(t *testing.T) {
-	rows := pkgentity.StructToConfigs(agentconfig.DefaultSlackChannelConfig())
+	var rows []pkgentity.Config
+	for _, r := range pkgentity.StructToConfigs(agentconfig.DefaultSlackChannelConfig()) {
+		if !r.Internal {
+			rows = append(rows, r)
+		}
+	}
 	got := map[string]agentSlackField{}
 	for _, f := range agentSlackSettingFields(nil, nil) {
 		got[f.Key] = f
+	}
+	if _, ok := got["app_token_expires_at"]; ok {
+		t.Error("internal app_token_expires_at is on the card")
 	}
 	if len(got) != len(rows) {
 		t.Errorf("card has %d fields, schema %d", len(got), len(rows))

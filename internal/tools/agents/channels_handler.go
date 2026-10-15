@@ -24,6 +24,7 @@ package agents
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -318,6 +319,14 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 		userID := currentUserIDForChannel(c)
 		key := c.PathValue("key")
 		value := c.Form("value")
+		if channelType == "slack" && key == "app_token_expires_at" {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "app_token_expires_at is written by wick after each token refresh and cannot be set"})
+			return
+		}
+		var extra map[string]string
+		if channelType == "slack" && key == "app_token" && value != "" {
+			extra = slackAppTokenPasteKeys(value, storedSlackAppToken(userID))
+		}
 		if value != "" && secretKeys[key] && globalConfigs != nil {
 			encrypted, err := globalConfigs.EncryptSecret(value)
 			if err != nil {
@@ -326,13 +335,48 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 			}
 			value = encrypted
 		}
-		if err := agentchannels.SetChannelConfigKeyForUser(globalDB, channelType, userID, key, value); err != nil {
+		kv := map[string]string{key: value}
+		maps.Copy(kv, extra)
+		if err := agentchannels.SetChannelConfigKeysForUser(globalDB, channelType, userID, kv); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		syncChannelInstance(c.R.Context(), channelType, userID)
 		c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	}
+}
+
+// slackAppTokenPasteKeys is what else changes when app token next is saved
+// over prev on a Slack channel row. A different token starts a new rotation
+// lineage: the stored expiry no longer applies, and for a rotating token the
+// stored refresh token belongs to the previous one — it is cleared so health
+// asks for the matching one instead of wick spending the old lineage's.
+// Re-saving the same token changes nothing else.
+func slackAppTokenPasteKeys(next, prev string) map[string]string {
+	if next == prev {
+		return nil
+	}
+	kv := map[string]string{"app_token_expires_at": ""}
+	if agentslack.IsRotatingAppToken(next) {
+		kv["app_refresh_token"] = ""
+	}
+	return kv
+}
+
+// storedSlackAppToken is userID's stored Slack app token in plaintext, ""
+// when unset or unreadable.
+func storedSlackAppToken(userID string) string {
+	m, err := agentchannels.GetChannelConfigMapForUser(globalDB, "slack", userID)
+	if err != nil {
+		return ""
+	}
+	v := m["app_token"]
+	if v != "" && globalConfigs != nil {
+		if d, err := globalConfigs.DecryptSecret(v); err == nil {
+			v = d
+		}
+	}
+	return v
 }
 
 // loadChannelRowsForUser returns entity.Config rows with values populated from
@@ -437,6 +481,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			// while wick runs also labels itself "Slack - <bot> - <owner>"
 			// after the next restart without another auth.test.
 			channelsetup.WireIdentityCache(store, channelType, userID, ch)
+			channelsetup.WireSlackAppTokenPersist(store, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetPublicURL(pubURL)
 			ch.SetSessionPrefix(sessPrefix)
