@@ -99,15 +99,20 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				target = shared
 			}
 			// A remote agent gets the mention text alone: the frame names
-			// a local agent, which is not the remote's business.
-			if !target.Remote {
+			// a local agent, which is not the remote's business. A message
+			// from another chat of the agent itself names that chat.
+			switch {
+			case from.ID == target.ID:
+				text = h.frameSelf(ctx, from, callerSession, text)
+			case !target.Remote:
 				text = Frame(from, text)
 			}
 		}
 
 		newChat, _ := meta[metaNewChat].(bool)
 		resume, _ := meta[metaChat].(string)
-		chat, err := h.chatFor(ctx, ec.ContextID, callerSession, target, newChat, resume)
+		self := fromID != "" && from.ID == target.ID
+		chat, err := h.chatFor(ctx, ec.ContextID, callerSession, target, newChat, resume, self)
 		if err != nil {
 			e.fail(ctx, ec, yield, err)
 			return

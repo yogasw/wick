@@ -71,7 +71,7 @@ type messageInput struct {
 	To        string `wick:"required;desc=The teammate's handle, e.g. @anton. Agents of your own Team, or agents shared with your owner."`
 	Message   string `wick:"required;textarea;desc=What YOU need from them, composed by you. Lead with the point. wick signs it with your name — do not prefix it."`
 	ContextID string `wick:"desc=Continue an earlier exchange: pass the context_id a previous call returned."`
-	Chat      string `wick:"desc=Resume one of the teammate's older chats: a session_id the chats op listed. ONLY when the user asks to continue that chat, never pick one on your own. Omit to use the chat paired with this conversation."`
+	Chat      string `wick:"desc=Run the message in this session of the teammate (session_id). On your own only with a session_id from a ticket (ticket_get / ticket_conversations, e.g. owner_session) or from session_lookup; any other one (e.g. an older chat the chats op listed) ONLY when the user asks for it. Your own other chat (to = yourself) only when both chats are in the same ticket. A turn in a Slack thread session is posted in that thread. Omit to use the chat paired with this conversation."`
 	NewChat   bool   `wick:"desc=true starts a NEW chat with the teammate (a clean context) instead of the one paired with this conversation, and pairs that new chat with it: later messages from this conversation go there. A Slack remote agent gets a new Slack thread — except one whose Remote target is a specific thread, which always posts in that thread."`
 	TaskID    string `wick:"desc=Answer a task that came back state=input_required: pass its task_id (to and context_id may be omitted, and if given they must match that task)."`
 	FanIn     string `wick:"dropdown=all|each|first;desc=How the replies of this message's group reach you. all (default): wait for every teammate of the group, then get ONE message with every reply — for one question to several teammates whose answers you combine. each: every reply on its own as it lands — for independent checks. first: the first answer only, the others are canceled — for the same question to several teammates when any one answer will do. Set by the group's first message, later ones keep it."`
@@ -100,7 +100,10 @@ func Operations(deps Deps) []connector.Category {
 					"fan_in=each gets every reply on its own (independent checks); fan_in=first takes the first answer and cancels the rest. group=<group_id> adds a later message to an open group; group=none keeps a message out of any group. "+
 					"state=input_required means the teammate asks you something (reply_text): answer with message task_id=<that task_id>, or ask the user when only they can answer. "+
 					"state=failed, rejected (refused: no access, not shared, mentions off) or canceled carries the reason. Pass context_id to continue the same exchange. "+
-					"Each conversation of yours gets its own chat at the teammate, opened on your first message and reused after; set new_chat=true only when the user asks for a new/separate chat or session with the teammate, and chat=<session_id> only when the user asks to continue an older one — never on your own. "+
+					"Each conversation of yours gets its own chat at the teammate, opened on your first message and reused after; set new_chat=true only when the user asks for a new/separate chat or session with the teammate. "+
+					"chat=<session_id> runs the message in that session of the teammate: use it on your own only with a session_id that came from a ticket (ticket_get / ticket_conversations, e.g. owner_session) or from session_lookup; otherwise (e.g. continuing an older chat) only when the user asks. "+
+					"You may message another chat of your own (to = yourself, chat=<its session_id>) only when both chats are in the same ticket. "+
+					"A turn that runs in a Slack thread session is posted in that thread, so write what the thread may read (or [silent]). "+
 					"Agent-to-agent turns are capped per exchange; on \"hop limit reached\" stop and report to the user.",
 				messageInput{}, deps.message, wickdocs.Docs{}),
 			connector.Op("chats", "List Team Chats",

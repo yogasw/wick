@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/pkg/tool"
@@ -270,14 +272,20 @@ func storeSwitchSeen(m *sync.Map, sessionID string, v bool) {
 func forgetShowTeammates() { showTeammatesCache.Clear() }
 
 // TeamHidesInterim reports whether the Team agent of sessionID keeps its
-// in-between text out of channels (channel_hide_interim). A session of
-// no Team agent never delegates through team_message: false.
+// in-between text out of channels (channel_hide_interim). The agent is
+// the one the session speaks as on the Team paths (teamAgentOfSession),
+// as team_message there is. A session of no Team agent never delegates
+// through team_message: false.
 func TeamHidesInterim(ctx context.Context, sessionID string) bool {
 	if globalTeam == nil {
 		return false
 	}
-	p := globalTeam.AgentFor(ctx, sessionID)
-	if p == nil {
+	id := teamAgentOfSession(ctx, sessionID)
+	if id == "" {
+		return false
+	}
+	p, err := globalTeam.Get(ctx, id)
+	if err != nil {
 		return false
 	}
 	return team.HidesInterimInChannels(p.ChannelHideInterim)
@@ -331,6 +339,63 @@ func TeamAgentOf(ctx context.Context, sessionID string) string {
 		return p.ID
 	}
 	return ""
+}
+
+// TeamCallerOf is the Team agent sessionID speaks as on the Team paths
+// (the team connector's caller, team_* tools): teamAgentOfSession.
+func TeamCallerOf(ctx context.Context, sessionID string) string {
+	return teamAgentOfSession(ctx, sessionID)
+}
+
+// teamAgentOfSession is the Team agent sessionID belongs to for Team
+// messaging only: TeamAgentOf, else — for a top-level session of a
+// project exactly one enabled agent points at (a Slack thread session
+// there, which the project's missing Team tag left unstamped) — that
+// agent, when the session is its owner's or is in one of the project's
+// tickets. Anyone else's session there, group backing sessions and
+// ticket rooms never get one this way. Only the Team paths read it: the
+// session's scope, spawn identity and agent (AgentFor) stay what they
+// are.
+func teamAgentOfSession(ctx context.Context, sessionID string) string {
+	if id := TeamAgentOf(ctx, sessionID); id != "" {
+		return id
+	}
+	if globalTeam == nil || globalLayout.BaseDir == "" || storage.ValidateSessionID(sessionID) != nil {
+		return ""
+	}
+	s, err := session.Load(globalLayout, sessionID)
+	if err != nil {
+		return ""
+	}
+	m := s.Meta
+	if m.ProjectID == "" || m.ParentSessionID != "" || m.GroupSessionID != "" || m.TicketRoom != nil || m.AgentGroup != nil {
+		return ""
+	}
+	rows, err := globalTeam.ListByProjects(ctx, []string{m.ProjectID})
+	if err != nil {
+		return ""
+	}
+	// ListByProjects reads ids only: the owner and switch come from Get.
+	var agent *entity.AgentPersona
+	for _, r := range rows {
+		p, err := globalTeam.Get(ctx, r.ID)
+		if err != nil || p.Disabled {
+			continue
+		}
+		if agent != nil {
+			return ""
+		}
+		agent = &p
+	}
+	if agent == nil {
+		return ""
+	}
+	if m.UserID != agent.OwnerUserID {
+		if _, ok := ticket.FindBySession(globalLayout, m.ProjectID, sessionID); !ok {
+			return ""
+		}
+	}
+	return agent.ID
 }
 
 // globalTeamHub is the server's late-bound Hub, set by SetTeamHub; nil
@@ -998,6 +1063,63 @@ func (poolTurns) Link(_ context.Context, agent teamlink.Peer, chat, callerSessio
 	return nil
 }
 
+// errChatNotFound is CanTarget's answer for a chat= that names no
+// session: a message never opens one.
+func errChatNotFound(id string) error {
+	return fmt.Errorf("session %s not found — pass a session_id that exists", id)
+}
+
+// CanTarget admits chat — a session that is not one of agent's own chats
+// — as a message's chat= (teamlink.SessionTargeter): it must exist, be a
+// top-level session that is no group backing or ticket room, belong to
+// agent (teamAgentOfSession), and be agent's chat user's, or in the same
+// ticket of chat's project as callerSession (ticket = true).
+func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSession, chat string) (bool, error) {
+	if storage.ValidateSessionID(chat) != nil {
+		return false, errChatNotFound(chat)
+	}
+	s, err := session.Load(globalLayout, chat)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, errChatNotFound(chat)
+		}
+		return false, teamlink.ErrUnknownChat
+	}
+	m := s.Meta
+	if m.ParentSessionID != "" || m.GroupSessionID != "" || m.TicketRoom != nil || m.AgentGroup != nil || teamAgentOfSession(ctx, chat) != agent.ID {
+		return false, teamlink.ErrUnknownChat
+	}
+	if callerSession != "" && m.ProjectID != "" {
+		if tk, ok := ticket.FindBySession(globalLayout, m.ProjectID, chat); ok {
+			if mine, ok := ticket.FindBySession(globalLayout, m.ProjectID, callerSession); ok && mine.ID == tk.ID {
+				return true, nil
+			}
+		}
+	}
+	if m.UserID != "" && m.UserID == chatUserOf(agent) {
+		return false, nil
+	}
+	return false, teamlink.ErrUnknownChat
+}
+
+// SessionLabel names sessionID to an agent a message from it reaches
+// (teamlink.SessionLabeler): its id, plus its Slack thread when the
+// session answers in one.
+func (poolTurns) SessionLabel(_ context.Context, sessionID string) string {
+	label := "session " + sessionID
+	if globalMgr == nil {
+		return label
+	}
+	if s, ok := globalMgr.Registry().Session(sessionID); ok {
+		if r := s.Meta.ChannelRef; r != nil && r.Channel == "slack" {
+			if link := slackThreadLink(slackremote.State{Channel: r.ChatID, ThreadTS: r.ThreadID}); link != "" {
+				label += ", Slack thread " + link
+			}
+		}
+	}
+	return label
+}
+
 // Chats is agent's chats for its chat user, newest first
 // (teamlink.ChatLister): only that user's own sessions, so another
 // person's chat with a shared agent never shows, whatever the share's
@@ -1058,7 +1180,7 @@ func TeamLinkedChats(ctx context.Context, sessionID string) []teamlink.TeamChat 
 		return nil
 	}
 	h := globalTeamHub()
-	id := TeamAgentOf(ctx, sessionID)
+	id := teamAgentOfSession(ctx, sessionID)
 	if h == nil || id == "" {
 		return nil
 	}
@@ -1292,10 +1414,28 @@ type TeamMentionRouter struct{ Hub func() *teamlink.Hub }
 // with an agent shared with the session's user — that user's own agents
 // and those shared with them (teamlink.Hub.MentionTargets).
 func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []string {
+	return r.TeamHandlesFor(ctx, sessionID, true)
+}
+
+// teamMentionCaller is the agent a mention line in sessionID speaks as:
+// an agent's own line speaks as the agent it messages as (team_message,
+// teamAgentOfSession); a person's line only in a session that is the
+// agent's (TeamAgentOf) — in an unstamped Slack thread of the agent's
+// project, anyone typing @handle must not set the owner's agents to work.
+func teamMentionCaller(ctx context.Context, sessionID string, human bool) string {
+	if human {
+		return TeamAgentOf(ctx, sessionID)
+	}
+	return teamAgentOfSession(ctx, sessionID)
+}
+
+// TeamHandlesFor is TeamHandles for a person's line (human) or the
+// agent's own (delegation.TeamHumanRouter).
+func (r TeamMentionRouter) TeamHandlesFor(ctx context.Context, sessionID string, human bool) []string {
 	if InTicketRoom(sessionID) {
 		return nil
 	}
-	h, id := r.Hub(), TeamAgentOf(ctx, sessionID)
+	h, id := r.Hub(), teamMentionCaller(ctx, sessionID, human)
 	if h == nil || id == "" {
 		return nil
 	}
@@ -1319,7 +1459,7 @@ func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body
 		return nil
 	}
 	_, err := h.Send(context.WithoutCancel(ctx), teamlink.SendInput{
-		CallerSession: sessionID, CallerAgentID: TeamAgentOf(ctx, sessionID),
+		CallerSession: sessionID, CallerAgentID: teamMentionCaller(ctx, sessionID, human),
 		SessionUser: sessionUserOf(sessionID),
 		To:          handle, Text: body, Wait: -1, Mention: true, Human: human,
 	})

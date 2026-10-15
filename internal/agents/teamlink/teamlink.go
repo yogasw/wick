@@ -835,7 +835,14 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 		resolveAs = in.SessionUser
 	}
 	card, target, err := h.Resolve(ctx, resolveAs, in.To)
-	if err == nil && target.ID == caller.ID {
+	in.Chat = strings.TrimSpace(in.Chat)
+	// An agent may message another chat of its own (chat=), one in the
+	// same ticket as the asking chat — checked with the chat below — and
+	// answer a task such a message left asking (the executor finds the
+	// chat the exchange runs in). Never a remote: its turns are not a chat
+	// of this agent's to pick.
+	self := err == nil && target.ID == caller.ID
+	if self && (target.Remote || in.Human || (answer == "" && (in.Chat == "" || in.Chat == in.CallerSession))) {
 		err = ErrSelf
 	}
 	// A person's @mention always goes through; an agent's needs the
@@ -846,7 +853,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if err == nil && !in.Human && !viaShare && target.OwnerID != caller.OwnerID && target.ChatUser != caller.OwnerID {
 		err = ErrSharedHumanOnly
 	}
-	if err == nil && !in.Human && !target.AcceptsFrom(caller) {
+	// A message to the agent itself is no hand-over to someone else: its
+	// own mention policy (MentionFrom) does not apply, on purpose.
+	if err == nil && !in.Human && !self && !target.AcceptsFrom(caller) {
 		err = ErrMentionsOff
 		if target.Remote && (target.RemoteOwnerOnly || NormalizeMentionFrom(target.MentionFrom) == MentionOff) {
 			err = &OwnerOnlyError{Handle: target.Handle}
@@ -874,15 +883,26 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if _, ok := h.Turns.(ChatOpener); in.NewChat && !ok {
 		return nil, ErrNewChatUnsupported
 	}
-	if in.Chat = strings.TrimSpace(in.Chat); in.Chat != "" {
+	if in.Chat != "" {
 		if in.NewChat {
 			return nil, ErrChatAndNewChat
 		}
 		// The chat must be the session person's own, with the target as
 		// it is shared with them; never someone else's (read-only) chat.
-		rp, ok := h.resumeScope(ctx, in.SessionUser, caller.OwnerID)(target)
-		if !ok || !h.ownsChat(ctx, rp, in.Chat) {
+		// Past the target's own chats, a session of the target the Turns
+		// admit (SessionTargeter: its Slack thread, or one in the asking
+		// chat's ticket) — the executor re-checks it the same way. A
+		// message to the agent itself skips the person's scope: the shared
+		// ticket decides, whoever the asking chat belongs to.
+		rp, ok := target, true
+		if !self {
+			rp, ok = h.resumeScope(ctx, in.SessionUser, caller.OwnerID)(target)
+		}
+		if !ok {
 			return nil, ErrUnknownChat
+		}
+		if _, err := h.chatAllowed(ctx, rp, in.CallerSession, in.Chat, self); err != nil {
+			return nil, err
 		}
 		if rp.ChatUser != target.ChatUser {
 			// The turn runs in the recipient's chat with the target; the
@@ -1290,22 +1310,34 @@ func (h *Hub) unknownLocked(callerAgentID string, id a2a.TaskID) error {
 // new chat when newChat asks for one, the chat an earlier new_chat opened for this
 // exchange, else the chat paired with callerSession (ChatLinker) — opened
 // and paired on the first message from that conversation. "" is the main
-// chat, where Turns cannot pair.
-func (h *Hub) chatFor(ctx context.Context, contextID, callerSession string, target Peer, newChat bool, resume string) (string, error) {
+// chat, where Turns cannot pair. self is a message from target to
+// itself: its resume must be a chat SessionTargeter admits in the asking
+// chat's ticket; without one (an answer to its task) it runs in the chat
+// the exchange already picked, never a new or paired one.
+func (h *Hub) chatFor(ctx context.Context, contextID, callerSession string, target Peer, newChat bool, resume string, self bool) (string, error) {
 	key := chatKey(target)
 	op, canOpen := h.Turns.(ChatOpener)
 	lk, canLink := h.Turns.(ChatLinker)
 	if newChat && !canOpen {
 		return "", ErrNewChatUnsupported
 	}
+	if self && newChat {
+		return "", ErrSelf
+	}
 	if resume != "" {
 		// Re-checked here, whatever the metadata claims: only one of the
-		// target's chats with the caller's side.
-		if newChat || !canOpen || !h.ownsChat(ctx, target, resume) {
+		// target's chats with the caller's side, or a session of target
+		// SessionTargeter admits — used as is, never paired (a Slack
+		// thread session is no chat of the caller's).
+		if newChat || !canOpen {
 			return "", ErrUnknownChat
 		}
+		link, err := h.chatAllowed(ctx, target, callerSession, resume, self)
+		if err != nil {
+			return "", err
+		}
 		h.linkMu.Lock()
-		if canLink && callerSession != "" {
+		if link && canLink && callerSession != "" {
 			_ = lk.Link(ctx, target, resume, callerSession)
 		}
 		h.linkMu.Unlock()
@@ -1326,6 +1358,9 @@ func (h *Hub) chatFor(ctx context.Context, contextID, callerSession string, targ
 			id = cs.chats[key]
 		}
 		h.mu.Unlock()
+		if self && (id == "" || id == callerSession) {
+			return "", ErrSelf
+		}
 		if id != "" || !canOpen || !canLink || callerSession == "" {
 			return id, nil
 		}

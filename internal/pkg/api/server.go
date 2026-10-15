@@ -1980,14 +1980,14 @@ func NewServer() *Server {
 		})
 		return teamHub
 	}
-	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf, SessionUser: agentstool.SessionUserOf, InRoom: agentstool.InTicketRoom}))
+	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamCallerOf, SessionUser: agentstool.SessionUserOf, InRoom: agentstool.InTicketRoom}))
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
 	// team_* tools only in a Team agent's session with a reachable teammate.
 	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
 		h := hub()
-		id := agentstool.TeamAgentOf(ctx, sessionID)
+		id := agentstool.TeamCallerOf(ctx, sessionID)
 		if h == nil || id == "" {
 			return false
 		}

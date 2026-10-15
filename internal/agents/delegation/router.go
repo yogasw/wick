@@ -63,6 +63,21 @@ type TeamRouter interface {
 	SendTeam(ctx context.Context, sessionID, handle, body string, human bool) error
 }
 
+// TeamHumanRouter is optionally implemented by a TeamRouter whose reach
+// depends on who wrote the line: a person (human) or the agent itself.
+type TeamHumanRouter interface {
+	TeamHandlesFor(ctx context.Context, sessionID string, human bool) []string
+}
+
+// teamHandles is TeamHandles for in's author when the router tells them
+// apart (TeamHumanRouter).
+func (s *Service) teamHandles(ctx context.Context, in RouteInput) []string {
+	if hr, ok := s.TeamRouter.(TeamHumanRouter); ok {
+		return hr.TeamHandlesFor(ctx, in.SessionID, in.Human)
+	}
+	return s.TeamRouter.TeamHandles(ctx, in.SessionID)
+}
+
 // routeTeam acts on the mentions that name a Team agent. A Team handle
 // can never also be a role key (refused when the handle is saved), so
 // these never compete with the tree's own routing.
@@ -70,7 +85,7 @@ func (s *Service) routeTeam(ctx context.Context, in RouteInput) []Dispatch {
 	if s.TeamRouter == nil {
 		return nil
 	}
-	handles := s.TeamRouter.TeamHandles(ctx, in.SessionID)
+	handles := s.teamHandles(ctx, in)
 	if len(handles) == 0 {
 		return nil
 	}
@@ -163,7 +178,7 @@ func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
 	// back into this thread, so the note must not promise it does.
 	var userTasks []string
 	if s.TeamRouter != nil {
-		for _, m := range ParseMentions(in.Text, s.TeamRouter.TeamHandles(ctx, in.SessionID)) {
+		for _, m := range ParseMentions(in.Text, s.teamHandles(ctx, in)) {
 			if !seen[m.Handle] {
 				seen[m.Handle] = true
 				tokens = append(tokens, "@"+m.Handle)
