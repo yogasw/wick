@@ -106,20 +106,32 @@ func SetChannelConfigKey(db *gorm.DB, channelType, key, value string) error {
 	if err != nil {
 		return err
 	}
-	// enabled mirrors whether the primary credential is present. Default
-	// signal is a non-empty "bot_token"; channels with no per-instance
-	// token (e.g. REST, which authenticates via PAT per request) use an
-	// explicit "enabled" key in the JSON config instead.
-	enabled := m["bot_token"] != ""
-	if _, hasEnabled := m["enabled"]; hasEnabled {
-		enabled = m["enabled"] == "true"
-	}
 	return db.Model(&ch).Updates(map[string]any{
 		"config":     string(data),
-		"enabled":    enabled,
+		"enabled":    ChannelRowEnabled(m),
 		"updated_at": time.Now(),
 	}).Error
 }
+
+// ChannelRowEnabled is the enabled column of a channel row with config m.
+// A token channel (Slack, Telegram — the row holds a "bot_token" key) runs
+// when the token is set and the operator has not switched it off: an
+// explicit "enabled" = "false" wins over the token, so saving any other key
+// (a token included) never switches it back on. A channel with no token of
+// its own (REST, which authenticates per request) runs only when "enabled"
+// is "true".
+func ChannelRowEnabled(m map[string]string) bool {
+	v, hasEnabled := m["enabled"]
+	if _, hasToken := m["bot_token"]; hasToken || !hasEnabled {
+		return m["bot_token"] != "" && v != "false"
+	}
+	return v == "true"
+}
+
+// ChannelSwitchedOff reports whether the operator turned a channel row off
+// with its Enabled switch (Channels page). A row without the key predates
+// the switch and stays on.
+func ChannelSwitchedOff(m map[string]string) bool { return m["enabled"] == "false" }
 
 // EnsureChannelForUser creates a channel row for a specific user if it doesn't exist.
 // Pass userID="" to create/ensure the App Owner row (user_id = NULL).
@@ -216,13 +228,9 @@ func SetChannelConfigKeysForUser(db *gorm.DB, channelType, userID string, kv map
 		if err != nil {
 			return err
 		}
-		enabled := m["bot_token"] != ""
-		if _, hasEnabled := m["enabled"]; hasEnabled {
-			enabled = m["enabled"] == "true"
-		}
 		return tx.Model(&ch).Updates(map[string]any{
 			"config":     string(data),
-			"enabled":    enabled,
+			"enabled":    ChannelRowEnabled(m),
 			"updated_at": time.Now(),
 		}).Error
 	})
@@ -240,6 +248,14 @@ func ListChannelOwners(db *gorm.DB, channelType string) ([]*string, error) {
 		out[i] = r.UserID
 	}
 	return out, nil
+}
+
+// ListAllChannelUsers returns the user ids of every per-user row of
+// channelType, enabled or not (the App Owner row has none).
+func ListAllChannelUsers(db *gorm.DB, channelType string) ([]string, error) {
+	var ids []string
+	err := db.Model(&entity.AgentChannel{}).Where("type = ? AND user_id IS NOT NULL", channelType).Pluck("user_id", &ids).Error
+	return ids, err
 }
 
 // DBStore satisfies SlackConfigStore + TelegramConfigStore by delegating

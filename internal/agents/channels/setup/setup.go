@@ -225,6 +225,11 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 			log.Warn().Err(err).Str("user_id", uid).Msg("agents: failed to load slack config for user")
 			continue
 		}
+		// Defence in depth: ListChannelOwners already skips a row switched
+		// off, but its error fallback loads the App Owner blindly.
+		if cfg.Enabled == "false" {
+			continue
+		}
 		// Read the cached identity BEFORE constructing: with it in hand the
 		// channel skips the auth.test its constructor would otherwise run.
 		cachedBotID, cachedBotName, cachedTeam := loadCachedIdentity(store, "slack", uid)
@@ -296,6 +301,9 @@ func Telegram(reg *agentchannels.Registry, store TelegramStore, sendFn agentchan
 		cfg, err := store.LoadTelegramForUser(uid)
 		if err != nil {
 			log.Warn().Err(err).Str("user_id", uid).Msg("agents: failed to load telegram config for user")
+			continue
+		}
+		if cfg.Enabled == "false" {
 			continue
 		}
 		ch := agenttelegram.NewWithOwner(cfg, uid)

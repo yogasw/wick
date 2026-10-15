@@ -27,6 +27,7 @@ vi.mock("../../api/team.js", async (orig) => ({
     ],
   }),
   runApi: <T,>(p: Promise<T>) => p,
+  runApiRaw: <T,>(p: Promise<T>) => p,
 }));
 
 let instantNow: { enabled: boolean } & Record<string, unknown> = { enabled: false, bound_channels: [] };

@@ -34,6 +34,7 @@ var agentSlackSettingGroups = map[string]bool{
 // schema field is either editable or listed here, except `internal` rows,
 // which no page shows — TestAgentSlackSettingsCoverSchema.
 var agentSlackReadOnlyNotes = map[string]string{
+	"enabled":        "The Channels page switch. An agent's bot runs while the agent is enabled — Disconnect stops it.",
 	"mode":           "Set by the connect wizard: an agent's own app runs in socket mode.",
 	"bot_token":      "Managed with Replace tokens on this card.",
 	"app_token":      "Managed with Replace tokens on this card.",

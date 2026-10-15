@@ -16,10 +16,10 @@
   import SlackInstantCard from "./team/SlackInstantCard.svelte";
   import SlackSettingsGroups from "./team/SlackSettingsGroups.svelte";
   import {
-    getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
-    type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
+    getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi, runApiRaw,
+    type AgentItem, type AgentSlackStatus, type AgentSlackHealth, type SlackSecretKey,
   } from "../api/team.js";
-  import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, showRotation, rotationLine, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
+  import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, showRotation, rotationLine, withoutCleared, botTakenByChannel, type TokenDraft, type BotTakenByChannel, TOKEN_HINTS } from "../slackConnection.js";
   import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
   import { CONN_TABS, CONN_MARK, CONN_MARK_LABEL, connState, defaultConnTab, type ConnTab, type ConnState } from "../connectionTabs.js";
 
@@ -35,6 +35,10 @@
   let draft = $state<TokenDraft>({ mode: "socket", bot_token: "", app_token: "", signing_secret: "", app_refresh_token: "", client_id: "", client_secret: "" });
   let busy = $state(false);
   let error = $state("");
+  /* cleared: stored secrets the Clear buttons drop on the next connect.
+     takeover: the 409 offer when a Channels-page instance runs the bot. */
+  let cleared = $state<SlackSecretKey[]>([]);
+  let takeover = $state<BotTakenByChannel | null>(null);
   let health = $state<AgentSlackHealth | null>(null);
   let healthError = $state("");
   let manifest = $state<{ json: string; url: string } | null>(null);
@@ -102,8 +106,13 @@
     }
   }
 
-  const tokenProblem = $derived(tokenError(draft, status));
-  const rotation = $derived(showRotation(draft, status));
+  const seen = $derived(withoutCleared(status, cleared));
+  const tokenProblem = $derived(tokenError(draft, seen));
+  const rotation = $derived(showRotation(draft, seen));
+  const stored = (k: SlackSecretKey) => !!seen?.secrets?.[k];
+  function clearSecret(k: SlackSecretKey) {
+    if (!cleared.includes(k)) cleared = [...cleared, k];
+  }
   const rotationBadge = $derived(rotationLine(status));
 
   let marks = $state<Partial<Record<ConnTab, ConnState>>>({});
@@ -131,19 +140,24 @@
     document.getElementById(`conn-tab-${next}`)?.focus();
   }
 
-  async function connect() {
+  async function connect(takeOver = false) {
     if (tokenProblem) return;
     busy = true;
     error = "";
     try {
-      status = await runApi(connectAgentSlack(base, agent.id, connectBody(draft)));
+      /* runApiRaw keeps the 409 body: a bot the Channels page runs comes
+         back as a take-over offer, not a bare message. */
+      status = await runApiRaw(connectAgentSlack(base, agent.id, connectBody(draft, cleared, takeOver)));
+      cleared = [];
+      takeover = null;
       draft.bot_token = draft.app_token = draft.signing_secret = draft.app_refresh_token = draft.client_secret = "";
       draft.client_id = status.client_id ?? "";
       wizard = false;
       toastOk(`@${agent.handle} is connected to Slack`);
       await runHealth();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      takeover = botTakenByChannel(e);
+      error = takeover ? "" : e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }
@@ -272,7 +286,8 @@
             {#if draft.mode === "socket"}
               <div>
                 <label class={label} for="sl-app">App token (xapp-… or xoxe.xapp-…)</label>
-                <input id="sl-app" type="password" autocomplete="off" class={input} bind:value={draft.app_token} placeholder={status?.secrets?.app_token ? MASKED : "xapp-…"} />
+                <input id="sl-app" type="password" autocomplete="off" class={input} bind:value={draft.app_token} placeholder={stored("app_token") ? MASKED : "xapp-…"} />
+                {#if stored("app_token")}<button type="button" class="mt-1 text-xs text-neg-400 hover:underline" data-testid="clear-app_token" onclick={() => clearSecret("app_token")}>Clear stored value</button>{/if}
                 <p class="mt-1 {muted}" data-testid="hint-app">{TOKEN_HINTS.app_token}</p>
               </div>
               {#if rotation}
@@ -280,7 +295,8 @@
                   <p class="text-xs font-medium text-black-900 dark:text-white-100">Rotating token detected</p>
                   <div>
                     <label class={label} for="sl-refresh">Refresh token</label>
-                    <input id="sl-refresh" type="password" autocomplete="off" class={input} bind:value={draft.app_refresh_token} placeholder={status?.secrets?.app_refresh_token && !draft.app_token.trim() ? MASKED : "xoxe-1-…"} />
+                    <input id="sl-refresh" type="password" autocomplete="off" class={input} bind:value={draft.app_refresh_token} placeholder={stored("app_refresh_token") && !draft.app_token.trim() ? MASKED : "xoxe-1-…"} />
+                    {#if stored("app_refresh_token")}<button type="button" class="mt-1 text-xs text-neg-400 hover:underline" data-testid="clear-app_refresh_token" onclick={() => clearSecret("app_refresh_token")}>Clear stored value</button>{/if}
                   </div>
                   <div>
                     <label class={label} for="sl-client-id">Client ID</label>
@@ -288,7 +304,8 @@
                   </div>
                   <div>
                     <label class={label} for="sl-client-secret">Client Secret</label>
-                    <input id="sl-client-secret" type="password" autocomplete="off" class={input} bind:value={draft.client_secret} placeholder={status?.secrets?.client_secret ? MASKED : ""} />
+                    <input id="sl-client-secret" type="password" autocomplete="off" class={input} bind:value={draft.client_secret} placeholder={stored("client_secret") ? MASKED : ""} />
+                {#if stored("client_secret")}<button type="button" class="mt-1 text-xs text-neg-400 hover:underline" data-testid="clear-client_secret" onclick={() => clearSecret("client_secret")}>Clear stored value</button>{/if}
                   </div>
                   <p class={muted} data-testid="hint-rotation">{TOKEN_HINTS.rotation}</p>
                 </div>
@@ -296,7 +313,8 @@
             {:else}
               <div>
                 <label class={label} for="sl-sign">Signing secret</label>
-                <input id="sl-sign" type="password" autocomplete="off" class={input} bind:value={draft.signing_secret} placeholder={status?.secrets?.signing_secret ? MASKED : ""} />
+                <input id="sl-sign" type="password" autocomplete="off" class={input} bind:value={draft.signing_secret} placeholder={stored("signing_secret") ? MASKED : ""} />
+                {#if stored("signing_secret")}<button type="button" class="mt-1 text-xs text-neg-400 hover:underline" data-testid="clear-signing_secret" onclick={() => clearSecret("signing_secret")}>Clear stored value</button>{/if}
                 <p class="mt-1 {muted}" data-testid="hint-sign">{TOKEN_HINTS.signing_secret}</p>
               </div>
             {/if}
@@ -306,8 +324,38 @@
           <p class="text-sm font-medium text-black-900 dark:text-white-100">3. Connect and test</p>
           {#if tokenProblem}<p class="mt-1 {muted}" data-testid="token-problem">{tokenProblem}</p>{/if}
           {#if error}<p class="mt-1 text-xs text-neg-400" data-testid="connect-error">{error}</p>{/if}
+          {#if takeover}
+            <div class="mt-2 space-y-2 rounded-lg border border-white-300 p-3 dark:border-navy-600" data-testid="slack-takeover">
+              <p class="text-xs text-black-900 dark:text-white-100">This Slack app already runs on the Channels page as <span class="font-medium">{takeover.instance_name}</span> (<span class="font-mono">{takeover.instance_key}</span>).</p>
+              {#if takeover.can_take_over}
+              <p class={muted}>Taking it over switches that instance off (its tokens stay stored) and connects the bot to @{agent.handle}. Nothing pointing at the old instance is moved:</p>
+              <ul class="list-disc pl-5 {muted}" data-testid="slack-takeover-impact">
+                {#if takeover.replaces_bot}<li>@{agent.handle} is connected to {takeover.replaces_bot} now — that app is replaced.</li>{/if}
+                {#if takeover.access_note}<li>{takeover.access_note}</li>{/if}
+                {#each takeover.instant_agents ?? [] as h (h)}<li class="text-neg-400">{h} (Instant) rides this instance and stops answering.</li>{/each}
+                {#if takeover.rotating}<li class="text-neg-400">This app uses a rotating app token: after the take over the old instance cannot reuse it — paste fresh tokens there before switching it back on.</li>{/if}
+                <li>{takeover.sessions} thread session{takeover.sessions === 1 ? "" : "s"} under <span class="font-mono">{takeover.session_prefix}</span> stay with the old instance; new threads start as @{agent.handle}'s.</li>
+                {#if takeover.workflow_refs.length}
+                  {#each takeover.workflow_refs as r (r.workflow_id + r.kind + r.id + (r.draft ? "d" : ""))}
+                    <li>Workflow <span class="font-medium">{r.workflow_name || r.workflow_id}</span>: {r.kind} <span class="font-mono">{r.id}</span>{r.draft ? " (draft)" : ""} still pins this instance.</li>
+                  {/each}
+                {:else}
+                  <li>No workflow trigger or node pins this instance.</li>
+                {/if}
+              </ul>
+              {/if}
+              {#if takeover.can_take_over}
+                <div class="flex gap-2">
+                  <Button size="sm" variant="danger" disabled={busy} onclick={() => connect(true)}>{busy ? "Taking over…" : "Take over from Channels page"}</Button>
+                  <Button size="sm" variant="ghost" onclick={() => (takeover = null)}>Cancel</Button>
+                </div>
+              {:else}
+                <p class="text-xs text-neg-400" data-testid="slack-takeover-denied">{takeover.blocker || "Only an owner or admin can take it over — ask one, or create a separate Slack app for this agent."}</p>
+              {/if}
+            </div>
+          {/if}
           <div class="mt-2 flex gap-2">
-            <Button size="sm" disabled={busy || !!tokenProblem} onclick={connect}>{busy ? "Connecting…" : "Connect & test"}</Button>
+            <Button size="sm" disabled={busy || !!tokenProblem} onclick={() => connect()}>{busy ? "Connecting…" : "Connect & test"}</Button>
             {#if status?.connected}<Button size="sm" variant="ghost" onclick={() => (wizard = false)}>Cancel</Button>{/if}
           </div>
         </li>

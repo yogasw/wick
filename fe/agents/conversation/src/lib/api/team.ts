@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { apiGetE, apiPostE, apiPatchE, apiPutE, apiDeleteE, WickClientLayer, type APIError } from "@wick-fe/common-api";
+import { apiGetE, apiPostE, apiPatchE, apiPutE, apiDeleteE, WickClientLayer, runPromiseUnwrapped, type APIError } from "@wick-fe/common-api";
 import type { HttpClient } from "@effect/platform";
 import type { AgentFeatures } from "../agentMode.js";
 import { invalidateProjectOptions } from "./projectOptionsCache.js";
@@ -675,6 +675,11 @@ export const sendToGroup = (base: string, id: string, text: string) =>
 export const runApi = <T>(eff: Effect.Effect<T, APIError, HttpClient.HttpClient>): Promise<T> =>
   Effect.runPromise(eff.pipe(Effect.provide(WickClientLayer)));
 
+/** runApiRaw is runApi rejecting with the APIError itself (status + body),
+    not Effect's FiberFailure — for callers that read the error body. */
+export const runApiRaw = <T>(eff: Effect.Effect<T, APIError, HttpClient.HttpClient>): Promise<T> =>
+  runPromiseUnwrapped(eff.pipe(Effect.provide(WickClientLayer)));
+
 /** isWorking reads a session status as "the agent is busy right now". */
 export const isWorking = (status: string | undefined) => status === "running" || status === "queued";
 
@@ -718,6 +723,10 @@ export type AgentSlackConnect = Partial<{
   app_refresh_token: string;
   client_id: string;
   client_secret: string;
+  /* Stored secrets to drop (a blank field keeps them). */
+  clear: SlackSecretKey[];
+  /* Switch off the Channels-page instance running this bot (owner/admin). */
+  take_over: boolean;
 }>;
 export type SlackMatrixItem = { name: string; status: SlackMatrixStatus; hint?: string };
 export type SlackMatrixStatus = "ok" | "warn" | "error" | "off" | "pending";

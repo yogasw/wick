@@ -1,5 +1,5 @@
 /* Connections › Slack: the pure half of AgentConnections.svelte. */
-import type { AgentSlackStatus, SlackMatrixStatus, SlackSecretKey } from "./api/team.js";
+import type { AgentSlackConnect, AgentSlackStatus, SlackMatrixStatus, SlackSecretKey } from "./api/team.js";
 
 export const MATRIX_ICON: Record<SlackMatrixStatus, string> = { ok: "✅", warn: "⚠️", error: "❌", off: "·", pending: "⏳" };
 export const MATRIX_LABEL: Record<SlackMatrixStatus, string> = { ok: "ok", warn: "warning", error: "missing", off: "off", pending: "not seen yet" };
@@ -68,14 +68,66 @@ export function tokenError(d: TokenDraft, st: AgentSlackStatus | null): string {
   return "";
 }
 
-/** connectBody sends only what was typed: a blank secret keeps the stored one. */
-export function connectBody(d: TokenDraft): Record<string, string> {
-  const out: Record<string, string> = { mode: d.mode };
+/** connectBody sends only what was typed: a blank secret keeps the stored
+    one, unless it is named in `clear` (the field's Clear button). */
+export function connectBody(d: TokenDraft, clear: SlackSecretKey[] = [], takeOver = false): AgentSlackConnect {
+  const out: AgentSlackConnect = { mode: d.mode };
   for (const k of ["bot_token", "app_token", "signing_secret", "app_refresh_token", "client_id", "client_secret"] as const) {
     const v = d[k].trim();
     if (v) out[k] = v;
   }
+  const drop = clear.filter((k) => !(k in d) || !String(d[k as keyof TokenDraft]).trim());
+  if (drop.length) out.clear = drop;
+  if (takeOver) out.take_over = true;
   return out;
+}
+
+/** withoutCleared is st as the wizard sees it once the secrets in `clear`
+    are dropped: tokenError then asks for them again when they are needed. */
+export function withoutCleared(st: AgentSlackStatus | null, clear: SlackSecretKey[]): AgentSlackStatus | null {
+  if (!st || !clear.length) return st;
+  const secrets = { ...st.secrets };
+  for (const k of clear) secrets[k] = false;
+  return { ...st, secrets };
+}
+
+/** One workflow trigger or node still pinned to the Channels instance. */
+export type WorkflowInstanceRef = { workflow_id: string; workflow_name: string; kind: "trigger" | "node"; id: string; draft?: boolean };
+
+/** BotTakenByChannel is the 409 of a bot a Channels-page Slack instance
+    runs: what a take over leaves pointing at that instance. */
+export type BotTakenByChannel = {
+  error: string;
+  code: "bot_taken_by_channel";
+  instance_key: string;
+  instance_name: string;
+  can_take_over: boolean;
+  workflow_refs: WorkflowInstanceRef[];
+  sessions: number;
+  session_prefix: string;
+  /* "Only me" note for a first connection, the bot it replaces, and
+     whether the old instance's rotating app token becomes unusable. */
+  access_note?: string;
+  replaces_bot?: string;
+  rotating?: boolean;
+  /* Instant agents riding the instance (they stop answering), and why the
+     move cannot go ahead (a disabled target agent). */
+  instant_agents?: string[];
+  blocker?: string;
+};
+
+/** botTakenByChannel reads the take-over offer out of a connect error
+    (APIError keeps the response body), null for any other error. */
+export function botTakenByChannel(e: unknown): BotTakenByChannel | null {
+  const body = e && typeof e === "object" && "body" in e ? (e as { body: unknown }).body : null;
+  if (typeof body !== "string") return null;
+  try {
+    const v = JSON.parse(body) as Partial<BotTakenByChannel>;
+    if (v?.code !== "bot_taken_by_channel" || !v.instance_key) return null;
+    return { workflow_refs: [], sessions: 0, session_prefix: "", instance_name: v.instance_key, can_take_over: false, error: "", ...v } as BotTakenByChannel;
+  } catch {
+    return null;
+  }
 }
 
 /** formatExpiry: "expires in 11h 40m", "expired", "" when unknown. */

@@ -412,6 +412,7 @@ func Register(r tool.Router) {
 	r.PUT("/api/team/agents/{id}/slack", apiTeamAgentSlackConnect)
 	r.PATCH("/api/team/agents/{id}/slack", apiTeamAgentSlackOptions)
 	r.DELETE("/api/team/agents/{id}/slack", apiTeamAgentSlackDisconnect)
+	r.POST("/api/team/agents/{id}/slack/convert", apiTeamAgentSlackConvert)
 	r.GET("/api/team/agents/{id}/slack/health", apiTeamAgentSlackHealth)
 	r.GET("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsGet)
 	r.PATCH("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsPatch)

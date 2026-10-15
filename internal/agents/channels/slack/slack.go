@@ -406,6 +406,14 @@ type Channel struct {
 	// attached; channel-only deployments leave it nil with no overhead.
 	workflowEmit WorkflowEventSink
 
+	// halted is set by Stop (the instance is being retired: switched
+	// off, removed) and cleared only by Start; Reload and the watchdog
+	// restart the run without touching it. Written under runMu so a Stop
+	// racing a run beginning cannot end with a retired instance serving;
+	// read lock-free by the webhook handler. The registry already routes
+	// past a removed instance — this is the second line.
+	halted atomic.Bool
+
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
@@ -699,6 +707,28 @@ func (s *Channel) RefreshTokenMap(ctx context.Context) {
 	log.Info().Int("users", len(newMap)).Msg("slack: user token map refreshed")
 }
 
+// Serving reports whether the instance takes webhook events: false once
+// stopped, until a run begins again. The fan-in dispatcher prefers a
+// serving instance.
+func (s *Channel) Serving() bool { return !s.halted.Load() }
+
+// eventsRoute is the Slack Events API webhook route.
+const eventsRoute = "POST /integrations/slack/events"
+
+// VerifiesRoute satisfies channels.RequestVerifier: only the events route
+// is signed by Slack; /send and the avatar route are not.
+func (s *Channel) VerifiesRoute(path string) bool { return path == eventsRoute }
+
+// VerifiesRequest satisfies channels.RequestVerifier: body is signed with
+// this instance's signing secret. Lets the registry route a shared events
+// route to the right bot instead of the first one mounted.
+func (s *Channel) VerifiesRequest(h http.Header, body []byte) bool {
+	s.cfgMu.Lock()
+	secret := s.cfg.SigningSecret
+	s.cfgMu.Unlock()
+	return secret != "" && verifySlackSignature(h, body, secret) == nil
+}
+
 // HTTPHandlers satisfies channels.MultiHTTPHandlerProvider.
 // Returns two routes:
 //   - POST /integrations/slack/events — inbound Slack webhook
@@ -708,9 +738,9 @@ func (s *Channel) RefreshTokenMap(ctx context.Context) {
 // at /manager/connectors/slack/oauth/* and are no longer registered here.
 func (s *Channel) HTTPHandlers() map[string]http.Handler {
 	return map[string]http.Handler{
-		"POST /integrations/slack/events": s.HTTPHandler(),
-		"POST /integrations/slack/send":   s.sendHandler(),
-		"GET " + avatarPath + "{file}":    avatarHandler(),
+		eventsRoute:                     s.HTTPHandler(),
+		"POST /integrations/slack/send": s.sendHandler(),
+		"GET " + avatarPath + "{file}":  avatarHandler(),
 	}
 }
 
@@ -903,6 +933,9 @@ var socketStartTimeout = 60 * time.Second
 // Start begins listening for Slack events. Blocks until ctx is cancelled
 // or Stop/Reload is called.
 func (s *Channel) Start(ctx context.Context) error {
+	s.runMu.Lock()
+	s.halted.Store(false)
+	s.runMu.Unlock()
 	runCtx, gen, done := s.beginRun(ctx)
 	defer done()
 	return s.serve(ctx, runCtx, gen)
@@ -1200,8 +1233,18 @@ func (s *Channel) watchStart(runCtx context.Context, gen uint64) {
 	go s.Reload(context.Background(), cfg, pubURL)
 }
 
-// Stop signals the current Start() to exit gracefully.
+// Stop signals the current Start() to exit gracefully and retires the
+// instance: its webhook handler drops events until Start is called again.
 func (s *Channel) Stop() {
+	s.runMu.Lock()
+	s.halted.Store(true)
+	s.runMu.Unlock()
+	s.stopRun()
+}
+
+// stopRun ends the current run without retiring the instance — what
+// Reload needs, so webhooks keep being served across a config reload.
+func (s *Channel) stopRun() {
 	s.runMu.Lock()
 	cancel := s.runCancel
 	s.runMu.Unlock()
@@ -1535,10 +1578,18 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 	ctx = context.WithoutCancel(ctx)
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
-	s.Stop()
+	s.stopRun()
 	s.runWg.Wait()
 
 	s.applyConfig(cfg, pubURL)
+
+	// A retired instance (Stop: switched off, removed) takes the new
+	// config but does not come back to life — a hot-reload or watchdog
+	// restart landing after the switch-off must not reopen its socket.
+	if s.halted.Load() {
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("reload: instance stopped, not restarting")
+		return
+	}
 
 	if !s.IsConfigured() {
 		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("reload: not configured, staying stopped")
@@ -2237,6 +2288,13 @@ func (s *Channel) mentionsBot(text string) bool {
 // url_verification challenge synchronously; everything else dispatched async.
 func (s *Channel) HTTPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.halted.Load() {
+			// Stopped (switched off): acknowledge so Slack does not
+			// retry, and drop the event — this bot is not serving.
+			w.Header().Set("X-Wick-Ignored", "instance stopped")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			http.Error(w, "read error", http.StatusBadRequest)

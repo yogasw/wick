@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -230,11 +231,26 @@ type agentSlackConnectReq struct {
 	AppRefreshToken string `json:"app_refresh_token"`
 	ClientID        string `json:"client_id"`
 	ClientSecret    string `json:"client_secret"`
+	// Clear names stored secrets to drop: a blank field keeps the stored
+	// value, so dropping one has to be said out loud.
+	Clear []string `json:"clear"`
+	// TakeOver switches off the Channels-page Slack instance that runs the
+	// same bot (owner/admin only) and connects the bot here instead.
+	TakeOver bool `json:"take_over"`
+	// sourceInstance is set by Convert: the caller's Channels instance the
+	// tokens were copied from, switched off whether or not it is running.
+	sourceInstance string
 }
 
 // errBotTaken is the answer to a bot token whose app already serves
 // another agent or channel: one Slack app = one agent.
-type errBotTaken struct{ owner string }
+type errBotTaken struct {
+	owner string
+	// instance is the Channels-page instance holding the bot
+	// ("slack:<user-id>", "slack:__owner__"); "" when an agent holds it,
+	// which can never be taken over.
+	instance string
+}
 
 func (e errBotTaken) Error() string {
 	return "this Slack app is already connected to " + e.owner + " — create a separate Slack app for each agent"
@@ -277,12 +293,20 @@ func checkBotUnique(agentID, botID, botUserID string) error {
 		own := agentSlackInstanceKey(agentID)
 		for _, ch := range globalChannels.Channels() {
 			sc, ok := ch.(*agentslack.Channel)
-			if !ok || globalChannels.InstanceKeyOf(ch) == own {
+			key := globalChannels.InstanceKeyOf(ch)
+			if !ok || key == own {
 				continue
 			}
-			if sc.BotUserID() == botUserID {
-				return errBotTaken{owner: "a channel on the Channels page"}
+			if sc.BotUserID() != botUserID {
+				continue
 			}
+			if _, page := channelsPageSlackOwner(key); page {
+				// Fail closed: an instance still in the registry may
+				// still be running, whatever its row says — it holds the
+				// bot until it is stopped (switching it off removes it).
+				return errBotTaken{owner: "a channel on the Channels page", instance: key}
+			}
+			return errBotTaken{owner: "a channel on the Channels page"}
 		}
 	}
 	return nil
@@ -304,11 +328,31 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
+	connectAgentSlackWith(c, p, req)
+}
+
+// connectAgentSlackWith connects p to the Slack app req names — the
+// wizard's PUT and the Channels page's "Convert to agent" share it, take
+// over included.
+func connectAgentSlackWith(c *tool.Ctx, p entity.AgentPersona, req agentSlackConnectReq) {
+	if p.Disabled && (req.TakeOver || req.sourceInstance != "") {
+		// A disabled agent runs no bot: taking one over would leave the
+		// Slack app with nobody answering.
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "@" + p.Handle + " is disabled — enable it before moving a Slack app to it"})
+		return
+	}
 	m, err := agentchannels.AgentSlackConfig(globalDB, p.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// The row as it was, for a take over that has to be rolled back.
+	prevRow, hadRow, err := agentchannels.AgentSlackRow(globalDB, p.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	prevConf := maps.Clone(m)
 	plain := func(k string) string {
 		if v := m[k]; v != "" && globalConfigs != nil {
 			if d, err := globalConfigs.DecryptSecret(v); err == nil {
@@ -322,14 +366,24 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "mode must be socket or http"})
 		return
 	}
+	if (req.TakeOver || req.sourceInstance != "") && mode != "socket" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "this Slack app cannot be taken over in HTTP mode: " + errTakeoverNeedsSocket})
+		return
+	}
 	secrets := map[string]string{
 		"bot_token": strings.TrimSpace(req.BotToken), "app_token": strings.TrimSpace(req.AppToken),
 		"signing_secret": strings.TrimSpace(req.SigningSecret), agentSlackKeyAppToken: strings.TrimSpace(req.AppConfigToken),
 		agentSlackKeyRefresh: strings.TrimSpace(req.AppRefreshToken), agentSlackKeyClientSec: strings.TrimSpace(req.ClientSecret),
 	}
 	newAppToken := secrets["app_token"] != "" && secrets["app_token"] != plain("app_token")
+	cleared := map[string]bool{}
+	for _, k := range req.Clear {
+		if _, ok := secrets[k]; ok && secrets[k] == "" {
+			cleared[k] = true
+		}
+	}
 	for k, v := range secrets {
-		if v == "" {
+		if v == "" && !cleared[k] {
 			secrets[k] = plain(k)
 		}
 	}
@@ -365,13 +419,16 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "Slack rejected the bot token: " + err.Error()})
 		return
 	}
-	if err := checkBotUnique(p.ID, botID, botUserID); err != nil {
-		status := http.StatusInternalServerError
-		if errors.As(err, new(errBotTaken)) {
-			status = http.StatusConflict
-		}
-		c.JSON(status, map[string]string{"error": err.Error()})
+	claim, ok := claimSlackBot(c, p.ID, botID, botUserID, botName, req.TakeOver, req.sourceInstance)
+	if !ok {
 		return
+	}
+	// fail answers an error after the claim: a Channels instance switched
+	// off for this connect is switched back on, so a failed take over never
+	// leaves the bot with nobody serving it.
+	fail := func(status int, msg string) {
+		claim.undo()
+		c.JSON(status, map[string]string{"error": msg})
 	}
 	// A brand-new app starts as "Only me": the owner alone may use it, or
 	// nobody until someone is picked when the owner is not found by email.
@@ -408,18 +465,35 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		if globalConfigs != nil {
 			enc, err := globalConfigs.EncryptSecret(v)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, map[string]string{"error": "encrypt secret: " + err.Error()})
+				fail(http.StatusInternalServerError, "encrypt secret: "+err.Error())
 				return
 			}
 			v = enc
 		}
 		m[k] = v
 	}
-	if err := agentchannels.SaveAgentSlack(globalDB, p.ID, p.OwnerUserID, m, true); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err := saveAgentSlack(globalDB, p.ID, p.OwnerUserID, m, true); err != nil {
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
+	since := time.Now()
 	syncAgentSlack(context.Background(), p)
+	if claim.tookOver() {
+		if err := waitAgentSlackOnline(p, mode, since); err != nil {
+			// The agent's bot did not come up: carry a rotated app token
+			// back first (the copied refresh token is spent), put the
+			// agent's connection back as it was (its previous bot
+			// included), then give this bot back to the Channels instance.
+			note := claim.carryAppToken(p, secrets["app_token"])
+			restoreAgentSlackRow(p, prevRow, prevConf, hadRow)
+			msg := "the agent's Slack bot did not come online (" + err.Error() + ")"
+			if back := claim.undo(); back != "" {
+				msg += " — " + back + "."
+			}
+			c.JSON(http.StatusBadGateway, map[string]string{"error": msg + note})
+			return
+		}
+	}
 	st, _ := agentSlackStatusOf(p)
 	c.JSON(http.StatusOK, st)
 }

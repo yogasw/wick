@@ -127,7 +127,11 @@ templ simpleFieldInner(row entity.Config) {
 				<span class="text-[10px] font-semibold text-neg-400">*</span>
 			}
 			if row.IsSecret && row.Value != "" {
-				<span class="rounded-full bg-pos-100 px-1.5 py-0.5 text-[10px] font-semibold text-pos-400">stored</span>
+				<span data-stored-badge class="rounded-full bg-pos-100 px-1.5 py-0.5 text-[10px] font-semibold text-pos-400">stored</span>
+				<!-- Clear drops the stored secret (a blank input keeps it). Hidden
+				     unless the page sits in [data-secret-clearable], whose save
+				     handler understands clear=1. -->
+				<button type="button" data-secret-clear={ row.Key } hidden class="rounded px-1.5 py-0.5 text-[10px] font-semibold text-neg-400 hover:bg-neg-100 transition-colors">Clear</button>
 			}
 			if row.EnvOverride != "" {
 				<span class="rounded-full bg-prog-100 px-1.5 py-0.5 text-[10px] font-semibold text-prog-400" title="Overridden by environment variable — unset it and restart to edit from here">env: { row.EnvOverride }</span>
@@ -730,6 +734,10 @@ templ configsSaveScript() {
 			}else if(state==='error'){
 				el.textContent='✗ failed';
 				el.style.color='#EB5757';
+			}else if(state==='refused'){
+				// msg: the server's own reason (409/503 …), shown as text.
+				el.textContent='✗ '+(arguments[2]||'failed');
+				el.style.color='#EB5757';
 			}
 		}
 
@@ -742,7 +750,22 @@ templ configsSaveScript() {
 			var fd=new FormData();fd.append('value',val);
 			try{
 				var r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});
-				if(!r.ok)throw new Error(key);
+				if(!r.ok){
+					// A refused save (e.g. a bot a Team agent holds) says why,
+					// and a toggle goes back to where the server left it.
+					var why='';try{why=(await r.json()).error||'';}catch(_){}
+					if(el.type==='checkbox'){
+						// No change event: that would save the old value again.
+						el.checked=!el.checked;
+						var lbl=el.closest('label');
+						var track=lbl?lbl.querySelector('[data-toggle-track]'):null;
+						if(track)track.classList.toggle('is-on',el.checked);
+						var txt=lbl?lbl.querySelector('[data-toggle-label]'):null;
+						if(txt)txt.textContent=el.checked?'On':'Off';
+					}
+					setStatus(statusEl,'refused',why);
+					return;
+				}
 				setStatus(statusEl,'saved');
 				// clear "missing" badge if field now has a value
 				if(val&&val.trim()!==''){
@@ -927,8 +950,41 @@ templ configsSaveScript() {
 			});
 		}
 
+		// clearSecret drops a stored secret: the blank input means "keep",
+		// so the server only clears on the explicit clear=1.
+		async function clearSecret(btn,base){
+			var key=btn.getAttribute('data-secret-clear');
+			if(!confirm('Clear the stored value of '+key+'?'))return;
+			var wrap=btn.closest('[data-field-wrap]');
+			var statusEl=wrap?wrap.querySelector('[data-save-status]'):null;
+			setStatus(statusEl,'saving');
+			var fd=new FormData();fd.append('value','');fd.append('clear','1');
+			try{
+				var r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});
+				if(!r.ok){
+					var why='';try{why=(await r.json()).error||'';}catch(_){}
+					setStatus(statusEl,'refused',why);
+					return;
+				}
+				setStatus(statusEl,'saved');
+				var badge=wrap?wrap.querySelector('[data-stored-badge]'):null;
+				if(badge)badge.remove();
+				var inp=wrap?wrap.querySelector('[data-field-key]'):null;
+				if(inp){inp.value='';inp.placeholder='Enter secret';}
+				btn.remove();
+			}catch(e){
+				setStatus(statusEl,'error');
+			}
+		}
+
 		function attachAutoSave(form){
 			var base=form.getAttribute('data-action-base');
+			if(form.closest('[data-secret-clearable]')){
+				form.querySelectorAll('[data-secret-clear]').forEach(function(btn){
+					btn.hidden=false;
+					btn.addEventListener('click',function(){clearSecret(btn,base);});
+				});
+			}
 			// Restore server-side value for dropdowns to override browser form-state cache.
 			// If browser auto-selected something different from the server value, save it.
 			form.querySelectorAll('select[data-server-value]').forEach(function(el){

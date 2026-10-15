@@ -12,7 +12,11 @@ package config
 // role family (anyone who passed access / workspace admins / a custom list)
 // allowed to resolve interactive gate buttons.
 type SlackChannelConfig struct {
-	Mode          string `wick:"dropdown=socket|http;hidden;key=mode;group=Connection|Transport credentials. Socket mode needs the bot + app token. HTTP mode needs the bot token + signing secret and a public URL.;desc=Connection mode."`
+	Mode string `wick:"dropdown=socket|http;hidden;key=mode;group=Connection|Transport credentials. Socket mode needs the bot + app token. HTTP mode needs the bot token + signing secret and a public URL.;desc=Connection mode."`
+	// Enabled is the instance's on/off switch on the Channels page. "" (a
+	// row saved before the switch existed) counts as on; only "false"
+	// stops the bot, and saving a token never turns it back on.
+	Enabled       string `wick:"bool;default=true;hidden;key=enabled;group=Connection;desc=Run this Slack bot. Off stops it right away and keeps it stopped across restarts; the tokens stay stored. Turn it back on to reconnect — refused while a Team agent holds the same bot. If a Team agent used this app with a rotating app token (xoxe.xapp-), paste fresh tokens first: the stored refresh token has been spent."`
 	BotToken      string `wick:"secret;hidden;key=bot_token;group=Connection;desc=Bot token (xoxb-...)."`
 	AppToken      string `wick:"secret;hidden;key=app_token;group=Connection;desc=App-level token (xapp-... or xoxe.xapp-... when token rotation is on). Required for socket mode."`
 	SigningSecret string `wick:"secret;hidden;key=signing_secret;group=Connection;desc=Signing secret. Required for http mode."`

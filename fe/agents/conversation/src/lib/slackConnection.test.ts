@@ -1,6 +1,6 @@
-import { describe, test, expect } from "vitest";
+import { describe, test, it, expect } from "vitest";
 import type { AgentSlackStatus } from "./api/team.js";
-import { connectBody, formatExpiry, isRotatingAppToken, rotationLine, showRotation, tokenError, type TokenDraft } from "./slackConnection.js";
+import { connectBody, formatExpiry, isRotatingAppToken, rotationLine, showRotation, tokenError, withoutCleared, botTakenByChannel, type TokenDraft } from "./slackConnection.js";
 
 const blank: TokenDraft = { mode: "socket", bot_token: "", app_token: "", signing_secret: "", app_refresh_token: "", client_id: "", client_secret: "" };
 const none: AgentSlackStatus = { connected: false, online: false, mode: "socket", dm_main_chat: true, secrets: {}, disabled: false };
@@ -91,4 +91,32 @@ test("rotationLine", () => {
   expect(rotationLine({ ...rotating, app_token_expires_at: "2026-10-14T11:40:00Z", last_refresh: last.toISOString() }, now))
     .toBe("Rotating · expires in 11h 40m · last refreshed 09:05");
   expect(rotationLine(rotating, now)).toBe("Rotating");
+});
+
+describe("take over + clear", () => {
+  const draft = { mode: "socket" as const, bot_token: "", app_token: "", signing_secret: "", app_refresh_token: "", client_id: "", client_secret: "" };
+
+  it("reads the take-over offer out of a 409 body only", () => {
+    const body = JSON.stringify({ error: "x", code: "bot_taken_by_channel", instance_key: "slack:u9", instance_name: "Slack · @bot · Yoga", can_take_over: true, workflow_refs: [], sessions: 3, session_prefix: "slack-u9-" });
+    const offer = botTakenByChannel({ status: 409, body });
+    expect(offer?.instance_key).toBe("slack:u9");
+    expect(offer?.sessions).toBe(3);
+    expect(botTakenByChannel({ status: 409, body: JSON.stringify({ error: "already connected to @rekap" }) })).toBeNull();
+    expect(botTakenByChannel(new Error("boom"))).toBeNull();
+    expect(botTakenByChannel({ body: "not json" })).toBeNull();
+  });
+
+  it("sends clear for blank cleared secrets and take_over when asked", () => {
+    expect(connectBody(draft, ["signing_secret"], true)).toEqual({ mode: "socket", clear: ["signing_secret"], take_over: true });
+    // A pasted value replaces the secret — no clear needed.
+    expect(connectBody({ ...draft, app_token: "xapp-1" }, ["app_token"])).toEqual({ mode: "socket", app_token: "xapp-1" });
+    expect(connectBody(draft)).toEqual({ mode: "socket" });
+  });
+
+  it("treats cleared secrets as not held", () => {
+    const st = { connected: true, online: true, mode: "socket" as const, dm_main_chat: true, disabled: false, secrets: { bot_token: true, app_token: true } };
+    expect(withoutCleared(st, ["app_token"])?.secrets.app_token).toBe(false);
+    expect(tokenError(draft, withoutCleared(st, ["app_token"]))).toMatch(/app-level token/);
+    expect(withoutCleared(st, [])).toBe(st);
+  });
 });

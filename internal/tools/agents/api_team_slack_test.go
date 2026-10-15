@@ -30,6 +30,17 @@ func withAgentSlackWorld(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		tok := r.Form.Get("token")
+		if strings.Contains(tok, "-revoked-") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":false,"error":"token_revoked"}`))
+			return
+		}
+		if strings.Contains(tok, "-down-") {
+			// A token naming "down" stands in for Slack failing.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":false,"error":"service_unavailable"}`))
+			return
+		}
 		bot := tok[strings.LastIndex(tok, "-")+1:]
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true,"user_id":"U` + bot + `","bot_id":"` + bot + `","user":"bot","team":"T"}`))

@@ -580,6 +580,18 @@ type RequestRouter interface {
 	OwnsRequest(r *http.Request) bool
 }
 
+// RequestVerifier is implemented by webhook channels whose requests carry
+// a per-instance signature (Slack's signing secret). When several
+// instances share a route and none claims a request, the registry hands it
+// to the one whose secret verifies body — and acknowledges-and-drops one
+// only a removed instance verifies.
+type RequestVerifier interface {
+	// VerifiesRoute names the routes whose requests carry the signature;
+	// only those bodies are read for routing (others stream untouched).
+	VerifiesRoute(path string) bool
+	VerifiesRequest(h http.Header, body []byte) bool
+}
+
 // ConfigSource is per-channel hot-reload glue. Hash returns a stable
 // fingerprint of the currently-applied config; the registry watcher
 // compares against the previous hash on each tick and calls Reload
