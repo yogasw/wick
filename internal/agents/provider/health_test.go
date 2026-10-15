@@ -180,6 +180,13 @@ func TestHealthKeyFallback(t *testing.T) {
 
 func TestHealthyNow(t *testing.T) {
 	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	// MarkUnhealthy stamps a zero CheckedAt/FailedAt with healthNow, and
+	// the wait now runs from the latest failure: the cases record theirs
+	// at marked and the clock is pinned to the table's, so they do not
+	// depend on the day the test runs.
+	prevNow := healthNow
+	healthNow = func() time.Time { return now }
+	t.Cleanup(func() { healthNow = prevNow })
 	marked := now.Add(-30 * time.Minute)
 	limit := Health{Kind: event.ErrLimit, Since: marked, CheckedAt: marked, Until: now.Add(3 * time.Hour)}
 	under := []UsageDiskWindow{{Key: "five_hour", Utilization: 12}}
@@ -200,9 +207,9 @@ func TestHealthyNow(t *testing.T) {
 		{"Until passed", &Health{Kind: event.ErrLimit, Since: marked, Until: now.Add(-time.Minute)}, nil, true},
 		{"Until passed but fresh reading full", &Health{Kind: event.ErrLimit, Since: marked, Until: now.Add(-time.Minute)}, &UsageDisk{ObservedAt: now.Add(-time.Minute), Windows: full}, false},
 		// H1: no Until → one recheck interval after Since.
-		{"no Until, before Since+Recheck", &Health{Kind: event.ErrLimit, Since: marked, Recheck: time.Hour}, nil, false},
-		{"no Until, past Since+Recheck", &Health{Kind: event.ErrLimit, Since: marked, Recheck: 20 * time.Minute}, nil, true},
-		{"no Until, default recheck", &Health{Kind: event.ErrLimit, Since: marked}, nil, true},
+		{"no Until, before Since+Recheck", &Health{Kind: event.ErrLimit, Since: marked, CheckedAt: marked, Recheck: time.Hour}, nil, false},
+		{"no Until, past Since+Recheck", &Health{Kind: event.ErrLimit, Since: marked, CheckedAt: marked, Recheck: 20 * time.Minute}, nil, true},
+		{"no Until, default recheck", &Health{Kind: event.ErrLimit, Since: marked, CheckedAt: marked}, nil, true},
 		// M2: a fresh reading with no real window has no vote.
 		{"Until passed, fresh empty reading", &Health{Kind: event.ErrLimit, Since: marked, Until: now.Add(-time.Minute)}, &UsageDisk{ObservedAt: now.Add(-time.Minute), Windows: []UsageDiskWindow{{Error: "all accounts failed"}}}, true},
 		{"auth ignores usage", &Health{Kind: event.ErrAuth, Since: marked}, &UsageDisk{ObservedAt: now.Add(-time.Minute), Windows: under}, false},
