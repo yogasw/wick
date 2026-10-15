@@ -1764,7 +1764,9 @@ func NewServer() *Server {
 	// SendFuncFor. Without this they get nil and the first message panics.
 	// The closure does not depend on the transport, so one serves all.
 	channelReg.WithSendFunc(sendFnFor("runtime"))
+	bootClk := newBootClock()
 	channelsetup.All(channelReg, channelStore, sendFnFor, tokensSvc)
+	bootClk.mark("channels set up")
 
 	// Team agents as A2A servers (/integrations/a2a/<agent_id>). One channel
 	// serves every agent; each agent's connection row decides if it answers.
@@ -1782,6 +1784,7 @@ func NewServer() *Server {
 	// surfaces.
 	wfsetup.RegisterSlackIntegration(wfMgr.Integration, channelReg, wfMgr.Router, wfMgr.MCP.Pickers)
 
+	bootClk.mark("workflow slack integration")
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
 	// one DB row per Key on first boot. The MCP server below is the
@@ -1877,6 +1880,7 @@ func NewServer() *Server {
 	// Config tab can read connector field schemas + AllowSessionConfig.
 	agentstool.SetConnectors(connectorsSvc)
 
+	bootClk.mark("connector services wired")
 	// Wire the agent factory's connector-catalog loader now that the
 	// connectors service exists. The loader runs at every agent spawn,
 	// listing only connector definitions whose Meta.Key has at least
@@ -1959,6 +1963,7 @@ func NewServer() *Server {
 	// to resolve a scope, so the ticket package cannot call it directly.
 	ticket.SetNotesMover(agentnotes.MoveForSession)
 
+	bootClk.mark("built-in connectors A")
 	// wickmanager is a built-in single-instance connector that exposes
 	// wick's own management plane (apps, jobs, tools, connectors,
 	// process lifecycle) via the same connector contract every
@@ -2034,6 +2039,7 @@ func NewServer() *Server {
 		return err == nil && len(peers) > 0
 	}
 
+	bootClk.mark("built-in connectors B")
 	// Custom connectors: replay admin-built definitions from the DB
 	// into the registry. MUST run before Bootstrap so custom modules
 	// ride the same instance seeding, allItems, and tag passes as
@@ -2092,6 +2098,7 @@ func NewServer() *Server {
 	// Persona Generate / Improve.
 	aigenSvc.Register(team.PersonaKindSpec())
 	aigenHandler := aigen.NewHandler(aigenSvc)
+	bootClk.mark("custom connector service ready")
 	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
 		log.Error().Err(err).Msg("custom connectors: boot registration failed")
 	}
@@ -2106,6 +2113,7 @@ func NewServer() *Server {
 	// wick_get lazily re-syncs custom MCP tool catalogs (throttled).
 	connectorsSvc.SetCatalogRefresh(customConnSvc.RefreshIfStale)
 
+	bootClk.mark("custom connectors replayed")
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -2126,8 +2134,10 @@ func NewServer() *Server {
 	// needs token-refresh wiring for the send-proxy feature.
 	// Team agents with their own Slack app or Telegram bot join the registry
 	// here so the wiring below (identity, owner, tokens) reaches them too.
+	bootClk.mark("connectors bootstrapped")
 	agentstool.RegisterAgentSlackInstances(context.Background())
 	agentstool.RegisterAgentTelegramInstances(context.Background())
+	bootClk.mark("agent slack/telegram instances")
 	wireChannel := func(ch agentchannels.Channel) {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
@@ -2244,6 +2254,7 @@ func NewServer() *Server {
 	// A bot connected while wick runs gets the same wiring.
 	agentstool.SetChannelWirer(wireChannel)
 
+	bootClk.mark("channel wiring")
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	// tokensSvc instantiated earlier so the REST channel can reuse it.
 	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
@@ -2261,6 +2272,7 @@ func NewServer() *Server {
 	// dispatch by prefix.
 	scheduleStore := schedule.NewStore(db).SetLayout(agentsLayout)
 
+	bootClk.mark("oauth + schedules")
 	// ── Sub-agent delegation ─────────────────────────────────────
 	// Sub-agents authenticate to the loopback MCP server with SCOPED
 	// tokens (their triggering user + an already-narrowed tag set), never
@@ -2498,6 +2510,7 @@ func NewServer() *Server {
 	// has to be eventually right.
 	delegation.NewDelegationSweeper(delegationSvc, 15*time.Second).Start(context.Background())
 
+	bootClk.mark("delegation wired")
 	// Install the investigation roles once, so a team gets a working
 	// incident workflow without writing seven prompts first. Marked in
 	// configs afterwards: an operator's edits survive every restart, and
@@ -2516,6 +2529,7 @@ func NewServer() *Server {
 		log.Warn().Err(err).Msg("agents: role mode default not migrated")
 	}
 
+	bootClk.mark("delegation roles seeded")
 	mcpHandler := mcp.NewHandler(connectorsSvc).
 		WithBuildInfo(releaseAppVersion, buildCommit, buildTime).
 		WithAppURL(configsSvc.AppURL).
@@ -2614,6 +2628,7 @@ func NewServer() *Server {
 		return out
 	})
 
+	bootClk.mark("mcp handler")
 	// wickGateExemptTools mirrors the CLI gate's built-in always-allow
 	// list (docs/guide/command-gate.md "wick's own read-only MCP tools
 	// are gate-exempt") — read-only discovery / session-housekeeping
@@ -2704,6 +2719,7 @@ func NewServer() *Server {
 	// mux.Handle. Module paths are relative to /tools/{meta.Key}; the
 	// router prefixes the base per meta before mounting.
 	toolsMux := http.NewServeMux()
+	bootClk.mark("mcp gate wiring")
 	tr := newToolRouter(configsSvc)
 	for _, m := range modules {
 		// Tool plugins mount on pluginTools below so they can come and go.
@@ -2719,6 +2735,7 @@ func NewServer() *Server {
 	}
 	tr.mount(toolsMux)
 	// Tool plugins: one dispatcher over the live set, same Ctx and the same
+	bootClk.mark("tool routes mounted")
 	// RequireToolAccess check as the built-ins above. Plugins loaded at boot
 	// are mounted now; installs, updates, enables and disables while wick
 	// runs go through toolPlugins.Reconcile → liveToolSink.

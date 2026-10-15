@@ -8,10 +8,14 @@ func supported() bool { return true }
 
 func newFlipper(pidFile string) (flipper, error) {
 	// UpgradeTimeout bounds how long we wait for the child to report ready
-	// before giving up and continuing to serve. Boot restore on a loaded host
-	// is not instant, so this is well above tableflip's 1-minute default.
+	// before giving up and continuing to serve. Unbounded unless configured —
+	// see upgradeTimeout.
+	timeout := upgradeTimeout()
+	if timeout <= 0 {
+		timeout = noHandoverLimit
+	}
 	upg, err := tableflip.New(tableflip.Options{
-		UpgradeTimeout: upgradeTimeout,
+		UpgradeTimeout: timeout,
 		PIDFile:        pidFile,
 	})
 	if err != nil {

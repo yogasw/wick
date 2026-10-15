@@ -862,6 +862,7 @@ templ systemUpdateScript() {
 		   it drains. By then it answers no requests, so this is the only way
 		   this page can say why the swap is queued rather than stuck. */
 		var drainWhy = '', drainTip = '';
+		var busyRaw = [];
 		var installedAgo = 0;
 
 		function mmss(n) {
@@ -919,8 +920,8 @@ templ systemUpdateScript() {
 			// Grounded in what a boot ACTUALLY took here last time, not a
 			// guess. Without it, a minute of silence reads as a hang.
 			if (typicalBoot > 0) t += ' of ~' + mmss(typicalBoot) + ' usual';
-			// The 3-minute abort limit is real but almost never reached, so it
-			// stays out of the way until it is close.
+			// The abort limit is real but almost never reached, so it stays
+			// out of the way until it is close.
 			if (autoLeft > 0 && autoLeft <= 45) t += ' · giving up in ' + mmss(autoLeft);
 			return t;
 		}
@@ -970,7 +971,11 @@ templ systemUpdateScript() {
 					var det = panels[i].querySelector('[data-detail]');
 					if (det) det.textContent = stepDetail(key);
 					// Hover carries the full explanation; the panel stays short.
-					if (key === 'idle') panels[i].title = autoState === 'previous_draining' ? drainTip : '';
+					if (key === 'idle') {
+						panels[i].title = autoState === 'previous_draining'
+							? drainTip
+							: (busyRaw.length ? 'Still running:\n' + busyRaw.join('\n') : '');
+					}
 				}
 			}
 			// A bar for the one phase that has a duration worth showing. Capped
@@ -1093,6 +1098,11 @@ templ systemUpdateScript() {
 			if (!d) return;
 			// Prefer the server's human wording; fall back to the raw list on
 			// an older daemon that does not send it yet.
+			// The raw list ("agent turns=1 (session-id)", "http requests=1
+			// (POST /path)") is kept for the hover: the words say how much,
+			// the raw entries say WHICH — what an operator needs to judge
+			// whether the wait is real.
+			busyRaw = d.busy || [];
 			d.busy = (d.busy_label && d.busy_label.length) ? d.busy_label : d.busy;
 			typicalBoot = d.typical_boot_seconds || 0;
 			var dr = d.draining;
