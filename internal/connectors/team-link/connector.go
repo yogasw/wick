@@ -10,6 +10,9 @@ package teamlink
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/teamlink"
@@ -38,6 +41,10 @@ type Deps struct {
 	// sub-agent under one): such a session reaches its ticket only, so no
 	// op here may set a teammate to work for it. Optional.
 	InRoom func(sessionID string) bool
+	// Lookup lists the sessions bound to a Slack thread (channel,
+	// threadTS) as callerAgent asking from callerSession sees them.
+	// Optional: session_lookup is unavailable without it.
+	Lookup func(ctx context.Context, callerAgent, callerSession, channel, threadTS string) (any, error)
 }
 
 // errInTicketRoom mirrors team.ErrInTicketRoom (this package does not
@@ -88,6 +95,12 @@ type getTaskInput struct {
 
 type listTasksInput struct{}
 
+type sessionLookupInput struct {
+	Permalink string `wick:"desc=A Slack thread link, e.g. https://<workspace>.slack.com/archives/C0123/p1792044355318329 (a ?thread_ts= in it wins). Or pass channel and thread_ts instead."`
+	Channel   string `wick:"desc=The Slack channel id (C…), with thread_ts, when there is no permalink."`
+	ThreadTS  string `wick:"desc=The thread's ts, e.g. 1792044355.318329, with channel."`
+}
+
 // Operations lists the connector's ops.
 func Operations(deps Deps) []connector.Category {
 	return []connector.Category{
@@ -122,6 +135,12 @@ func Operations(deps Deps) []connector.Category {
 				"Cancel a task you sent that is still working or waiting for your answer: the teammate's turn for it is stopped (or the task leaves the line if it has not started; any other turn of the teammate keeps running) and the task ends canceled. "+
 					"Use it when the user calls the request off or it is no longer needed.",
 				getTaskInput{}, deps.cancelTask, wickdocs.Docs{}),
+			connector.Op("session_lookup", "Look Up a Thread's Sessions",
+				"The wick sessions that answer in a Slack thread (permalink, or channel + thread_ts), newest first: "+
+					"session_id, agent (its Team agent's handle, \"\" for none), project_id, ticket_id, owner_user, last_active, "+
+					"can_send (whether you may message it: message to=@<agent> chat=<chat>), reason when you may not, and chat. "+
+					"Only sessions of agents of your owner (or shared with them) are listed; hidden counts the others.",
+				sessionLookupInput{}, deps.sessionLookup, wickdocs.Docs{}),
 		),
 	}
 }
@@ -208,4 +227,53 @@ func (d Deps) cancelTask(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return hub.CancelTask(c.Context(), agentID, strings.TrimSpace(c.Input("task_id")))
+}
+
+func (d Deps) sessionLookup(c *connector.Ctx) (any, error) {
+	_, agentID, err := d.caller(c)
+	if err != nil {
+		return nil, err
+	}
+	if d.Lookup == nil {
+		return nil, errUnavailable
+	}
+	channel, ts, err := ParseThread(c.Input("permalink"), c.Input("channel"), c.Input("thread_ts"))
+	if err != nil {
+		return nil, err
+	}
+	return d.Lookup(c.Context(), agentID, c.SessionID(), channel, ts)
+}
+
+var (
+	slackPermalinkPath = regexp.MustCompile(`^/archives/([A-Z0-9]+)/p(\d{10})(\d{6})/?$`)
+	slackTS            = regexp.MustCompile(`^\d{10}\.\d{6}$`)
+)
+
+// ParseThread resolves session_lookup's input to a Slack channel and
+// thread ts: a permalink (https://<ws>.slack.com/archives/<C>/p<16
+// digits>, its p split 10.6; a thread_ts query wins, it names the thread
+// a reply link sits in), else channel + threadTS.
+func ParseThread(permalink, channel, threadTS string) (string, string, error) {
+	permalink, channel, threadTS = strings.TrimSpace(permalink), strings.TrimSpace(channel), strings.TrimSpace(threadTS)
+	if permalink != "" {
+		u, err := url.Parse(permalink)
+		if err != nil || !strings.HasSuffix(strings.ToLower(u.Hostname()), "slack.com") {
+			return "", "", fmt.Errorf("permalink %q is not a Slack link", permalink)
+		}
+		m := slackPermalinkPath.FindStringSubmatch(u.Path)
+		if m == nil {
+			return "", "", fmt.Errorf("permalink %q is not a Slack message link (…/archives/<channel>/p<ts>)", permalink)
+		}
+		channel, threadTS = m[1], m[2]+"."+m[3]
+		if q := strings.TrimSpace(u.Query().Get("thread_ts")); q != "" {
+			threadTS = q
+		}
+	}
+	if channel == "" || threadTS == "" {
+		return "", "", errors.New("pass permalink, or channel and thread_ts")
+	}
+	if !slackTS.MatchString(threadTS) {
+		return "", "", fmt.Errorf("thread_ts %q is not a Slack ts (e.g. 1792044355.318329)", threadTS)
+	}
+	return channel, threadTS, nil
 }
