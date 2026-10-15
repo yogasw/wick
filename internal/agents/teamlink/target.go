@@ -73,3 +73,47 @@ func (h *Hub) frameSelf(ctx context.Context, from Peer, callerSession, text stri
 	}
 	return fmt.Sprintf("Message from your own other chat (%s), as %s:\n%s", origin, from.Label(), text)
 }
+
+// ReadableChat is whether callerAgentID, asking from callerSession (its
+// wick user sessionUser), may read chat — a session of the agent to
+// names — with the team read_chat op: exactly when a message to=to
+// chat=chat from there would be let in (Send's resolution and checks,
+// then chatAllowed). It reads nothing and pairs nothing; it returns the
+// target as resolved.
+func (h *Hub) ReadableChat(ctx context.Context, callerAgentID, callerSession, sessionUser, to, chat string) (Peer, error) {
+	if callerAgentID == "" {
+		return Peer{}, ErrNotTeamSession
+	}
+	caller, err := h.Dir.Get(ctx, callerAgentID)
+	if err != nil {
+		return Peer{}, ErrNotTeamSession
+	}
+	if chat == "" {
+		return Peer{}, errors.New("pass chat: the session_id to read")
+	}
+	_, target, err := h.Resolve(ctx, caller.OwnerID, to)
+	if err != nil {
+		return Peer{}, err
+	}
+	self := target.ID == caller.ID
+	if self && (target.Remote || chat == callerSession) {
+		return Peer{}, ErrSelf
+	}
+	if target.OwnerID != caller.OwnerID && target.ChatUser != caller.OwnerID {
+		return Peer{}, ErrSharedHumanOnly
+	}
+	if !self && !target.AcceptsFrom(caller) {
+		return Peer{}, ErrMentionsOff
+	}
+	rp, ok := target, true
+	if !self {
+		rp, ok = h.resumeScope(ctx, sessionUser, caller.OwnerID)(target)
+	}
+	if !ok {
+		return Peer{}, ErrUnknownChat
+	}
+	if _, err := h.chatAllowed(ctx, rp, callerSession, chat, self); err != nil {
+		return Peer{}, err
+	}
+	return rp, nil
+}

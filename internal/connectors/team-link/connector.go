@@ -50,6 +50,10 @@ type Deps struct {
 	// or off; an error for a session that does not exist. Optional:
 	// takeover is unavailable without it.
 	SetHold func(ctx context.Context, sessionID string, on bool) error
+	// ReadChat reads one page of a session's conversation in the tickets
+	// ticket_conversation_read shape; read_chat checks access first.
+	// Optional: read_chat is unavailable without it.
+	ReadChat func(sessionID string, offset, limit int, order, detail string) (map[string]any, error)
 }
 
 // errInTicketRoom mirrors team.ErrInTicketRoom (this package does not
@@ -115,6 +119,19 @@ type sessionLookupInput struct {
 	ThreadTS  string `wick:"desc=The thread's ts, e.g. 1792044355.318329, with channel."`
 }
 
+type readChatInput struct {
+	To     string `wick:"required;desc=Handle of the agent whose session it is, e.g. @franky."`
+	Chat   string `wick:"required;desc=The session to read (session_id), e.g. from a ticket (owner_session) or session_lookup."`
+	Detail string `wick:"dropdown=final|trace;desc=final (default) = the messages only. trace = each assistant turn's tool calls and thinking as well — much larger, use it when the question is HOW something was done."`
+	Order  string `wick:"dropdown=newest|oldest;desc=Which end to page from. newest (default) starts at the last message, oldest starts at the first. Either way a page reads oldest-first."`
+	Limit  int    `wick:"desc=Messages per page. Default 20, maximum 50."`
+	Offset int    `wick:"desc=Messages to skip from the chosen end — 0 is the first page. Use next_offset from the previous response rather than computing it."`
+}
+
+// readChatMaxLimit caps a read_chat page below ticket_conversation_read's
+// 100: it reads into a turn that is about to answer, not a catch-up.
+const readChatMaxLimit = 50
+
 // Operations lists the connector's ops.
 func Operations(deps Deps) []connector.Category {
 	return []connector.Category{
@@ -155,6 +172,13 @@ func Operations(deps Deps) []connector.Category {
 					"can_send (whether you may message it: message to=@<agent> chat=<chat>), reason when you may not, and chat. "+
 					"Only sessions of agents of your owner (or shared with them) are listed; hidden counts the others.",
 				sessionLookupInput{}, deps.sessionLookup, wickdocs.Docs{}),
+			connector.Op("read_chat", "Read a Teammate's Session",
+				"Read, read-only, a session of a teammate you oversee: to=@<agent> chat=<session_id>. "+
+					"Use it before you answer a checkpoint or send a correction, to see what the agent actually did and said in that session (e.g. its Slack thread session). "+
+					"Allowed exactly when message to=@<agent> chat=<session_id> would be: the session exists and belongs to that agent, and is its user's (the owner's) session or in the same ticket as this conversation; for another chat of your own, only within one ticket. "+
+					"Same output and paging as ticket_conversation_read: {session_id, title, detail, order, total, offset, limit, returned, messages, has_more, next_offset}. "+
+					"limit default 20, max 50; order newest (default) or oldest; detail final (default) or trace. Nothing is sent and no chat is paired.",
+				readChatInput{}, deps.readChat, wickdocs.Docs{}),
 			connector.Op("takeover", "Take Over a Session",
 				"Put a session under manual control (on=true) or back to auto (on=false). While on, a Team message another agent sends to that session runs no turn: "+
 					"the sender's task ends rejected (\"session is under manual control (take over) — your message was recorded, not delivered\") and the handoff row records it. "+
@@ -263,6 +287,29 @@ func (d Deps) sessionLookup(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return d.Lookup(c.Context(), agentID, c.SessionID(), channel, ts)
+}
+
+func (d Deps) readChat(c *connector.Ctx) (any, error) {
+	hub, agentID, err := d.caller(c)
+	if err != nil {
+		return nil, err
+	}
+	if d.ReadChat == nil {
+		return nil, errUnavailable
+	}
+	user := ""
+	if d.SessionUser != nil {
+		user = d.SessionUser(c.SessionID())
+	}
+	chat := strings.TrimSpace(c.Input("chat"))
+	if _, err := hub.ReadableChat(c.Context(), agentID, c.SessionID(), user, c.Input("to"), chat); err != nil {
+		return nil, err
+	}
+	limit := c.InputInt("limit")
+	if limit > readChatMaxLimit {
+		limit = readChatMaxLimit
+	}
+	return d.ReadChat(chat, c.InputInt("offset"), limit, c.Input("order"), c.Input("detail"))
 }
 
 func (d Deps) takeover(c *connector.Ctx) (any, error) {
