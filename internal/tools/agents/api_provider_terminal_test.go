@@ -1,10 +1,13 @@
 package agents
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
@@ -60,6 +63,29 @@ func TestProviderTerminalUnknownSession(t *testing.T) {
 		h(tool.NewCtx(w, r, nil, tool.Tool{}, nil, nil))
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404", w.Code)
+		}
+	}
+}
+
+// The detail payload carries has_terminal so the SPA shows the Terminal
+// section from the registry instead of its own list of types.
+func TestProviderDetailHasTerminal(t *testing.T) {
+	cases := map[provider.Type]bool{
+		provider.TypeOMP: true, provider.TypeOpencode: true, provider.TypeClaude: true,
+		provider.TypeCodex: true, provider.TypeGemini: true, provider.TypeWick: false,
+	}
+	for typ, want := range cases {
+		resp := ProviderDetailResponse{HasTerminal: terminal.Supported(provider.Instance{Type: typ, Name: "x"})}
+		b, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := m["has_terminal"].(bool); got != want {
+			t.Errorf("%s has_terminal = %v, want %v", typ, m["has_terminal"], want)
 		}
 	}
 }

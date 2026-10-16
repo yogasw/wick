@@ -323,6 +323,9 @@ export interface ProviderDetailResponse {
      render only for an admin. Can: what the caller may do beyond viewing —
      everything for an admin, the ticked owner permissions for its owner. */
   IsAdmin: boolean;
+  /* HasTerminal: the backend registered a web terminal for this type
+     (terminal.Supported); the Terminal section shows from it, admin-only. */
+  HasTerminal: boolean;
   Can: ProviderCaps;
   /* OwnerPerms: the instance's effective owner permissions, sent to admins
      only (the Owner permissions card). Empty for everyone else. */
@@ -389,6 +392,13 @@ export interface ProviderConnection {
   usageFetchedAt: string;
   usageAgeS: number;
   usageNextS: number;
+  /* usageLastErr is the latest probe's failure while `windows` still
+     holds an OLDER reading — the card labels those numbers cached.
+     Empty when the latest probe succeeded. usageRateLimited marks it a
+     429; usageFails counts the consecutive failures behind it. */
+  usageLastErr?: string;
+  usageRateLimited?: boolean;
+  usageFails?: number;
   windows: { key: string; utilization: number; resetsAt: string }[];
   /* Saved rate-limit resets (shared model, see @wick-fe/common-ui);
      null when the type reports none or the read failed. */

@@ -30,6 +30,7 @@ function makeDetail(): ProviderDetailResponse {
     CanManage: true,
     SecretsHidden: false,
     IsAdmin: true,
+    HasTerminal: true,
     Can: {
       Configure: true, Models: true, Env: true, ExtraArgs: true, Binary: true, ExtraMCPServers: true, ExternalSkills: true,
       Sandbox: true, AIRouterRawConfig: true, BorrowLogin: true, Rename: true, Delete: true, AIRouter: true, StorageSync: true,
@@ -633,6 +634,49 @@ describe("ProviderDetail - Binary section", () => {
     expect(screen.getByTestId("managed-host").textContent).toBe("linux-x64 · glibc · AVX2");
     expect(sec.textContent).toContain(d.Path);
     expect(localStorage.getItem("wick.providers.section.detail.binary")).toBe("1");
+  });
+});
+
+describe("ProviderDetail - Terminal section", () => {
+  for (const t of ["claude", "codex", "gemini", "omp", "opencode"]) {
+    it(`${t}: an admin gets the Terminal section`, async () => {
+      const d = makeDetail();
+      d.Instance = { ...d.Instance, Type: t, Name: "x" };
+      vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+      render(ProviderDetail, { props: { ...defaultProps, type: t, name: "x" } });
+      expect(await screen.findByTestId("section-terminal")).toBeTruthy();
+    });
+  }
+
+  it("follows the backend flag, not a list of types", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "newcli", Name: "x" };
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "newcli", name: "x" } });
+    expect(await screen.findByTestId("section-terminal")).toBeTruthy();
+  });
+
+  it("claude: no managed pill on the Binary section", async () => {
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByTestId("section-terminal");
+    expect(screen.getByTestId("section-binary").textContent).not.toContain("managed by wick");
+  });
+
+  it("hides the Terminal section from a non-admin", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), IsAdmin: false, OwnerPerms: {} });
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Configuration");
+    expect(screen.queryByTestId("section-terminal")).toBeNull();
+  });
+
+  it("no Terminal section when the backend reports none", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "wick", Name: "wick" };
+    d.HasTerminal = false;
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "wick", name: "wick" } });
+    await screen.findByText("Configuration");
+    expect(screen.queryByTestId("section-terminal")).toBeNull();
   });
 });
 

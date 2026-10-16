@@ -9,6 +9,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -392,6 +393,10 @@ type ProviderDetailResponse struct {
 	// IsAdmin: admin-only parts (terminal, hooks, gate, opening a session)
 	// render only for an admin, whatever the owner permissions say.
 	IsAdmin bool `json:"is_admin"`
+	// HasTerminal: the instance's type has a web terminal registered
+	// (terminal.Supported). The SPA shows the Terminal section from this
+	// flag, for admins only, instead of keeping its own list of types.
+	HasTerminal bool `json:"has_terminal"`
 	// Can lists what the caller may do to this instance beyond viewing:
 	// everything for an admin, the ticked owner permissions for its owner.
 	Can ProviderCapsDTO `json:"can"`
@@ -834,6 +839,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		CanManage:     canManageProvider(c, t, name),
 		SecretsHidden: !isAdmin,
 		IsAdmin:       isAdmin,
+		HasTerminal:   terminal.Supported(st.Instance),
 		Can:           can,
 		OwnerPerms:    adminOwnerPerms(isAdmin, st.Instance.OwnerPerms),
 		Instance: ProviderInstanceDTO{

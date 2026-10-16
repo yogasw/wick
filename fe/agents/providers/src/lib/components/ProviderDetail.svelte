@@ -91,6 +91,9 @@
   let liveCount = $state<number | null>(null);
   // Types whose binary wick downloads and switches itself.
   let managedType = $derived(type === "omp" || type === "opencode");
+  // The backend says whether this type has a web terminal (its terminal
+  // registry), so a new type needs no change here.
+  let hasTerminal = $derived(data?.HasTerminal ?? false);
   let configSummary = $derived.by(() => {
     const parts: string[] = [];
     const v = (k: string) => fieldValues[k] ?? "";
@@ -893,7 +896,7 @@
       {/if}
     </CollapsibleSection>
 
-    {#if managedType}
+    {#if hasTerminal}
       <!-- A terminal is a shell on the host: admin-only, owner or not. -->
       {#if isAdmin}
         <TerminalPanel {base} {type} {name} />

@@ -215,6 +215,7 @@ interface WireProviderDetailResponse {
   can_manage?: boolean;
   secrets_hidden?: boolean;
   is_admin?: boolean;
+  has_terminal?: boolean;
   can?: WireProviderCaps;
   owner_perms?: Record<string, boolean> | null;
   instance: WireProviderInstance;
@@ -633,6 +634,7 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     CanManage: r.can_manage ?? false,
     SecretsHidden: r.secrets_hidden ?? false,
     IsAdmin: r.is_admin ?? false,
+    HasTerminal: r.has_terminal ?? false,
     Can: {
       Configure: r.can?.configure ?? false,
       Models: r.can?.models ?? false,
@@ -1598,6 +1600,9 @@ interface WireProviderConnection {
   usage_fetched_at?: string;
   usage_age_s?: number;
   usage_next_s?: number;
+  usage_last_err?: string;
+  usage_rate_limited?: boolean;
+  usage_fails?: number;
   windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
   saved_resets?: WireSavedResets | null;
 }
@@ -1621,6 +1626,9 @@ export function normalizeConnections(
     usageFetchedAt: c.usage_fetched_at ?? "",
     usageAgeS: c.usage_age_s ?? 0,
     usageNextS: c.usage_next_s ?? 0,
+    usageLastErr: c.usage_last_err ?? "",
+    usageRateLimited: c.usage_rate_limited ?? false,
+    usageFails: c.usage_fails ?? 0,
     windows: (c.windows ?? []).map((w) => ({
       key: w.key ?? "",
       utilization: w.utilization ?? 0,
