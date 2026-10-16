@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -498,6 +499,22 @@ type CreateOptions struct {
 // per creator. Wired at boot by the Team service.
 var ProjectAgent func(projectID string) string
 
+// agentSlackPrefix starts the id of every session a Team agent's own Slack
+// bot opens: "slackagent-<agent id>-<thread ts>".
+const agentSlackPrefix = "slackagent-"
+
+// AgentOfSessionID names the Team agent whose own Slack bot opened the
+// session id, "" for any other id. The id says it outright, so it holds even
+// where ProjectAgent cannot: an agent adopted onto an ordinary project
+// (no agent tag) still owns the threads its bot answers.
+func AgentOfSessionID(id string) string {
+	rest, ok := strings.CutPrefix(id, agentSlackPrefix)
+	if !ok || len(rest) < 37 || rest[36] != '-' {
+		return ""
+	}
+	return rest[:36]
+}
+
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
 // array), agent.md snapshot. No filesystem work touches the project
 // folder — project folders live under projects/<id>/ and are shared
@@ -538,6 +555,9 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		AgentID:         opt.AgentID,
 		AgentMain:       opt.AgentMain,
 	}
+	if meta.AgentID == "" && meta.ParentSessionID == "" {
+		meta.AgentID = AgentOfSessionID(opt.ID)
+	}
 	if meta.AgentID == "" && meta.ParentSessionID == "" && meta.ProjectID != "" && ProjectAgent != nil {
 		meta.AgentID = ProjectAgent(meta.ProjectID)
 	}
@@ -567,6 +587,10 @@ func Load(layout config.Layout, id string) (Session, error) {
 	var meta Meta
 	if err := storage.ReadJSON(layout.SessionMeta(id), &meta); err != nil {
 		return Session{}, err
+	}
+	// Threads an agent's bot opened before Create stamped them.
+	if meta.AgentID == "" && meta.ParentSessionID == "" && meta.GroupSessionID == "" {
+		meta.AgentID = AgentOfSessionID(id)
 	}
 	var agents []AgentEntry
 	if storage.PathExists(layout.SessionAgents(id)) {
