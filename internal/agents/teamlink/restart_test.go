@@ -37,8 +37,12 @@ func sendWorking(t *testing.T, dir string) (string, chan struct{}) {
 // "working" for TaskKeep; sending it again works.
 func TestRestartSettlesAWorkingTaskAsInterrupted(t *testing.T) {
 	dir := t.TempDir()
-	id, gate := sendWorking(t, dir)
-	defer close(gate)
+	// The gate is never opened: the first process is gone after the
+	// "restart", so its turn must never finish. Opening it at the end
+	// (it used to be a deferred close) let that Hub write its reply and
+	// fan-in files into dir while t.TempDir was removing it, which failed
+	// the test with "directory not empty".
+	id, _ := sendWorking(t, dir)
 
 	h2, _, note := newTestHub(func(Peer, string) string { return "scanned again" })
 	h2.orphanPoll = 5 * time.Millisecond
