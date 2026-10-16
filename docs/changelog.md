@@ -6,15 +6,119 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
--   **Connectors:** `Operation.VisibleWhen` hides an operation unless the instance's config matches a `field:a|b` predicate (the config `visible_when` grammar). Hidden ops are left out of every agent-facing listing and refused by `wick_execute` and workflow nodes, while the manager Test panel still runs them. The admin operations table shows them greyed with a "Hidden: requires …" chip and leaves them out of the count. Plugin manifests and installs reject a predicate naming an unknown or secret config key.
--   **Connectors:** Hide for me. A user can hide a connector instance for themselves from the manager connector list; it is a display preference, not access. `wick_list` and `wick_search` skip the caller's hidden instances (and their accounts), report them as `hidden_count` + `hidden_note`, and accept `include_hidden: true` to list them anyway. Hidden instances still run by id through `wick_get` / `wick_execute`, and agent checklists and team grants are unchanged.
--   **Connectors:** `FileOutput.ContentBase64` lets an op hand wick a binary file (images, PDF, video, audio, zip, Office documents). In-process ops can pass raw bytes in `FileOutput.Data`. wick writes the raw bytes to the session's `artifacts/` (mode 0600, every path step through `os.Root`), refusing scripts and executables, files over the size limit, HTML disguised as a media type, and an `artifacts/` that is a symlink. Admin settings `file_io.allowed_formats` (default: media, PDF, zip, Office and the text export formats) and `file_io.max_binary_mb` (default 50, at most 200) apply without a restart; scripts and executables cannot be allowed.
--   **Slack:** `read_file` writes binary files over 2 MB, text over 256 KB, or any file with the new `save_to_artifacts: true` to `artifacts/` and returns only the path, so a large video no longer travels through the MCP connection. Files over the admin limit (`file_io.max_binary_mb`) are refused from Slack's reported size before downloading; `max_bytes` can only lower that limit. Callers without an agent session (workflows, schedules, stdio MCP clients) can no longer read files over 2 MB (text 256 KB) — previously up to 8 MiB came back inline — and get an error that says so.
--   **MCP:** a `wick_execute` result over 6 MB (measured JSON-escaped) comes back as a tool error instead of a message that closes the client connection. In a batch the check is per call: an oversized call becomes an error entry, and when the calls fit one by one but not together the largest results are left out (`result_omitted`) while every call keeps its `ok`/`error`.
--   **Playwright Browser:** `get_markdown` is now offered only on `moli` instances and `pdf` only on Chromium-based engines, via `VisibleWhen`. The plugin version is bumped to 0.14.0.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v1.16.0](https://github.com/yogasw/wick/compare/v1.15.3...v1.16.0) — Team Collaboration & Platform
+
+_Released on 2026-10-16_
+
+### Added
+-   **Connectors:**
+    -   Introduced `Operation.VisibleWhen` to hide operations unless the instance's configuration matches a `field:a|b` predicate. Hidden operations are excluded from agent-facing listings, refused by `wick_execute` and workflow nodes, but still executable via the manager Test panel. The admin operations table displays them greyed out with a "Hidden: requires…" chip and omits them from the operation count. Plugin manifests and installs now reject predicates naming unknown or secret config keys.
+    -   Users can now hide a connector instance for themselves from the manager connector list, a display preference that does not affect access. `wick_list` and `wick_search` skip the caller's hidden instances (and their accounts), reporting them via `hidden_count` + `hidden_note`, and accept `include_hidden: true` to list them. Hidden instances remain executable by ID through `wick_get` / `wick_execute`, and agent checklists and team grants are unaffected.
+    -   `FileOutput.ContentBase64` allows operations to provide Wick with binary files (images, PDF, video, audio, zip, Office documents). In-process operations can pass raw bytes directly in `FileOutput.Data`. Wick writes these raw bytes to the session's `artifacts/` directory (mode 0600), prohibiting scripts, executables, files exceeding size limits, HTML disguised as media types, and symlinked `artifacts/` directories. Admin settings `file_io.allowed_formats` (default: media, PDF, zip, Office, and text export formats) and `file_io.max_binary_mb` (default 50 MB, maximum 200 MB) apply without a restart; scripts and executables cannot be permitted.
+    -   Added a `--run-op` command-line option to execute a single connector operation from source with admin-approved real configuration. This command now files the request and exits; the admin panel shows the SSO account, token, and instance for plugin test requests. Plugin test requests are bound to the token, machine, and IP, with a 7-day history.
+-   **Plugins:**
+    -   A new Host API has been introduced, featuring generic layers (Connectors, Invoke, Rest, Query), a service with scopes, permissions, and audit logging, and a client SDK. This Host API is integrated into all plugin types. An admin page, plugin card, and audit view are available for host access. Webhook delivery headers are now passed to tool plugins, which also report withheld secrets. Wick SSO JWTs are accepted on tool plugin webhook routes.
+    -   Tool plugins can now be loaded live, and their real-time status is reported.
+-   **Team Collaboration:**
+    -   Enhanced Team ticket pages with a session panel, new layout, scoped project options, and a multi-assignee filter. The `/team/tickets` route offers faster ticket boards and collapses 'Done' by default. Combined ticket boards across selected projects are available, along with a Tickets page entry, project picker, and settings tab, including a `ticket_projects` setting.
+    -   Introduced ticket rooms with per-owner agents and scoped ticket access, featuring a dedicated UI on the Team ticket page.
+    -   Added a "Take Over" functionality, allowing a session under manual control to redirect messages from other agents.
+    -   Implemented `read_chat` to allow reading a teammate's messageable session, and `session_lookup` to identify which sessions respond in a Slack thread. `message chat=` now targets an agent's thread sessions and its own chats within a single ticket.
+    -   Improved delegation blocks in the Captain turn with progress rows for each working teammate, nested traces, and no-answer fallbacks. The Tasks tab now features denser row actions and grouped records. A per-task message thread with `TaskThread` view is available, showing the viewer's name, inline code, and hiding duplicate briefs, along with live dots and time on the progress line. Team tasks can be retried if failed and reassigned if declined, with live progress lines. Replies can be made in a team task thread directly from the delegation block.
+    -   Team sessions now remain active while teammates reply, and fan-in team replies are supported, with one wake per batch.
+    -   New Team leads are run as their owner, with warnings issued if no connectors are present. Captain headers now display "Team lead," and roster statuses are in English.
+    -   Introduced a "Hide in-between messages" switch to keep the lead's intermediate text out of Slack and Telegram, though it remains in the trace of a delegating turn.
+    -   Image avatars are now supported with upload, crop, and safe serving options, including 13 image poses with motion, a Poses grid, and crop shapes. Classic/image fail poses are displayed on tool errors with a crop checkerboard.
+    -   The teammate responsible for each point of a combined answer is now named. Structured question options and inline code are supported in questions.
+    -   A person's `@mention` is now treated as their own team task. Team task changes are pushed to the chat stream, and users can answer or cancel them directly from the chat. Team tasks are persisted to disk and follow the A2A task lifecycle.
+    -   Side chats active today keep the roster avatar awake, and running side chats are displayed on the roster.
+    -   Team chats are now shared, with a provider switch guard and saved resets. Users can hide empty saved resets and scope Team chats with "Yours/All" pills.
+    -   The Team roster now shows per-viewer team task state, presence, remote kind, and sharing.
+-   **Agents & Providers:**
+    -   Workflow agent nodes can now fail over to the next provider. Agents can return a failed-over session to its home provider, fail a limited turn over to the next provider and continue, and manage failover home state, target picking, and continue messages.
+    -   Turn errors are now categorized as limit, authentication, or unavailable. Provider failover chain configuration can be set per provider instance.
+    -   Provider usage readings are persisted, and account health is tracked. Provider UI features include a failover card, health badges, and chat cards.
+    -   Usage limits are read from the account file when a panel opens. Live Claude usage is reported from `rate_limit_event`, with cached labels on failed probes. A context panel with real turns, all points, and a full usage view is available, displaying real turn numbers and full series.
+    -   Wick sessions are now recognized from the MCP token on the Running agents table.
+    -   A web terminal for Claude, Codex, and Gemini is available via a provider registry.
+-   **UI/UX Improvements:**
+    -   Named config cards can now start in a collapsed state (`config_groups_collapsed`).
+    -   Composer usage rings for single-instance provider types are introduced.
+    -   Rail tabs now display labels by default, with an option for users to turn them off. Teammate avatars animate while working or waiting.
+    -   Delegation blocks are shown in the live Captain turn.
+    -   The task tray and folded delegation rows with assistant meta are redesigned for grouped tasks. A shared `AnswerBox` and needs-input section are provided for grouped designs, along with shared team primitives (Dots, `SmBtn`, icons) for `agents-ui`.
+    -   Users can now reply to a specific message within a conversation.
+    -   Conversations support jumping to a quoted turn via around/after paging.
+-   **Integrations:**
+    -   **Slack:** `read_file` now writes binary files over 2 MB, text over 256 KB, or any file with `save_to_artifacts: true` to `artifacts/`, returning only the path to avoid large data transfer via MCP. Files exceeding the admin limit (`file_io.max_binary_mb`) are rejected based on Slack's reported size before download; `max_bytes` can only lower this limit. Callers without an agent session (workflows, schedules, stdio MCP clients) can no longer read files over 2 MB (text 256 KB) – previously up to 8 MiB was returned inline – and will receive an appropriate error. Slack instances can now be switched off, their stored secrets cleared, and their bot moved to a Team agent. Support for rotating app-level tokens (`xoxe.xapp-`) has been added.
+    -   **Bitbucket:** Added merge rules for `merge_pull_request`, reviewers on `create_pull_request`, and an `add_pull_request_reviewers` operation.
+    -   **GitHub:** Added capabilities to read rulesets and environments, and validate repository setup.
+-   **MCP:** A `wick_execute` result exceeding 6 MB (JSON-escaped) now returns as a tool error instead of causing a client connection closure. In a batch, the check is per call: an oversized call becomes an error entry, and if calls fit individually but not collectively, the largest results are omitted (`result_omitted`) while each call retains its `ok`/`error` status.
+-   **Playwright Browser:** `get_markdown` is now exclusively offered on `moli` instances, and `pdf` only on Chromium-based engines, controlled via `VisibleWhen`. The plugin version has been updated to 0.14.1.
+
+### Fixed
+-   **Agents:**
+    -   Claude conversations now correctly resume across instances sharing a configuration directory.
+    -   Addressed issues with failover health aging, held messages, and buffer lifetime, including failover follow-ups and lost messages during the spawn window.
+    -   Running turns are now consistently kept alive across a reload.
+    -   Task badges are now displayed exclusively for Team tasks, markers are more accurate, and dozing blobs exhibit winking behavior.
+    -   The web and CLI caller are now correctly carried into spawns.
+    -   Resume IDs are kept per instance, preventing a switch from resuming another instance's transcript.
+    -   Messages sent mid-turn are kept as unanswered until their own turn ends.
+-   **Team Collaboration:**
+    -   Team agent's Slack threads are correctly identified as that agent's chats.
+    -   The workflow sink is now wired into Team agent Slack bots, and Team agents' Slack bots are listed in the palette and channel picker.
+    -   For a ticket, only its owner's session is now a Slack thread target.
+    -   Attaching a session that is already associated with another ticket is now explicitly refused, preventing silent moves. A message sent to a non-existent session now fails rather than opening an empty one.
+    -   Unsaved access edits are now preserved, and only a single error toast is displayed.
+    -   The lead's entire turn text is re-evaluated in channels, and the channel hold for the lead's intermediate text is completed. Rules for in-between text in the trace were tightened.
+    -   Focus and progress are maintained on the Delegated row button, and Delegated progress rows now correctly open their associated task.
+    -   Roster opening is serialized with task-opened main chats.
+    -   A shared agent's chat for a task is now opened for someone who has not previously opened it.
+    -   The team results prompt is hidden under its Delegated block.
+    -   End times are consistently displayed on the Tasks panel.
+    -   Ticket backing sessions are now properly guarded, and the Stop function operates as expected. Ticket sessions shared across owners are locked down.
+    -   Cut-short room turns are ended, and room status lines are tidied. Ticket rooms are confined within their ticket, room runs are stopped through the caller's own members, combined board cards are keyed by project, room escape paths are closed, and ticket rooms are scoped to their project and ticket.
+    -   Idle agents now doze in color rather than appearing disabled.
+    -   Inline code chips in task threads and rotated "More" rail labels in the Team UI have been improved.
+    -   An agent's new task is held in the live turn until its result explicitly names it.
+    -   Only a person's message now keeps a canceled task's turn alive, and a person's message is preserved even if its task is canceled.
+    -   Remote A2A team tasks now conclude in the state reported by the remote.
+-   **Workflow:**
+    -   The log, run-history, and session growth are now bounded, and `session_init` wiring has been hardened.
+    -   Auto-layout now re-wraps sticky notes, and new nodes are assigned a real position.
+-   **Plugins:**
+    -   `run-op` now reads up to 64 MB and reports when a reply exceeds this size.
+    -   Approve links utilize `AppURL()` to ensure `APP_URL` environment overrides are respected.
+    -   Connector plugins are now provided with the same context as built-in plugins.
+    -   The public scheme is forwarded when a proxy terminates TLS, and the public origin is forwarded to tool and service plugins.
+-   **Slack:**
+    -   Agent view manifests now subscribe to `app_home_opened`.
+    -   Only prefixed words are treated as meta-commands; `/help` was added, and links are constructed from the `app_url` setting.
+    -   Source tags are rewritten in background briefs and direct messages.
+    -   Remote edits to older messages are now correctly incorporated.
+-   **Usage:**
+    -   The chart modal now appears above the page and ceases loading on error.
+    -   Context responses are trimmed, and series data is tidied.
+    -   All models' tokens are tracked within a Claude turn, and a Claude turn's model is selected by its running total.
+    -   An error turn's own spend is recorded in the ledger, and a Claude turn's own usage is recorded, not the process running total.
+-   **Admin:** The dev-mode requests table now includes a state filter, row menu, and literal time text.
+-   **PostgreSQL:** Statements whose cached plan became stale are now consistently retried.
+-   **SCM (Source Control Management):**
+    -   An open Source stream is now carried to the new project during a move operation.
+    -   The Source selection is kept scoped to the session's own project.
+    -   Symlinked repositories are listed as folders, allowing Files to open them, and are displayed in Source and Files when located in another project.
+-   **Tags:** Semicolons are excluded from Slack and Telegram enabled descriptions, and from three Wick tag descriptions.
+-   **Upgrade:** A swap now waits for its successor instead of terminating it after three minutes.
+-   **Connectors:** Health-check configuration is now decrypted using the caller's key.
+-   **Avatars:** Blob-only poses are correctly mapped for classic and image styles.
+
+---
+
 
 ## [v1.15.3](https://github.com/yogasw/wick/compare/v1.15.2...v1.15.3) — Watch Schedules
 
