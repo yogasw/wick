@@ -604,6 +604,9 @@ type batchResult struct {
 	Error      string          `json:"error,omitempty"`
 	TimedOut   bool            `json:"timed_out,omitempty"`
 	DurationMS int64           `json:"duration_ms"`
+	// ResultOmitted is set when Result was dropped so the whole batch fits
+	// in one message; OK still says how the call itself went.
+	ResultOmitted string `json:"result_omitted,omitempty"`
 }
 
 func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
@@ -626,8 +629,19 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, execErr.Error(), toolID)
 		return
 	}
-	rsp.WriteResult(w, req.ID, ToolCallResult{
-		Content: []ToolContent{{Type: "text", Text: resJSON}},
+	writeExecuteResult(w, req.ID, rsp, resJSON, toolID)
+}
+
+// writeExecuteResult sends a wick_execute result, or a tool error when it
+// is over MaxToolResultBytes: an oversized message would close the
+// client's connection rather than arrive.
+func writeExecuteResult(w http.ResponseWriter, id json.RawMessage, rsp Responder, text, toolID string) {
+	if msg := OversizedResult(text); msg != "" {
+		rsp.ToolError(w, id, msg, toolID)
+		return
+	}
+	rsp.WriteResult(w, id, ToolCallResult{
+		Content: []ToolContent{{Type: "text", Text: text}},
 		IsError: false,
 	})
 }
@@ -866,6 +880,7 @@ func wickExecuteBatch(w http.ResponseWriter, r *http.Request, req RPCRequest, rs
 			errCount++
 		}
 	}
+	fitBatchResults(results, MaxToolResultBytes)
 	payload := map[string]any{
 		"results":         results,
 		"ok_count":        okCount,
@@ -878,11 +893,33 @@ func wickExecuteBatch(w http.ResponseWriter, r *http.Request, req RPCRequest, rs
 		return
 	}
 	// The batch as a whole is NOT an error — partial failures are reported
-	// inside the array. Only a malformed request is isError (handled above).
-	rsp.WriteResult(w, req.ID, ToolCallResult{
-		Content: []ToolContent{{Type: "text", Text: string(out)}},
-		IsError: false,
-	})
+	// inside the array. Only a malformed request is isError (handled above)
+	// and a batch whose combined result is too big to send.
+	writeExecuteResult(w, req.ID, rsp, string(out), "")
+}
+
+// fitBatchResults drops results, largest first, until the batch fits in
+// budget bytes. Each entry keeps ok, error and tool_id, so the caller still
+// sees which calls ran (a write that succeeded is not retried by mistake).
+func fitBatchResults(results []batchResult, budget int) {
+	total := 0
+	for _, br := range results {
+		total += escapedLen(string(br.Result)) + len(br.Error) + 160
+	}
+	for total > budget {
+		big := -1
+		for i, br := range results {
+			if len(br.Result) > 0 && (big < 0 || len(br.Result) > len(results[big].Result)) {
+				big = i
+			}
+		}
+		if big < 0 {
+			return
+		}
+		total -= escapedLen(string(results[big].Result))
+		results[big].Result = nil
+		results[big].ResultOmitted = "result left out: the whole batch was too large to send in one message. The call itself ran (see ok); run it alone, or ask for less, to see its result"
+	}
 }
 
 // runBatch executes calls with a fixed server-side concurrency
@@ -925,6 +962,11 @@ func runBatch(parent context.Context, calls []batchCall, timeout time.Duration, 
 				if callCtx.Err() == context.DeadlineExceeded {
 					br.TimedOut = true
 				}
+			} else if msg := OversizedResult(resJSON); msg != "" {
+				// The call ran to the end; only its result cannot be sent.
+				// Keeping it out of the array keeps the other calls' results.
+				br.OK = false
+				br.Error = "the call finished but " + msg
 			} else {
 				br.OK = true
 				br.Result = json.RawMessage(resJSON)

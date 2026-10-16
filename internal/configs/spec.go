@@ -17,9 +17,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 // Canonical key constants. Always reference a variable by these rather
@@ -42,7 +44,16 @@ const (
 	KeyPluginTestEnabled     = "plugin_test_enabled"
 	KeyConfigGroupsCollapsed = "config_groups_collapsed"
 	DefaultProfile           = "full"
+	KeyFileAllowedFormats    = "file_io.allowed_formats"
+	KeyFileMaxBinaryMB       = "file_io.max_binary_mb"
 )
+
+// appValidators check an app-level value before it is stored, so a value
+// the reader would ignore is refused on the admin page instead.
+var appValidators = map[string]func(string) error{
+	KeyFileAllowedFormats: connector.ValidateFileFormats,
+	KeyFileMaxBinaryMB:    connector.ValidateMaxBinaryMB,
+}
 
 // generators maps app-level keys to the function that produces a fresh
 // value on first-boot (when the row is missing) and on admin-triggered
@@ -167,6 +178,18 @@ func appDefaults() []entity.Config {
 			Description:   "Master key for the encrypted-fields layer (HKDF salt = user_uuid, AES-256-GCM). Regenerating invalidates every wick_enc_ token already issued. Set WICK_ENC_KEY in the environment to override the DB value (vault injection); set WICK_ENC_DISABLE=true to disable encryption entirely.",
 			IsSecret:      true,
 			CanRegenerate: true,
+		},
+		{
+			Key:         KeyFileAllowedFormats,
+			Type:        "text",
+			Value:       "",
+			Description: "File types (extensions, comma-separated) a connector may write into an agent session's artifacts/ folder, e.g. a Slack file downloaded with read_file. Empty means the built-in list, which follows wick upgrades: " + connector.DefaultFileFormats + ". The text formats csv, tsv, json, ndjson and txt stay allowed whatever this says. Scripts and executables (exe, sh, py, js, php and the like) are always refused. Warning: html, htm and svg are active content that can run script when the file is previewed in a browser, so add them only if you trust every file source. Applies without a restart.",
+		},
+		{
+			Key:         KeyFileMaxBinaryMB,
+			Type:        "number",
+			Value:       "",
+			Description: "Largest file, in MB, a connector may download and write into artifacts/ (Slack read_file refuses bigger files before downloading). Empty means " + strconv.Itoa(connector.DefaultMaxBinaryMB) + ", and " + strconv.Itoa(connector.MaxBinaryMBCeiling) + " is the most allowed. Applies without a restart.",
 		},
 		{
 			Key:         KeyProfile,

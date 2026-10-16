@@ -93,6 +93,13 @@ func (s *Service) RegisterValidator(owner string, fn ConfigValidator) {
 
 // validate runs owner's validator, if one is registered.
 func (s *Service) validate(owner, key, value string) error {
+	if owner == "" {
+		if fn := appValidators[key]; fn != nil {
+			if err := fn(value); err != nil {
+				return err
+			}
+		}
+	}
 	s.mu.RLock()
 	fn := s.validators[owner]
 	s.mu.RUnlock()

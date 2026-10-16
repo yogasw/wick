@@ -147,12 +147,35 @@ return connector.WithFile(map[string]any{"rows": len(rows)}, connector.FileOutpu
 // the caller gets: {"rows": 1234, "file": {"path": "artifacts/apps.csv", "format": "csv", "bytes": 52311}}
 ```
 
-- Text formats only: `csv`, `tsv`, `json`, `ndjson`, `txt`; 60 MB at most.
+- Text formats go in `Content`: `csv`, `tsv`, `json`, `ndjson`, `txt`; 60 MB at
+  most.
+- Binary files (a downloaded image, PDF, video, archive) go in `Data` (raw
+  bytes) or `ContentBase64` (standard or URL-safe base64). wick writes the raw
+  bytes; the agent only gets the path. `Data` is encoded as
+  `content_base64` automatically when it crosses the plugin transport. Built-in
+  binary formats: `png`, `jpg`, `jpeg`, `gif`, `webp`, `pdf`, `mp4`, `mov`,
+  `webm`, `mp3`, `ogg`, `wav`, `zip`, `docx`, `xlsx`, `pptx`; 50 MB at most by
+  default, checked before decoding. A text format may also come as bytes (a
+  CSV that is not UTF-8); those bytes are written unchanged. Set exactly one of
+  `Content`, `ContentBase64` and `Data`.
+- Plugins talk to wick over gRPC with a 64 MB message limit, so a plugin's
+  file tops out around 48 MB of bytes (base64 adds a third) whatever the admin
+  limit says.
+- The admin can change the allowed formats (`file_io.allowed_formats`) and
+  the binary limit (`file_io.max_binary_mb`, at most 200) on the app config
+  page, live. Scripts and executables (`exe`, `sh`, `py`, `js`, `php`, …) are
+  never written. For a format the admin added, content whose type wick can
+  recognise must match the extension, and a built-in binary format whose
+  content is HTML is refused. Masking does not reach inside bytes
+  (`ContentBase64`, `Data`), so use them for files you downloaded, not for
+  content you built from secrets.
 - The content passes the normal masking sweep before it is written, so values
   given to `c.Mask` are masked inside the file too. For large files, mask
   cells yourself with a fixed placeholder instead of `c.Mask` on every value.
-- It needs an agent session (the file goes into that session's folder); a call
-  without one fails with a clear error.
+- It needs an agent session (the file goes into that session's folder). A
+  call without one (a workflow, a schedule, a stdio MCP client such as Claude
+  Desktop) fails with an error that says so; return a smaller result inline
+  for those callers if they matter to your op.
 - Make the format and file name required inputs, so the agent has to decide
   where the output goes.
 

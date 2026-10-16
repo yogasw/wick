@@ -313,6 +313,8 @@ func NewServer() *Server {
 	}
 
 	connectors.RegisterProfile(configsSvc.Profile())
+	// file_io.* admin settings, read per write so edits apply live.
+	connectors.SetFileSettingLoader(configsSvc.Get)
 
 	pluginStore := connplugin.NewStateStore(db)
 	var pluginMgr *connplugin.Manager

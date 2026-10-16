@@ -14,6 +14,7 @@ package slack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -264,7 +265,9 @@ type GetFileInfoInput struct {
 
 type ReadFileInput struct {
 	File     string `wick:"required;desc=File ID (F...) to download and read. The bot must be a member of a channel the file was shared in."`
-	MaxBytes int    `wick:"desc=Refuse to download files larger than this many bytes (guards context blow-up). Default: 8388608 (8 MiB)."`
+	MaxBytes int    `wick:"desc=Refuse to download files larger than this many bytes. It can only lower wick's own limit (admin setting file_io.max_binary_mb, default 50 MB), which is also the default."`
+	// SaveToArtifacts forces the artifacts/ path even for a small file.
+	SaveToArtifacts bool `wick:"desc=Write the file to the agent session's artifacts/ folder and return only its path, even when it is small enough to return inline. Files over 2 MB (binary) or 256 KB (text) always go to artifacts/."`
 }
 
 type GetReactionsInput struct {
@@ -667,7 +670,7 @@ func Operations() []connector.Category {
 			connector.Op(
 				"read_file",
 				"Read File",
-				"Download a file's contents with the bot token and return them inline. Text files come back as a UTF-8 string; binary files (images, PDFs) come back base64-encoded with their mimetype. This is what makes shared screenshots and attachments readable.",
+				"Download a file's contents with the bot token. Small files come back inline: text as a UTF-8 string, binary (images, PDFs) base64-encoded with their mimetype. This is what makes shared screenshots and attachments readable. Binary files over 2 MB, text over 256 KB, or any file with save_to_artifacts=true are written to the agent session's artifacts/ folder instead and only the path comes back (file.path) — pass that path to upload ops that take one.",
 				ReadFileInput{},
 				readFile,
 				wickdocs.Docs{
@@ -678,12 +681,15 @@ func Operations() []connector.Category {
 						"size":           "Byte length of the downloaded content.",
 						"is_text":        "True when content was returned as a UTF-8 string; false when base64.",
 						"content":        "UTF-8 file text — present only when is_text is true.",
-						"content_base64": "Base64-encoded bytes — present only when is_text is false (binary/image).",
+						"content_base64": "Base64-encoded bytes — present only when is_text is false (binary/image) and the file was returned inline.",
+						"file":           "Present instead of content/content_base64 when the file went to artifacts/: {path, format, bytes}, path relative to the session folder (e.g. artifacts/clip.mp4).",
 					},
 					Quirks: []string{
 						"Requires files:read scope AND the bot must be in a channel the file was shared to — otherwise Slack returns HTML login page bytes, not the file.",
 						"Downloads via url_private_download with Authorization: Bearer <bot token>. files.info alone is not enough; the URL is auth-gated.",
-						"Refuses files larger than max_bytes (default 8 MiB) to protect the agent's context window.",
+						"Refuses files over wick's admin limit (setting file_io.max_binary_mb, default 50 MB) or a lower max_bytes, from Slack's reported size before downloading. A larger max_bytes does not raise the admin limit.",
+						"Inline up to 2 MB binary / 256 KB text; anything larger goes to artifacts/ so a big video never travels through the MCP connection. artifacts/ needs an agent session.",
+						"Binary files go to artifacts/ only for the types the admin allows (setting file_io.allowed_formats, by default png, jpg, jpeg, gif, webp, pdf, mp4, mov, webm, mp3, ogg, wav, zip, docx, xlsx, pptx). Scripts and executables are always refused. Big text files keep a csv/tsv/json/ndjson/txt extension and are saved as .txt otherwise.",
 						"Text detection is by mimetype (text/*, application/json, application/xml, and a few known text subtypes). Everything else returns base64.",
 					},
 					PairWith:    []string{"connector:slack.get_file_info", "connector:slack.list_files"},
@@ -1438,7 +1444,10 @@ func readFile(c *connector.Ctx) (any, error) {
 	if file == "" {
 		return nil, fmt.Errorf("file is required")
 	}
-	maxBytes := clampInt(c.InputInt("max_bytes"), 1, 64<<20, 8<<20)
+	// max_bytes can only lower wick's own limit (the admin setting): a
+	// file wick would refuse to write is never downloaded.
+	adminLimit := connector.MaxBinaryBytes()
+	maxBytes := clampInt(c.InputInt("max_bytes"), 1, adminLimit, adminLimit)
 
 	// Resolve the auth-gated download URL + mimetype/size from files.info.
 	raw, err := slackGet(c, "files.info", map[string]string{"file": file})
@@ -1456,12 +1465,31 @@ func readFile(c *connector.Ctx) (any, error) {
 	}
 	mimetype := strAt(fm, "mimetype")
 	name := strAt(fm, "name")
+	// Refuse from the reported size before downloading anything.
+	size, sized := fm["size"].(float64)
+	if sized && int64(size) > int64(maxBytes) {
+		return nil, readFileLimitError(int64(size), maxBytes, adminLimit)
+	}
 
+	// Large downloads run a couple at a time: each holds the whole file in
+	// memory until wick has written it, and a batch could start several.
+	if !sized || int(size) > readFileInlineBinary {
+		select {
+		case readFileBigSlots <- struct{}{}:
+			defer func() { <-readFileBigSlots }()
+		case <-c.Context().Done():
+			return nil, c.Context().Err()
+		}
+	}
 	body, err := slackDownload(c, downloadURL, maxBytes)
 	if err != nil {
+		var over errDownloadTooLarge
+		if errors.As(err, &over) {
+			return nil, readFileLimitError(over.size, maxBytes, adminLimit)
+		}
 		return nil, err
 	}
-	return shapeReadFile(file, name, mimetype, body), nil
+	return readFileResult(file, name, mimetype, body, c.InputBool("save_to_artifacts"))
 }
 
 func createCanvas(c *connector.Ctx) (any, error) {

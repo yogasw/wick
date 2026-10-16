@@ -2396,7 +2396,17 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		res.Status = entity.ConnectorRunStatusError
 		res.ErrorMessage = maskOut(execErr.Error())
 	default:
-		bytes, mErr := json.Marshal(value)
+		// A binary file an in-process op returned goes to artifacts/ before
+		// the result is marshalled: its bytes are never copied into JSON nor
+		// run through masking. Text content keeps mask → extract below.
+		v, ferr := takeBinaryFile(value, sessionID)
+		if ferr != nil {
+			res.Status = entity.ConnectorRunStatusError
+			res.ErrorMessage = maskOut(ferr.Error())
+			execErr = ferr
+			break
+		}
+		bytes, mErr := json.Marshal(v)
 		if mErr != nil {
 			res.Status = entity.ConnectorRunStatusError
 			res.ErrorMessage = maskOut("marshal response: " + mErr.Error())

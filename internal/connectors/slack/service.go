@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -682,6 +683,113 @@ func shapeReadFile(fileID, name, mimetype string, body []byte) any {
 		out["content_base64"] = base64.StdEncoding.EncodeToString(body)
 	}
 	return out
+}
+
+// read_file returns small files inline (the screenshot flow reads them
+// straight from the result). Anything bigger goes to the agent session's
+// artifacts/ folder through connector.WithFile: the host decodes and writes
+// the bytes, and the agent only gets the path, so a large video never
+// travels through the MCP connection. Which formats and sizes the host
+// accepts is its admin setting; the connector only refuses what can never
+// be written.
+const (
+	readFileInlineText   = 256 << 10
+	readFileInlineBinary = 2 << 20
+)
+
+// readFileBigSlots bounds how many large read_file downloads run at once.
+var readFileBigSlots = make(chan struct{}, 2)
+
+// readFileLimitError names the limit that refused the file: the caller's
+// max_bytes, or wick's own (which max_bytes cannot raise).
+func readFileLimitError(size int64, maxBytes, adminLimit int) error {
+	if maxBytes >= adminLimit {
+		return fmt.Errorf("file is %.1f MB, over the admin limit %d MB for files wick downloads (setting file_io.max_binary_mb); it cannot be read through wick", float64(size)/(1<<20), adminLimit>>20)
+	}
+	return fmt.Errorf("file is %d bytes, over max_bytes (%d)", size, maxBytes)
+}
+
+// readFileResult picks between the inline shape and a file in artifacts/.
+func readFileResult(fileID, name, mimetype string, body []byte, toFile bool) (any, error) {
+	textLike := (isTextMimetype(mimetype) || strings.TrimSpace(mimetype) == "") && utf8.Valid(body)
+	limit := readFileInlineBinary
+	if textLike {
+		limit = readFileInlineText
+	}
+	if !toFile && len(body) <= limit {
+		return shapeReadFile(fileID, name, mimetype, body), nil
+	}
+	meta := map[string]any{
+		"file_id":  fileID,
+		"name":     name,
+		"mimetype": mimetype,
+		"size":     len(body),
+		"is_text":  textLike,
+	}
+	if textLike {
+		return connector.WithFile(meta, connector.FileOutput{Name: name, Format: textFileFormat(name), Content: string(body)}), nil
+	}
+	format := binaryFileFormat(name, mimetype)
+	if format == "" {
+		return nil, fmt.Errorf("file %q (%s) has no usable file type, or is a script or executable, so it cannot be saved to artifacts/; if it is small enough, read it inline without save_to_artifacts", name, mimetype)
+	}
+	// Raw bytes: wick writes them as they are when the connector runs in
+	// its process, and they travel as base64 only across a plugin boundary.
+	return connector.WithFile(meta, connector.FileOutput{Name: name, Format: format, Data: body}), nil
+}
+
+// textFileFormat keeps a text file's own extension when the host accepts
+// it and saves everything else (.md, .log, .html, .py, …) as inert .txt.
+func textFileFormat(name string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	if ok, bin := connector.FileFormat(ext); ok && !bin {
+		return ext
+	}
+	return "txt"
+}
+
+// binaryMimeFormats maps a Slack mimetype to a host-accepted binary format
+// for files whose name has no usable extension.
+var binaryMimeFormats = map[string]string{
+	"image/png":                    "png",
+	"image/jpeg":                   "jpg",
+	"image/gif":                    "gif",
+	"image/webp":                   "webp",
+	"application/pdf":              "pdf",
+	"video/mp4":                    "mp4",
+	"video/quicktime":              "mov",
+	"video/webm":                   "webm",
+	"audio/mpeg":                   "mp3",
+	"audio/ogg":                    "ogg",
+	"audio/wav":                    "wav",
+	"audio/x-wav":                  "wav",
+	"audio/wave":                   "wav",
+	"application/zip":              "zip",
+	"application/x-zip-compressed": "zip",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   "docx",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         "xlsx",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+}
+
+var extRe = regexp.MustCompile(`^[a-z0-9]{1,10}$`)
+
+// binaryFileFormat returns the format to save a binary file under: its own
+// extension, else one from its mimetype. "" for no usable type or a script
+// or executable, which the host never writes. Whether the format is on the
+// allowed list is the host's call (admin setting).
+func binaryFileFormat(name, mimetype string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	if !extRe.MatchString(ext) {
+		mt := strings.ToLower(strings.TrimSpace(mimetype))
+		if i := strings.IndexByte(mt, ';'); i >= 0 {
+			mt = strings.TrimSpace(mt[:i])
+		}
+		ext = binaryMimeFormats[mt]
+	}
+	if ext == "" || connector.FileFormatDenied(ext) {
+		return ""
+	}
+	return ext
 }
 
 // isTextMimetype reports whether a mimetype's bytes are safe to return as a
