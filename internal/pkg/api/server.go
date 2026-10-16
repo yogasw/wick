@@ -2142,6 +2142,13 @@ func NewServer() *Server {
 	bootClk.mark("agent slack/telegram instances")
 	wireChannel := func(ch agentchannels.Channel) {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
+			// Team agent bots join the registry after RegisterSlackIntegration
+			// ran (and hot-added bots after boot), so they never got the
+			// workflow sink: their events and button clicks fired no trigger.
+			if !slackCh.HasWorkflowEventSink() {
+				wfsetup.AttachSlackWorkflowSinkKeyed(slackCh, wfMgr.Router, channelReg.InstanceKeyOf(ch))
+			}
+
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
 			// from connector rows without a server restart.
 			slackCh.SetTokenRefreshFn(func(ctx context.Context) map[string]string {
