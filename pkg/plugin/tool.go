@@ -30,6 +30,24 @@ const (
 	HeaderUserRole  = "X-Wick-User-Role" // "admin" or "user"; absent = no session
 	HeaderUserTags  = "X-Wick-User-Tags" // comma-separated tag names
 	HeaderBase      = "X-Wick-Base"      // "/tools/{key}"
+	// HeaderTokenUser* name who a webhook request authenticated as, when
+	// wick could verify its credential; absent otherwise. The credential is
+	// a wick PAT (Authorization: Bearer, checked first) or wick's own SSO
+	// JWT in X-Wick-User (sent by a custom MCP connector with the sso
+	// scheme whose server is this wick); HeaderTokenUserSource says which.
+	// For the JWT wick mints for itself (tools/list at boot or reload) the
+	// ID is TokenUserSystemID, the role "system" and there is no email; the
+	// plugin's Host API calls for that request run without a user (plugin
+	// identity / wick_pat), never as "system:wick".
+	HeaderTokenUserID    = "X-Wick-Token-User-Id"
+	HeaderTokenUserEmail = "X-Wick-Token-User-Email"
+	HeaderTokenUserName  = "X-Wick-Token-User-Name"
+	HeaderTokenUserRole  = "X-Wick-Token-User-Role" // "admin", "user" or "system"
+	HeaderTokenUserTags  = "X-Wick-Token-User-Tags"
+	// HeaderTokenUserSource is set with every HeaderTokenUser* injection:
+	// TokenUserSourcePAT, TokenUserSourceSSO or TokenUserSourceSystem.
+	// Plugins use it when PAT and SSO callers get different rights.
+	HeaderTokenUserSource = "X-Wick-Token-User-Source"
 	// HeaderLayout on a plugin response asks the host to wrap the body (an
 	// HTML fragment) in wick's page layout; HeaderTitle names the page.
 	HeaderLayout = "X-Wick-Layout"
@@ -38,6 +56,15 @@ const (
 	LayoutPage = "page"
 	// HeaderPrefix is the namespace the host strips from client requests.
 	HeaderPrefix = "X-Wick-"
+)
+
+// HeaderTokenUserSource values (same strings as tool.TokenSource*).
+const (
+	TokenUserSourcePAT    = "pat"
+	TokenUserSourceSSO    = "sso"
+	TokenUserSourceSystem = "system"
+	// TokenUserSystemID is HeaderTokenUserID for wick's own SSO identity.
+	TokenUserSystemID = "system:wick"
 )
 
 // ToolMeta is the manifest form of tool.Tool. It is a plain copy (not
@@ -78,18 +105,40 @@ type ToolModule struct {
 
 // ToolGRPCPlugin is the go-plugin descriptor for the Tool control service.
 // Impl is set only on the plugin side.
+//
+// HostKey/HostKind (host side) name the plugin the Host API is served for
+// over the broker; HostKey "" serves none. Service plugins share this
+// descriptor, hence the kind.
 type ToolGRPCPlugin struct {
 	goplugin.NetRPCUnsupportedPlugin
-	Impl pb.ToolServer
+	Impl     pb.ToolServer
+	HostKey  string
+	HostKind string
 }
 
-func (p *ToolGRPCPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Server) error {
+func (p *ToolGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	pb.RegisterToolServer(s, p.Impl)
+	dialHostBroker(broker)
 	return nil
 }
 
-func (p *ToolGRPCPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+func (p *ToolGRPCPlugin) GRPCClient(_ context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+	kind := p.HostKind
+	if kind == "" {
+		kind = KindTool
+	}
+	serveHostBroker(broker, p.HostKey, kind)
 	return &toolClient{inner: pb.NewToolClient(c)}, nil
+}
+
+// ToolVersionedPluginsFor is ToolVersionedPlugins for one plugin of kind
+// (tool or service): the host also serves it the Host API over the broker.
+func ToolVersionedPluginsFor(key, kind string) map[int]goplugin.PluginSet {
+	out := map[int]goplugin.PluginSet{}
+	for _, v := range SupportedProtoVersions() {
+		out[v] = goplugin.PluginSet{ToolPluginName: &ToolGRPCPlugin{HostKey: key, HostKind: kind}}
+	}
+	return out
 }
 
 // ToolVersionedPlugins is the host-side plugin set for tool plugins.

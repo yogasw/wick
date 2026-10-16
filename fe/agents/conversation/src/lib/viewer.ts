@@ -50,3 +50,25 @@ export function isViewer(wickUserID: string | undefined): boolean {
   if (!me || !wickUserID) return false;
   return wickUserID === me;
 }
+
+let cachedName: string | null = null;
+
+/**
+ * viewerName returns the logged-in person's display name, or "" when the
+ * shell did not inline one. Both the Team and the conversation shells set
+ * `data-viewer-name` on #app (the account menu reads the same attribute).
+ */
+export function viewerName(): string {
+  if (cachedName === null) {
+    cachedName =
+      typeof document !== "undefined"
+        ? (document.getElementById("app")?.dataset.viewerName ?? "").trim()
+        : "";
+  }
+  return cachedName;
+}
+
+/** setViewerName overrides the cached name; null reads #app again. Only for tests. */
+export function setViewerName(name: string | null): void {
+  cachedName = name;
+}

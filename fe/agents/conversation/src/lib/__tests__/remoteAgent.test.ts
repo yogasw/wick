@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   authReq, egressWarning, formatBytes, hostOf, isRemoteAgent, limitsError, remoteCaption, remoteSettingsTab,
-  REMOTE_HIDDEN_TABS, remoteChatMode, remoteSubtitle, testSummary,
+  REMOTE_HIDDEN_TABS, remoteChatMode, remoteTarget, testSummary,
   isA2ARemote, isSlackRemote, remoteBadge, remoteSettingsTabs, REMOTE_SOURCES,
   clipLabel, remoteProgress, remoteWaitLabel, PROGRESS_MAX,
 } from "../remoteAgent.js";
@@ -73,12 +73,12 @@ describe("remote chat mode", () => {
     expect(m.railNote).toContain("No local tools");
   });
 
-  test("the header subtitle carries the card version and host", () => {
-    expect(remoteSubtitle(remote)).toBe("A2A remote · v1.4.0 · research.example.com");
-    expect(remoteSubtitle({})).toBe("A2A remote");
+  test("the header target carries the card version and host", () => {
+    expect(remoteTarget(remote)).toBe("v1.4.0 · research.example.com");
+    expect(remoteTarget({})).toBe("");
   });
 
-  test("a Slack remote agent is remote, with its own badge, caption, subtitle and Remote tab", () => {
+  test("a Slack remote agent is remote, with its own badge, caption, header target and Remote tab", () => {
     const slack = {
       kind: "slack-remote",
       slack_remote: { connector_id: "c1", identity: "bot", target: "channel", channel: "C1", target_name: "#ops", listen: "target" },
@@ -92,7 +92,7 @@ describe("remote chat mode", () => {
     const m = remoteChatMode(slack);
     expect(m.caption).toBe("via Slack · #ops · no local tools");
     expect(m.hideTabs).toEqual(REMOTE_HIDDEN_TABS);
-    expect(remoteSubtitle(slack)).toBe("Slack remote · #ops");
+    expect(remoteTarget(slack)).toBe("#ops");
     expect(remoteSettingsTabs(slack).map((t) => t.label)).toEqual(["Remote", "Persona", "Mention", "Avatar", "Advanced"]);
     expect(remoteSettingsTabs({ kind: "a2a-remote" })[0].label).toBe("Remote A2A");
   });
@@ -116,8 +116,10 @@ describe("remote wait label", () => {
     expect(remoteWaitLabel({ kind: "a2a-remote", handle: "res" } as never, 5)).toBe("Waiting for @res's reply · 5s");
   });
   test("header does not repeat a target named like the handle", () => {
-    expect(remoteSubtitle({ ...(dm as object), handle: "halodev" } as never)).toBe("Slack remote");
-    expect(remoteSubtitle({ ...(dm as object), handle: "other" } as never)).toBe("Slack remote · @halodev");
+    expect(remoteTarget({ ...(dm as object), handle: "halodev" } as never)).toBe("");
+    expect(remoteTarget({ ...(dm as object), handle: "other" } as never)).toBe("@halodev");
+    // A recipient's row carries no remote settings: nothing to name.
+    expect(remoteTarget({ kind: "slack-remote", handle: "x" } as never)).toBe("");
   });
 });
 

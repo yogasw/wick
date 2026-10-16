@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -91,9 +92,34 @@ func safeJoin(base, rel string) (string, error) {
 	}
 	sep := string(filepath.Separator)
 	if absFull != absBase && !strings.HasPrefix(absFull, absBase+sep) {
+		if linkedRepoContains(absBase, clean, absFull) {
+			return absFull, nil
+		}
 		return "", fmt.Errorf("path escapes session cwd")
 	}
 	return absFull, nil
+}
+
+// linkedRepoContains reports whether full, which resolved outside base, sits
+// inside a repo that a symlink under base points to (scm.LinkedRepoTarget:
+// a link to a repo root within wick's projects dir). It is the one
+// exception to the symlink rule: every other link out of base still fails.
+func linkedRepoContains(base, rel, full string) bool {
+	sep := string(filepath.Separator)
+	cur := base
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		cur = filepath.Join(cur, seg)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return false
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, ok := scm.LinkedRepoTarget(cur)
+		return ok && (full == target || strings.HasPrefix(full, target+sep))
+	}
+	return false
 }
 
 type contextFileEntry struct {
@@ -178,6 +204,16 @@ func readDirEntries(dir, rel string) ([]contextFileEntry, bool) {
 		if ierr != nil {
 			continue
 		}
+		isDir, size := de.IsDir(), info.Size()
+		// A link to a repo in another project opens like a folder; any other
+		// link stays a plain entry (safeJoin would refuse to open it anyway).
+		if de.Type()&os.ModeSymlink != 0 {
+			if target, ok := scm.LinkedRepoTarget(filepath.Join(dir, de.Name())); ok {
+				if ti, terr := os.Stat(target); terr == nil {
+					info, isDir, size = ti, true, 0
+				}
+			}
+		}
 		p := de.Name()
 		if rel != "" {
 			p = rel + "/" + p
@@ -185,8 +221,8 @@ func readDirEntries(dir, rel string) ([]contextFileEntry, bool) {
 		entries = append(entries, contextFileEntry{
 			Path:  p,
 			Name:  de.Name(),
-			Size:  info.Size(),
-			IsDir: de.IsDir(),
+			Size:  size,
+			IsDir: isDir,
 			MTime: info.ModTime().UnixMilli(),
 		})
 	}

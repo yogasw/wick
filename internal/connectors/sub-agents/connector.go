@@ -213,7 +213,8 @@ func Operations(deps Deps) []connector.Category {
 					"including ones that have finished, which stay reachable. "+
 					"Read `instances` FIRST. An agent that already did related work can be continued or messaged for a fraction of what a fresh "+
 					"spawn costs, and it remembers what it did; delegating instead gets you a stranger who has to rediscover all of it. "+
-					"Call this before delegate, continue, or message so you use a key or handle that exists.",
+					"Call this before delegate, continue, or message so you use a key or handle that exists. "+
+					"In a Team agent's session, `team_chats` (when present) names the chat paired with THIS conversation at each teammate — [{agent_id, handle, chat}].",
 				emptyInput{}, h.listAgents, wickdocs.Docs{}),
 
 			connector.Op("delegate", "Delegate a Task",

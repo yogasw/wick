@@ -8,6 +8,9 @@ const inertEffect: { pipe: (...a: unknown[]) => unknown } = { pipe: () => inertE
 
 vi.mock("@wick-fe/common-api", () => ({
   WickClientLayer: {},
+  APIError: class APIError extends Error {
+    constructor(public readonly status: number, public readonly body: string) { super(body); }
+  },
   apiGetE: vi.fn(() => inertEffect),
   apiPostE: vi.fn(() => inertEffect),
   apiDeleteE: vi.fn(() => inertEffect),
@@ -24,6 +27,8 @@ vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
   toastWarn: vi.fn(),
+  pushToast: vi.fn(() => 1),
+  dismissToast: vi.fn(),
 }));
 
 vi.mock("effect", () => ({
@@ -31,7 +36,11 @@ vi.mock("effect", () => ({
     runPromise: vi.fn().mockReturnValue(new Promise(() => {})),
     provide: vi.fn((eff: unknown) => eff),
     map: vi.fn(() => (eff: unknown) => eff),
+    // api/team.ts builds a tap at import time (cache invalidation).
+    tap: vi.fn(() => (eff: unknown) => eff),
+    either: vi.fn((eff: unknown) => ({ either: eff })),
   },
+  Either: { isRight: (r: { _tag?: string }) => r?._tag === "Right" },
 }));
 
 const { metaStore } = vi.hoisted(() => {
@@ -59,21 +68,42 @@ const { threadState } = vi.hoisted(() => ({
   threadState: {
     typing: { active: false } as { active: boolean },
     lifecycle: { state: "", pid: 0, substate: "", at: 0 },
+    turns: [] as unknown[],
+    appendUserTurn: vi.fn(),
+    renameTurn: vi.fn(),
+    setHistory: vi.fn(),
   },
 }));
 
-vi.mock("../../stores/thread.js", () => ({
+/* The turns and live turn a test can push after render (the thread
+   store's own updates); every other test only reads the initial value. */
+const { threadBus } = vi.hoisted(() => {
+  const bus = <T,>(initial: T) => {
+    const subs = new Set<(v: T) => void>();
+    let value = initial;
+    return {
+      subscribe(fn: (v: T) => void) { subs.add(fn); fn(value); return () => { subs.delete(fn); }; },
+      set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+      reset(v: T) { value = v; subs.clear(); },
+    };
+  };
+  return { threadBus: { live: bus<unknown>(null), turns: bus<unknown[] | null>(null) } };
+});
+
+vi.mock("../../stores/thread.js", async (importActual) => ({
+  isLocalTurnId: (await importActual<typeof import("../../stores/thread.js")>()).isLocalTurnId,
   createThreadStore: () => ({
-    turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
-    live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
+    turns: { subscribe: (fn: (v: unknown[]) => void) => threadBus.turns.subscribe((v) => fn(v ?? threadState.turns)) },
+    live: { subscribe: (fn: (v: null) => void) => threadBus.live.subscribe(fn as (v: unknown) => void) },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn(threadState.typing); return () => {}; } },
     turnStartedAt: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
     contextUsed: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn(threadState.lifecycle); return () => {}; } },
     meta: metaStore,
     cards: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; }, set: vi.fn(), update: vi.fn() },
-    setHistory: vi.fn(),
-    appendUserTurn: vi.fn(),
+    setHistory: threadState.setHistory,
+    appendUserTurn: threadState.appendUserTurn,
+    renameTurn: threadState.renameTurn,
     handleEvent: vi.fn(),
     handleKilledLocally: vi.fn(),
   }),
@@ -158,6 +188,8 @@ vi.mock("../../api/subagents.js", () => ({
   interruptAllSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   getMessages: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   bumpHops: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  getTeamTasksView: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  cancelWorkingTeamTasks: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   // Real behaviour — the rail badge and the poll both key off it.
   liveSubAgents: (subs: { status: string }[]) =>
     subs.filter((s) => s.status === "queued" || s.status === "running"),
@@ -210,15 +242,27 @@ vi.mock("svelte/store", async (importActual) => {
   return { ...actual };
 });
 
+// tasksByTurn and heldForLiveTurn run as written; the spies count how
+// often DetailView regroups the turns' tasks (not once per streamed token).
+vi.mock("../../delegations.js", async (importActual) => {
+  const actual = await importActual<typeof import("../../delegations.js")>();
+  return { ...actual, tasksByTurn: vi.fn(actual.tasksByTurn), heldForLiveTurn: vi.fn(actual.heldForLiveTurn) };
+});
+
 import DetailView from "../DetailView.svelte";
+import { tasksByTurn, heldForLiveTurn } from "../../delegations.js";
+import { tick } from "svelte";
 import { killProcess, getProcesses, dequeueProcess } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 import { getApprovals } from "../../api/approvals.js";
 import { fetchSessionContext } from "../../api/context.js";
 import { getConversation } from "../../api/sessions.js";
-import { getSubAgentPanel, interruptAllSubAgents } from "../../api/subagents.js";
+import { toastWarn, pushToast } from "@wick-fe/common-stores";
+import { APIError } from "@wick-fe/common-api";
+import { getSubAgentPanel, interruptAllSubAgents, getTeamTasksView, cancelWorkingTeamTasks } from "../../api/subagents.js";
 import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
 import { Effect } from "effect";
+import { sendMessage } from "../../api/messages.js";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -888,6 +932,47 @@ describe("DetailView — composer Stop", () => {
     expect(interruptAllSubAgents).toHaveBeenCalledWith("/api", "test-sess");
   });
 
+  test("waiting on teammates: tray line, and Stop offers to stop them", async () => {
+    threadState.lifecycle = { state: "working", pid: 7, substate: "", at: 0 };
+    const view = { pipe: () => view };
+    (getTeamTasksView as unknown as ReturnType<typeof vi.fn>).mockReturnValue(view);
+    const tasks = [
+      { task_id: "t1", to_handle: "halodev", state: "working" },
+      { task_id: "t2", to_handle: "halodev", state: "working" },
+      { task_id: "t3", to_handle: "qa", state: "working" },
+    ];
+    runPromise.mockImplementation((e: unknown) =>
+      e === view ? Promise.resolve({ tasks, showTeammates: true }) : new Promise(() => {}),
+    );
+    render(DetailView, { props: TEAM_PROPS as never });
+    await waitFor(() => expect(screen.getByTestId("teammates-tray").textContent).toContain("is waiting on 2 teammates"));
+    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(screen.getByText("Stop this agent and its teammates' tasks?")).toBeDefined();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));
+    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
+    expect(cancelWorkingTeamTasks).toHaveBeenCalledWith("/api", "test-sess");
+  });
+
+  test("header Kill leaves sub-agents to their own cascade (only teammates are offered)", async () => {
+    threadState.lifecycle = { state: "working", pid: 7, substate: "", at: 0 };
+    const panel = { pipe: () => panel };
+    (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mockReturnValue(panel);
+    runPromise.mockImplementation((e: unknown) =>
+      e === panel
+        ? Promise.resolve({ subAgents: [{ id: "d1", status: "running", lifecycle: "working" }], incident: null })
+        : new Promise(() => {}),
+    );
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() => expect(getSubAgentPanel).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent.click(screen.getByRole("button", { name: /kill session/i }));
+    expect(screen.getByText("Stop this agent?")).toBeDefined();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop agent$/i }));
+    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
+    expect(interruptAllSubAgents).not.toHaveBeenCalled();
+  });
+
   test("queued spawn: the button reads Cancel and dequeues", async () => {
     threadState.lifecycle = { state: "queued", pid: 0, substate: "", at: 0 };
     render(DetailView, { props: TEAM_PROPS as never });
@@ -895,5 +980,494 @@ describe("DetailView — composer Stop", () => {
     await fireEvent.click(btn);
     expect(dequeueProcess).toHaveBeenCalledWith("/api", "test-sess");
     expect(killProcess).not.toHaveBeenCalled();
+  });
+});
+
+describe("DetailView — reply chip", () => {
+  const SEND = { send: true };
+  const turn = {
+    turn_id: "111", role: "assistant", agent: "main", provider: "", text: "Deploy finished",
+    timestamp: 0, truncated: false, interrupted: false, has_trace: false, events: [], attachments: [],
+  };
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    threadState.turns = [turn];
+    threadState.appendUserTurn.mockReturnValue("local-user-1");
+    vi.mocked(sendMessage).mockReturnValue({ pipe: () => SEND } as never);
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: unknown) =>
+      eff === SEND ? Promise.resolve({ status: "queued", turn_id: "999" }) : new Promise(() => {})) as never);
+  });
+  afterEach(() => {
+    threadState.turns = [];
+    vi.mocked(sendMessage).mockReturnValue({ pipe: (x: unknown) => x } as never);
+    vi.mocked(Effect.runPromise).mockReset();
+    vi.mocked(Effect.runPromise).mockReturnValue(new Promise(() => {}));
+  });
+
+  async function pickReply() {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(await screen.findByTestId("reply-action"));
+    const chip = await screen.findByTestId("reply-chip");
+    expect(chip.textContent).toContain("Replying to main");
+    expect(chip.textContent).toContain("Deploy finished");
+  }
+
+  test("Reply sets the chip and × cancels it", async () => {
+    await pickReply();
+    await fireEvent.click(screen.getByTestId("reply-cancel"));
+    expect(screen.queryByTestId("reply-chip")).toBeNull();
+  });
+
+  test("Esc in the composer cancels the chip", async () => {
+    await pickReply();
+    await fireEvent.keyDown(document.querySelector("textarea")!, { key: "Escape" });
+    expect(screen.queryByTestId("reply-chip")).toBeNull();
+  });
+
+  test("a sent message carries reply_to, takes the server id, and clears the chip", async () => {
+    await pickReply();
+    const ta = document.querySelector("textarea")!;
+    await fireEvent.input(ta, { target: { value: "roll it back" } });
+    await fireEvent.keyDown(ta, { key: "Enter" });
+    expect(vi.mocked(sendMessage)).toHaveBeenCalledWith("/api", "test-sess", expect.objectContaining({ text: "roll it back", reply_to: "111" }));
+    expect(threadState.appendUserTurn).toHaveBeenCalledWith("roll it back", [], expect.objectContaining({ turn_id: "111" }));
+    await waitFor(() => expect(screen.queryByTestId("reply-chip")).toBeNull());
+    expect(threadState.renameTurn).toHaveBeenCalledWith("local-user-1", "999");
+  });
+});
+
+/* P40: the strip prints the labels unless the profile turned them off. The
+   choice arrives inlined on #app, like the rest of the rail layout. */
+describe("DetailView — rail label style (P40)", () => {
+  const app = () => {
+    let el = document.getElementById("app");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    return el;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    app();
+  });
+
+  afterEach(() => {
+    delete app().dataset.railPrefs;
+  });
+
+  const label = (container: HTMLElement) =>
+    container.querySelector('[data-testid="rail-tab-files"] [class*="writing-mode"]');
+
+  test("labels off: icons only, the name in an accessible tooltip", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
+    expect(btn.getAttribute("aria-label")).toBe("Files");
+    // No native title on top of the custom tooltip, or hover shows two.
+    expect(btn.hasAttribute("title")).toBe(false);
+    const tip = container.querySelector('[data-testid="rail-tip-files"]')!;
+    expect(tip.textContent).toBe("Files");
+    expect(tip.getAttribute("aria-hidden")).toBe("true");
+    // Shown on keyboard focus too, not only on hover.
+    expect(tip.className).toContain("group-focus-visible:opacity-100");
+    expect(tip.className).toContain("group-hover:opacity-100");
+    // Popover colours from the theme: light by default, navy only in dark.
+    expect(tip.className).toContain("bg-white-100");
+    expect(tip.className).toContain("dark:bg-navy-800");
+    expect(tip.className).not.toMatch(/(^|\s)bg-navy-800/);
+    expect(label(container)).toBeNull();
+    // No element inside any tab carries a title either (Source used to).
+    const strip = btn.parentElement!;
+    expect(strip.querySelectorAll("[data-testid^='rail-tab-'] [title]").length).toBe(0);
+  });
+
+  const expectLabels = (container: HTMLElement) => {
+    const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
+    expect(btn.getAttribute("aria-label")).toBe("Files");
+    expect(btn.getAttribute("title")).toBe("Files");
+    expect(label(container)?.textContent).toBe("Files");
+    expect(container.querySelector('[data-testid="rail-tip-files"]')).toBeNull();
+  };
+
+  test("labels on: the name runs along the strip, no tooltip", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: true });
+    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+  });
+
+  test("unset (saved layout without a choice): labels on", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null });
+    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+  });
+
+  test("nothing inlined: labels on", () => {
+    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+  });
+});
+
+/* P48 rail: Team tasks arriving over SSE draw the Tasks tab through
+   RailTasksIcon — ring while one works, green count, amber dot while one
+   waits for the person — and its icons-mode tooltip. */
+describe("DetailView — Tasks rail marks (P48)", () => {
+  const app = () => {
+    let el = document.getElementById("app");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    return el;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    app();
+  });
+
+  afterEach(() => {
+    delete app().dataset.railPrefs;
+  });
+
+  const task = (o: Record<string, unknown>) => ({
+    type: "team_task",
+    data: JSON.stringify({
+      task_id: "t1", context_id: "c", to_agent_id: "a", to_handle: "franky", to_name: "Franky", title: "x",
+      state: "working", turns: 1, max_turns: 8, started_at: "2026-10-10T10:00:00Z", updated_at: "2026-10-10T10:00:00Z", ...o,
+    }),
+  });
+
+  test("1 working + 1 needs input: ring, green 2, amber dot, tooltip", async () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector('[data-testid="rail-tab-tasks"]')).toBeNull();
+    sseBus.handler!(task({}) as { type: string });
+    sseBus.handler!(task({ task_id: "t2", state: "input_required", needs_you: true }) as { type: string });
+    await waitFor(() => expect(container.querySelector('[data-testid="rail-tab-tasks"]')).not.toBeNull());
+    const tab = container.querySelector('[data-testid="rail-tab-tasks"]')!;
+    expect(tab.getAttribute("aria-label")).toBe("Tasks · 2 active · 1 needs input");
+    expect(tab.querySelector('[data-testid="rail-ring-tasks"]')?.className).toContain("animate-spin");
+    const badge = tab.querySelector('[data-testid="rail-badge-tasks"]')!;
+    expect(badge.textContent).toBe("2");
+    expect(badge.className).toContain("bg-green-500");
+    expect(badge.className).not.toContain("bg-amber-500");
+    expect(tab.querySelector('[data-testid="rail-dot-tasks"]')?.className).toContain("bg-amber-500");
+    const tip = tab.querySelector('[data-testid="rail-tip-tasks"]')!;
+    expect(tip.textContent).toBe("Tasks · 2 active · 1 needs input");
+    expect(tip.querySelector("b")?.textContent).toBe("Tasks");
+    expect(tip.querySelector('[data-testid="rail-tip-tasks-needs"]')?.className).toContain("text-amber-700");
+  });
+
+  test("the mobile sheet titles the Tasks panel once, with the count", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!(task({}) as { type: string });
+    sseBus.handler!(task({ task_id: "t2", state: "input_required", needs_you: true }) as { type: string });
+    await waitFor(() => expect(container.querySelector('[data-testid="rail-tab-tasks"]')).not.toBeNull());
+    await fireEvent.click(container.querySelector('[data-testid="rail-tab-tasks"]')!);
+    const panels = await waitFor(() => {
+      const p = container.querySelectorAll('[data-testid="tasks-panel"]');
+      expect(p.length).toBe(2);
+      return p;
+    });
+    const sheet = container.querySelector(".lg\\:hidden.fixed")!;
+    const inSheet = [...panels].find((p) => sheet.contains(p))!;
+    const docked = [...panels].find((p) => !sheet.contains(p))!;
+    // Sheet: its own "Tasks" heading carries the count; the panel adds none.
+    expect([...sheet.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(["tasks"]);
+    expect(sheet.querySelector('[data-testid="tasks-sheet-count"]')?.textContent).toBe("this chat · 2");
+    expect(inSheet.querySelector("h2")).toBeNull();
+    // Docked (lg+): the panel's own header.
+    expect(docked.querySelector("h2")?.textContent).toBe("Tasks");
+    expect(docked.querySelector('[data-testid="tasks-panel-count"]')?.textContent).toBe("this chat · 2");
+  });
+});
+
+/* P48-s9: the running turn's delegation block, through DetailView's own
+   wiring — tasks patched in by team_task, the live turn and its commit
+   pushed through the thread store. */
+describe("DetailView — live delegation block (P48-s9)", () => {
+  const app = () => {
+    let el = document.getElementById("app");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    return el;
+  };
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    threadBus.live.reset(null);
+    threadBus.turns.reset(null);
+    app();
+  });
+  afterEach(() => {
+    threadBus.live.reset(null);
+    threadBus.turns.reset(null);
+  });
+
+  const teamTask = (o: Record<string, unknown>) => ({
+    type: "team_task",
+    data: JSON.stringify({
+      task_id: "k1", context_id: "c", to_agent_id: "a1", to_handle: "alpha", to_name: "Alpha", title: "x",
+      state: "working", turns: 1, max_turns: 8, started_at: "2026-10-10T10:05:00Z", updated_at: "2026-10-10T10:05:00Z", ...o,
+    }),
+  }) as { type: string };
+  const turn = (id: string, role: string, ts: string, text: string, events: unknown[] = []) => ({
+    turn_id: id, role, agent: "", provider: "", text, ts, timestamp: Date.parse(ts), truncated: false, interrupted: false, has_trace: events.length > 0, events, attachments: [],
+  });
+  // An earlier turn sent "old"; the running one sends k1 and answers "old".
+  const history = [
+    turn("u1", "user", "2026-10-10T10:00:00Z", "first"),
+    turn("a-old", "assistant", "2026-10-10T10:01:00Z", "asked beta", [
+      { type: "tool_use", tool_use_id: "x1", tool_name: "mcp__wick__team_message", tool_input: '{"to":"@beta","message":"m"}' },
+      { type: "tool_result", tool_use_id: "x1", text: '{"task_id":"old","state":"input_required"}' },
+    ]),
+    turn("u2", "user", "2026-10-10T10:04:00Z", "second"),
+    // A turn woken in the same segment, before the running one: the
+    // fallback would hand it k1 unless DetailView keeps live tasks out.
+    turn("a-wake", "assistant", "2026-10-10T10:04:30Z", "noted"),
+  ];
+  const liveBlocks = [
+    { kind: "tool", toolUseId: "l1", toolName: "mcp__wick__team_message", toolInput: '{"to":"@alpha","message":"m"}', result: '{"task_id":"k1","state":"working"}' },
+    { kind: "tool", toolUseId: "l2", toolName: "mcp__wick__team_message", toolInput: '{"task_id":"old","message":"use the 20:55 one"}', result: '{"task_id":"old","state":"working"}' },
+  ];
+  const blocks = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-task-ids]")];
+  const ownerOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-turn-id]")?.dataset.turnId ?? "live";
+
+  test("one block per turn through the live turn, a team_task patch and the commit", async () => {
+    threadBus.turns.set(history);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!(teamTask({ task_id: "old", to_handle: "beta", to_name: "Beta", state: "input_required", started_at: "2026-10-10T10:01:00Z" }));
+    sseBus.handler!(teamTask({}));
+    threadBus.live.set({ text: "", blocks: liveBlocks });
+    await waitFor(() => expect(blocks(container).length).toBe(2));
+    // The answer to "old" leaves it on the turn that sent it.
+    expect(blocks(container).map((b) => [ownerOf(b), b.dataset.taskIds])).toEqual([["a-old", "old"], ["live", "k1"]]);
+
+    // A team_task patch reaches the live block's chip.
+    const liveChip = () => blocks(container).find((b) => ownerOf(b) === "live")!.textContent;
+    expect(liveChip()).toContain("working");
+    sseBus.handler!(teamTask({ state: "input_required", needs_you: true, updated_at: "2026-10-10T10:06:00Z" }));
+    await waitFor(() => expect(liveChip()).toContain("needs input"));
+
+    // Commit (thread store finalize): the live-* turn in the same update
+    // that clears live.
+    const committed = turn("live-1", "assistant", "2026-10-10T10:07:00Z", "waiting on alpha",
+      liveBlocks.map((b) => ({ type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId, text: b.result })));
+    threadBus.turns.set([...history, committed]);
+    threadBus.live.set(null);
+    await waitFor(() => expect(blocks(container).map((b) => [ownerOf(b), b.dataset.taskIds])).toEqual([["a-old", "old"], ["live-1", "k1"]]));
+  });
+
+  // P48-s18b: the team_task event ("sent") can reach the page before the
+  // team_message result reaches the stream.
+  const k1Owners = (c: HTMLElement) => blocks(c).filter((b) => b.dataset.taskIds?.split(" ").includes("k1")).map(ownerOf);
+
+  test("a task sent before its tool_result shows only in the live block, then once on the commit", async () => {
+    threadBus.turns.set(history);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    threadBus.live.set({ text: "", blocks: [] });
+    sseBus.handler!(teamTask({}));
+    await waitFor(() => expect(container.querySelector('[data-testid="rail-tab-tasks"]')).not.toBeNull());
+    await tick();
+    // Not on the turn before (a-wake would take it by the fallback).
+    expect(k1Owners(container)).toEqual([]);
+
+    // The result arrives: the live block, once.
+    threadBus.live.set({ text: "", blocks: [liveBlocks[0]] });
+    await waitFor(() => expect(k1Owners(container)).toEqual(["live"]));
+
+    const committed = turn("live-1", "assistant", "2026-10-10T10:07:00Z", "waiting on alpha",
+      [liveBlocks[0]].map((b) => ({ type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId, text: b.result })));
+    threadBus.turns.set([...history, committed]);
+    threadBus.live.set(null);
+    await waitFor(() => expect(k1Owners(container)).toEqual(["live-1"]));
+  });
+
+  test("streamed tokens do not regroup the turns' tasks", async () => {
+    threadBus.turns.set(history);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!(teamTask({}));
+    threadBus.live.set({ text: "", blocks: liveBlocks });
+    await waitFor(() => expect(k1Owners(container)).toEqual(["live"]));
+    const calls = vi.mocked(tasksByTurn).mock.calls.length;
+    const held = vi.mocked(heldForLiveTurn).mock.calls.length;
+    expect(held).toBeGreaterThan(0);
+    for (const text of ["Wait", "Waiting on", "Waiting on alpha"]) {
+      threadBus.live.set({ text, blocks: liveBlocks });
+      await tick();
+    }
+    await waitFor(() => expect(container.textContent).toContain("Waiting on alpha"));
+    expect(vi.mocked(tasksByTurn).mock.calls.length).toBe(calls);
+    expect(vi.mocked(heldForLiveTurn).mock.calls.length).toBe(held);
+    expect(k1Owners(container)).toEqual(["live"]);
+  });
+});
+
+/* P50: a reply quote whose original is not on screen fetches ONE window
+   around it and shows it detached from the latest turns. */
+describe("DetailView — reply jump (P50)", () => {
+  const mk = (turn_id: string, text: string, extra: Record<string, unknown> = {}) => ({
+    turn_id, role: "assistant", agent: "main", provider: "", text,
+    timestamp: 0, truncated: false, interrupted: false, has_trace: false, events: [], attachments: [], ...extra,
+  });
+  const reply = (to: string) => mk("222", "roll it back", {
+    role: "user", reply_to: { turn_id: to, role: "assistant", author: "main", excerpt: "Deploy finished" },
+  });
+  type Conv = { conv: { around?: string; after?: string; limit?: number } };
+  let aroundResult: (opts: Conv["conv"]) => unknown;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    threadBus.turns.reset(null);
+    Element.prototype.scrollIntoView = vi.fn();
+    if (!(globalThis as { CSS?: unknown }).CSS) (globalThis as { CSS?: unknown }).CSS = { escape: (v: string) => v };
+    // getConversation(...).pipe(provide) → a tagged request the runner reads.
+    vi.mocked(getConversation).mockImplementation(((_b: string, _s: string, opts: Conv["conv"] = {}) =>
+      ({ pipe: () => ({ conv: opts }) })) as never);
+    aroundResult = (opts) => ({
+      _tag: "Right",
+      right: { turns: [mk("100", "older"), mk(opts.around!, "Deploy finished")], hasMore: true, hasMoreAfter: true },
+    });
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: { either?: Conv }) =>
+      eff?.either?.conv?.around ? Promise.resolve(aroundResult(eff.either.conv)) : new Promise(() => {})) as never);
+  });
+  afterEach(() => {
+    threadState.turns = [];
+    threadBus.turns.reset(null);
+    vi.mocked(getConversation).mockReset();
+    vi.mocked(getConversation).mockReturnValue({ pipe: (x: unknown) => x } as never);
+    vi.mocked(Effect.runPromise).mockReset();
+    vi.mocked(Effect.runPromise).mockReturnValue(new Promise(() => {}));
+  });
+  const aroundCalls = () => vi.mocked(getConversation).mock.calls.filter((c) => (c[2] as Conv["conv"])?.around);
+
+  test("original on screen: scrolls to it, no request, Back to reply appears", async () => {
+    threadState.turns = [mk("111", "Deploy finished"), reply("111")];
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    const target = container.querySelector('[data-turn-id="111"]')!;
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0]).toBe(target);
+    expect(aroundCalls()).toHaveLength(0);
+    expect(await screen.findByTestId("back-to-reply")).toBeDefined();
+  });
+
+  test("original not on screen: one around request, detached window, then Back / Jump to latest", async () => {
+    threadState.turns = [reply("old")];
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await waitFor(() => expect(container.querySelector('[data-turn-id="old"]')).not.toBeNull());
+    expect(aroundCalls()).toHaveLength(1);
+    expect(aroundCalls()[0][2]).toEqual({ around: "old" });
+    // Detached: the window replaced the latest turns, Jump to latest shows.
+    expect(container.querySelector('[data-turn-id="222"]')).toBeNull();
+    expect(screen.getByTestId("jump-latest")).toBeDefined();
+
+    // Live events only bump the badge; the window stays as it is.
+    threadBus.turns.set([reply("old"), mk("333", "new reply")]);
+    expect((await screen.findByTestId("jump-latest-badge")).textContent).toBe("1");
+    expect(container.querySelector('[data-turn-id="333"]')).toBeNull();
+
+    // Back to reply: its bubble was dropped with the latest window → around=222.
+    await fireEvent.click(screen.getByTestId("back-to-reply"));
+    await waitFor(() => expect(aroundCalls()).toHaveLength(2));
+    expect(aroundCalls()[1][2]).toEqual({ around: "222" });
+    await waitFor(() => expect(screen.queryByTestId("back-to-reply")).toBeNull());
+
+    // Jump to latest leaves the window and reloads the latest one.
+    const before = vi.mocked(getConversation).mock.calls.length;
+    await fireEvent.click(screen.getByTestId("jump-latest"));
+    await waitFor(() => expect(container.querySelector('[data-turn-id="333"]')).not.toBeNull());
+    expect(vi.mocked(getConversation).mock.calls.length).toBe(before + 1);
+    expect(vi.mocked(getConversation).mock.calls.at(-1)![2]).toEqual({ limit: 20 });
+  });
+
+  test("Jump to latest hides the Back to reply chip", async () => {
+    threadState.turns = [reply("old")];
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await screen.findByTestId("back-to-reply");
+    await fireEvent.click(screen.getByTestId("jump-latest"));
+    await waitFor(() => expect(screen.queryByTestId("back-to-reply")).toBeNull());
+  });
+
+  test("original gone: toast, no detached window", async () => {
+    threadState.turns = [reply("gone")];
+    aroundResult = () => ({ _tag: "Left", left: new (APIError as unknown as new (s: number, b: string) => Error)(404, "turn not found") });
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await waitFor(() => expect(toastWarn).toHaveBeenCalledWith("Original message is no longer available"));
+    expect(container.querySelector('[data-turn-id="222"]')).not.toBeNull();
+    expect(screen.queryByTestId("back-to-reply")).toBeNull();
+  });
+
+  test("in flight: the quote spins and repeat clicks send no extra request", async () => {
+    threadState.turns = [reply("old")];
+    vi.mocked(Effect.runPromise).mockImplementation((() => new Promise(() => {})) as never);
+    render(DetailView, { props: DEFAULT_PROPS });
+    const q = screen.getByTestId("reply-quote");
+    await fireEvent.click(q);
+    await fireEvent.click(q);
+    await fireEvent.click(q);
+    expect(aroundCalls()).toHaveLength(1);
+    expect(await screen.findByTestId("reply-quote-spinner")).toBeDefined();
+    expect(q.getAttribute("title")).toBe("Finding message…");
+    // Slow: a neutral "working" toast, not a success one.
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({ state: "info", title: "Finding message…" })), { timeout: 1000 });
+  });
+
+  test("a streaming reply bumps the badge while detached", async () => {
+    threadState.turns = [reply("old")];
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await screen.findByTestId("back-to-reply");
+    expect(screen.queryByTestId("jump-latest-badge")).toBeNull();
+    threadBus.live.set({ turnId: "live-1", text: "typing", blocks: [] });
+    expect((await screen.findByTestId("jump-latest-badge")).textContent).toBe("1");
+    threadBus.live.reset(null);
+  });
+
+  test("paging down to the latest turn re-attaches the thread and reloads it", async () => {
+    threadState.turns = [reply("old")];
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await waitFor(() => expect(container.querySelector('[data-turn-id="old"]')).not.toBeNull());
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: { conv?: Conv["conv"]; either?: Conv }) =>
+      eff?.conv?.after
+        ? Promise.resolve({ turns: [reply("old")], hasMore: false, hasMoreAfter: false })
+        : new Promise(() => {})) as never);
+    await fireEvent.click(screen.getByRole("button", { name: "Load newer messages" }));
+    await waitFor(() => expect(threadState.setHistory).toHaveBeenCalled());
+    expect(vi.mocked(getConversation).mock.calls.find((c) => (c[2] as Conv["conv"])?.after)![2]).toEqual({ limit: 20, after: "old" });
+    expect(threadState.setHistory.mock.calls.at(-1)![0].map((t: { turn_id: string }) => t.turn_id)).toEqual(["100", "old", "222"]);
+    // Attached again: the store's turns show, and the latest window is re-read.
+    await waitFor(() => expect(container.querySelector('[data-turn-id="100"]')).toBeNull());
+    expect(vi.mocked(getConversation).mock.calls.at(-1)![2]).toEqual({ limit: 20 });
+  });
+
+  test("Jump to latest while a lookup is out: its late answer does not re-detach", async () => {
+    threadState.turns = [reply("old")];
+    let resolve!: (v: unknown) => void;
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: { either?: Conv }) =>
+      eff?.either?.conv?.around ? new Promise((r) => { resolve = r; }) : new Promise(() => {})) as never);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await screen.findByTestId("reply-quote-spinner");
+    await fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true });
+    await waitFor(() => expect(screen.queryByTestId("reply-quote-spinner")).toBeNull());
+    resolve(aroundResult({ around: "old" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container.querySelector('[data-turn-id="old"]')).toBeNull();
+    expect(container.querySelector('[data-turn-id="222"]')).not.toBeNull();
+    expect(screen.queryByTestId("back-to-reply")).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SSEStatus } from "../types/agents.js";
+  import TeammatesChip from "./team/TeammatesChip.svelte";
   import type { LifecycleState } from "../stores/thread.js";
   import { idleCountdownText } from "../idleCountdown.js";
 
@@ -25,6 +26,9 @@
         be idle while its children work, and both facts have to stay
         readable. 0 hides it. */
     subAgentsBusy?: number;
+    /** How many teammates (per handle) this chat waits on: their Team tasks
+        are still working. 0 hides the chip. */
+    teammatesBusy?: number;
     activeView?: ActiveView;
     /* Where the ticket jump goes, when this chat's project has ticket mode
        on. A chat already on a ticket opens that ticket; one that is not
@@ -44,6 +48,7 @@
     lifecycle,
     idleTimeoutMs = 120_000,
     subAgentsBusy = 0,
+    teammatesBusy = 0,
     activeView = "conversation",
     ticketJump,
     onKill,
@@ -249,6 +254,7 @@
         {subAgentsBusy} {subAgentsBusy === 1 ? "sub-agent" : "sub-agents"}
       </span>
     {/if}
+    <TeammatesChip count={teammatesBusy} />
 
     <span
       class={[

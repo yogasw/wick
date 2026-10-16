@@ -75,7 +75,42 @@ func (s *Channel) HealthCheck() []agentchannels.HealthCheck {
 	// Transport mode probe: always emitted so the operator sees
 	// subscribe status / webhook URL even when other probes pass.
 	out = append(out, s.probeTransport(cfg))
+	if cfg.Mode != "http" && IsRotatingAppToken(cfg.AppToken) {
+		out = append(out, s.probeAppTokenRotation(cfg, time.Now()))
+	}
 	return out
+}
+
+// probeAppTokenRotation reports a rotating app token: the settings it still
+// lacks, the last refresh failure, or when it expires and was refreshed.
+func (s *Channel) probeAppTokenRotation(cfg agentconfig.SlackChannelConfig, now time.Time) agentchannels.HealthCheck {
+	const name = "socket.app_token"
+	if miss := rotationMissing(cfg.AppToken, cfg.AppRefreshToken, cfg.ClientID, cfg.ClientSecret); miss != "" {
+		return agentchannels.HealthCheck{
+			Name:  name,
+			OK:    false,
+			Error: "rotating app token (xoxe.xapp-) is missing: " + miss,
+			Detail: "token rotation is on for this Slack app, so wick must refresh the token every 12h — " +
+				"paste the refresh token and the app's Client ID + Client Secret (Basic Information → App Credentials)",
+		}
+	}
+	rot := s.AppTokenRotation()
+	if rot.LastError != "" {
+		return agentchannels.HealthCheck{Name: name, OK: false, Error: rot.LastError}
+	}
+	detail := "rotating"
+	switch left := rot.ExpiresAt.Sub(now).Round(time.Minute); {
+	case rot.ExpiresAt.IsZero():
+		detail += " — expiry not known yet, refreshing"
+	case left <= 0:
+		detail += " — expired " + (-left).String() + " ago, refreshing"
+	default:
+		detail += " — expires in " + left.String()
+	}
+	if !rot.LastRefresh.IsZero() {
+		detail += " · last refreshed " + rot.LastRefresh.UTC().Format("2006-01-02 15:04 UTC")
+	}
+	return agentchannels.HealthCheck{Name: name, OK: true, Detail: detail}
 }
 
 // probeTransport reports the runtime status of whichever transport the
@@ -113,7 +148,7 @@ func (s *Channel) probeTransport(cfg agentconfig.SlackChannelConfig) agentchanne
 		return agentchannels.HealthCheck{
 			Name:   "socket.subscribe",
 			OK:     false,
-			Detail: "app_token (xapp-...) required for socket mode",
+			Detail: "app_token (xapp-... or xoxe.xapp-...) required for socket mode",
 		}
 	}
 	state, at := s.SocketState()

@@ -159,11 +159,12 @@ func builtinModules() []connector.Module {
 			AllowSessionConfig: true,
 		},
 		{
-			Meta:        withConnectorTag(slack.Meta(), tags.Communication),
-			Configs:     entity.StructToConfigs(slack.Configs{}),
-			Operations:  slack.Operations(),
-			HealthCheck: slack.HealthCheck,
-			OAuth:       slack.SlackOAuthMeta(),
+			Meta:           withConnectorTag(slack.Meta(), tags.Communication),
+			Configs:        entity.StructToConfigs(slack.Configs{}),
+			Operations:     slack.Operations(),
+			HealthCheck:    slack.HealthCheck,
+			ValidateConfig: slack.ValidateConfig,
+			OAuth:          slack.SlackOAuthMeta(),
 		},
 		// loki and phoenix moved out-of-tree to downloadable plugins
 		// (plugins/connector/loki, plugins/connector/phoenix). They are no

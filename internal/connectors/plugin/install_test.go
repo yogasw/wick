@@ -64,3 +64,29 @@ func TestInstallRejectsWrongArch(t *testing.T) {
 		t.Fatal("install must reject wrong-arch plugin")
 	}
 }
+
+func TestInstallRejectsInvalidVisibleWhen(t *testing.T) {
+	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "0")
+	t.Setenv("WICK_PLUGIN_PUBKEY", "")
+	src := makeSrc(t, "demo", "binbytes", runtime.GOOS+"/"+runtime.GOARCH)
+	raw, err := os.ReadFile(filepath.Join(src, "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env wickplugin.Manifest
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	env.Module.Operations = []connector.Category{{Ops: []connector.Operation{{Key: "pdf", VisibleWhen: "browser:moli"}}}}
+	b, _ := json.Marshal(env)
+	if err := os.WriteFile(filepath.Join(src, "plugin.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if err := InstallFromDir(src, dest); err == nil {
+		t.Fatal("install must reject a visible_when on an undeclared config field")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "demo")); !os.IsNotExist(err) {
+		t.Fatal("nothing should be installed")
+	}
+}

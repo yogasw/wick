@@ -142,3 +142,85 @@ func TestAgentIdleKillBetweenTurnsWritesNothing(t *testing.T) {
 		t.Fatalf("idle reap between turns wrote a turn: %+v", turns)
 	}
 }
+
+// A message the process took and never wrote a line after is handed back
+// on an idle kill, so the pool can re-buffer it instead of losing it.
+func TestAgentIdleKillHandsBackUnansweredMessages(t *testing.T) {
+	r := newIdleKillRig(t, 50*time.Millisecond)
+	if err := r.a.Send("first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.Send("second"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.waitExit(t); got != ExitIdle {
+		t.Fatalf("exit reason %v", got)
+	}
+	got := r.a.TakeUnanswered()
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("unanswered: %q", got)
+	}
+	if again := r.a.TakeUnanswered(); len(again) != 0 {
+		t.Fatalf("second take: %q", again)
+	}
+}
+
+// Output after a message means the process is working on it: nothing is
+// handed back when it is later reaped.
+func TestAgentOutputClearsUnansweredMessages(t *testing.T) {
+	r := newIdleKillRig(t, 50*time.Millisecond)
+	if err := r.a.Send("hello"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`)
+	r.say(t, `{"type":"result","subtype":"success","is_error":false,"result":"hi"}`)
+	r.waitExit(t)
+	if got := r.a.TakeUnanswered(); len(got) != 0 {
+		t.Fatalf("unanswered after output: %q", got)
+	}
+}
+
+// A message sent while a turn is running is not answered by that turn's
+// output: the process never reads it before the idle kill, so it is handed
+// back. (The 2026-10-13 Slack thread case: a reply to a progress text
+// arrived mid-turn, the turn went silent, and the reply vanished.)
+func TestAgentMidTurnMessageSurvivesOutputOfRunningTurn(t *testing.T) {
+	r := newIdleKillRig(t, 80*time.Millisecond)
+	if err := r.a.Send("first"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`)
+	time.Sleep(20 * time.Millisecond)
+	if err := r.a.Send("follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"more of turn one"}]}}`)
+	if got := r.waitExit(t); got != ExitIdle {
+		t.Fatalf("exit reason %v", got)
+	}
+	got := r.a.TakeUnanswered()
+	if len(got) != 1 || got[0] != "follow-up" {
+		t.Fatalf("unanswered: %q, want only the mid-turn follow-up", got)
+	}
+}
+
+// Messages folded into a turn that then ended normally are answered: when the
+// finished agent is reaped, nothing is handed back (it would be re-delivered
+// as "your last message was not answered" after the reply was already sent).
+func TestAgentIdleReapAfterFinishedTurnHandsNothingBack(t *testing.T) {
+	r := newIdleKillRig(t, 80*time.Millisecond)
+	if err := r.a.Send("first"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`)
+	time.Sleep(20 * time.Millisecond)
+	if err := r.a.Send("follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"answer covering both"}]}}`)
+	r.say(t, `{"type":"result","subtype":"success","is_error":false,"result":"answer covering both"}`)
+	r.waitExit(t)
+	if got := r.a.TakeUnanswered(); len(got) != 0 {
+		t.Fatalf("unanswered after a finished turn: %q", got)
+	}
+}

@@ -249,6 +249,114 @@ describe("ConnectorList", () => {
   });
 });
 
+describe("ConnectorList Hide for me", () => {
+  const viewOnly = { id: "row-a", label: "Prod", disabled: false, status: "ready", rate_limit_rpm: 0, tags: [], can_configure: false };
+
+  /* A per-viewer preference, not configuration: offered even to a viewer
+     who cannot configure the row. */
+  it("offers Hide for me to a viewer who cannot configure the row", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await openRowMenu();
+    expect(screen.getByRole("menuitem", { name: "Hide for me" })).toBeTruthy();
+  });
+
+  it("offers a one-click eye button that hides the row without opening it", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(true);
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    const eye = screen.getByRole("button", { name: "Hide from my wick_list" });
+    expect(eye.getAttribute("title")).toBe("Hide for me — only you stop seeing this in wick_list; others are not affected");
+    await fireEvent.click(eye);
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", true));
+    expect(router.push).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText("Prod")).toBeNull());
+  });
+
+  it("unhides a hidden row from its eye-off button", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [{ ...viewOnly, hidden_for_me: true }] }));
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(false);
+    render(ConnectorList, { connectorKey: "slack" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Show hidden (1)" }));
+    expect(screen.queryByRole("button", { name: "Hide from my wick_list" })).toBeNull();
+    const eyeOff = screen.getByRole("button", { name: "Show in my wick_list" });
+    expect(eyeOff.getAttribute("title")).toBe("Hidden for you — click to show it in your wick_list again");
+    await fireEvent.click(eyeOff);
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", false));
+    expect(router.push).not.toHaveBeenCalled();
+    await waitFor(() => expect(stores.toastOk).toHaveBeenCalledWith("Visible again"));
+  });
+
+  it("hides the row through the API and tucks it away", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(true);
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await openRowMenu();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Hide for me" }));
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", true));
+    await waitFor(() => expect(stores.toastOk).toHaveBeenCalledWith("Hidden for you"));
+    await waitFor(() => expect(screen.queryByText("Prod")).toBeNull());
+    expect(screen.getByRole("button", { name: "Show hidden (1)" })).toBeTruthy();
+  });
+
+  it("keeps hidden rows out by default and shows them dimmed at the bottom on demand", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(
+      makeData({
+        rows: [
+          { id: "row-a", label: "Prod", disabled: false, status: "ready", rate_limit_rpm: 0, tags: [], hidden_for_me: true },
+          { id: "row-b", label: "Staging", disabled: false, status: "ready", rate_limit_rpm: 0, tags: [] },
+        ],
+      }),
+    );
+    vi.mocked(api.setConnectorHidden).mockResolvedValue(false);
+    const { container } = render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Staging");
+    expect(screen.queryByText("Prod")).toBeNull();
+    expect(screen.queryByText("Hidden for you")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Show hidden (1)" }));
+    expect(screen.getByText("Prod")).toBeTruthy();
+    expect(screen.getByText("Hidden for you")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide hidden" })).toBeTruthy();
+    const labels = Array.from(container.querySelectorAll("[aria-label^='Open ']")).map((el) => el.getAttribute("aria-label"));
+    expect(labels).toEqual(["Open Staging", "Open Prod"]);
+    expect(container.querySelector("[data-hidden-for-me]")?.className).toContain("opacity-60");
+    await openRowMenu();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Unhide" }));
+    await waitFor(() => expect(api.setConnectorHidden).toHaveBeenCalledWith("slack", "row-a", false));
+    await waitFor(() => expect(stores.toastOk).toHaveBeenCalledWith("Visible again"));
+  });
+
+  it("disables the hide item while a request is in flight", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
+    let resolve: (v: boolean) => void = () => {};
+    vi.mocked(api.setConnectorHidden).mockReturnValue(new Promise<boolean>((r) => (resolve = r)));
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await openRowMenu();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Hide for me" }));
+    if (!screen.queryByRole("menuitem", { name: "Hide for me" })) await openRowMenu();
+    expect((screen.getByRole("menuitem", { name: "Hide for me" }) as HTMLButtonElement).disabled).toBe(true);
+    resolve(true);
+    await waitFor(() => expect(screen.queryByText("Prod")).toBeNull());
+  });
+
+  it("toasts the server message when hiding fails", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [viewOnly] }));
+    vi.mocked(api.setConnectorHidden).mockRejectedValue(new Error("hide limit reached (200): unhide some first"));
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await openRowMenu();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Hide for me" }));
+    await waitFor(() =>
+      expect(stores.toastError).toHaveBeenCalledWith("Hide failed", "hide limit reached (200): unhide some first"),
+    );
+    expect(screen.getByText("Prod")).toBeTruthy();
+  });
+});
+
 describe("ConnectorList OAuth / SSO", () => {
   // A row with SSO ready (start_url set) and no accounts yet.
   function ssoRow() {

@@ -213,6 +213,39 @@ func TestAPISetConnectorConfig(t *testing.T) {
 	}
 }
 
+func TestAPIClearConnectorConfig(t *testing.T) {
+	h, svc := newDetailHandler(t)
+	row, _ := svc.Create(t.Context(), "slack", "Prod", map[string]string{}, "u-admin")
+	if err := svc.Update(t.Context(), row.ID, row.Label, map[string]string{"api_url": "https://slack.test", "token": "s3cret"}, false); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	clear := func(configKey string) *httptest.ResponseRecorder {
+		req := adminReq(t, http.MethodDelete, "/manager/api/connectors/slack/"+row.ID+"/configs/"+configKey, nil)
+		req.SetPathValue("key", "slack")
+		req.SetPathValue("id", row.ID)
+		req.SetPathValue("configKey", configKey)
+		rec := httptest.NewRecorder()
+		h.apiClearConnectorConfig(rec, req)
+		return rec
+	}
+
+	if rec := clear("token"); rec.Code != http.StatusOK {
+		t.Fatalf("clear secret status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	rec := clear("api_url")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("clear required status = %d, want 400", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
+		t.Errorf("refusal must carry a JSON error; body=%s", rec.Body.String())
+	}
+	stored := svc.LoadConfigs(*row)
+	if stored["token"] != "" || stored["api_url"] != "https://slack.test" {
+		t.Errorf("configs after clear = %+v, want token empty and api_url kept", stored)
+	}
+}
+
 func TestAPISetConnectorLabel(t *testing.T) {
 	h, svc := newDetailHandler(t)
 	row, _ := svc.Create(t.Context(), "slack", "Old", map[string]string{}, "u-admin")
@@ -365,5 +398,58 @@ func TestBuildCategoryJSON(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("category[%d] = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestAPIConnectorDetailVisibleWhen pins that an op gated by VisibleWhen
+// carries its predicate and the row's hidden_by_config verdict, so the
+// operations table can grey it out instead of dropping it.
+func TestAPIConnectorDetailVisibleWhen(t *testing.T) {
+	mod := connector.Module{
+		Meta:    connector.Meta{Key: "eng", Name: "Engine"},
+		Configs: []entity.Config{{Key: "engine", Type: "text", Value: "a"}},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Operation{Key: "plain", Name: "Plain", Execute: noopExec},
+				connector.Operation{Key: "on_a", Name: "On A", VisibleWhen: "engine:a", Execute: noopExec},
+				connector.Operation{Key: "on_b", Name: "On B", VisibleWhen: "engine:b|c", Execute: noopExec},
+			),
+		},
+	}
+	svc := newConnectorsSvcForAPI(t, []connector.Module{mod})
+	h := &Handler{connectors: svc}
+	row, err := svc.Create(t.Context(), "eng", "Prod", nil, "u-admin")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	req := adminReq(t, http.MethodGet, "/manager/api/connectors/eng/"+row.ID, nil)
+	req.SetPathValue("key", "eng")
+	req.SetPathValue("id", row.ID)
+	rec := httptest.NewRecorder()
+	h.apiConnectorDetail(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"hidden_by_config":`)) {
+		t.Fatalf("hidden_by_config missing from JSON: %s", rec.Body.String())
+	}
+	var got connectorDetailJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byKey := map[string]connectorOpJSON{}
+	for _, op := range got.Operations {
+		byKey[op.Key] = op
+	}
+	if op := byKey["plain"]; op.VisibleWhen != "" || op.HiddenByConfig {
+		t.Errorf("plain op must be ungated: %+v", op)
+	}
+	// The default engine=a satisfies on_a and fails on_b.
+	if op := byKey["on_a"]; op.VisibleWhen != "engine:a" || op.HiddenByConfig {
+		t.Errorf("on_a should be visible with its predicate: %+v", op)
+	}
+	if op := byKey["on_b"]; op.VisibleWhen != "engine:b|c" || !op.HiddenByConfig {
+		t.Errorf("on_b should be hidden by config: %+v", op)
 	}
 }

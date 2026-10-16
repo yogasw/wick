@@ -613,17 +613,29 @@ func TestReactionRemovedGuards(t *testing.T) {
 }
 
 func TestDashboardURL(t *testing.T) {
-	s := &Channel{pubURL: "https://wick.example.com"}
-	got := s.dashboardURL("1715167891.234567")
-	want := "https://wick.example.com/tools/agents/sessions/1715167891.234567"
+	prev := appURL
+	t.Cleanup(func() { appURL = prev })
+
+	// The app URL wins over a channel row's own public_url.
+	SetAppURL(func() string { return "https://app.example.com/" })
+	s := &Channel{pubURL: "https://old.example.com"}
+	got := s.dashboardURL("T123")
+	want := "<https://app.example.com/tools/agents/sessions/T123|Open session in the dashboard>"
 	if got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 
-	// Empty pubURL
-	s.pubURL = ""
+	// No app URL: the row's public_url is the last resort.
+	SetAppURL(func() string { return "" })
 	got = s.dashboardURL("T123")
-	if !strings.Contains(got, "not configured") {
-		t.Errorf("expected 'not configured' message, got %q", got)
+	want = "<https://old.example.com/tools/agents/sessions/T123|Open session in the dashboard>"
+	if got != want {
+		t.Errorf("legacy: got %q want %q", got, want)
+	}
+
+	// Neither: a short plain line, no config jargon.
+	s.pubURL = ""
+	if got = s.dashboardURL("T123"); !strings.Contains(got, "belum diatur") {
+		t.Errorf("expected the unset message, got %q", got)
 	}
 }

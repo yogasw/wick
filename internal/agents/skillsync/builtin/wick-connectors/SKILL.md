@@ -20,6 +20,8 @@ Four tools, used in order:
 | `wick_get` | Operations for one connector, then the input schema for one operation. |
 | `wick_execute` | Run an operation by `tool_id` + `params`. |
 
+`wick_list` / `wick_search` skip instances the user chose to **hide for themselves**. When some are hidden the reply carries `hidden_count` and `hidden_note`; call again with `include_hidden: true` before telling the user a connector does not exist. A hidden instance still works by id (`wick_get` / `wick_execute`).
+
 `wick_list` deliberately does **not** return per-operation input schemas — you only pay that token cost when you commit to a specific operation via `wick_get`.
 
 ```
@@ -66,6 +68,10 @@ The division of labour matters: **you create the blank instance, the user fills 
 ## Access is re-checked every call
 
 `wick_execute` and `wick_get` re-validate visibility and per-operation enable state on every call; they never trust a list-time cache. If a user's tag is removed or an op is disabled, the very next call fails. Treat an authorization error as current truth, not a glitch to retry.
+
+## Plugins calling connectors
+
+A wick plugin (not you) can also run a connector operation, through the Host API scope `connectors.execute` — but only the connector ops it declared in its manifest (`host_resources.connectors`, e.g. `slack` → `lookup_user_by_email`), and always **as a user**: the person who triggered the plugin, else the owner of the plugin's `wick_pat`. It sees only the instances that user may see, and an admin can block any single op on Plugins → Host access. So when a plugin reports `PermissionDenied` on a connector op, the op is undeclared or blocked — it is not a connector outage.
 
 ## The Wick Manager exception
 

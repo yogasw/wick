@@ -281,6 +281,25 @@ func TestReachFollowsTheConnectorAdminKnob(t *testing.T) {
 	require.Equal(t, 1, sums["/connectors/row-1"].Reach(), "knob off must drop the admin from the count")
 }
 
+// Providers have their own knob, default ON, mirroring connectors.
+func TestReachFollowsTheProvidersAdminKnob(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	require.NoError(t, db.Create(&entity.User{
+		ID: "u-admin", Name: "Root", Email: "root@x.test", Approved: true, Role: entity.RoleAdmin,
+	}).Error)
+	tagPath(t, db, "/providers/claude/team", support)
+
+	sums := h.accessSummaries(ctx, []string{"/providers/claude/team"})
+	require.Equal(t, 2, sums["/providers/claude/team"].Reach())
+
+	setAgentsKnob(t, h, "admin_see_all_provider_instances", "false")
+	sums = h.accessSummaries(ctx, []string{"/providers/claude/team"})
+	require.Equal(t, 1, sums["/providers/claude/team"].Reach(), "knob off must drop the admin from the count")
+}
+
 // Projects follow the OTHER knob, which is off by default — so an admin is
 // NOT in reach of a tagged project until admin_see_all_sessions is turned on.
 func TestReachFollowsTheSessionsAdminKnob(t *testing.T) {

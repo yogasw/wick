@@ -122,7 +122,10 @@
     selected = new Set();
     closePicker();
   }
-  function openPicker() {
+  /** openPicker shows the Add picker on Connectors; the wizard's
+      "+ Add connectors" footer button calls it too. */
+  export function openPicker() {
+    if (tier !== "connectors") pickTier("connectors");
     adding = true;
     addQuery = "";
     picked = new Set();

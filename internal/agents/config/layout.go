@@ -29,6 +29,10 @@ func (l Layout) ProjectsDir() string   { return filepath.Join(l.BaseDir, "projec
 func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessions") }
 func (l Layout) WorkflowsDir() string  { return filepath.Join(l.BaseDir, "workflows") }
 
+// TeamTasksDir holds the Team tasks agents sent each other (teamlink
+// Persist), one JSON file per task.
+func (l Layout) TeamTasksDir() string { return filepath.Join(l.BaseDir, "team-tasks") }
+
 // WorkflowDir is the folder for one workflow (`workflows/<id>/`).
 func (l Layout) WorkflowDir(id string) string {
 	return filepath.Join(l.WorkflowsDir(), id)

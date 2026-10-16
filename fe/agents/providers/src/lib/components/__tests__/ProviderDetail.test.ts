@@ -17,6 +17,11 @@ vi.mock("@wick-fe/common-stores", () => ({
   toasts: { subscribe: vi.fn(() => vi.fn()) },
 }));
 
+// viewerCan: a non-admin who is not the owner — every permission off.
+function viewerCan(): ProviderDetailResponse["Can"] {
+  return Object.fromEntries(Object.keys(makeDetail().Can).map((k) => [k, false])) as ProviderDetailResponse["Can"];
+}
+
 function makeDetail(): ProviderDetailResponse {
   return {
     // Existing tests describe the ADMIN page; the read-only variant has
@@ -24,6 +29,14 @@ function makeDetail(): ProviderDetailResponse {
     ReadOnly: false,
     CanManage: true,
     SecretsHidden: false,
+    IsAdmin: true,
+    HasTerminal: true,
+    Can: {
+      Configure: true, Models: true, Env: true, ExtraArgs: true, Binary: true, ExtraMCPServers: true, ExternalSkills: true,
+      Sandbox: true, AIRouterRawConfig: true, BorrowLogin: true, Rename: true, Delete: true, AIRouter: true, StorageSync: true,
+      Rescan: true, ViewSessions: true, Failover: true,
+    },
+    OwnerPerms: { configure: true, binary: false, delete: true },
     Instance: { Type: "claude", Name: "default", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
     Path: "/usr/bin/claude",
     PathFound: true,
@@ -272,7 +285,10 @@ describe("ProviderDetail - key-value editor (env)", () => {
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue(data);
     render(ProviderDetail, { props: defaultProps });
     await fireEvent.click(await screen.findByText("env"));
-    const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+    // The failover card above has inputs of its own; skip them.
+    const inputs = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).filter(
+      (i) => !i.closest('[data-testid="failover-card"]'),
+    );
     await fireEvent.blur(inputs[0]);
     await vi.waitFor(() => expect(api.apiSaveConfigKey).toHaveBeenCalled());
     const lastCall = vi.mocked(api.apiSaveConfigKey).mock.calls.at(-1)!;
@@ -405,7 +421,7 @@ describe("ProviderDetail - callbacks", () => {
 
 describe("ProviderDetail - read-only viewer", () => {
   it("gives a manager a read-only summary, not the admin form", async () => {
-    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false, IsAdmin: false, Can: viewerCan() });
     render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
 
     const cfg = await screen.findByTestId("provider-config");
@@ -447,7 +463,7 @@ describe("ProviderDetail - card rhythm", () => {
   });
 
   it("spaces the read-only summary too", async () => {
-    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false, IsAdmin: false, Can: viewerCan() });
     const { container } = render(ProviderDetail, { props: defaultProps });
     await screen.findByTestId("provider-config");
     expectCardRhythm(container);
@@ -621,6 +637,49 @@ describe("ProviderDetail - Binary section", () => {
   });
 });
 
+describe("ProviderDetail - Terminal section", () => {
+  for (const t of ["claude", "codex", "gemini", "omp", "opencode"]) {
+    it(`${t}: an admin gets the Terminal section`, async () => {
+      const d = makeDetail();
+      d.Instance = { ...d.Instance, Type: t, Name: "x" };
+      vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+      render(ProviderDetail, { props: { ...defaultProps, type: t, name: "x" } });
+      expect(await screen.findByTestId("section-terminal")).toBeTruthy();
+    });
+  }
+
+  it("follows the backend flag, not a list of types", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "newcli", Name: "x" };
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "newcli", name: "x" } });
+    expect(await screen.findByTestId("section-terminal")).toBeTruthy();
+  });
+
+  it("claude: no managed pill on the Binary section", async () => {
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByTestId("section-terminal");
+    expect(screen.getByTestId("section-binary").textContent).not.toContain("managed by wick");
+  });
+
+  it("hides the Terminal section from a non-admin", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), IsAdmin: false, OwnerPerms: {} });
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Configuration");
+    expect(screen.queryByTestId("section-terminal")).toBeNull();
+  });
+
+  it("no Terminal section when the backend reports none", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "wick", Name: "wick" };
+    d.HasTerminal = false;
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "wick", name: "wick" } });
+    await screen.findByText("Configuration");
+    expect(screen.queryByTestId("section-terminal")).toBeNull();
+  });
+});
+
 describe("ProviderDetail - Activity", () => {
   it("Token Usage is collapsed by default and mounts the report only when opened", async () => {
     render(ProviderDetail, { props: defaultProps });
@@ -633,5 +692,61 @@ describe("ProviderDetail - Activity", () => {
     expect(sec.getAttribute("data-open")).toBe("1");
     expect(await screen.findByText("Refresh")).toBeTruthy();
     expect(localStorage.getItem("wick.providers.section.detail.activity")).toBe("1");
+  });
+});
+
+describe("ProviderDetail - owner permissions", () => {
+  it("shows the card to an admin, seeded from OwnerPerms, and saves the ticks", async () => {
+    vi.mocked(api.apiSaveOwnerPerms).mockImplementation(async (_b, _t, _n, perms) => perms);
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Owner permissions"));
+    const binary = (await screen.findByTestId("owner-perm-binary")) as HTMLInputElement;
+    const del = screen.getByTestId("owner-perm-delete") as HTMLInputElement;
+    expect(binary.checked).toBe(false);
+    expect(del.checked).toBe(true);
+    await fireEvent.click(binary);
+    await fireEvent.click(screen.getByTestId("owner-perms-save"));
+    expect(api.apiSaveOwnerPerms).toHaveBeenCalledWith(
+      defaultProps.base, "claude", "default",
+      expect.objectContaining({ binary: true, delete: true }),
+    );
+  });
+
+  it("hides the card from a non-admin", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), IsAdmin: false, OwnerPerms: {} });
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Configuration");
+    expect(screen.queryByText("Owner permissions")).toBeNull();
+  });
+});
+
+describe("ProviderDetail - failover", () => {
+  it("lists the failover owner permission and saves it", async () => {
+    vi.mocked(api.apiSaveOwnerPerms).mockImplementation(async (_b, _t, _n, perms) => perms);
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), OwnerPerms: { failover: false } });
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Owner permissions"));
+    const fo = (await screen.findByTestId("owner-perm-failover")) as HTMLInputElement;
+    expect(fo.checked).toBe(false);
+    await fireEvent.click(fo);
+    await fireEvent.click(screen.getByTestId("owner-perms-save"));
+    expect(api.apiSaveOwnerPerms).toHaveBeenCalledWith(
+      defaultProps.base, "claude", "default",
+      expect.objectContaining({ failover: true }),
+    );
+  });
+
+  it("mounts the failover card with the instance health", async () => {
+    vi.mocked(api.apiGetFailover).mockResolvedValue({
+      config: { enabled: false, triggers: [], chain: [], recheck_minutes: 10, return_home: true },
+      warnings: [], errors: [], can_edit: true,
+    });
+    vi.mocked(api.apiFailoverOptions).mockResolvedValue([]);
+    const d = makeDetail();
+    d.Instance.Health = { Kind: "unavailable", Since: "", Until: "", Reason: "" };
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: defaultProps });
+    expect(await screen.findByTestId("failover-card")).toBeTruthy();
+    expect(screen.getByTestId("failover-health-label").textContent).toBe("Unavailable");
   });
 });

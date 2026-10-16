@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -46,4 +47,36 @@ func (r Responder) ToolError(w http.ResponseWriter, id json.RawMessage, message,
 		Content: []ToolContent{{Type: "text", Text: string(b)}},
 		IsError: true,
 	})
+}
+
+// MaxToolResultBytes caps the text of one wick_execute result. A bigger
+// message closes the client's MCP connection instead of arriving, so the
+// call fails with a readable tool error instead.
+const MaxToolResultBytes = 6 << 20
+
+// OversizedResult returns the tool error for a result text over
+// MaxToolResultBytes, or "" when it fits. The size is measured as the text
+// will travel: JSON-escaped inside the response envelope.
+func OversizedResult(text string) string {
+	n := escapedLen(text)
+	if n <= MaxToolResultBytes {
+		return ""
+	}
+	return fmt.Sprintf("result too large (%.1f MB, limit %d MB); it was not sent because a message this big closes the connection. Narrow the request (fewer rows, a filter, a smaller page), split a batch into smaller ones, or use the op's file option when it has one (e.g. save_to_artifacts) so the content is written to artifacts/ and only the path comes back", float64(n)/(1<<20), MaxToolResultBytes>>20)
+}
+
+// escapedLen is len(text) once encoded as a JSON string (without quotes),
+// as encoding/json writes it: quote, backslash and the common control
+// characters take 2 bytes, other control characters and <, >, & take 6.
+func escapedLen(text string) int {
+	n := len(text)
+	for i := 0; i < len(text); i++ {
+		switch c := text[i]; {
+		case c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t':
+			n++
+		case c < 0x20 || c == '<' || c == '>' || c == '&':
+			n += 5
+		}
+	}
+	return n
 }

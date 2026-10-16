@@ -308,9 +308,14 @@ type State struct {
 	ThreadTS string `json:"thread_ts,omitempty"`
 	LastTS   string `json:"last_ts,omitempty"`
 	// SentTS is the last turn's own message: what Recheck reads from.
-	SentTS    string    `json:"sent_ts,omitempty"`
-	LastNote  string    `json:"last_note,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	SentTS string `json:"sent_ts,omitempty"`
+	// Token is the last turn's marker token ("" = marker off) and
+	// PrevSentTS the turn before's message: Recheck hears what the turn
+	// did (tracker.takesOlder).
+	Token      string    `json:"token,omitempty"`
+	PrevSentTS string    `json:"prev_sent_ts,omitempty"`
+	LastNote   string    `json:"last_note,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func LoadState(dir string) State {

@@ -12,6 +12,8 @@
 // Codex and Gemini parsers land in phase 6.
 package event
 
+import "time"
+
 // EventType is the normalized event taxonomy used across all CLIs.
 //
 // `Thinking` is optional — only Claude exposes thinking deltas; other
@@ -74,6 +76,10 @@ const (
 	// RemoteLink carries the remote's own page for the running turn
 	// (.Text = URL), where it can be followed or stopped. Not end-of-turn.
 	RemoteLink
+	// Notice is a line wick itself posts to a session's channels, ABOUT the
+	// session rather than part of the reply (.Text). Only the channel
+	// registry makes one; providers never emit it.
+	Notice
 )
 
 // String makes log lines readable. Not used for serialization.
@@ -97,6 +103,8 @@ func (t EventType) String() string {
 		return "warning"
 	case Compaction:
 		return "compaction"
+	case Notice:
+		return "notice"
 	case Trace:
 		return "trace"
 	case TextReplace:
@@ -125,6 +133,19 @@ type AgentEvent struct {
 	IsError   bool   // ToolResult: true when the tool returned an error
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
+	// ErrKind is what an Error says about the ACCOUNT (limit, auth,
+	// vendor down) — see limit.go. Also set on a Synthetic TextDelta,
+	// which is how claude announces a limit before its error result.
+	// ErrNone everywhere else.
+	ErrKind ErrKind
+	// ResetAt is when an ErrLimit lifts, zero when the message did not
+	// say.
+	ResetAt time.Time
+	// Synthetic marks a TextDelta the CLI wrote itself rather than the
+	// model — claude's "You've hit your session limit · resets …". It is
+	// shown like any text but is not the model's output: the turn has
+	// not produced anything because of it.
+	Synthetic bool
 	Raw       string // verbatim source line
 	// RemoteNote labels how a remote agent's turn ended (Done only):
 	// "ended without marker", "follow-up", "late reply".
@@ -181,6 +202,31 @@ type AgentEvent struct {
 	// leave this zero, and zero means "this frame said nothing about the
 	// window", never "the window is empty".
 	ContextUsed int
+
+	// RateLimit is the account's rate-limit windows as the CLI reported
+	// them mid-stream (claude's rate_limit_event). It rides on an Unknown
+	// event: nothing about the turn changes, only the usage cache reads
+	// it. Nil everywhere else.
+	RateLimit *RateLimitInfo
+}
+
+// RateLimitInfo is one rate-limit report: the windows it carried, keyed
+// like the usage API's ("five_hour", "seven_day", …). A window the
+// account does not have is simply absent.
+type RateLimitInfo struct {
+	// Status is the CLI's verdict for the request ("allowed", …).
+	Status  string
+	Windows map[string]RateLimitWindow
+	// ObservedAt is when wick read the report.
+	ObservedAt time.Time
+}
+
+// RateLimitWindow is one window's level. Utilization is a percent on
+// the same scale as the usage API (0-100, may exceed 100); ResetsAt is
+// zero when unreported.
+type RateLimitWindow struct {
+	Utilization float64
+	ResetsAt    time.Time
 }
 
 // QueueInfo is one remote_queue line: message ID's State (queued, sent,

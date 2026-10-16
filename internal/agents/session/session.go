@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -41,6 +42,9 @@ const (
 	// project-scoped fire. Distinct so cleanup can tell disposable
 	// scheduler output from a conversation someone started.
 	OriginSchedule Origin = "schedule"
+	// OriginWorkflow marks a session a workflow run created for its agent
+	// nodes. Provider failover leaves these alone.
+	OriginWorkflow Origin = "workflow"
 )
 
 // Status is the high-level pool view: idle (no subprocess), queued
@@ -139,6 +143,11 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// TeamHold marks the session as taken over by a person: while true, a
+	// Team message another AGENT sends to it is recorded (its handoff row)
+	// but no turn runs for it, and the task ends rejected. A person's own
+	// @mention still runs. Toggled by the team connector's takeover op.
+	TeamHold bool `json:"team_hold,omitempty"`
 	// ChannelRef binds the session to the chat thread it belongs to, so a
 	// reply can be delivered there even when the message did NOT arrive
 	// from that chat.
@@ -205,9 +214,24 @@ type Meta struct {
 	// its own backing session (GroupSessionID) with its own access, and
 	// the replies are copied into this thread. nil = not a group.
 	AgentGroup *AgentGroup `json:"agent_group,omitempty"`
+	// TicketRoom makes this session the room of one ticket: a group chat
+	// that lives in the ticket's project, whose members work for the
+	// people who brought them in. Kept apart from AgentGroup, whose
+	// single-owner rules do not fit a room. nil = not a ticket room.
+	TicketRoom *TicketRoom `json:"ticket_room,omitempty"`
 	// GroupSessionID marks a member's backing session: the group chat it
 	// answers for. Hidden from the agent's own chat list.
 	GroupSessionID string `json:"group_session_id,omitempty"`
+	// TicketBacking marks a backing session made for a ticket room or an
+	// ordinary ticket session: it answered another person there, read
+	// everyone's text, and stays held to a room's rules even after its
+	// parent leaves the ticket or is gone.
+	TicketBacking bool `json:"ticket_backing,omitempty"`
+	// LinkedFromSession pairs this chat of a Team agent with the
+	// conversation that messages it (team_message or an @mention): later
+	// messages from that conversation land here instead of the agent's
+	// main chat. Kept on disk so the pair outlives a restart.
+	LinkedFromSession string `json:"linked_from_session,omitempty"`
 }
 
 // AgentGroup is a group chat's settings (Meta.AgentGroup).
@@ -226,6 +250,62 @@ type AgentGroup struct {
 	LastReadAt *time.Time `json:"last_read_at,omitempty"`
 }
 
+// Kinds of a ticket room member (RoomMember.Kind).
+const (
+	// RoomMemberAgent is a Team agent working for OwnerID.
+	RoomMemberAgent = "agent"
+	// RoomMemberProjectDefault is the project's own prompt and provider,
+	// running as whoever sends the message.
+	RoomMemberProjectDefault = "project_default"
+)
+
+// TicketRoom is a ticket room's settings (Meta.TicketRoom).
+type TicketRoom struct {
+	TicketID string       `json:"ticket_id"`
+	Members  []RoomMember `json:"members"`
+	// ShareFull is, per user id, whether that person's agents read the
+	// whole thread — other people's messages and agents included — or
+	// only that person's own part of it (the default).
+	ShareFull map[string]bool `json:"share_full,omitempty"`
+}
+
+// RoomMember is one member of a ticket room. Identity is (AgentID,
+// OwnerID), never the handle: everyone's Captain is "captain".
+type RoomMember struct {
+	Kind    string `json:"kind"`
+	AgentID string `json:"agent_id,omitempty"`
+	// OwnerID is the person the member works for ("" for a project
+	// default, which works for whoever sends).
+	OwnerID string `json:"owner_id"`
+	// Home marks the member every room starts with; it cannot be removed.
+	Home bool `json:"home,omitempty"`
+}
+
+// Member returns the agent member agentID working for ownerID.
+func (r *TicketRoom) Member(agentID, ownerID string) (RoomMember, bool) {
+	if r == nil || agentID == "" {
+		return RoomMember{}, false
+	}
+	for _, m := range r.Members {
+		if m.Kind == RoomMemberAgent && m.AgentID == agentID && m.OwnerID == ownerID {
+			return m, true
+		}
+	}
+	return RoomMember{}, false
+}
+
+// Home returns the room's home member.
+func (r *TicketRoom) Home() (RoomMember, bool) {
+	if r != nil {
+		for _, m := range r.Members {
+			if m.Home {
+				return m, true
+			}
+		}
+	}
+	return RoomMember{}, false
+}
+
 // ChannelRef is where a session's replies belong: a chat channel and the
 // thread inside it. Written by the channel that owns the session and read
 // back when its in-memory state is unavailable.
@@ -239,6 +319,10 @@ type ChannelRef struct {
 	// Instance identifies WHICH configured bot owns the thread, so a
 	// multi-instance host replies as the one that was there.
 	Instance string `json:"instance,omitempty"`
+	// LastSeenTS is the newest message ts in the thread the session has
+	// already seen (the message that started a turn, or the bot's own
+	// reply). The next turn catches up on what was said after it.
+	LastSeenTS string `json:"last_seen_ts,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
@@ -415,6 +499,22 @@ type CreateOptions struct {
 // per creator. Wired at boot by the Team service.
 var ProjectAgent func(projectID string) string
 
+// agentSlackPrefix starts the id of every session a Team agent's own Slack
+// bot opens: "slackagent-<agent id>-<thread ts>".
+const agentSlackPrefix = "slackagent-"
+
+// AgentOfSessionID names the Team agent whose own Slack bot opened the
+// session id, "" for any other id. The id says it outright, so it holds even
+// where ProjectAgent cannot: an agent adopted onto an ordinary project
+// (no agent tag) still owns the threads its bot answers.
+func AgentOfSessionID(id string) string {
+	rest, ok := strings.CutPrefix(id, agentSlackPrefix)
+	if !ok || len(rest) < 37 || rest[36] != '-' {
+		return ""
+	}
+	return rest[:36]
+}
+
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
 // array), agent.md snapshot. No filesystem work touches the project
 // folder — project folders live under projects/<id>/ and are shared
@@ -455,6 +555,9 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		AgentID:         opt.AgentID,
 		AgentMain:       opt.AgentMain,
 	}
+	if meta.AgentID == "" && meta.ParentSessionID == "" {
+		meta.AgentID = AgentOfSessionID(opt.ID)
+	}
 	if meta.AgentID == "" && meta.ParentSessionID == "" && meta.ProjectID != "" && ProjectAgent != nil {
 		meta.AgentID = ProjectAgent(meta.ProjectID)
 	}
@@ -484,6 +587,10 @@ func Load(layout config.Layout, id string) (Session, error) {
 	var meta Meta
 	if err := storage.ReadJSON(layout.SessionMeta(id), &meta); err != nil {
 		return Session{}, err
+	}
+	// Threads an agent's bot opened before Create stamped them.
+	if meta.AgentID == "" && meta.ParentSessionID == "" && meta.GroupSessionID == "" {
+		meta.AgentID = AgentOfSessionID(id)
 	}
 	var agents []AgentEntry
 	if storage.PathExists(layout.SessionAgents(id)) {
@@ -619,6 +726,10 @@ func SetProject(_ context.Context, layout config.Layout, id, newProjectID string
 		return nil
 	}
 	sess.Meta.ProjectID = newProjectID
+	// The Source selection names a repo in the old folder. Kept, a repo
+	// of the same name in the new project would read as a choice the
+	// person never made there.
+	sess.Meta.ScmRepo = ""
 	sess.Meta.LastActive = time.Now().UTC()
 	return SaveMeta(layout, id, sess.Meta)
 }

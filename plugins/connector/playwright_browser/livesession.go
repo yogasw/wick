@@ -187,8 +187,11 @@ func openSession(c *connector.Ctx) (any, error) {
 	// don't, so guard early with a clear message instead of hanging until the 20s
 	// port timeout.
 	b := strings.ToLower(strings.TrimSpace(c.Cfg("browser")))
-	if b != "" && b != defBrowser && !isCloakEngine(b) {
-		return nil, fmt.Errorf("live sessions require a chromium-based engine (chromium, cloakbrowser, or cloakbrowser-pro); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
+	if b != "" && b != defBrowser && !isCloakEngine(b) && !isMoliEngine(b) {
+		return nil, fmt.Errorf("live sessions require a CDP engine (chromium, cloakbrowser, cloakbrowser-pro, or moli); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
+	}
+	if isMoliEngine(b) {
+		return openMoliSession(c, dir)
 	}
 
 	// Resolve the browser binary via playwright (respects executable_path too).
@@ -323,6 +326,65 @@ func openSession(c *connector.Ctx) (any, error) {
 		"profile":    profile,
 		"note":       "Live browser started. Pass this session_id to run/screenshot/etc to reuse it. Close it with session_close when done.",
 	}, nil
+}
+
+// openMoliSession is openSession for the moli engine. Moli is not Chromium, so
+// instead of a detached chrome + DevToolsActivePort it starts a detached
+// `moli serve` on a free port with the profile as --profile-dir. The metadata,
+// profile rules and reconnect path (ConnectOverCDP) are shared with Chromium.
+func openMoliSession(c *connector.Ctx, dir string) (any, error) {
+	id := newSessionID(c)
+	profile, err := resolveProfile(c, c.Input("profile"))
+	if err != nil {
+		return nil, err
+	}
+	if profile != "" {
+		if owner, ok := profileInUse(c, profile); ok {
+			return nil, fmt.Errorf("profile %q is already in use by live session %s: close it first (session_close) before reopening the profile", profile, owner)
+		}
+	}
+	udd := profileDir(dir, profile, id)
+	if err := os.MkdirAll(udd, 0o755); err != nil {
+		return nil, fmt.Errorf("create profile dir: %w", err)
+	}
+	// Moli takes an flock on the profile, so a killed server never leaves a
+	// stale lock behind — no clearStaleProfileLocks needed here.
+	mp, err := startMoli(c, udd, filepath.Join(udd, "moli-serve.log"))
+	if err != nil {
+		return nil, err
+	}
+	touchProfileDir(udd, sessionNow(c))
+	meta := sessionMeta{
+		ID:       id,
+		PID:      mp.cmd.Process.Pid,
+		CDPURL:   mp.cdpURL,
+		Browser:  moliEngine,
+		Created:  sessionNow(c),
+		UserData: udd,
+		Profile:  profile,
+	}
+	if err := writeMeta(dir, meta); err != nil {
+		mp.stop()
+		return nil, fmt.Errorf("persist session: %w", err)
+	}
+	return map[string]any{
+		"session_id": id,
+		"pid":        meta.PID,
+		"cdp_url":    mp.cdpURL,
+		"profile":    profile,
+		"note":       moliSessionNote(len(installedExtensions(c))),
+	}, nil
+}
+
+// moliSessionNote is session_open's note for a moli session. Installed
+// extensions only load into Chromium, so say they were skipped rather than
+// leave the agent assuming they are active.
+func moliSessionNote(extensions int) string {
+	note := "Live moli browser started. Pass this session_id to run/screenshot/etc to reuse it. Close it with session_close when done."
+	if extensions > 0 {
+		note += fmt.Sprintf(" Moli does not load browser extensions; %d installed extension(s) were skipped.", extensions)
+	}
+	return note
 }
 
 // ── connect ──────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ package channels
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -236,6 +237,37 @@ type ThreadBinding struct {
 	ChatID   string // channel / room id inside that adapter
 	ThreadID string // thread within the chat (Slack thread_ts)
 	Instance string // which configured bot owns it
+	// LastSeenTS is the newest thread message the session has seen. The
+	// store only moves it forward: an empty or older value on write keeps
+	// the stored one, so a plain re-bind never resets it.
+	LastSeenTS string
+}
+
+// SlackTSAfter reports whether Slack message ts a ("1700000000.000100") is
+// newer than b. An empty b is older than everything. Seconds and the
+// fractional part compare as integers, so no float rounding is involved.
+func SlackTSAfter(a, b string) bool {
+	if a == "" {
+		return false
+	}
+	if b == "" {
+		return true
+	}
+	as, af, _ := strings.Cut(a, ".")
+	bs, bf, _ := strings.Cut(b, ".")
+	if len(as) != len(bs) {
+		return len(as) > len(bs)
+	}
+	if as != bs {
+		return as > bs
+	}
+	for len(af) < len(bf) {
+		af += "0"
+	}
+	for len(bf) < len(af) {
+		bf += "0"
+	}
+	return af > bf
 }
 
 // SessionStartHook fires once when a channel sees a brand-new session
@@ -333,6 +365,18 @@ type LiveTurnReporter interface {
 type DetachedSurvivor struct {
 	Handle     string
 	ProfileKey string
+	// Teammate marks a Team teammate the session is waiting on (a working
+	// team task) rather than a sub-agent. Zero value = sub-agent.
+	Teammate bool
+	// Hidden: the session's agent has "Show teammates in channels" off,
+	// so the channel shows its generic working state and never the name.
+	// Teammate entries only.
+	Hidden bool
+	// Replied / Of count the tasks of the session's open team batches:
+	// how many came back out of how many. The same on every teammate
+	// entry of one set; Of == 0 = unknown.
+	Replied int
+	Of      int
 }
 
 // DetachedNoticeReceiver is notified when a session's leader was killed while
@@ -534,6 +578,18 @@ type RequestRouter interface {
 	// OwnsRequest reports whether r is destined for this instance. It must
 	// not consume r.Body (the dispatcher may hand r to another instance).
 	OwnsRequest(r *http.Request) bool
+}
+
+// RequestVerifier is implemented by webhook channels whose requests carry
+// a per-instance signature (Slack's signing secret). When several
+// instances share a route and none claims a request, the registry hands it
+// to the one whose secret verifies body — and acknowledges-and-drops one
+// only a removed instance verifies.
+type RequestVerifier interface {
+	// VerifiesRoute names the routes whose requests carry the signature;
+	// only those bodies are read for routing (others stream untouched).
+	VerifiesRoute(path string) bool
+	VerifiesRequest(h http.Header, body []byte) bool
 }
 
 // ConfigSource is per-channel hot-reload glue. Hash returns a stable

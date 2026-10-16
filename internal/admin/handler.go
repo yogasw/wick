@@ -108,6 +108,7 @@ type Handler struct {
 
 	repo       *repo
 	tools      []tool.Tool
+	toolsFn    func() []tool.Tool
 	configs    *configs.Service
 	sso        *sso.Service
 	svc        JobListProvider
@@ -351,6 +352,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/providers", admin(h.providersAdminPage))
 	mux.Handle("POST /admin/providers/{type}/{name}/access-tags", admin(h.setProviderAccessTags))
 	mux.Handle("POST /admin/providers/{type}/{name}/manage-tags", admin(h.setProviderManageTags))
+	mux.Handle("POST /admin/providers/{type}/{name}/owner", admin(h.setProviderOwner))
 
 	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
 	mux.Handle("GET /admin/team-agents", admin(h.teamAgentsAdminPage))
@@ -362,6 +364,16 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	// /admin/access-tokens, not /admin/mcp.
 	mux.Handle("GET /admin/access-tokens", admin(h.accessTokensAdminPage))
 	mux.Handle("POST /admin/access-tokens/{id}/revoke", admin(h.revokeTokenAdmin))
+
+	// Plugin test requests: the admin page decides, the /api routes are the
+	// CLI side (PAT bearer) a locally run plugin binary talks to.
+	mux.Handle("GET /admin/plugins/dev-mode", admin(h.pluginTestsPage))
+	mux.Handle("POST /admin/plugins/dev-mode/settings", admin(h.pluginTestsSettings))
+	mux.Handle("POST /admin/plugins/dev-mode/{id}/{action}", admin(h.pluginTestDecide))
+	mux.HandleFunc("POST /api/plugin-tests", h.apiPluginTestCreate)
+	mux.HandleFunc("GET /api/plugin-tests/{id}", h.apiPluginTestGet)
+	mux.HandleFunc("POST /api/plugin-tests/{id}/config", h.apiPluginTestConfig)
+	mux.HandleFunc("POST /api/plugin-tests/{id}/run", h.apiPluginTestRun)
 
 	// OAuth connected apps (admin override view).
 	mux.Handle("GET /admin/connections", admin(h.connectionsAdminPage))
@@ -415,7 +427,7 @@ func (h *Handler) dashboardPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) countTools() int {
 	n := 0
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if strings.HasPrefix(t.Path, "/tools/") {
 			n++
 		}
@@ -439,7 +451,7 @@ func (h *Handler) gatherMissing(ctx context.Context, jobs []entity.Job) (total i
 	}
 
 	// Tools — link to manager for config editing
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if !strings.HasPrefix(t.Path, "/tools/") {
 			continue
 		}
@@ -662,7 +674,7 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 	currentUser := login.GetUser(r.Context())
 
 	var toolsOnly []tool.Tool
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if strings.HasPrefix(t.Path, "/tools/") {
 			toolsOnly = append(toolsOnly, t)
 		}
@@ -1031,4 +1043,19 @@ const channelPlaceholderDomain = "@channel.local"
 // an unidentifiable channel sender, rather than a real contact address.
 func isChannelPlaceholderEmail(email string) bool {
 	return strings.HasSuffix(email, channelPlaceholderDomain)
+}
+
+// SetToolsSource makes the handler read its tool list from fn on every use
+// instead of the slice given to NewHandler, so a tool plugin loaded or
+// unloaded while wick runs is listed (or not) without a restart.
+func (h *Handler) SetToolsSource(fn func() []tool.Tool) *Handler {
+	h.toolsFn = fn
+	return h
+}
+
+func (h *Handler) toolsNow() []tool.Tool {
+	if h.toolsFn != nil {
+		return h.toolsFn()
+	}
+	return h.tools
 }

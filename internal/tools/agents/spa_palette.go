@@ -192,16 +192,17 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 	}
 	// Channel-as-trigger drill rows — one per channel that exposes events.
 	// ChannelsList returns one row per registered INSTANCE (Slack runs one
-	// bot per owning user), so collapse to the row this user should see:
-	// theirs when they have one, labelled "Slack - <bot> - <owner>".
+	// bot per owning user and one per Team agent), so narrow to the rows
+	// this user should see: every bot of theirs (agents' included), else
+	// one stand-in, labelled "Slack - <bot> - <owner>".
 	ownerNames := channelOwnerNames()
-	chRows := visibleChannelInstances(globalWorkflowMgr.MCP.ChannelsList(), me)
+	chRows := visibleChannelInstances(resolveAgentChannelOwners(globalWorkflowMgr.MCP.ChannelsList()), me)
 	for _, ch := range chRows {
 		evs := globalWorkflowMgr.Integration.EventsByChannel(ch.Name)
 		if len(evs) == 0 {
 			continue
 		}
-		key := "channel-trigger:" + ch.Name
+		key := channelDrillKey("channel-trigger:", ch)
 		events := make([]paletteItem, 0, len(evs))
 		for _, ev := range evs {
 			events = append(events, paletteItem{
@@ -282,7 +283,7 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 		if len(ch.Actions) == 0 {
 			continue
 		}
-		key := "channel-ops:" + ch.Name
+		key := channelDrillKey("channel-ops:", ch)
 		ops := make([]paletteItem, 0, len(ch.Actions))
 		for _, a := range ch.Actions {
 			ops = append(ops, paletteItem{

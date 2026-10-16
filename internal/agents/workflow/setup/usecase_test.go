@@ -35,7 +35,12 @@ func newMgr(t *testing.T) *Manager {
 	t.Helper()
 	layout := config.Layout{BaseDir: t.TempDir()}
 	require.NoError(t, layout.EnsureLayout())
-	return New(layout)
+	m := New(layout)
+	// Registered after t.TempDir, so it runs first: router workers still
+	// writing a run's files would otherwise race the temp dir removal
+	// ("directory not empty").
+	t.Cleanup(m.Stop)
+	return m
 }
 
 // runWorkflow saves a workflow to disk, registers it with the

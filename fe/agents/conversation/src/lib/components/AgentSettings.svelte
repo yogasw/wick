@@ -11,10 +11,13 @@
   import { toastOk } from "@wick-fe/common-stores";
   import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
-  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, switchAvatarKind, type AvatarSpec } from "@wick-fe/common-avatar";
+  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, IMAGE_POSES, colorInputValue, isBlobKind, isImageKind, switchAvatarKind, avatarImageUrl, type AvatarSpec } from "@wick-fe/common-avatar";
+  const pendingImage = (a: AvatarSpec) => isImageKind(a.kind) && !a.image?.v;
+  import AvatarImageEditor from "./AvatarImageEditor.svelte";
+  import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
-    getAgent, updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, listAgentShares, makeCaptain, runApi,
+    getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
@@ -27,6 +30,7 @@
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
   import type { MentionFrom, CaptainCan } from "../api/team.js";
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf, captainBlock } from "../captainSettings.js";
+  import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
@@ -57,7 +61,7 @@
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
-    disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean; show_in_projects: boolean;
+    disabled: boolean; allow_provider_switch: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
@@ -70,7 +74,7 @@
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
-      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
+      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
@@ -151,6 +155,8 @@
   let confirmCaptain = $state(false);
   let captainSaving = $state(false);
   let captainError = $state("");
+  // "Give @x your access": ticked each time the confirm opens.
+  let captainGiveAccess = $state(true);
   $effect(() => {
     if (view !== "captain" || agent.is_captain || remote) return;
     const id = agent.id;
@@ -164,12 +170,18 @@
     captainSaving = true;
     captainError = "";
     try {
-      const r = await runApi(makeCaptain(base, agent.id));
-      saved = r.agent;
-      draft.manage_agents = r.agent.manage_agents ?? r.agent.is_captain;
-      onSaved(r.agent);
+      const { agent: a, accessFailed } = await makeCaptainWithAccess(base, agent.id, captainGiveAccess);
+      saved = a;
+      draft.manage_agents = a.manage_agents ?? a.is_captain;
+      // Only a given access overrides the Access draft; unticked (or a
+      // failed update) keeps the user's unsaved edits.
+      if (captainGiveAccess && !accessFailed) {
+        draft.run_as = a.run_as ?? "caller";
+        draft.access_mode = normalizeAccessMode(a.access_mode);
+      }
+      onSaved(a);
       confirmCaptain = false;
-      toastOk(`@${r.agent.handle} is now your Team's Captain`);
+      if (!accessFailed) toastOk(`@${a.handle} is now your Team's Captain`);
     } catch (err) {
       captainError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -295,7 +307,15 @@
       p.model = model;
     }
     if (!sameValue(d.features, saved.features)) p.features = { ...d.features };
-    if (!sameValue(d.avatar, saved.avatar)) p.avatar = { ...d.avatar };
+    // Image with no picture yet is a local, pending state (Style shows
+    // Image, the editor "No image yet"): the style is not saved until an
+    // upload lands (the server would turn it into Classic and the draft
+    // would differ again forever), but the rest of the avatar — color,
+    // shape, Reacts to — is, under the style saved before.
+    {
+      const av = avatarToSave(d.avatar);
+      if (!sameValue(av, avatarCmp(saved.avatar))) p.avatar = av;
+    }
     if (!sameValue(d.grants, saved.allowed_connectors ?? [])) {
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
@@ -304,6 +324,8 @@
     if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
+    if (d.channel_show_teammates !== (saved.channel_show_teammates !== false)) p.channel_show_teammates = d.channel_show_teammates;
+    if (d.channel_hide_interim !== (saved.channel_hide_interim !== false)) p.channel_hide_interim = d.channel_hide_interim;
     if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
     if (d.show_in_projects !== (saved.show_in_projects ?? !saved.own_project)) p.show_in_projects = d.show_in_projects;
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
@@ -346,6 +368,47 @@
     flush();
   }
 
+  /* Style Image: the picture uploads at once (the server checks and
+     re-encodes it); the avatar switches to it through the normal save. */
+  let imgBusy = $state(false);
+  let imgError = $state("");
+  const avatarImage = $derived(
+    isImageKind(draft.avatar.kind) && draft.avatar.image?.v
+      ? { ...draft.avatar.image, src: avatarImageUrl(base, agent.id, draft.avatar.image.v) }
+      : null,
+  );
+  async function uploadImage(f: File) {
+    imgError = pickError(f);
+    if (imgError) return;
+    imgBusy = true;
+    try {
+      const r = await runApi(uploadAvatarImage(base, agent.id, await fileData(f)));
+      // A new picture starts centred but keeps the chosen crop shape.
+      draft.avatar = imageAvatar(draft.avatar, r.v, r.aspect, { ...DEFAULT_CROP, crop: draft.avatar.image?.crop ?? DEFAULT_CROP.crop });
+    } catch (err) {
+      imgError = err instanceof Error ? err.message : String(err);
+    } finally {
+      imgBusy = false;
+    }
+  }
+
+  /** avatarCmp drops the picture's src: the API adds it on the way out
+      and never stores it, so it must not make the draft look changed. */
+  function avatarCmp(a: AvatarSpec): AvatarSpec {
+    if (!a.image?.src) return { ...a };
+    const { src: _src, ...image } = a.image;
+    return { ...a, image };
+  }
+
+  /** avatarToSave is what the avatar part of a PATCH carries: the draft,
+      or while Image is pending, the draft under the saved style + picture. */
+  function avatarToSave(a: AvatarSpec): AvatarSpec {
+    if (!pendingImage(a)) return avatarCmp(a);
+    const { kind: _k, image: _i, ...rest } = a;
+    const s = saved.avatar;
+    return avatarCmp({ ...rest, ...(s?.kind ? { kind: s.kind } : {}), ...(s?.image ? { image: s.image } : {}) });
+  }
+
   async function save() {
     if (!dirty || !handleOk) return;
     if (saving) return; // the effect re-fires once the in-flight PATCH settles
@@ -360,6 +423,13 @@
       const next = await runApi(updateAgent(base, agent.id, sent));
       onSaved(next);
       saved = next;
+      // The server owns the picture's v/aspect (another tab may have
+      // uploaded a new one) and normalises the rest: when the avatar was
+      // not edited while this PATCH was in flight, take its answer, or the
+      // draft would differ from saved forever and PATCH again and again.
+      if (sent.avatar && next.avatar && sameValue(avatarToSave(draft.avatar), sent.avatar) && !pendingImage(draft.avatar)) {
+        draft.avatar = avatarCmp(next.avatar);
+      }
       failedKey = "";
       pruned = 0;
       grantErrors = null;
@@ -641,14 +711,14 @@
     {/key}
   {:else if view === "avatar"}
     <div class="flex items-center gap-4">
-      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} live />
-      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} working live events={draft.avatar.events} />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={72} live />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={72} working live events={draft.avatar.events} />
       <span class="text-xs text-black-800 dark:text-black-600">idle · working</span>
     </div>
     <div>
       <span class={label}>Style</span>
       <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Avatar kind">
-        {#each [["", "Classic"], ["blob", "Blob"]] as [k, lbl] (k)}
+        {#each [["", "Classic"], ["blob", "Blob"], ["image", "Image"]] as [k, lbl] (k)}
           <button
             type="button"
             class="rounded-md px-3 py-1 text-xs {(draft.avatar.kind ?? "") === k ? 'bg-green-500 text-white-100' : 'text-black-800 dark:text-black-600'}"
@@ -659,7 +729,30 @@
         {/each}
       </div>
     </div>
-    {#if isBlobKind(draft.avatar.kind)}
+    {#if isImageKind(draft.avatar.kind)}
+      <AvatarImageEditor
+        src={avatarImage?.src ?? ""}
+        aspect={draft.avatar.image?.aspect ?? 1}
+        crop={draft.avatar.image ?? DEFAULT_CROP}
+        busy={imgBusy}
+        error={imgError}
+        labelClass={label}
+        onFile={uploadImage}
+        onReset={() => {
+          // Local only, as in the mockup: the stored picture stays until a
+          // new upload replaces it (or the agent is deleted).
+          imgError = "";
+          const { image: _img, ...rest } = draft.avatar;
+          draft.avatar = rest;
+        }}
+        onCrop={(c) => {
+          if (draft.avatar.image) draft.avatar = { ...draft.avatar, image: { ...draft.avatar.image, ...c } };
+        }}
+      />
+      {#if pendingImage(draft.avatar)}
+        <p class="text-xs text-amber-600 dark:text-amber-400" data-testid="avatar-image-pending">Not saved yet: upload a picture to use Image. Other avatar changes are saved with the current style.</p>
+      {/if}
+    {:else if isBlobKind(draft.avatar.kind)}
       <BlobAvatarPicker
         shape={draft.avatar.shape}
         expression={draft.avatar.expression}
@@ -716,18 +809,35 @@
                  moves the way that state does there. -->
             {#if st === "egg"}
               {#key hatchRun}
-                <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} hatching live />
+                <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={40} pose={st} hatching live />
               {/key}
             {:else}
-              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} live />
+              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={40} pose={st} live />
             {/if}
             <span class="text-[11px] text-black-800 dark:text-black-600">{AVATAR_STATE_LABELS[st]}</span>
           </div>
         {/each}
       </div>
     </div>
+    {#if isImageKind(draft.avatar.kind)}
+      <!-- The image avatar's own poses (the mockup's Poses grid): each one
+           moves its own way; the table below picks them per event. -->
+      <div data-testid="avatar-poses">
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">Poses</p>
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600">Every pose has its own motion. Pick them in the table below.</p>
+        <div class="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-7">
+          {#each IMAGE_POSES as p (p)}
+            <div class="flex flex-col items-center gap-1.5 text-center" data-testid="avatar-pose-{p}">
+              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} color={draft.avatar.color} image={avatarImage} size={40} pose={p} live />
+              <span class="text-[11px] text-black-800 dark:text-black-600">{p}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
     <AvatarEventsTable
       kind={draft.avatar.kind}
+      image={avatarImage}
       shape={draft.avatar.shape}
       color={draft.avatar.color}
       expression={draft.avatar.expression}
@@ -771,7 +881,7 @@
                 draft.mention_allow = on ? [...draft.mention_allow, a.id] : draft.mention_allow.filter((id) => id !== a.id);
               }}
             />
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={20} />
+            <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={20} />
             <span>{a.name}</span>
             <span class="text-xs text-black-800 dark:text-black-600">@{a.handle}</span>
           </label>
@@ -809,7 +919,7 @@
           </span>
         </span>
         <span class="shrink-0 whitespace-nowrap">
-          <Button variant="secondary" disabled={captainShares === null || !!captainReason || captainSaving} onclick={() => { captainError = ""; confirmCaptain = true; }}>Make Captain</Button>
+          <Button variant="secondary" disabled={captainShares === null || !!captainReason || captainSaving} onclick={() => { captainError = ""; captainGiveAccess = true; confirmCaptain = true; }}>Make Captain</Button>
         </span>
       </div>
     {/if}
@@ -897,6 +1007,18 @@
         Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
       </p>
     </div>
+    <div data-testid="as-show-teammates">
+      <Toggle checked={draft.channel_show_teammates} onChange={(v) => (draft.channel_show_teammates = v)} label="Show teammates in channels" />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        When off, channels see one agent working; teammates and their names stay in the web view only.
+      </p>
+    </div>
+    <div data-testid="as-hide-interim">
+      <Toggle checked={draft.channel_hide_interim} onChange={(v) => (draft.channel_hide_interim = v)} label="Hide in-between messages in channels" />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        Status lines the lead writes while teammates work stay out of Slack and Telegram; the final answer always posts.
+      </p>
+    </div>
     {@render dangerZone()}
   {/if}
   {#if error}<p class="text-sm text-neg-400">{error}</p>{/if}
@@ -977,6 +1099,10 @@
       {#if currentCaptain}<b>@{currentCaptain.handle}</b> stops being the Captain;{" "}{/if}<b>@{agent.handle}</b> takes over coordinating your Team.
     </p>
     <p class="text-xs text-black-800 dark:text-black-600">Only the role moves: names, personas, chats and memory stay as they are. Mentions set to "Captain only" now come from @{agent.handle}.</p>
+    <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100" data-testid="captain-give-access">
+      <input type="checkbox" class="mt-1" bind:checked={captainGiveAccess} />
+      <span>Give @{agent.handle} your access<br /><span class="text-xs text-black-800 dark:text-black-600">{OWNER_ACCESS_HINT} Today: {accessToday(saved)}. Untick to keep that.</span></span>
+    </label>
     {#if captainError}<p class="text-xs text-neg-400" role="alert">{captainError}</p>{/if}
   </div>
   {#snippet footer()}

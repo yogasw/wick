@@ -62,7 +62,7 @@ func TestSharedWithOwnerBlock(t *testing.T) {
 		t.Fatal("no shared agents must add no block")
 	}
 	got := SharedWithOwner([]Member{{Name: "Ops", Handle: "ops", Tagline: "on-call"}})
-	for _, want := range []string{"## Shared with your owner", "You cannot message them", "- @ops — Ops, on-call"} {
+	for _, want := range []string{"## Shared with your owner", "You can message them like a teammate", "- @ops — Ops, on-call"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}

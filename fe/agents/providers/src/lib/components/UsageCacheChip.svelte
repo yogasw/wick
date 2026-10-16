@@ -10,25 +10,33 @@
      page never made; the chip says what the number is: this old. */
   import { cacheHint } from "$lib/usagerings.js";
 
-  type Props = { ageS: number; nextS?: number; fetchedAt?: string };
-  let { ageS, nextS = 0, fetchedAt = "" }: Props = $props();
+  /* lastError is the raw failure of the latest probe when it failed
+     after this reading was taken: the chip then says "cached" in amber
+     and the tooltip carries the error itself. Empty = a current reading. */
+  type Props = { ageS: number; nextS?: number; fetchedAt?: string; lastError?: string };
+  let { ageS, nextS = 0, fetchedAt = "", lastError = "" }: Props = $props();
 
   let hint = $derived(cacheHint(ageS, nextS));
   /* The tooltip adds the absolute local time when the server sent one —
      useful when the age is minutes old and the reader wants the clock. */
-  let title = $derived.by(() => {
+  let base = $derived.by(() => {
     if (!hint.full) return "";
     if (!fetchedAt) return hint.full;
     const t = new Date(fetchedAt);
     if (Number.isNaN(t.getTime())) return hint.full;
     return `${hint.full} (at ${clock24(t, true)})`;
   });
+  let stale = $derived(lastError.trim() !== "");
+  let title = $derived(stale && base ? `${base}. Last check failed: ${lastError.trim()}` : base);
 </script>
 
 {#if hint.short}
   <span
     data-testid="usage-cache-chip"
-    class="inline-flex items-center gap-1 whitespace-nowrap text-black-600 dark:text-black-700"
+    data-stale={stale ? "true" : undefined}
+    class="inline-flex items-center gap-1 whitespace-nowrap {stale
+      ? 'rounded bg-cau-100 dark:bg-cau-400/20 px-1 text-cau-400'
+      : 'text-black-600 dark:text-black-700'}"
     {title}
     aria-label={title}
   >
@@ -42,6 +50,6 @@
       />
       <path d="M10.4 1.6v2.2H8.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
-    {hint.short}
+    {stale ? `cached · ${hint.short}` : hint.short}
   </span>
 {/if}

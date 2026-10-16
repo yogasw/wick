@@ -365,6 +365,15 @@ func (h *Handler) updatePreferences(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Absent on the profile's other forms, so only the preferences form
+	// touches it. Anything but the two radio values is ignored rather than
+	// read as Icons, so a stray value cannot switch the rail off.
+	if v := r.FormValue("rail_labels"); v == entity.RailStyleIcons || v == entity.RailStyleLabels {
+		if err := h.svc.SetRailLabels(r.Context(), user.ID, v == entity.RailStyleLabels); err != nil {
+			http.Error(w, "failed to save preferences", http.StatusInternalServerError)
+			return
+		}
+	}
 	// Clearing a "don't ask again" lives on the same form, so a remembered
 	// answer stays reversible from the place it is displayed.
 	if r.FormValue("reset_ticket_prompts") != "" {

@@ -127,14 +127,29 @@ type Event struct {
 // BoardContext describes the ticket list a board button was clicked on.
 //
 // The filter is sent twice on purpose. Assignee is the raw toolbar choice
-// ("", "me", or a user id) — what the clicker picked. AssigneeID is that
-// choice RESOLVED against the clicker, so a receiver never has to guess who
-// "me" was and an empty value always means "everyone". A receiver that only
-// wants to know whose work this is reads AssigneeID and ignores the rest.
+// — what the clicker picked. The rest is that choice RESOLVED against the
+// clicker, so a receiver never has to guess who "me" was.
+//
+// The toolbar can tick several people and "none" (unassigned), so the
+// resolved form is a list: AssigneeIDs, plus AssigneeNone. AssigneeFiltered
+// says whether any of it applies; only when it is false does the list mean
+// "everyone". AssigneeID and its name/email are filled for a single person
+// only, as before — an empty AssigneeID means everyone ONLY when
+// AssigneeFiltered is false.
 type BoardContext struct {
-	// Assignee is the toolbar's own value: "" (all), "me", or a user id.
+	// Assignee is the toolbar's own value: "" (all), or a comma list of
+	// "me", "none" and user ids ("me" alone and a single id as before).
 	Assignee string `json:"assignee"`
-	// AssigneeID is the resolved user id; "" means every assignee.
+	// AssigneeFiltered is true when the list was narrowed by assignee at
+	// all. False = every ticket regardless of who it is on.
+	AssigneeFiltered bool `json:"assignee_filtered"`
+	// AssigneeIDs are the resolved people ("me" made the clicker's id).
+	AssigneeIDs []string `json:"assignee_ids,omitempty"`
+	// AssigneeNone says unassigned tickets were asked for.
+	AssigneeNone bool `json:"assignee_none,omitempty"`
+	// AssigneeID is the resolved user id when exactly one person (and not
+	// "none") was picked; "" otherwise — read AssigneeFiltered to tell
+	// "everyone" from "several".
 	AssigneeID   string `json:"assignee_id,omitempty"`
 	AssigneeName string `json:"assignee_name,omitempty"`
 	// AssigneeEmail is that person's email, for the same reason Actor has

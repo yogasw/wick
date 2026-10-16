@@ -13,8 +13,9 @@ import (
 )
 
 // api_provider_terminal.go is the Detail page's "Terminal" section for
-// omp/opencode: a gotty web terminal running one allowlisted command
-// under the instance's env, reached only through wick's reverse proxy.
+// every provider type registered with terminal.Register (omp, opencode,
+// claude, codex, gemini; not wick, which has no binary): a gotty web
+// terminal running one allowlisted command under the instance's env, reached only through wick's reverse proxy.
 // A terminal is a shell on the host, so every route is provider-admin
 // only (the same guard as provider configuration) and the guard runs
 // before anything else. gotty itself binds 127.0.0.1 with a random port
@@ -51,7 +52,7 @@ func findTerminalInstance(c *tool.Ctx) (provider.Instance, bool) {
 	if !ok {
 		return ins, false
 	}
-	if len(terminal.Commands(ins)) == 0 {
+	if !terminal.Supported(ins) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "no web terminal for provider type " + string(ins.Type)})
 		return ins, false
 	}
@@ -97,12 +98,10 @@ func apiProviderTerminalStart(c *tool.Ctx) {
 		c.JSON(http.StatusConflict, map[string]string{"error": "binary not found: " + bin})
 		return
 	}
-	if ins.Type == provider.TypeOpencode {
-		// The data dir must exist before opencode writes into it.
-		if _, err := provider.OpencodeEnv(ins); err != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
+	// Per-type setup (e.g. opencode's data dir) registered with the terminal.
+	if err := terminal.Prepare(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 	who := ""
 	if u := login.GetUser(c.Context()); u != nil {

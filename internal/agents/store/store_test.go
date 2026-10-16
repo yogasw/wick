@@ -715,9 +715,10 @@ func TestSessionStartAfterSwitchDoesNotHijackResumeID(t *testing.T) {
 	}
 }
 
-// TestSessionStartMatchingProviderStillPersists: the guard must not break
-// the normal path — an event from the provider the entry points at keeps
-// writing CLISessionID exactly as before.
+// TestSessionStartMatchingProviderStillPersists: an event from another
+// instance of the entry's type is parked under that instance (and the
+// type), never written as CLISessionID; one from the instance the entry
+// points at keeps writing CLISessionID exactly as before.
 func TestSessionStartMatchingProviderStillPersists(t *testing.T) {
 	layout := config.NewLayout(t.TempDir())
 	if err := layout.EnsureLayout(); err != nil {
@@ -743,11 +744,23 @@ func TestSessionStartMatchingProviderStillPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := got.Agents[0]
-	if a.CLISessionID != "id-42" {
-		t.Errorf("CLISessionID = %q, want id-42 — same-type events must keep persisting", a.CLISessionID)
+	if a.CLISessionID != "" {
+		t.Errorf("CLISessionID = %q, want empty — another instance's id cannot be resumed here", a.CLISessionID)
+	}
+	if a.ProviderSessions["claude/other_instance"] != "id-42" {
+		t.Errorf("ProviderSessions[claude/other_instance] = %q, want id-42", a.ProviderSessions["claude/other_instance"])
 	}
 	if a.ProviderSessions["claude"] != "id-42" {
 		t.Errorf("ProviderSessions[claude] = %q, want id-42", a.ProviderSessions["claude"])
+	}
+
+	// The instance the entry is on keeps persisting as before.
+	st = New(Options{Layout: layout, SessionID: "S1", AgentName: "main", Provider: "claude/claude_default"})
+	if _, err := st.Apply(event.AgentEvent{Type: event.SessionStart, SessionID: "id-43"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = session.Load(layout, "S1"); got.Agents[0].CLISessionID != "id-43" {
+		t.Errorf("CLISessionID = %q, want id-43", got.Agents[0].CLISessionID)
 	}
 }
 

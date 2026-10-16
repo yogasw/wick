@@ -24,6 +24,7 @@ package agents
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -88,6 +89,7 @@ func channelsPage(c *tool.Ctx) {
 				channels[i].Configured = m["enabled"] == "true"
 			} else {
 				channels[i].Configured = m["bot_token"] != ""
+				channels[i].Disabled = agentchannels.ChannelSwitchedOff(m)
 			}
 		}
 	}
@@ -108,7 +110,35 @@ func slackChannelPage(c *tool.Ctx) {
 		ChannelSlug: "slack",
 		Rows:        rows,
 		ActionBase:  c.Base() + "/channels/slack",
+		Convert:     slackConvertVM(c, userID),
 	}))
+}
+
+// slackConvertVM feeds the "Convert to agent" panel: shown once a bot token
+// is stored, listing the caller's own agents as targets.
+func slackConvertVM(c *tool.Ctx, userID string) *view.SlackConvertVM {
+	if globalDB == nil {
+		return nil
+	}
+	m, err := agentchannels.GetChannelConfigMapForUser(globalDB, "slack", userID)
+	if err != nil || m["bot_token"] == "" {
+		return nil
+	}
+	vm := &view.SlackConvertVM{APIBase: c.Base() + "/api/team/agents/", InstanceKey: channelsSlackKey(userID)}
+	for _, p := range convertTargetAgents(c.Context(), actorID(c)) {
+		vm.Agents = append(vm.Agents, view.SlackConvertAgent{ID: p.ID, Handle: p.Handle})
+	}
+	if len(vm.Agents) == 0 && globalTeam != nil {
+		if own, err := globalTeam.List(c.Context(), actorID(c)); err == nil {
+			for _, p := range own {
+				if p.Kind == "" {
+					vm.AllDisabled = true
+					break
+				}
+			}
+		}
+	}
+	return vm
 }
 
 // restChannelPage renders the REST (OpenAI-compatible) channel config form
@@ -304,6 +334,8 @@ func channelSecretKeys(channelType string) map[string]bool {
 // makeChannelSaveHandler returns a POST handler for /channels/{channelType}/{key}
 // that saves one config value for the current user in the agent_channels table.
 // Fields declared secret in the channel's config struct are encrypted at rest.
+// An empty value for a secret keeps the stored one (the input of a stored
+// secret is always blank); clear=1 is the explicit Clear button and drops it.
 // Any logged-in user can configure their own channel (no admin gate).
 func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 	secretKeys := channelSecretKeys(channelType)
@@ -311,28 +343,98 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 		if notReady(c) {
 			return
 		}
-		if globalDB == nil {
-			c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not ready"})
-			return
-		}
-		userID := currentUserIDForChannel(c)
-		key := c.PathValue("key")
-		value := c.Form("value")
-		if value != "" && secretKeys[key] && globalConfigs != nil {
-			encrypted, err := globalConfigs.EncryptSecret(value)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, map[string]string{"error": "encrypt: " + err.Error()})
-				return
-			}
-			value = encrypted
-		}
-		if err := agentchannels.SetChannelConfigKeyForUser(globalDB, channelType, userID, key, value); err != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		syncChannelInstance(c.R.Context(), channelType, userID)
-		c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		saveChannelKey(c, channelType, secretKeys)
 	}
+}
+
+// saveChannelKey is the body of makeChannelSaveHandler, past the readiness
+// gate: one key of the caller's channelType row, secrets encrypted.
+func saveChannelKey(c *tool.Ctx, channelType string, secretKeys map[string]bool) {
+	if globalDB == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not ready"})
+		return
+	}
+	userID := currentUserIDForChannel(c)
+	key := c.PathValue("key")
+	value := c.Form("value")
+	if channelType == "slack" && key == "app_token_expires_at" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "app_token_expires_at is written by wick after each token refresh and cannot be set"})
+		return
+	}
+	if secretSaveKeeps(secretKeys, key, value, c.Form("clear") == "1") {
+		c.JSON(http.StatusOK, map[string]string{"status": "kept"})
+		return
+	}
+	if channelType == "slack" {
+		if status, msg := slackEnableConflict(userID, key, value); status != 0 {
+			c.JSON(status, map[string]string{"error": msg})
+			return
+		}
+	}
+	var extra map[string]string
+	if channelType == "slack" && key == "app_token" && value != "" {
+		extra = slackAppTokenPasteKeys(value, storedSlackAppToken(userID))
+	}
+	if channelType == "slack" && key == "app_token" && value == "" {
+		// A cleared app token takes its rotation lineage with it.
+		extra = map[string]string{"app_token_expires_at": "", "app_refresh_token": ""}
+	}
+	if value != "" && secretKeys[key] && globalConfigs != nil {
+		encrypted, err := globalConfigs.EncryptSecret(value)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": "encrypt: " + err.Error()})
+			return
+		}
+		value = encrypted
+	}
+	kv := map[string]string{key: value}
+	maps.Copy(kv, extra)
+	if err := agentchannels.SetChannelConfigKeysForUser(globalDB, channelType, userID, kv); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	syncChannelInstance(c.R.Context(), channelType, userID)
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// secretSaveKeeps reports whether a save of value to key leaves the
+// stored value alone: a blank secret means "keep" unless the Clear button
+// sent clear=1.
+func secretSaveKeeps(secretKeys map[string]bool, key, value string, clear bool) bool {
+	return value == "" && secretKeys[key] && !clear
+}
+
+// slackAppTokenPasteKeys is what else changes when app token next is saved
+// over prev on a Slack channel row. A different token starts a new rotation
+// lineage: the stored expiry no longer applies, and for a rotating token the
+// stored refresh token belongs to the previous one — it is cleared so health
+// asks for the matching one instead of wick spending the old lineage's.
+// Re-saving the same token changes nothing else.
+func slackAppTokenPasteKeys(next, prev string) map[string]string {
+	if next == prev {
+		return nil
+	}
+	kv := map[string]string{"app_token_expires_at": ""}
+	if agentslack.IsRotatingAppToken(next) {
+		kv["app_refresh_token"] = ""
+	}
+	return kv
+}
+
+// storedSlackAppToken is userID's stored Slack app token in plaintext, ""
+// when unset or unreadable.
+func storedSlackAppToken(userID string) string {
+	m, err := agentchannels.GetChannelConfigMapForUser(globalDB, "slack", userID)
+	if err != nil {
+		return ""
+	}
+	v := m["app_token"]
+	if v != "" && globalConfigs != nil {
+		if d, err := globalConfigs.DecryptSecret(v); err == nil {
+			v = d
+		}
+	}
+	return v
 }
 
 // loadChannelRowsForUser returns entity.Config rows with values populated from
@@ -420,7 +522,9 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 		if err != nil {
 			return
 		}
-		if cfg.BotToken == "" {
+		// No token, or switched off on the Channels page: the bot stops
+		// now and boot leaves it stopped (the row's enabled column).
+		if cfg.BotToken == "" || cfg.Enabled == "false" {
 			if globalChannels.HasKey(iKey) {
 				globalChannels.RemoveKeyed(iKey)
 			}
@@ -437,6 +541,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			// while wick runs also labels itself "Slack - <bot> - <owner>"
 			// after the next restart without another auth.test.
 			channelsetup.WireIdentityCache(store, channelType, userID, ch)
+			channelsetup.WireSlackAppTokenPersist(store, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetPublicURL(pubURL)
 			ch.SetSessionPrefix(sessPrefix)
@@ -457,7 +562,9 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 		if err != nil {
 			return
 		}
-		if cfg.BotToken == "" {
+		// No token, or switched off on the Channels page: the bot stops
+		// now and boot leaves it stopped (the row's enabled column).
+		if cfg.BotToken == "" || cfg.Enabled == "false" {
 			if globalChannels.HasKey(iKey) {
 				globalChannels.RemoveKeyed(iKey)
 			}

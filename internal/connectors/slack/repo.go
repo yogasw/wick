@@ -155,6 +155,14 @@ func slackPostMultipart(c *connector.Ctx, filename string, content []byte, title
 	return result, nil
 }
 
+// errDownloadTooLarge is a download refused for its size; size is what
+// was known of it (Content-Length, or at least the bytes read).
+type errDownloadTooLarge struct{ size int64 }
+
+func (e errDownloadTooLarge) Error() string {
+	return fmt.Sprintf("file is over the download limit (%d bytes or more)", e.size)
+}
+
 // slackDownload fetches raw bytes from a Slack url_private / url_private_download
 // URL using the connector's token as a Bearer header. This is the step
 // files.info cannot do for you: the download URLs are auth-gated, and a
@@ -182,13 +190,21 @@ func slackDownload(c *connector.Ctx, downloadURL string, maxBytes int) ([]byte, 
 		return nil, fmt.Errorf("download file: HTTP %d", resp.StatusCode)
 	}
 
+	if resp.ContentLength > int64(maxBytes) {
+		return nil, errDownloadTooLarge{size: resp.ContentLength}
+	}
 	// Read one byte past the cap so we can tell "exactly at cap" from "over".
-	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
-	if err != nil {
+	// A known length sizes the buffer once instead of growing it by doubling.
+	var buf bytes.Buffer
+	if resp.ContentLength > 0 {
+		buf.Grow(int(resp.ContentLength) + 1)
+	}
+	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, int64(maxBytes)+1)); err != nil {
 		return nil, fmt.Errorf("read file body: %w", err)
 	}
+	body := buf.Bytes()
 	if len(body) > maxBytes {
-		return nil, fmt.Errorf("file exceeds max_bytes (%d) — raise max_bytes or fetch it another way", maxBytes)
+		return nil, errDownloadTooLarge{size: int64(len(body))}
 	}
 
 	// Slack answers an unauthorized download with 200 + an HTML login page

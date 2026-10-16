@@ -265,24 +265,37 @@ func saveProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
+	if !requireProviderDo(c, t, name, ownerPermConfigure) {
+		return
+	}
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.Error(http.StatusNotFound, "provider not found")
 		return
 	}
-	ins.Binary = strings.TrimSpace(c.Form("binary"))
-	ins.ExtraArgs = splitFields(c.Form("extra_args"))
-	ins.Env = splitLines(c.Form("env"))
+	// Host settings change only for whoever may edit them, each under its
+	// own permission; anyone else's save keeps the stored value whatever
+	// the form carried.
+	if canProviderDo(c, t, name, ownerPermBinary) {
+		ins.Binary = strings.TrimSpace(c.Form("binary"))
+	}
+	if canProviderDo(c, t, name, ownerPermExtraArgs) {
+		ins.ExtraArgs = splitFields(c.Form("extra_args"))
+	}
+	if canProviderDo(c, t, name, ownerPermEnv) {
+		ins.Env = splitLines(c.Form("env"))
+	}
 	ins.Disabled = c.Form("disabled") == "on"
 	ins.MaxConcurrent = parseIntForm(c.Form("max_concurrent"))
-	if msg := applyAccountForm(&ins, c); msg != "" {
-		c.Error(http.StatusBadRequest, msg)
-		return
+	// The account dir (opencode data dir / omp profile) decides whose login
+	// runs: borrowing it is auth_from by another name.
+	if canProviderDo(c, t, name, ownerPermAuthFrom) {
+		if msg := applyAccountForm(&ins, c); msg != "" {
+			c.Error(http.StatusBadRequest, msg)
+			return
+		}
 	}
 	// omp/opencode: extra MCP servers + opencode model/hosting. Validated
 	// here so a bad JSON (or a plaintext secret) never reaches the file.
@@ -302,6 +315,9 @@ func saveProviderDetail(c *tool.Ctx) {
 			if _, present := c.R.Form[k]; !present {
 				continue
 			}
+			if !canProviderDo(c, t, name, providerKeyPerm(k)) {
+				continue
+			}
 			if err := provider.ValidateInstanceConfigKey(k, c.Form(k)); err != nil {
 				c.Error(http.StatusBadRequest, err.Error())
 				return
@@ -309,7 +325,9 @@ func saveProviderDetail(c *tool.Ctx) {
 			provider.ApplyInstanceConfigKey(&ins, k, c.Form(k))
 		}
 	}
-	if t == provider.TypeCodex {
+	// The codex sandbox decides what a session may do on the host: a host
+	// setting. A form that does not carry the field keeps the stored mode.
+	if _, sent := c.R.Form["sandbox_mode"]; t == provider.TypeCodex && sent && canProviderDo(c, t, name, ownerPermSandbox) {
 		if ins.CodexConfig == nil {
 			ins.CodexConfig = &provider.CodexConfig{}
 		}
@@ -320,7 +338,7 @@ func saveProviderDetail(c *tool.Ctx) {
 	// to wick (uses WickModels). The FE toggle sends "true"/"false"; models
 	// is a kvlist (JSON [{id,desc}]) so it's decoded via ApplyInstanceConfigKey
 	// rather than splitLines.
-	if t != provider.TypeWick {
+	if t != provider.TypeWick && canProviderDo(c, t, name, ownerPermModels) {
 		ms := strings.TrimSpace(c.Form("model_select"))
 		ins.ModelSelect = ms == "true" || ms == "on"
 		provider.ApplyInstanceConfigKey(&ins, "models", c.Form("models"))
@@ -348,7 +366,7 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	key := c.PathValue("key")
 	// Idle compact is housekeeping on the account, not its configuration:
 	// whoever may reconnect the instance may also tune it.
-	if !(provider.IsIdleCompactKey(key) && canManageProvider(c, t, name)) && !requireProviderAdmin(c) {
+	if !(provider.IsIdleCompactKey(key) && canManageProvider(c, t, name)) && !requireProviderDo(c, t, name, providerKeyPerm(key)) {
 		return
 	}
 	ins, err := provider.Find(t, name)
@@ -404,7 +422,9 @@ func applyAIRouterForm(ins *provider.Instance, c *tool.Ctx) {
 // FE renders one model picker per slot and re-fetches when the router changes.
 // GET /providers/airouter/slots/{type}
 func providerAIRouterSlots(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	// Static per-type data the AI Router card needs; the Providers menu
+	// gate is enough.
+	if !requireProviderMenu(c) {
 		return
 	}
 	routerID := strings.TrimSpace(c.Query("router"))
@@ -423,23 +443,82 @@ func saveProviderAIRouter(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
+	if !requireProviderDo(c, t, name, ownerPermAIRouter) {
+		return
+	}
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
+	rawConfig := ins.AIRouterRawConfig
 	applyAIRouterForm(&ins, c)
+	// The raw config is env/args injected at spawn: its own permission.
+	if !canProviderDo(c, t, name, ownerPermAIRouterRawConf) {
+		ins.AIRouterRawConfig = rawConfig
+	}
 	if err := provider.Save(ins); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// saveProviderOwnerPerms stores what the owner of one instance may do to
+// it. Admin-only: an owner cannot widen their own permissions. The body
+// is a JSON map of permission name → allowed; an unknown name refuses the
+// whole request so a typo never reads as saved. Names the body leaves out
+// keep their stored value.
+// POST /providers/detail/{type}/{name}/owner-perms
+//
+// No agents-manager check: this only edits the provider config file.
+func saveProviderOwnerPerms(c *tool.Ctx) {
+	if !requireProviderAdmin(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	var req map[string]bool
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	for k := range req {
+		if !isOwnerPerm(k) {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "unknown owner permission " + k})
+			return
+		}
+	}
+	ins, err := findProviderInstanceFn(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	perms := make(map[string]bool, len(ins.OwnerPerms)+len(req))
+	for k, v := range ins.OwnerPerms {
+		if isOwnerPerm(k) {
+			perms[k] = v
+		}
+	}
+	for k, v := range req {
+		perms[k] = v
+	}
+	ins.OwnerPerms = perms
+	if err := saveProviderInstanceFn(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "owner_perms": effectiveOwnerPerms(perms)})
+}
+
+// findProviderInstanceFn and saveProviderInstanceFn read and persist an
+// instance. Vars so tests can stand in for the provider config file.
+var (
+	findProviderInstanceFn = provider.Find
+	saveProviderInstanceFn = provider.Save
+)
 
 // encryptSecretValue wraps a plaintext secret as a wick_cenc_ token via
 // the configs service. Empty / already-token / masked values pass through
@@ -463,7 +542,9 @@ func saveProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
+	isAdmin := callerIsAdmin(c)
+	if !isAdmin && !canCreateProvider(c) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "no access: creating a provider is limited to admins and the provider_create_tag whitelist"})
 		return
 	}
 	t := provider.Type(strings.TrimSpace(c.Form("type")))
@@ -472,38 +553,62 @@ func saveProviderInstance(c *tool.Ctx) {
 		c.Error(http.StatusBadRequest, "instance name required")
 		return
 	}
-	ins := provider.Instance{
-		Type:      t,
-		Name:      name,
-		Binary:    strings.TrimSpace(c.Form("binary")),
-		ExtraArgs: splitFields(c.Form("extra_args")),
-		Env:       splitLines(c.Form("env")),
-		Disabled:  c.Form("disabled") == "on" || c.Form("disabled") == "true",
+	_, findErr := provider.Find(t, name)
+	isNew := findErr != nil
+	// This endpoint replaces an existing instance wholesale; only an admin
+	// may do that. A whitelisted creator adds new instances only.
+	if !isNew && !isAdmin {
+		c.JSON(http.StatusConflict, map[string]string{"error": "an instance with that name already exists"})
+		return
 	}
-	if t == provider.TypeCodex {
+	// A non-admin creator becomes the owner of an instance that stores no
+	// owner permissions yet, so host and login settings follow the default
+	// owner permissions. Anything not allowed is dropped, leaving the
+	// built-in values.
+	may := func(perm string) bool { return isAdmin || ownerPermDefaults[perm] }
+	ins := provider.Instance{
+		Type:     t,
+		Name:     name,
+		Disabled: c.Form("disabled") == "on" || c.Form("disabled") == "true",
+	}
+	if may(ownerPermBinary) {
+		ins.Binary = strings.TrimSpace(c.Form("binary"))
+	}
+	if may(ownerPermExtraArgs) {
+		ins.ExtraArgs = splitFields(c.Form("extra_args"))
+	}
+	if may(ownerPermEnv) {
+		ins.Env = splitLines(c.Form("env"))
+	}
+	if t == provider.TypeCodex && may(ownerPermSandbox) {
 		ins.CodexConfig = &provider.CodexConfig{
 			SandboxMode: provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode"))),
 		}
 	}
-	if msg := applyAccountForm(&ins, c); msg != "" {
-		c.Error(http.StatusBadRequest, msg)
-		return
-	}
-	applyAIRouterForm(&ins, c)
-	// A new omp/opencode instance offers every model its CLI lists; the
-	// operator narrows or turns that off in Detail afterwards.
-	if t == provider.TypeOMP || t == provider.TypeOpencode {
-		if _, err := provider.Find(t, name); err != nil {
-			ins.LiveModels = true
-			if t == provider.TypeOpencode {
-				if ins.OpencodeConfig == nil {
-					ins.OpencodeConfig = &provider.OpencodeConfig{}
-				}
-				ins.OpencodeConfig.AllowHosted = true
-			}
+	if may(ownerPermAuthFrom) {
+		if msg := applyAccountForm(&ins, c); msg != "" {
+			c.Error(http.StatusBadRequest, msg)
+			return
 		}
 	}
-	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" {
+	applyAIRouterForm(&ins, c)
+	if !may(ownerPermAIRouterRawConf) {
+		ins.AIRouterRawConfig = ""
+	}
+	// A new omp/opencode instance offers every model its CLI lists; the
+	// operator narrows or turns that off in Detail afterwards.
+	if isNew && (t == provider.TypeOMP || t == provider.TypeOpencode) {
+		ins.LiveModels = true
+		if t == provider.TypeOpencode {
+			if ins.OpencodeConfig == nil {
+				ins.OpencodeConfig = &provider.OpencodeConfig{}
+			}
+			ins.OpencodeConfig.AllowHosted = true
+		}
+	}
+	// Storage writes credential backups to a path on the host, so it
+	// follows the binary permission (what touches the host).
+	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" && may(ownerPermBinary) {
 		ins.Storage = &provider.StorageConfig{
 			Mode:            mode,
 			SyncPath:        strings.TrimSpace(c.Form("storage_path")),
@@ -515,6 +620,9 @@ func saveProviderInstance(c *tool.Ctx) {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
+	if isNew {
+		tagProviderOwner(c, t, name)
+	}
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
@@ -523,15 +631,15 @@ func saveProviderInstance(c *tool.Ctx) {
 //
 // POST /providers/{type}/{name}/sync
 func syncProviderStorage(c *tool.Ctx) {
-	if !requireProviderAdmin(c) {
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	if !requireProviderDo(c, t, name, ownerPermStorage) {
 		return
 	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return
 	}
-	t := provider.Type(c.PathValue("type"))
-	name := c.PathValue("name")
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -758,16 +866,48 @@ func deleteProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
+	if !requireProviderDo(c, t, name, ownerPermDelete) {
+		return
+	}
 	if err := provider.Delete(t, name); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// A later instance with the same name must start clean: no access or
+	// manage tags, and no owner left over from this one.
+	if globalTagsSvc != nil {
+		ctx := c.Context()
+		if err := globalTagsSvc.ClearToolPaths(ctx, providerAccessPath(t, name), providerManagePath(t, name)); err != nil {
+			log.Ctx(ctx).Warn().Err(err).Msgf("delete provider %s/%s: clear tags", t, name)
+		}
+		if err := globalTagsSvc.DeleteResourceOwnerTag(ctx, providerOwnerResource(t, name)); err != nil {
+			log.Ctx(ctx).Warn().Err(err).Msgf("delete provider %s/%s: owner tag", t, name)
+		}
+	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// providerOwnerResource is the resource id behind a provider instance's
+// owner tag ("owner:provider:<type>/<name>").
+func providerOwnerResource(t provider.Type, name string) string {
+	return "provider:" + string(t) + "/" + name
+}
+
+// tagProviderOwner gives a freshly created instance an owner tag on its
+// ACCESS path, the way a new connector instance gets one: only its creator
+// may pick it until an admin changes its access tags. Sole owner, so a tag
+// left behind by an older instance of the same name changes hands instead
+// of gaining a second holder. Best effort — the instance is already saved,
+// so a tag-store hiccup is logged, not surfaced.
+func tagProviderOwner(c *tool.Ctx, t provider.Type, name string) {
+	if globalTagsSvc == nil {
+		return
+	}
+	if err := globalTagsSvc.SetSoleOwner(c.Context(), providerOwnerResource(t, name), providerAccessPath(t, name), actorID(c)); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Msgf("owner tag for provider %s/%s", t, name)
+	}
 }
 
 // renameProviderInstance changes one instance's name and re-points
@@ -783,9 +923,6 @@ func renameProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	oldName := c.PathValue("name")
 	newName := strings.TrimSpace(c.Form("new_name"))
@@ -793,11 +930,37 @@ func renameProviderInstance(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "type and name required"})
 		return
 	}
+	if !requireProviderDo(c, t, oldName, ownerPermRename) {
+		return
+	}
 	if err := provider.ValidInstanceName(newName); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// Tags hang off the instance's paths. Move them first, in one
+	// transaction, and only then rename: a rename that lost its tags would
+	// leave the instance open to everyone and its owner without rights.
+	tagMoves := map[string]string{
+		providerAccessPath(t, oldName): providerAccessPath(t, newName),
+		providerManagePath(t, oldName): providerManagePath(t, newName),
+	}
+	oldOwner, newOwner := providerOwnerResource(t, oldName), providerOwnerResource(t, newName)
+	if globalTagsSvc != nil {
+		if err := globalTagsSvc.MoveResourceTags(c.Context(), tagMoves, oldOwner, newOwner); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": "rename aborted, tags could not be moved: " + err.Error()})
+			return
+		}
+	}
 	if err := provider.Rename(t, oldName, newName); err != nil {
+		if globalTagsSvc != nil {
+			back := make(map[string]string, len(tagMoves))
+			for from, to := range tagMoves {
+				back[to] = from
+			}
+			if rerr := globalTagsSvc.MoveResourceTags(c.Context(), back, newOwner, oldOwner); rerr != nil {
+				log.Ctx(c.Context()).Error().Err(rerr).Msgf("rename %s/%s failed and its tags could not be moved back", t, oldName)
+			}
+		}
 		c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -823,7 +986,9 @@ func renameProviderInstance(c *tool.Ctx) {
 //
 // GET /providers/catalog/{type}
 func providerCatalogJSON(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	// Static env/flag catalog for the config editor; the Providers menu
+	// gate is enough.
+	if !requireProviderMenu(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -1114,11 +1279,11 @@ func checkProviderHook(c *tool.Ctx) {
 // rescanOneProvider re-probes a single instance. Used by the per-card
 // Rescan button so the user can refresh just the row they care about.
 func rescanOneProvider(c *tool.Ctx) {
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
+	if !requireProviderDo(c, t, name, ownerPermRescan) {
+		return
+	}
 	if t == "" || name == "" {
 		c.Error(http.StatusBadRequest, "type and name required")
 		return
@@ -1174,16 +1339,29 @@ func matchesSpawnQuery(s provider.SpawnLogFile, q string) bool {
 // spawn's state (status, time, first message) plus a spawn count. Query:
 // type/name scope to a provider, q searches, page paginates (spawnsPerPage).
 func apiSessionsList(c *tool.Ctx) {
-	if !requireAdmin(c) {
-		return
+	pType := c.Query("type")
+	pName := c.Query("name")
+	// A provider's owner may list its sessions, scoped to that instance
+	// and without the first message (someone else's prompt). Opening a
+	// session or spawn stays admin-only.
+	isAdmin := callerIsAdmin(c)
+	if !isAdmin {
+		if pType == "" || pName == "" {
+			c.JSON(http.StatusForbidden, map[string]string{"error": "admin only"})
+			return
+		}
+		if !requireProviderDo(c, provider.Type(pType), pName, ownerPermSessions) {
+			return
+		}
 	}
 	if globalSpawnLog == nil {
 		c.JSON(http.StatusOK, SessionsListResponse{Sessions: []SessionSummaryDTO{}, Page: 1})
 		return
 	}
-	pType := c.Query("type")
-	pName := c.Query("name")
 	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	if !isAdmin {
+		q = "" // searching would probe message text the viewer cannot see
+	}
 	page := 1
 	if v := c.Query("page"); v != "" {
 		if n := parseInt(v); n > 0 {
@@ -1213,6 +1391,9 @@ func apiSessionsList(c *tool.Ctx) {
 				LastStarted:  s.StartedAt.UTC().Format(time.RFC3339),
 				FirstMessage: s.FirstUserMessage,
 				Origin:       s.Origin,
+			}
+			if !isAdmin {
+				sum.FirstMessage = ""
 			}
 			byID[s.SessionID] = sum
 			order = append(order, s.SessionID)

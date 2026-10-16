@@ -128,3 +128,9 @@ export { isBinaryKind } from "./trace/types.js";
 export { pushLayer, layer, topLayerNode, layerDepth } from "./layers.js";
 export type { LayerOptions } from "./layers.js";
 export { clock24 } from "./time24.js";
+export { default as SavedResetsChip } from "./usage/SavedResetsChip.svelte";
+export { default as SavedResetsSection } from "./usage/SavedResetsSection.svelte";
+export { default as UsageMiniRings } from "./usage/UsageMiniRings.svelte";
+// Usage base (types + parser + shared store); also importable on its own
+// as "@wick-fe/common-ui/usage".
+export * from "./usage/base/index.js";

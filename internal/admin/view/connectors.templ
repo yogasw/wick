@@ -195,7 +195,7 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 // left". Save appears only once the selection changes.
 templ connectorOwnerPicker(row ConnectorAdminRow, users []UserOption) {
 	{{ owner := row.Connector.CreatedBy }}
-	<form action={ templ.SafeURL("/admin/connectors/" + row.Connector.ID + "/owner") } method="POST" class="flex items-center gap-2">
+	<form action={ templ.SafeURL("/admin/connectors/" + row.Connector.ID + "/owner") } method="POST" class="async-form flex items-center gap-2">
 		<select
 			name="owner_user_id"
 			data-initial={ owner }

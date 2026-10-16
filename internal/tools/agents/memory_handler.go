@@ -69,6 +69,11 @@ type memoryAgentRow struct {
 	// has already released.
 	SessionID string `json:"session_id,omitempty"`
 	AgentName string `json:"agent_name,omitempty"`
+	// WickSession labels a row the pool does not know (FromWick false)
+	// from the MCP token the process was spawned with — the usual case is
+	// an agent still owned by the previous daemon during a reload. Display
+	// only, never verified; nil when no wick token was found.
+	WickSession *wickSessionRow `json:"wick_session,omitempty"`
 	// Peak* are the highest values seen across the retained window — the
 	// numbers a limit must accommodate, which a single instant misses.
 	PeakBytes  uint64  `json:"peak_bytes,omitempty"`
@@ -475,6 +480,13 @@ func buildMemoryReport() memoryReport {
 			row.FromWick = fromWickPIDs[r.PID]
 			if o, ok := owners[r.PID]; ok {
 				row.SessionID, row.AgentName = o.session, o.agent
+			}
+			// Only rows this wick cannot place: reading another process's
+			// cmdline/environ is not free, and a pool row already knows.
+			if !row.FromWick {
+				if ws, ok := detectWickSession(r.PID); ok {
+					row.WickSession = &ws
+				}
 			}
 			for _, sp := range memreport.Subtree(procs, r.PID, maxProcessRows) {
 				row.Processes = append(row.Processes, processRow{

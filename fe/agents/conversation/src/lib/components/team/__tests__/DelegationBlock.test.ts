@@ -1,0 +1,1063 @@
+import { describe, test, expect, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
+import DelegationBlock from "../DelegationBlock.svelte";
+import TaskTray from "../TaskTray.svelte";
+import TasksPanel from "../TasksPanel.svelte";
+import ThreadMessage from "../../ThreadMessage.svelte";
+import TeamTraceRows from "../TeamTraceRows.svelte";
+import { TEAM_TASKS_KEY, type TeamTasksCtx } from "../../../teamTasksContext.js";
+import type { ConversationTurn, TeamTaskItem } from "../../../types/agents.js";
+
+function task(o: Partial<TeamTaskItem>): TeamTaskItem {
+  return {
+    task_id: "t1", context_id: "c1", to_agent_id: "a1", to_handle: "anton", to_name: "Anton",
+    title: "check the logs", state: "working", turns: 1, max_turns: 8,
+    started_at: "2026-10-10T10:00:00Z", updated_at: "2026-10-10T10:00:00Z", age: "2m",
+    ...o,
+  };
+}
+
+describe("DelegationBlock", () => {
+  test("s18c: the question renders inline code, escaped, with the teammate's choices as pills", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [task({ state: "input_required", needs_you: true, reply: "Diff `v2.14.0` or only the 20:55 push? (a / b)", options: ["Both deploys", "Only 20:55", "Only v2.14.0"] })],
+        onAnswer: vi.fn(),
+      },
+    });
+    const q = screen.getByTestId("needs-you-question");
+    const code = q.querySelector("code")!;
+    expect(code.textContent).toBe("v2.14.0");
+    expect(code.className).toBe("font-mono text-[11.5px]");
+    expect(q.textContent).toBe("Diff v2.14.0 or only the 20:55 push? (a / b)");
+    expect(screen.getAllByTestId("quick-pill").map((p) => p.textContent)).toEqual(["Both deploys", "Only 20:55", "Only v2.14.0"]);
+  });
+
+  test("s18c: markup in the question stays text", () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ state: "input_required", needs_you: true, reply: '<img src=x onerror="alert(1)"> `<script>alert(1)</script>` see https://example.com/a?b=1' })], onAnswer: vi.fn() },
+    });
+    const q = screen.getByTestId("needs-you-question");
+    expect(q.querySelector("img,script")).toBeNull();
+    expect(q.querySelector("code")!.textContent).toBe("<script>alert(1)</script>");
+    expect(q.textContent).toContain('<img src=x onerror="alert(1)">');
+    expect(q.querySelector("a")!.getAttribute("href")).toBe("https://example.com/a?b=1");
+  });
+
+  test("groups several team_message results into one block with a summary", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a" }),
+          task({ task_id: "b", to_handle: "vera", to_name: "Vera" }),
+          task({ task_id: "c", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, reply: "Which env? (prod / staging)" }),
+          task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done" }),
+        ],
+      },
+    });
+    expect(screen.getAllByTestId("delegation-block")).toHaveLength(1);
+    expect(screen.getByText("Delegated to 4 teammates")).toBeDefined();
+    expect(screen.getByTestId("delegation-summary").textContent).toBe("· 2 working · 1 needs input · 1 replied");
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(4);
+  });
+
+  test("needs you opens the answer card with quick replies; the answer goes to the task", async () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    render(DelegationBlock, {
+      props: { tasks: [task({ state: "input_required", needs_you: true, reply: "Which env? (prod / staging)" })], captainName: "Cap", onAnswer },
+    });
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByTestId("answer-to").textContent).toBe("Answer goes to @anton · Cap sees it too");
+    await fireEvent.click(screen.getByText("prod"));
+    expect(onAnswer).toHaveBeenCalledWith("t1", "prod");
+  });
+
+  test("2a: the needs-input section sits in the block, head + indented body + AnswerBox", async () => {
+    let done!: () => void;
+    const onAnswer = vi.fn(() => new Promise<void>((r) => { done = r; }));
+    render(DelegationBlock, {
+      props: { tasks: [task({ state: "input_required", needs_you: true, title: "List deploys", reply: "Diff both? (both / only 20:55)" })], captainName: "Cap", onAnswer },
+    });
+    const sec = screen.getByTestId("needs-you-card");
+    for (const c of ["border-t", "border-white-300", "dark:border-navy-600", "bg-[rgba(251,191,36,.12)]", "dark:bg-[rgba(251,191,36,.10)]"]) expect(sec.classList.contains(c)).toBe(true);
+    expect(sec.className).not.toMatch(/rounded/);
+    const head = sec.firstElementChild as HTMLElement;
+    expect(head.className).toContain("py-[7px]");
+    expect(head.className).toContain("text-[11.5px]");
+    expect(head.querySelector("b")!.textContent).toBe("Anton");
+    // No asked_at yet: the head stops at the title.
+    expect(screen.getByTestId("needs-you-task").textContent).toBe("· List deploys");
+    expect((sec.children[1] as HTMLElement).className).toContain("pl-[38px]");
+    const q = screen.getByTestId("needs-you-question");
+    expect(q.className).toContain("text-[13px]");
+    expect(q.textContent).toBe("Diff both? (both / only 20:55)");
+    expect(screen.getAllByTestId("quick-pill").map((p) => p.textContent)).toEqual(["both", "only 20:55"]);
+    const input = screen.getByLabelText("Answer @anton") as HTMLInputElement;
+    expect(input.placeholder).toBe("Type an answer…");
+    const btn = screen.getByLabelText("Send answer") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await fireEvent.input(input, { target: { value: "both, please" } });
+    expect(btn.disabled).toBe(false);
+    await fireEvent.click(btn);
+    expect(onAnswer).toHaveBeenCalledWith("t1", "both, please");
+    // While it is on its way the button spins and stays disabled.
+    await tick();
+    expect(btn.disabled).toBe(true);
+    expect(btn.querySelector("svg")!.dataset.icon).toBe("spin");
+    expect((screen.getAllByTestId("quick-pill")[0] as HTMLButtonElement).disabled).toBe(true);
+    done();
+    await vi.waitFor(() => expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe(""));
+  });
+
+  test("2a: the head reads asked HH:MM once the task carries asked_at", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 10, 10, 14, 10));
+      const askedAt = new Date(2026, 9, 10, 10, 12, 0).toISOString();
+      render(DelegationBlock, {
+        props: { tasks: [task({ state: "input_required", needs_you: true, title: "List deploys", reply: "Which env?", asked_at: askedAt })], onAnswer: vi.fn() },
+      });
+      expect(screen.getByTestId("needs-you-task").textContent).toBe("· List deploys · asked 10:12");
+      // The chip times the wait from asked_at, not from the last touch.
+      expect(screen.getByTestId("chip-elapsed").textContent).toBe("2m 10s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("captain answering is a grey chip only, with Answer instead", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ state: "input_required", needs_you: false, reply: "Which env?" })], captainName: "Cap", onAnswer: vi.fn() },
+    });
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    expect(screen.getByText("Cap is answering…")).toBeDefined();
+    expect(screen.getByTestId("delegation-chip").dataset.status).toBe("answering");
+    await fireEvent.click(screen.getByTestId("answer-instead"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+  });
+
+  test("a second answer refused by the server shows its message", async () => {
+    const onAnswer = vi.fn().mockRejectedValue(new Error("that question was already answered — the first answer won"));
+    render(DelegationBlock, { props: { tasks: [task({ state: "input_required", needs_you: true, reply: "Which env? (prod / staging)" })], onAnswer } });
+    await fireEvent.click(screen.getByText("prod"));
+    await vi.waitFor(() => expect(screen.getByTestId("answer-error").textContent).toContain("already answered"));
+  });
+
+  test("auto-collapses once every task ended, and unfolds on click", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", state: "completed", turns: 2 }), task({ task_id: "b", to_handle: "vera", state: "completed", turns: 1 })] },
+    });
+    expect(screen.queryByTestId("delegation-block")).toBeNull();
+    expect(screen.getByTestId("fold-title").textContent).toBe("Delegated to 2 teammates");
+    expect(screen.getByTestId("fold-summary").textContent).toContain("· all replied · 3 messages");
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    expect(screen.getByTestId("delegation-block")).toBeDefined();
+  });
+
+  test("§3 fold row: full-width button, check, one avatar per teammate, title, summary with duration, chevron", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a", to_agent_id: "a1", state: "completed", turns: 5, started_at: "2026-10-10T09:31:00Z", updated_at: "2026-10-10T09:40:00Z" }),
+          task({ task_id: "b", to_agent_id: "a1", state: "completed", turns: 3, started_at: "2026-10-10T09:33:00Z", updated_at: "2026-10-10T09:38:00Z" }),
+          task({ task_id: "c", to_agent_id: "a2", to_handle: "vera", to_name: "Vera", state: "completed", turns: 4, started_at: "2026-10-10T09:32:00Z", updated_at: "2026-10-10T09:44:00Z" }),
+        ],
+      },
+    });
+    const row = screen.getByTestId("delegation-folded");
+    expect(row.tagName).toBe("BUTTON");
+    expect(row.getAttribute("type")).toBe("button");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    for (const c of ["flex", "w-full", "rounded-xl", "border", "border-white-300", "dark:border-navy-600", "bg-white-100", "dark:bg-navy-800", "px-3", "py-[7px]"]) expect(row.classList.contains(c)).toBe(true);
+    expect(row.className).not.toMatch(/rounded-full/);
+    const check = row.querySelector('[data-icon="check"]')!;
+    expect(check.getAttribute("width")).toBe("14");
+    expect(check.getAttribute("class")).toContain("text-green-600");
+    expect(screen.getByTestId("fold-avatars").getAttribute("aria-hidden")).toBe("true");
+    const avs = screen.getAllByTestId("fold-avatar");
+    expect(avs).toHaveLength(2);
+    expect(avs[0].className).not.toContain("-ml-[5px]");
+    expect(avs[1].className).toContain("-ml-[5px]");
+    const title = screen.getByTestId("fold-title");
+    expect(title.textContent).toBe("Delegated to 3 teammates");
+    for (const c of ["font-medium", "text-xs", "text-black-800", "dark:text-black-600"]) expect(title.classList.contains(c)).toBe(true);
+    const sum = screen.getByTestId("fold-summary");
+    expect(sum.textContent!.replace(/\s+/g, " ").trim()).toBe("· all replied · 12 messages · 13m");
+    expect(sum.querySelector("b")!.className).toContain("text-green-600");
+    expect(sum.classList.contains("dark:text-black-600")).toBe(true);
+    const chev = row.querySelector('[data-icon="chevron"]')!.getAttribute("class")!;
+    expect(chev).toContain("-rotate-90");
+    expect(chev).toContain("dark:text-black-600");
+  });
+
+  test("§3 fold row: a declined task shows in red instead of all replied; the chevron opens the full block", async () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a", state: "completed", turns: 2, started_at: "2026-10-10T09:00:00Z", updated_at: "2026-10-10T09:30:00Z" }),
+          task({ task_id: "b", to_agent_id: "a2", to_handle: "vera", state: "rejected", turns: 1, started_at: "2026-10-10T09:00:00Z", updated_at: "2026-10-10T10:05:00Z" }),
+        ],
+      },
+    });
+    const sum = screen.getByTestId("fold-summary");
+    expect(sum.textContent!.replace(/\s+/g, " ").trim()).toBe("· 1 replied · 1 declined · 3 messages · 1h 5m");
+    expect(sum.querySelector("b")).toBeNull();
+    expect(sum.querySelector('[data-status="declined"]')!.className).toContain("text-red-600");
+    screen.getByTestId("delegation-folded").focus();
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    expect(screen.queryByTestId("delegation-folded")).toBeNull();
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(2);
+    // Focus moves to the open block's toggle, not to <body>.
+    await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("delegation-collapse")));
+  });
+
+  test("a failure is never folded behind all replied", () => {
+    render(DelegationBlock, { props: { tasks: [task({ task_id: "a", state: "completed" }), task({ task_id: "b", state: "failed" })] } });
+    expect(screen.getByTestId("delegation-folded").textContent).toContain("1 replied · 1 failed");
+    expect(screen.getByTestId("fold-summary").querySelector('[data-status="failed"]')!.className).toContain("text-red-600");
+  });
+
+  test("a chip previews the last messages with Open chat", async () => {
+    const onOpenChat = vi.fn();
+    render(DelegationBlock, { props: { tasks: [task({ summary: "found 3 errors", reply: "found 3 errors", chat_id: "s-anton" })], onOpenChat } });
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.getByTestId("delegation-preview").textContent).toContain("found 3 errors");
+    await fireEvent.click(screen.getByText("Open chat"));
+    expect(onOpenChat).toHaveBeenCalled();
+  });
+
+  /* P48 s11: the open chip's section is grouped 2b — soft, its head
+     "Name · title · N messages", the thread read lazily, Collapse. */
+  test("2b: open chip shows the task's thread under its head", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "captain", handle: "captain", name: "Captain", text: "check the logs", at: new Date(2026, 9, 11, 10, 5).toISOString() },
+      { role: "user", text: "and the request ids", at: new Date(2026, 9, 11, 10, 8).toISOString() },
+    ]);
+    const onOpenChat = vi.fn();
+    render(DelegationBlock, { props: { tasks: [task({ state: "working", message_count: 2 })], loadThread, onOpenChat, onCancel: vi.fn() } });
+    expect(loadThread).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    const sec = screen.getByTestId("delegation-preview");
+    expect(sec.className).toContain("border-t");
+    expect(sec.className).toContain("bg-white-200");
+    expect(screen.getByTestId("delegation-preview-task").textContent).toBe("· check the logs · 2 messages");
+    // Truncated in the head, so the full brief stays on hover (s19a M1).
+    expect(screen.getByTestId("delegation-preview-task").getAttribute("title")).toBe("check the logs");
+    // No chat id: no Open chat; not a question: no Reply in thread.
+    expect(screen.queryByText("Open chat")).toBeNull();
+    expect(screen.queryByTestId("delegation-reply")).toBeNull();
+    expect(screen.getByTestId("delegation-cancel")).toBeDefined();
+    // Logged after the task started, so not the brief (s19a G3): kept.
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(2));
+    expect(loadThread).toHaveBeenCalledWith("t1");
+    expect(screen.getByTestId("task-thread-working")).toBeDefined();
+    await fireEvent.click(screen.getByTestId("delegation-preview-collapse"));
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+  });
+
+  /* P48 s19a (G1): the person's name reaches the open chip's thread. */
+  test("2b: userName reaches the thread as initials and name", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "user", text: "and the request ids", at: new Date(2026, 9, 11, 10, 8).toISOString() },
+    ]);
+    render(DelegationBlock, { props: { tasks: [task({})], loadThread, userName: "Yoga Setiawan" } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(1));
+    const you = screen.getAllByTestId("task-thread-msg")[0];
+    expect(you.querySelector(".bg-green-600")!.textContent!.trim()).toBe("YS");
+    expect(you.querySelector("b")!.textContent).toBe("Yoga Setiawan");
+  });
+
+  /* P48 s13 (B3): the open chip of a working task reads its live progress
+     (combined 2a .prog), and the thread's working row says the same. */
+  test("2a: open working chip shows the live progress line", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "captain", handle: "captain", name: "Captain", text: "check the logs", at: new Date(2026, 9, 11, 10, 5).toISOString() },
+    ]);
+    render(DelegationBlock, { props: { tasks: [task({ progress: "Checking Loki for the 21:00 window…" })], loadThread } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.getByTestId("delegation-preview-progress").textContent).toContain("Checking Loki for the 21:00 window…");
+    await waitFor(() => expect(screen.getByTestId("task-thread-progress").textContent).toBe("Checking Loki for the 21:00 window"));
+  });
+
+  test("2a: no progress line on a chip that is not working", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "w" }), task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done", reply: "done", progress: "stale" })] },
+    });
+    await fireEvent.click(screen.getAllByTestId("delegation-chip")[1]);
+    expect(screen.getByTestId("delegation-preview")).toBeDefined();
+    expect(screen.queryByTestId("delegation-preview-progress")).toBeNull();
+  });
+
+  /* P60 S1: under the chips, one row per working teammate with its
+     latest progress line. */
+  test("P60: a progress row per working task with progress", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a", progress: "Checking Loki for Audy pods" }),
+          task({ task_id: "b", to_handle: "vera", to_name: "Vera", progress: "Reading the client WA group" }),
+        ],
+      },
+    });
+    const rows = screen.getAllByTestId("delegation-progress-row");
+    expect(rows.map((r) => r.getAttribute("data-task-id"))).toEqual(["a", "b"]);
+    expect(rows[0].querySelector("b")!.textContent).toBe("Anton");
+    expect(rows[0].textContent).toContain("●");
+    expect(rows[0].textContent).toContain("Checking Loki for Audy pods");
+    expect(rows[1].querySelector("b")!.textContent).toBe("Vera");
+    expect(rows[1].querySelector(".font-mono")!.textContent).toBe(screen.getAllByTestId("chip-elapsed")[1].textContent);
+  });
+
+  test("P60: no progress row for a replied or failed task; a working one without progress reads working…", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "w", progress: "Checking Loki" }),
+          task({ task_id: "n", to_handle: "vera", to_name: "Vera" }),
+          task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done", reply: "done", progress: "stale" }),
+          task({ task_id: "f", to_handle: "rio", to_name: "Rio", state: "failed", summary: "boom", progress: "stale" }),
+        ],
+      },
+    });
+    const rows = screen.getAllByTestId("delegation-progress-row");
+    expect(rows.map((r) => r.getAttribute("data-task-id"))).toEqual(["w", "n"]);
+    expect(rows[0].querySelector("[data-testid=delegation-progress-working]")).toBeNull();
+    expect(rows[1].querySelector("[data-testid=delegation-progress-working]")!.textContent).toBe("working…");
+    expect(rows[1].querySelector(".font-mono")!.textContent).toBe(screen.getAllByTestId("chip-elapsed")[1].textContent);
+  });
+
+  test("P60: a click on a progress row opens that task's chip", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", progress: "Checking Loki" }), task({ task_id: "b", to_handle: "vera", to_name: "Vera" })] },
+    });
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    const row = screen.getAllByTestId("delegation-progress-row")[1];
+    expect(row.tagName).toBe("BUTTON");
+    expect(row.getAttribute("aria-label")).toBe("Open Vera's task");
+    expect(screen.getAllByTestId("delegation-progress-row")[0].getAttribute("aria-label")).toBe("Open Anton's task: Checking Loki");
+    await fireEvent.click(row);
+    await tick();
+    expect(screen.getAllByTestId("delegation-preview")).toHaveLength(1);
+    expect(screen.getAllByTestId("delegation-chip")[1].getAttribute("data-open")).toBe("true");
+    // The row left the DOM: focus moved to its chip, not the body.
+    expect(document.activeElement).toBe(screen.getAllByTestId("delegation-chip")[1]);
+    expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["a"]);
+  });
+
+  test("P60: Show all hides every progress row", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", progress: "Checking Loki" }), task({ task_id: "b", to_handle: "vera", to_name: "Vera" })] },
+    });
+    expect(screen.getAllByTestId("delegation-progress-row")).toHaveLength(2);
+    await fireEvent.click(screen.getByTestId("delegation-show-all"));
+    expect(screen.queryByTestId("delegation-progress-row")).toBeNull();
+  });
+
+  test("P60: the row leaves when its teammate replies", async () => {
+    const r = render(DelegationBlock, { props: { tasks: [task({ progress: "Checking Loki" }), task({ task_id: "t2", to_handle: "vera", to_name: "Vera" })] } });
+    expect(screen.getAllByTestId("delegation-progress-row").map((x) => x.getAttribute("data-task-id"))).toEqual(["t1", "t2"]);
+    await r.rerender({ tasks: [task({ state: "completed", reply: "done", progress: "Checking Loki" }), task({ task_id: "t2", to_handle: "vera", to_name: "Vera" })] });
+    expect(screen.getAllByTestId("delegation-progress-row").map((x) => x.getAttribute("data-task-id"))).toEqual(["t2"]);
+  });
+
+  test("P60: no progress rows while collapsed, none for the open chip", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "a", progress: "Checking Loki" }), task({ task_id: "b", to_handle: "vera", to_name: "Vera", progress: "Reading the group" })] },
+    });
+    await fireEvent.click(screen.getAllByTestId("delegation-chip")[0]);
+    expect(screen.getAllByTestId("delegation-progress-row").map((r) => r.getAttribute("data-task-id"))).toEqual(["b"]);
+    expect(screen.getByTestId("delegation-preview-progress").textContent).toContain("Checking Loki");
+    await fireEvent.click(screen.getByTestId("delegation-collapse"));
+    expect(screen.queryByTestId("delegation-progress-row")).toBeNull();
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(2);
+  });
+
+  test("2b: a thread that fails to load still shows the last reply", async () => {
+    const loadThread = vi.fn().mockRejectedValue(new Error("task not found"));
+    render(DelegationBlock, { props: { tasks: [task({ state: "completed", reply: "found 3 errors", summary: "found 3 errors" })], loadThread } });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await waitFor(() => expect(screen.getByTestId("task-thread-error").textContent).toBe("task not found"));
+    expect(screen.getByTestId("delegation-preview-fallback").textContent).toContain("found 3 errors");
+  });
+
+  test("2b.3: Reply in thread opens the answer box of a question the agent handles", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ state: "input_required", needs_you: false, reply: "Which env?" })], captainName: "Cap", onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+  });
+
+  /* B5: Reply in thread on a task that asks nothing opens a composer under
+     its thread; the message goes to onMessage, the composer stays open and
+     empties, an error reads inline. */
+  test("B5: Reply in thread on a working task sends a message to it", async () => {
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    render(DelegationBlock, { props: { tasks: [task({ state: "working" })], onMessage, onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    const box = screen.getByTestId("reply-composer");
+    expect(box.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("ok");
+    expect(screen.getByTestId("answer-to").textContent).toContain("@anton · joins this task");
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "  check 08:00 too " } });
+    await fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(onMessage).toHaveBeenCalledWith("t1", "check 08:00 too"));
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(screen.getByTestId("reply-composer")).toBeDefined();
+  });
+
+  test("B5: an ended task takes a reply too; a failure shows inline", async () => {
+    const onMessage = vi.fn().mockRejectedValue(new Error("the teammate has no chat for this task yet"));
+    render(DelegationBlock, { props: { tasks: [task({ state: "completed", reply: "found 3 errors", summary: "found 3 errors" })], onMessage } });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.getByTestId("answer-to").textContent).toContain("joins this ended task");
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "retry with 08:00" } });
+    await fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByTestId("reply-error").textContent).toBe("the teammate has no chat for this task yet"));
+    expect(input.value).toBe("retry with 08:00");
+    // The toggle closes it again.
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+  });
+
+  test("B5: no onMessage (read-only chat) = no Reply in thread on a non-question", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ state: "working" })], onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("delegation-reply")).toBeNull();
+  });
+
+  test("B5: the composer stops at the server's cap and counts", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ state: "working" })], onMessage: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    expect(input.getAttribute("maxlength")).toBe("1200");
+    expect(screen.getByTestId("reply-count").textContent).toBe("0 / 1200");
+    await fireEvent.input(input, { target: { value: "abc" } });
+    expect(screen.getByTestId("reply-count").textContent).toBe("3 / 1200");
+  });
+
+  test("B5: a task that starts asking carries the typed reply into the answer card", async () => {
+    const r = render(DelegationBlock, { props: { tasks: [task({ task_id: "tr-1", state: "working" })], onMessage: vi.fn(), onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    await fireEvent.input(screen.getByLabelText("Message @anton"), { target: { value: "use prod" } });
+    await r.rerender({ tasks: [task({ task_id: "tr-1", state: "input_required", needs_you: true, reply: "Which env?" })] });
+    await tick();
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("use prod");
+  });
+
+  test("B5: a question keeps Reply in thread on the answer card, not the composer", async () => {
+    const onMessage = vi.fn();
+    render(DelegationBlock, { props: { tasks: [task({ state: "input_required", needs_you: false, reply: "Which env?" })], onAnswer: vi.fn(), onMessage } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+  });
+});
+
+/* P48 slice 3: the head and the chips as grouped §2 draws them. */
+describe("DelegationBlock head + chip (P48 s3)", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const fake = (iso: string) => { vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] }); vi.setSystemTime(new Date(iso)); };
+  const chip = (name: string) => screen.getAllByTestId("delegation-chip").find((c) => c.textContent!.includes(name))!;
+  const four = () => [
+    task({ task_id: "w1", to_handle: "halodev", to_name: "Halodev", started_at: "2026-10-10T10:02:00Z" }),
+    task({ task_id: "w2", to_handle: "wabster", to_name: "Wabster", started_at: "2026-10-10T10:03:30Z" }),
+    task({ task_id: "q", to_handle: "franky", to_name: "Franky", state: "input_required", needs_you: true, reply: "Diff both?", updated_at: "2026-10-10T10:11:50Z" }),
+    task({ task_id: "r", to_handle: "atraxa", to_name: "Atraxa", state: "completed", summary: "done", updated_at: "2026-10-10T10:08:00Z" }),
+  ];
+
+  test("head: tasks icon, 12.5px title, coloured summary parts, Show all as a small button", async () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    const block = screen.getByTestId("delegation-block");
+    expect(block.className).toContain("overflow-hidden");
+    expect(block.className).not.toMatch(/(^|\s)px-3(\s|$)/);
+    expect(block.querySelector("svg[data-icon=tasks]")!.getAttribute("width")).toBe("14");
+    expect(screen.getByText("Delegated to 4 teammates").className).toContain("text-[12.5px]");
+    const part = (st: string) => screen.getByTestId("delegation-summary").querySelector<HTMLElement>(`[data-status=${st}]`)!;
+    expect(part("working").className).toContain("text-green-600");
+    expect(part("needs_you").className).toContain("text-amber-700");
+    expect(part("replied").className).toContain("text-black-800");
+    const all = screen.getByTestId("delegation-show-all");
+    expect(all.dataset.variant).toBe("default");
+    expect(all.textContent!.trim()).toBe("Show all");
+    await fireEvent.click(all);
+    expect(all.textContent!.trim()).toBe("Hide");
+    expect(screen.getAllByTestId("delegation-preview")).toHaveLength(4);
+  });
+
+  test("failed and declined read red, canceled muted", () => {
+    render(DelegationBlock, { props: { tasks: [task({ task_id: "w" }), task({ task_id: "f", state: "failed" }), task({ task_id: "d", state: "rejected" }), task({ task_id: "c", state: "canceled" })] } });
+    const sum = screen.getByTestId("delegation-summary");
+    expect(sum.textContent).toBe("· 1 working · 1 declined · 1 failed · 1 canceled");
+    for (const st of ["failed", "declined"]) expect(sum.querySelector<HTMLElement>(`[data-status=${st}]`)!.className).toContain("dark:text-red-400");
+    expect(sum.querySelector<HTMLElement>("[data-status=canceled]")!.className).toBe("text-black-700");
+    const status = (s: string) => screen.getAllByTestId("delegation-chip").find((c) => c.dataset.status === s)!.querySelector<HTMLElement>("[data-testid=chip-status]")!;
+    expect(status("failed").className).toContain("text-red-600");
+    expect(status("declined").className).toContain("text-red-600");
+    expect(status("declined").textContent).toBe("declined");
+    expect(status("canceled").className).toContain("text-black-700");
+  });
+
+  test("the chevron collapses the block to its chips and back", async () => {
+    render(DelegationBlock, { props: { tasks: four(), onAnswer: vi.fn() } });
+    await fireEvent.click(chip("Halodev"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByTestId("delegation-preview")).toBeDefined();
+    const chev = screen.getByTestId("delegation-collapse");
+    expect(chev.getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(chev);
+    expect(chev.getAttribute("aria-expanded")).toBe("false");
+    expect(chev.getAttribute("aria-label")).toBe("Expand");
+    expect(chev.querySelector("svg")!.getAttribute("class")).toContain("-rotate-90");
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(4);
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    expect(chip("Halodev").dataset.open).toBe("false");
+    await fireEvent.click(chev);
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByTestId("delegation-preview")).toBeDefined();
+  });
+
+  test("a chip on a collapsed block opens it on that chip, even the one already selected", async () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    await fireEvent.click(chip("Halodev"));
+    expect(chip("Halodev").getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(screen.getByTestId("delegation-collapse"));
+    expect(chip("Halodev").getAttribute("aria-expanded")).toBe("false");
+    await fireEvent.click(chip("Halodev"));
+    expect(screen.getByTestId("delegation-collapse").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("delegation-preview").textContent).toContain("Halodev");
+    expect(chip("Halodev").dataset.open).toBe("true");
+    // Open, a second click still toggles it off.
+    await fireEvent.click(chip("Halodev"));
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    expect(chip("Franky").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("Show all never reads Hide while collapsed; a click there opens everything", async () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    const all = screen.getByTestId("delegation-show-all");
+    await fireEvent.click(all);
+    expect(all.getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(screen.getByTestId("delegation-collapse"));
+    expect(all.textContent!.trim()).toBe("Show all");
+    expect(all.getAttribute("aria-expanded")).toBe("false");
+    await fireEvent.click(all);
+    expect(all.textContent!.trim()).toBe("Hide");
+    expect(screen.getAllByTestId("delegation-preview")).toHaveLength(4);
+  });
+
+  test("the head chevron has a 24px hit area and a focus ring", () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    const c = screen.getByTestId("delegation-collapse").className;
+    for (const k of ["h-6", "w-6", "-m-1.5", "focus-visible:ring-1"]) expect(c).toContain(k);
+  });
+
+  test("chips: spin while working, check when replied, needs input with no chevron; open is green", async () => {
+    fake("2026-10-10T10:12:00Z");
+    render(DelegationBlock, { props: { tasks: four(), captainName: "Captain" } });
+    const w = chip("Halodev");
+    expect(w.className).toContain("text-[11.5px]");
+    expect(w.className).toContain("bg-white-200");
+    expect(w.querySelector<SVGElement>("svg[data-icon=spin]")!.classList.contains("team-icon-spin")).toBe(true);
+    expect(w.querySelector("[data-testid=chip-status]")!.textContent).toBe("working");
+    expect(w.querySelector("[data-testid=avatar-activity]")).not.toBeNull();
+    const r = chip("Atraxa");
+    expect(r.querySelector("svg[data-icon=check]")).not.toBeNull();
+    expect(r.querySelector("[data-testid=chip-status]")!.textContent).toBe("replied");
+    const q = chip("Franky");
+    expect(q.querySelector("[data-testid=chip-status]")!.textContent).toBe("needs input");
+    expect(q.className).toContain("border-amber-500/[.45]");
+    expect(q.className).toContain("bg-[rgba(251,191,36,.12)]");
+    expect(q.querySelector("svg[data-icon=chevron]")).toBeNull();
+    expect(w.querySelector("svg[data-icon=chevron]")!.getAttribute("class")).toContain("-rotate-90");
+    await fireEvent.click(w);
+    expect(w.dataset.open).toBe("true");
+    expect(w.className).toContain("border-green-500");
+    expect(w.className).toContain("ring-1");
+    expect(w.querySelector("svg[data-icon=chevron]")!.getAttribute("class")).not.toContain("-rotate-90");
+    expect(chip("Wabster").className).not.toContain("ring-1");
+  });
+
+  test("elapsed: a running timer, how long a question waited, how long a reply took (T16)", async () => {
+    fake("2026-10-10T10:12:00Z");
+    render(DelegationBlock, { props: { tasks: four() } });
+    const el = (name: string) => chip(name).querySelector("[data-testid=chip-elapsed]")!.textContent;
+    expect(el("Halodev")).toBe("10m 00s");
+    expect(el("Wabster")).toBe("8m 30s");
+    expect(el("Franky")).toBe("10s");
+    // Started 10:00, replied 10:08 (updated_at stands in for ended_at).
+    expect(el("Atraxa")).toBe("8m 00s");
+    expect(chip("Atraxa").querySelector("[data-testid=chip-elapsed]")!.className).toContain("font-mono");
+    await vi.advanceTimersByTimeAsync(1000);
+    await tick();
+    expect(el("Halodev")).toBe("10m 01s");
+    expect(el("Franky")).toBe("11s");
+  });
+
+  test("the 1s tick runs only while a task is active and stops on destroy", () => {
+    fake("2026-10-10T10:12:00Z");
+    const settled = render(DelegationBlock, { props: { tasks: [task({ state: "completed" }), task({ task_id: "f", state: "failed" })] } });
+    expect(vi.getTimerCount()).toBe(0);
+    settled.unmount();
+    const live = render(DelegationBlock, { props: { tasks: four() } });
+    expect(vi.getTimerCount()).toBe(1);
+    live.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("the tick stops once the tasks finish (props update)", async () => {
+    fake("2026-10-10T10:12:00Z");
+    const r = render(DelegationBlock, { props: { tasks: [task({ task_id: "p1" })] } });
+    expect(vi.getTimerCount()).toBe(1);
+    await r.rerender({ tasks: [task({ task_id: "p1", state: "completed" })] });
+    expect(vi.getTimerCount()).toBe(0);
+    await r.rerender({ tasks: [task({ task_id: "p1" })] });
+    expect(vi.getTimerCount()).toBe(1);
+    r.unmount();
+  });
+});
+
+describe("DelegationBlock cancel", () => {
+  test("Cancel in a preview asks first, then cancels the task", async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(DelegationBlock, { props: { tasks: [task({ task_id: "blk-1" })], onCancel } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-cancel"));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId("cancel-confirm").textContent).toContain("Anton's current turn will be stopped");
+    await fireEvent.click(screen.getByTestId("cancel-confirm-yes"));
+    expect(onCancel).toHaveBeenCalledWith("blk-1");
+  });
+
+  test("an interrupted task's chip reads Interrupted by a restart, with no Cancel", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ task_id: "blk-2", state: "failed", interrupted: true })], onCancel: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    expect(screen.getByTestId("chip-status").textContent).toBe("interrupted by a restart");
+    expect(screen.getByTestId("chip-status").className).toContain("text-red-600");
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("delegation-cancel")).toBeNull();
+  });
+});
+
+describe("TaskTray", () => {
+  test("is absent when no task is active", () => {
+    render(TaskTray, { props: { tasks: [task({ state: "completed" })] } });
+    expect(screen.queryByTestId("task-tray")).toBeNull();
+  });
+
+  test("shows the active tasks and Answer when one needs you; Cancel calls the task", async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(TaskTray, {
+      props: { tasks: [task({ task_id: "a" }), task({ task_id: "b", state: "input_required", needs_you: true }), task({ task_id: "c", state: "completed" })], onAnswer: vi.fn(), onCancel },
+    });
+    expect(screen.getByTestId("task-tray-summary").textContent).toBe("1 working · 1 needs input");
+    await fireEvent.click(screen.getByText("Answer"));
+    expect(screen.getByTestId("task-tray-popover")).toBeDefined();
+    await fireEvent.click(screen.getAllByText("Cancel")[0]);
+    // Cancel asks first: the teammate's current turn will be stopped.
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId("cancel-confirm").textContent).toContain("current turn will be stopped");
+    await fireEvent.click(screen.getByTestId("cancel-confirm-yes"));
+    expect(onCancel).toHaveBeenCalledWith("a");
+  });
+
+  test("Keep working closes the confirm without canceling", async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(TaskTray, { props: { tasks: [task({ task_id: "a" })], onCancel } });
+    await fireEvent.click(screen.getByTestId("task-tray-summary"));
+    await fireEvent.click(screen.getByText("Cancel"));
+    await fireEvent.click(screen.getByTestId("cancel-confirm-keep"));
+    expect(screen.queryByTestId("cancel-confirm")).toBeNull();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  test("canceling one task keeps the answer typed for another", async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(TaskTray, {
+      props: { tasks: [task({ task_id: "tray-q", state: "input_required", needs_you: true }), task({ task_id: "tray-w", to_handle: "vera", to_name: "Vera" })], onAnswer: vi.fn(), onCancel },
+    });
+    await fireEvent.click(screen.getAllByText("Answer")[0]);
+    const input = screen.getByLabelText("Answer @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "use staging" } });
+    await fireEvent.click(screen.getAllByText("Cancel")[1]);
+    await fireEvent.click(screen.getByTestId("cancel-confirm-yes"));
+    expect(onCancel).toHaveBeenCalledWith("tray-w");
+    expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("use staging");
+  });
+});
+
+describe("TasksPanel", () => {
+  test("groups Needs input / Working / Done today / Earlier / Failed · Canceled with a raw payload", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0));
+    try {
+      render(TasksPanel, {
+        props: {
+          tasks: [
+            task({ task_id: "a", state: "input_required", needs_you: true }),
+            task({ task_id: "b" }),
+            task({ task_id: "c", state: "completed", updated_at: new Date(2026, 9, 10, 9, 0).toISOString() }),
+            task({ task_id: "e", state: "completed", updated_at: new Date(2026, 9, 9, 18, 0).toISOString() }),
+            task({ task_id: "d", state: "canceled" }),
+          ],
+        },
+      });
+      for (const g of ["needs_you", "working", "done", "earlier", "failed"]) expect(screen.getByTestId("tasks-group-" + g)).toBeDefined();
+      expect(screen.getByTestId("tasks-panel-count").textContent).toBe("this chat · 5");
+      // Earlier starts folded: its row and raw payload are not drawn yet.
+      expect(screen.getAllByText("Raw payload")).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("Cancel asks before it cancels", async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(TasksPanel, { props: { tasks: [task({ task_id: "p1" })], onCancel } });
+    await fireEvent.click(screen.getByText("Cancel"));
+    expect(onCancel).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByTestId("cancel-confirm-yes"));
+    expect(onCancel).toHaveBeenCalledWith("p1");
+  });
+
+  test("a task a restart interrupted says so", () => {
+    render(TasksPanel, { props: { tasks: [task({ task_id: "p2", state: "failed", interrupted: true, summary: "interrupted by a restart: …" })] } });
+    expect(screen.getByTestId("tasks-row-tag").textContent).toBe("failed");
+    expect(screen.getByText("interrupted by a restart: …")).toBeDefined();
+  });
+});
+
+describe("Answer drafts", () => {
+  test("survive a remount, keyed by task, and clear only after a sent answer", async () => {
+    const q = task({ task_id: "draft-1", state: "input_required", needs_you: true, reply: "Which env?" });
+    const failing = vi.fn().mockRejectedValue(new Error("network down"));
+    const first = render(DelegationBlock, { props: { tasks: [q], onAnswer: failing } });
+    await fireEvent.input(screen.getByLabelText("Answer @anton"), { target: { value: "prod, after 6pm" } });
+    first.unmount();
+
+    // A refetch remounts the block: the draft is still there.
+    const second = render(DelegationBlock, { props: { tasks: [{ ...q, age: "3m" }], onAnswer: failing } });
+    expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("prod, after 6pm");
+    // A failed send keeps it.
+    await fireEvent.click(screen.getByLabelText("Send answer"));
+    expect(await screen.findByTestId("answer-error")).toBeDefined();
+    second.unmount();
+
+    // Another task's block starts empty; the tray shows the same draft.
+    const other = render(DelegationBlock, { props: { tasks: [task({ task_id: "draft-2", to_handle: "vera", state: "input_required", needs_you: true })], onAnswer: failing } });
+    expect((screen.getByLabelText("Answer @vera") as HTMLInputElement).value).toBe("");
+    other.unmount();
+    const sent = vi.fn().mockResolvedValue(undefined);
+    const tray = render(TaskTray, { props: { tasks: [q], onAnswer: sent } });
+    await fireEvent.click(screen.getAllByText("Answer")[0]);
+    expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("prod, after 6pm");
+    await fireEvent.click(screen.getByText("Send"));
+    expect(sent).toHaveBeenCalledWith("draft-1", "prod, after 6pm");
+    tray.unmount();
+
+    // Sent: gone everywhere.
+    render(DelegationBlock, { props: { tasks: [q], onAnswer: sent } });
+    expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("");
+  });
+});
+
+describe("ThreadMessage delegation block", () => {
+  const turn: ConversationTurn = {
+    turn_id: "turn-1", role: "assistant", agent: "main", provider: "p", text: "Sent them off.", timestamp: 0,
+    truncated: false, interrupted: false, has_trace: true, attachments: [],
+    events: [
+      { type: "tool_use", tool_use_id: "u1", tool_name: "mcp__wick__team_message", tool_input: '{"to":"@anton"}' },
+      { type: "tool_result", tool_use_id: "u1", text: '{"task_id":"t1","state":"working"}' },
+    ],
+  } as ConversationTurn;
+
+  test("B5: a read-only chat's context has no message, so no Reply in thread; otherwise it sends through it", async () => {
+    const base = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" };
+    // DetailView's getter gives message undefined in a read-only chat.
+    const ro = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, { ...base, message: undefined } as TeamTasksCtx]]) });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("delegation-reply")).toBeNull();
+    ro.unmount();
+    const message = vi.fn().mockResolvedValue(undefined);
+    render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, { ...base, message } as TeamTasksCtx]]) });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "hi" } });
+    await fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(message).toHaveBeenCalledWith("t1", "hi"));
+  });
+
+  /* P60 S2: the in-between text of a turn that only delegated lives in
+     its trace while a teammate works; it shows again once all settled
+     with no later answer. */
+  test("P60 S2: the in-between text moves into the trace, not the body", async () => {
+    const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const { container } = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(screen.getByTestId("asst-meta")).toBeDefined();
+    expect(screen.getByTestId("delegation-block")).toBeDefined();
+    expect(screen.queryByText("Sent them off.")).toBeNull();
+    await fireEvent.click(screen.getByText(/show trace/));
+    expect(container.querySelector("[data-trace-blocks]")!.textContent).toContain("Sent them off.");
+  });
+
+  test("P60 S2: settled with no later answer, or a turn that did other work, keeps the text in the body", async () => {
+    const settled = { forTurn: (id: string) => (id === "turn-1" ? [task({ state: "completed", reply: "ok" })] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const r = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, settled]]) });
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    await r.rerender({ turn, laterAnswer: true });
+    expect(screen.queryByText("Sent them off.")).toBeNull();
+    r.unmount();
+    const working = { ...settled, forTurn: (id: string) => (id === "turn-1" ? [task({})] : []) } as TeamTasksCtx;
+    const busy = { ...turn, events: [...turn.events!, { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", tool_input: "{}" }] } as ConversationTurn;
+    render(ThreadMessage, { props: { turn: busy }, context: new Map([[TEAM_TASKS_KEY, working]]) });
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+  });
+
+  test("P60 S2: a turn from history stays visible until its trace confirms; opening the trace fetches fresh", async () => {
+    const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const loadTrace = vi.fn().mockResolvedValue(turn.events!);
+    const { container } = render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    await waitFor(() => expect(screen.queryByText("Sent them off.")).toBeNull());
+    expect(loadTrace).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByText(/show trace/));
+    await waitFor(() => expect(loadTrace).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(container.querySelector("[data-trace-blocks]")!.textContent).toContain("Sent them off."));
+  });
+
+  test("P60 S2: a history turn that also did other work, or whose trace fails to load, keeps its text", async () => {
+    const ctx = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const busy = vi.fn().mockResolvedValue([...turn.events!, { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", tool_input: "{}" }]);
+    const r = render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace: busy }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    await waitFor(() => expect(busy).toHaveBeenCalledTimes(1));
+    await tick();
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    r.unmount();
+    const failing = vi.fn().mockRejectedValue(new Error("gone"));
+    render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace: failing }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    await waitFor(() => expect(failing).toHaveBeenCalledTimes(1));
+    await tick();
+    expect(screen.getByText("Sent them off.")).toBeDefined();
+    expect(screen.queryByText(/failed to load trace/)).toBeNull();
+  });
+
+  test("P60 S2: no trace read for a turn without tasks or one that fails a guard", async () => {
+    const none = { forTurn: () => [], agents: () => ({}), captainName: () => "Cap" } as TeamTasksCtx;
+    const loadTrace = vi.fn().mockResolvedValue(turn.events!);
+    const r = render(ThreadMessage, { props: { turn: { ...turn, events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, none]]) });
+    r.unmount();
+    const ctx = { ...none, forTurn: (id: string) => (id === "turn-1" ? [task({})] : []) } as TeamTasksCtx;
+    render(ThreadMessage, { props: { turn: { ...turn, text: "Sent them off. Shall I wait?", events: [] } as ConversationTurn, loadTrace }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    await tick();
+    await tick();
+    expect(loadTrace).not.toHaveBeenCalled();
+    expect(screen.getByText("Sent them off. Shall I wait?")).toBeDefined();
+  });
+
+  test("T16 S10: the block sums it up, the trace keeps the team_message card with a row per teammate", async () => {
+    const ctx: TeamTasksCtx = {
+      forTurn: (id) => (id === "turn-1" ? [task({})] : []),
+      agents: () => ({}),
+      captainName: () => "Cap",
+      answer: vi.fn(),
+      cancel: vi.fn(),
+    };
+    const traced = {
+      ...turn,
+      events: [
+        ...turn.events!,
+        { type: "team_task", tool_use_id: "u1", text: JSON.stringify({ task_id: "t1", via: "tool", to_handle: "anton", state: "completed", started_at: "2026-10-10T10:00:00Z", ended_at: "2026-10-10T10:02:21Z", entries: [{ role: "user", text: "check the logs", at: "2026-10-10T10:00:00Z" }, { role: "agent", handle: "anton", text: "all clear", at: "2026-10-10T10:02:21Z" }] }) },
+        { type: "team_task", text: JSON.stringify({ task_id: "t2", via: "mention", to_handle: "bea", state: "working" }) },
+      ],
+    } as ConversationTurn;
+    render(ThreadMessage, { props: { turn: traced }, context: new Map([[TEAM_TASKS_KEY, ctx]]) });
+    expect(screen.getByTestId("delegation-block")).toBeDefined();
+    await fireEvent.click(screen.getByText(/show trace/));
+    expect(screen.getByText(/team_message/)).toBeDefined();
+    const rows = screen.getAllByTestId("team-trace-row");
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain("@anton");
+    expect(rows[0].textContent).toContain("replied");
+    expect(rows[0].textContent).toContain("all clear");
+    expect(rows[0].querySelector("[data-testid=team-trace-duration]")!.textContent).toBe("2m 21s");
+    expect(screen.getByTestId("team-trace-mention").textContent).toBe("Sent with an @mention in the reply");
+    await fireEvent.click(rows[0].querySelector("[data-testid=team-trace-toggle]")!);
+    expect(screen.getByTestId("team-trace-thread").textContent).toContain("check the logs");
+  });
+
+  test("P45: the person's own task — 'You asked', straight to Needs you, no answering stage", async () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    render(DelegationBlock, {
+      props: { tasks: [task({ origin: "user", state: "input_required", needs_you: false, reply: "Which env? (prod / staging)" })], captainName: "Cap", onAnswer },
+    });
+    expect(screen.getByText("You asked 1 teammate")).toBeDefined();
+    expect(screen.getByTestId("user-task-marker").textContent).toBe("You asked");
+    const chip = screen.getByTestId("delegation-chip");
+    expect(chip.getAttribute("data-status")).toBe("needs_you");
+    expect(chip.getAttribute("data-origin")).toBe("user");
+    expect(chip.textContent).toContain("needs input");
+    expect(chip.textContent).not.toContain("is answering");
+    expect(screen.queryByTestId("answer-instead")).toBeNull();
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByTestId("answer-to").textContent).toBe("Answer goes to @anton · you asked, so only you answer");
+    await fireEvent.click(chip);
+    expect(screen.getByText("You → @anton")).toBeDefined();
+  });
+
+  test("P45: the teammate's final reply shows on the person's task", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ origin: "user", state: "completed", reply: "deployed to prod", summary: "deployed to prod" })], captainName: "Cap" },
+    });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.getByText("deployed to prod")).toBeDefined();
+    expect(screen.getByText("You → @anton")).toBeDefined();
+  });
+
+  test("P45: tray and Tasks tab name the person's task 'You → @B'", async () => {
+    const mine = task({ task_id: "m", origin: "user", state: "input_required", needs_you: false });
+    const { unmount } = render(TaskTray, { props: { tasks: [mine, task({ task_id: "a" })], onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("task-tray-summary"));
+    const names = screen.getAllByTestId("task-tray-name").map((e) => e.textContent);
+    expect(names).toContain("You → @anton");
+    expect(names).toContain("Anton");
+    unmount();
+    render(TasksPanel, { props: { tasks: [mine], senderName: "Cap" } });
+    expect(screen.getByTestId("tasks-panel-name").textContent).toBe("You → @anton");
+    expect(screen.queryByText(/Cap is answering/)).toBeNull();
+  });
+});
+
+/* P39: a teammate's avatar in the chip and the tray moves while its task
+   works and pulses while a question waits for the person. */
+describe("task avatar activity", () => {
+  const tasks = [
+    task({ task_id: "w" }),
+    task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, reply: "Which env?" }),
+    task({ task_id: "a", to_handle: "vera", to_name: "Vera", state: "input_required", reply: "Which env?" }),
+    task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done", updated_at: new Date(2026, 9, 10, 10, 0).toISOString() }),
+  ];
+  const activities = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>("[data-testid=avatar-activity]")].map((e) => e.dataset.activity);
+
+  test("delegation chips", () => {
+    render(DelegationBlock, { props: { tasks } });
+    expect(screen.getAllByTestId("delegation-chip").map((c) => activities(c)[0])).toEqual(["tool", "alert", "idle", "idle"]);
+  });
+
+  test("task tray, stacked avatars", () => {
+    const { container } = render(TaskTray, { props: { tasks } });
+    // The one waiting on you is stacked first; the list keeps the order.
+    expect(activities(container)).toEqual(["alert", "tool", "idle"]);
+  });
+
+  test("task tray popover rows", async () => {
+    render(TaskTray, { props: { tasks } });
+    await fireEvent.click(screen.getByTestId("task-tray-summary"));
+    const rows = screen.getAllByTestId("task-tray-name").map((n) => activities(n.parentElement!)[0]);
+    expect(rows).toEqual(["tool", "alert", "idle"]);
+  });
+
+  test("Tasks rail: a working teammate orbits, one waiting on you pulses", () => {
+    // Lia replied at 10:00 local today: on the real clock it would fold into Earlier.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0));
+    try {
+      const { container } = render(TasksPanel, { props: { tasks } });
+      const rows = screen.getAllByTestId("tasks-panel-name").map((n) => n.closest<HTMLElement>("[data-testid=tasks-row]")!);
+      const by = (name: string) => rows.find((r) => r.textContent!.includes(name))!;
+      expect(activities(by("Anton"))).toEqual(["tool"]);
+      expect(by("Anton").querySelector("[data-testid=avatar-orbit]")).not.toBeNull();
+      expect(activities(by("Rio"))).toEqual(["alert"]);
+      expect(activities(by("Vera"))).toEqual(["idle"]);
+      expect(activities(by("Lia"))).toEqual(["idle"]);
+      expect(container.querySelectorAll("[data-testid=avatar-orbit]").length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("DelegationBlock Summarize now (T16 S9)", () => {
+  const done = task({ task_id: "a", to_handle: "halodev", to_name: "Halodev", state: "completed", reply: "done", ended_at: "2026-10-10T10:02:21Z", group: "g1", summarizable: true });
+  const work = task({ task_id: "b", to_handle: "research", to_name: "Research", state: "working", group: "g1", summarizable: true });
+
+  test("shows from the server's summarizable; a press hands over that batch and stays away until the list moves", async () => {
+    const onSummarize = vi.fn().mockResolvedValue(undefined);
+    const r = render(DelegationBlock, { props: { tasks: [done, work], onSummarize } });
+    await fireEvent.click(screen.getByTestId("delegation-summarize"));
+    await waitFor(() => expect(onSummarize).toHaveBeenCalledWith("g1"));
+    await waitFor(() => expect(screen.queryByTestId("delegation-summarize")).toBeNull());
+    // The refetch: the batch handed its replies over.
+    await r.rerender({ tasks: [{ ...done, summarizable: false }, { ...work, summarizable: false }], onSummarize });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+    // Another reply landed: something to hand over again.
+    await r.rerender({ tasks: [done, work, task({ task_id: "c", state: "completed", group: "g1", summarizable: true })], onSummarize });
+    expect(screen.getByTestId("delegation-summarize")).toBeDefined();
+  });
+
+  test("a remount reads the server's state: nothing held = no button", () => {
+    render(DelegationBlock, { props: { tasks: [{ ...done, summarizable: false }, { ...work, summarizable: false }], onSummarize: vi.fn() } });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+  });
+
+  test("absent without the action, or for the person's own tasks", () => {
+    const b = render(DelegationBlock, { props: { tasks: [done, work] } });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+    b.unmount();
+    render(DelegationBlock, { props: { tasks: [{ ...done, origin: "user" }], onSummarize: vi.fn() } });
+    expect(screen.queryByTestId("delegation-summarize")).toBeNull();
+  });
+
+  test("a failed press says why and keeps the button", async () => {
+    render(DelegationBlock, { props: { tasks: [done, work], onSummarize: vi.fn().mockRejectedValue(new Error("nope")) } });
+    await fireEvent.click(screen.getByTestId("delegation-summarize"));
+    await waitFor(() => expect(screen.getByTestId("summarize-error").textContent).toBe("nope"));
+    expect(screen.getByTestId("delegation-summarize")).toBeDefined();
+  });
+
+  test("an open row shows how long the teammate took next to its reply", async () => {
+    render(DelegationBlock, { props: { tasks: [{ ...done, started_at: "2026-10-10T10:00:00Z" }, work] } });
+    await fireEvent.click(screen.getAllByTestId("delegation-chip")[0]);
+    expect(screen.getByTestId("delegation-preview-duration").textContent).toBe("2m 21s");
+    expect(screen.getByTestId("delegation-preview").textContent).toContain("done");
+  });
+});
+
+describe("TeamTraceRows (T16 S10)", () => {
+  const rec = { task_id: "t1", via: "tool" as const, to_handle: "anton", state: "working", started_at: "2026-10-10T10:00:00Z", entries: [{ role: "user", text: "check" }] };
+
+  test("the live task moves a recorded row on, and Open opens its chat", async () => {
+    const onOpen = vi.fn();
+    const live = task({ task_id: "t1", state: "completed", reply: "all clear", ended_at: "2026-10-10T10:02:21Z", chat_id: "c9" });
+    render(TeamTraceRows, { props: { tasks: [rec], live: { t1: live }, onOpen } });
+    const row = screen.getByTestId("team-trace-row");
+    expect(row.dataset.status).toBe("replied");
+    expect(row.textContent).toContain("all clear");
+    expect(screen.getByTestId("team-trace-duration").textContent).toBe("2m 21s");
+    await fireEvent.click(screen.getByTestId("team-trace-open"));
+    expect(onOpen).toHaveBeenCalledWith(live);
+  });
+
+  test("no live task: the snapshot as recorded, no Open", () => {
+    render(TeamTraceRows, { props: { tasks: [rec], onOpen: vi.fn() } });
+    expect(screen.getByTestId("team-trace-row").dataset.status).toBe("working");
+    expect(screen.queryByTestId("team-trace-open")).toBeNull();
+  });
+});

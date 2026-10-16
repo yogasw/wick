@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/rs/zerolog/log"
@@ -45,11 +46,33 @@ const stateFile = "a2a-remote.json"
 // TaskID is kept while the remote waits for input, so the next message
 // continues that task.
 type State struct {
-	ContextID     string    `json:"context_id,omitempty"`
-	TaskID        string    `json:"task_id,omitempty"`
-	InputRequired bool      `json:"input_required,omitempty"`
-	LastState     string    `json:"last_state,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ContextID     string `json:"context_id,omitempty"`
+	TaskID        string `json:"task_id,omitempty"`
+	InputRequired bool   `json:"input_required,omitempty"`
+	LastState     string `json:"last_state,omitempty"`
+	// Reason is the remote's message when its task ended failed,
+	// rejected, canceled or auth_required (EndedState), so a team task
+	// ends in that state with the remote's words.
+	Reason    string    `json:"reason,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EndedState is the A2A state the last turn's task ended in when that is
+// failed, rejected, canceled or auth_required; false otherwise.
+func (st State) EndedState() (a2a.TaskState, bool) {
+	if s := a2a.TaskState(st.LastState); endedState(s) {
+		return s, true
+	}
+	return "", false
+}
+
+// endedState is true for the states that end a turn as an error.
+func endedState(s a2a.TaskState) bool {
+	switch s {
+	case a2a.TaskStateFailed, a2a.TaskStateRejected, a2a.TaskStateCanceled, a2a.TaskStateAuthRequired:
+		return true
+	}
+	return false
 }
 
 // LoadState reads dir's state; zero when there is none.
@@ -70,7 +93,14 @@ func saveState(dir string, st State) {
 	}
 	st.UpdatedAt = time.Now().UTC()
 	b, _ := json.Marshal(st)
-	if err := os.WriteFile(filepath.Join(dir, stateFile), b, 0o600); err != nil {
+	// Written aside and renamed, so a reader never sees half a file.
+	path := filepath.Join(dir, stateFile)
+	tmp := path + ".tmp"
+	err := os.WriteFile(tmp, b, 0o600)
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
 		log.Warn().Err(err).Msg("a2aremote: save session state")
 	}
 }
@@ -135,6 +165,11 @@ func (s *Source) call(ctx context.Context, t *turnState, text string, hops int) 
 			t.event(ev)
 			if t.tooBig {
 				return ErrTooLarge
+			}
+			// auth_required and input_required end the turn though the
+			// remote may hold the stream open for the answer.
+			if t.settled() {
+				break
 			}
 		}
 	} else {
@@ -265,7 +300,7 @@ func (t *turnState) setStatus(s a2a.TaskStatus) {
 // the final status message when nothing was.
 func (t *turnState) finish() remote.Event {
 	st := t.st
-	st.LastState = string(t.state)
+	st.LastState, st.Reason = string(t.state), ""
 	if t.message {
 		st.LastState = "message"
 	}
@@ -280,11 +315,15 @@ func (t *turnState) finish() remote.Event {
 		}
 		return remote.Event{Kind: remote.EventDone, Text: t.text.String()}
 	case a2a.TaskStateFailed, a2a.TaskStateRejected, a2a.TaskStateCanceled, a2a.TaskStateAuthRequired:
-		msg := t.status
+		// The task is let go, auth_required included: after signing in,
+		// the next message starts a new task.
+		msg := CleanReason(t.status)
 		if msg == "" {
 			msg = "remote task ended as " + strings.ToLower(strings.TrimPrefix(string(t.state), "TASK_STATE_"))
 		}
-		return t.finishError("Remote agent: " + msg)
+		end := t.finishError("Remote agent: " + msg)
+		st.Reason = msg
+		return end
 	}
 	st.TaskID, st.InputRequired = "", false
 	if t.text.Len() == 0 && t.status != "" {
@@ -295,6 +334,29 @@ func (t *turnState) finish() remote.Event {
 
 func (t *turnState) finishError(msg string) remote.Event {
 	t.st.TaskID, t.st.InputRequired = "", false
-	t.st.LastState = string(t.state)
+	t.st.LastState, t.st.Reason = string(t.state), ""
 	return remote.Event{Kind: remote.EventError, Text: msg}
+}
+
+// maxReason caps, in runes, the remote's own words on an ended task.
+const maxReason = 2000
+
+// CleanReason is a remote's reason made safe to pass on: it reaches the
+// chat, the team task and the asker's next turn, so control characters
+// other than newline and tab are dropped and it is cut at maxReason
+// runes.
+func CleanReason(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range strings.TrimSpace(s) {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			continue
+		}
+		if n == maxReason {
+			return strings.TrimSpace(b.String()) + "…"
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return strings.TrimSpace(b.String())
 }

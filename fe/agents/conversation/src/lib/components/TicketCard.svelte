@@ -8,10 +8,13 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { getTicket } from "../api/tickets.js";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
 
   type Props = {
     base: string;
     ticket: TicketCard;
+    /* The ticket's project, named on the call that expands its sessions. */
+    projectId?: string;
     /* Project schema, so fields render with their labels, not raw keys. */
     schema?: TicketField[];
     /* user id → display name (assignees on this board). */
@@ -31,11 +34,20 @@
        so a card in a filtered board says WHY it survived — otherwise a hit
        on an assignee's name looks like a hit on a title nobody can see. */
     highlight?: string;
+    /* The project's name, on a board that combines several (Team ›
+       Tickets). Absent on a project's own board, where it goes without
+       saying. */
+    project?: string;
+    /* The chat in flight belongs to another project: the card does not
+       light up, but still takes the drop so the board can say why
+       (instead of the column underneath turning it into a ticket). */
+    sessionRefused?: boolean;
   };
 
   let {
     base,
     ticket,
+    projectId,
     schema,
     users,
     onOpen,
@@ -45,6 +57,8 @@
     onOpenSession,
     sessionDragging = false,
     highlight = "",
+    project,
+    sessionRefused = false,
   }: Props = $props();
 
   /* Split a string into plain and matched runs. Returned as data rather than
@@ -110,13 +124,15 @@
     ticket.session_rows;
     expanded = null;
   });
-  const sessionRows = $derived(expanded ?? ticket.session_rows ?? []);
-  const moreSessions = $derived(expanded === null && ticket.sessions > sessionRows.length);
+  const sessionRows = $derived((expanded ?? ticket.session_rows ?? []).filter((s) => s.id !== ticket.room?.session_id));
+  /* `sessions` counts the room too; it has its own row. */
+  const chatCount = $derived(ticket.sessions - (ticket.room ? 1 : 0));
+  const moreSessions = $derived(expanded === null && chatCount > sessionRows.length);
 
   function loadAllSessions() {
     if (loadingMore) return;
     loadingMore = true;
-    Effect.runPromise(getTicket(base, ticket.id).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(getTicket(base, ticket.id, projectId).pipe(Effect.provide(WickClientLayer)))
       .then((d) => { expanded = d.sessions; })
       .catch(() => { /* the +page link on the ticket still shows them */ })
       .finally(() => { loadingMore = false; });
@@ -137,7 +153,7 @@
     if (!sessionDragging) return;
     e.preventDefault();
     e.stopPropagation();
-    dropHover = true;
+    dropHover = !sessionRefused;
   }}
   ondragleave={() => { dropHover = false; }}
   ondrop={(e) => {
@@ -169,6 +185,9 @@
     </span>
     {#if ticket.stale}
       <span class="shrink-0 rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
+    {/if}
+    {#if project}
+      <span title={project} data-testid={"ticket-project-" + ticket.id} class="ml-auto min-w-0 truncate text-[10px] text-black-700 dark:text-black-600">📁 {project}</span>
     {/if}
   </div>
 
@@ -217,6 +236,20 @@
     <span class="ml-auto shrink-0">{timeAgo(ticket.updated_at, $now)}</span>
   </div>
 
+  <!-- The ticket's room: who is in it, then "Room · N members". -->
+  {#if ticket.room}
+    <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 pt-2 text-[11px] text-black-800 dark:border-navy-600 dark:text-black-600" data-testid={"ticket-room-" + ticket.id}>
+      <span class="flex -space-x-1" data-testid={"ticket-room-avatars-" + ticket.id}>
+        {#each ticket.room.members.slice(0, 5) as m (m.kind + (m.agent_id ?? "") + (m.owner_id ?? ""))}
+          <span title={m.owner_handle ? `${m.name || m.handle} · @${m.owner_handle}` : m.name || m.handle}>
+            <AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} color={m.avatar?.color} expression={m.avatar?.expression} size={16} />
+          </span>
+        {/each}
+      </span>
+      <span class="min-w-0 flex-1 truncate">👥 Room · {ticket.room.members.length} member{ticket.room.members.length === 1 ? "" : "s"}</span>
+    </div>
+  {/if}
+
   <!-- The ticket's sessions, listed rather than counted: a row is the drag
        handle for moving that conversation to another ticket, which a number
        could never be. -->
@@ -259,7 +292,7 @@
             disabled={loadingMore}
             onclick={(e) => { e.stopPropagation(); loadAllSessions(); }}
             class="w-full rounded px-1.5 py-0.5 text-left text-[10px] text-black-700 transition-colors hover:text-green-600 disabled:opacity-60 dark:text-black-600 dark:hover:text-green-400"
-          >{loadingMore ? "Loading…" : `+${ticket.sessions - sessionRows.length} more session${ticket.sessions - sessionRows.length === 1 ? "" : "s"}`}</button>
+          >{loadingMore ? "Loading…" : `+${chatCount - sessionRows.length} more session${chatCount - sessionRows.length === 1 ? "" : "s"}`}</button>
         </li>
       {/if}
     </ul>

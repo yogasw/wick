@@ -33,9 +33,13 @@ func grpcServerWithLimits(opts []grpc.ServerOption) *grpc.Server {
 }
 
 // DumpManifest returns json.Marshal(mod) — the manifest is the module
-// itself, so the plugin.json on disk can never drift from the binary.
+// itself, so the plugin.json on disk can never drift from the binary. A
+// module connector.ValidateModule rejects never makes it into a manifest.
 func DumpManifest(mod connector.Module) ([]byte, error) {
-	return json.Marshal(mod)
+	if err := connector.ValidateModule(mod); err != nil {
+		return nil, err
+	}
+	return json.Marshal(manifestModule(mod))
 }
 
 // Serve is the entire main() of a connector plugin binary. Call it with the
@@ -51,6 +55,11 @@ func Serve(mod connector.Module) {
 	}
 
 	args := os.Args[1:]
+	// --run-op: run one op in-process and exit (go run / dlv debugging
+	// against a local or admin-approved config). See runop.go.
+	if hasRunOpFlag(args) {
+		os.Exit(RunOpMain(mod, args, os.Stdout, os.Stderr))
+	}
 	dump := false
 	signKey := ""
 	for i := 0; i < len(args); i++ {

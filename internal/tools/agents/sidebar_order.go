@@ -86,5 +86,11 @@ func sidebarLifecycles() map[string]view.SessionLifecycleVM {
 		entry.SubAgent = sub
 		lc[root] = entry
 	}
+	// A conversation waiting on teammates shows the same marker.
+	for sid := range teamWaitingSessions(liveTeamTasks()) {
+		entry := lc[sid]
+		entry.SubAgent = "working"
+		lc[sid] = entry
+	}
 	return lc
 }

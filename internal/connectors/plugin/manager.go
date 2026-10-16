@@ -195,6 +195,30 @@ type SpawnSpec struct {
 	SocketDir string                     // "" = RunDir()
 	Env       []string                   // extra env on top of the scrubbed OS env
 	Stderr    io.Writer                  // nil = go-plugin's default (logged)
+	// Release runs once the process is gone (or failed to start): it
+	// revokes the process's Host API token. nil = nothing to release.
+	Release func()
+}
+
+// exitPoll is how often releaseOnExit checks whether a process is gone.
+var exitPoll = 2 * time.Second
+
+// releaseOnExit calls release once client's process has exited, whether it
+// was killed or crashed.
+func releaseOnExit(client *goplugin.Client, release func()) {
+	if release == nil {
+		return
+	}
+	go func() {
+		t := time.NewTicker(exitPoll)
+		defer t.Stop()
+		for range t.C {
+			if client.Exited() {
+				release()
+				return
+			}
+		}
+	}()
 }
 
 // Spawn starts a plugin subprocess (env scrubbed, same transport as connector
@@ -215,6 +239,7 @@ func Spawn(spec SpawnSpec) (*goplugin.Client, any, error) {
 		cfg.Stderr = spec.Stderr
 	}
 	client := goplugin.NewClient(cfg)
+	releaseOnExit(client, spec.Release)
 	rpc, err := client.Client()
 	if err != nil {
 		client.Kill()
@@ -230,7 +255,7 @@ func Spawn(spec SpawnSpec) (*goplugin.Client, any, error) {
 
 func (m *Manager) spawn(key string) (*entry, error) {
 	// caller (Client) holds m.mu.
-	clientCfg := clientConfig(m.socketDir, wickplugin.VersionedPlugins)
+	clientCfg := clientConfig(m.socketDir, wickplugin.VersionedPluginsFor(key))
 	// Debug: attach to a debugger-run plugin instead of spawning our own child,
 	// but ONLY when ReadReattachConfig confirms it's reachable (it dials the
 	// addr). A stale file from a stopped/relaunched dlv fails the dial and we
@@ -238,6 +263,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	// dispense mismatches, and circuit trips from desynced reattach files.
 	// AutoMTLS off: the running plugin never got our client cert.
 	reattached := false
+	var release func() // revokes the process's Host API token once it exits
 	if rp := reattachPathFor(key); rp != "" {
 		if rc, err := wickplugin.ReadReattachConfig(rp); err == nil {
 			clientCfg.Reattach = rc
@@ -259,9 +285,13 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		if !ok {
 			return nil, fmt.Errorf("no plugin binary registered for %q", key)
 		}
-		clientCfg.Cmd = m.pluginCommand(bin)
+		clientCfg.Cmd = m.pluginCommand(key, bin)
+		var env []string
+		env, release = wickplugin.HostProcessEnv(key, wickplugin.KindConnector)
+		clientCfg.Cmd.Env = append(clientCfg.Cmd.Env, env...)
 	}
 	client := goplugin.NewClient(clientCfg)
+	releaseOnExit(client, release)
 	rpc, err := client.Client()
 	if err != nil {
 		client.Kill()
@@ -280,13 +310,14 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	return &entry{client: client, conn: conn, lastUsed: m.now(), reattached: reattached}, nil
 }
 
-// pluginCommand passes the runtime DNS choice to connector plugins. The plugin
-// SDK configures its own Go resolver and Termux CA bundle, so plugins stay
-// native processes and do not require proot or filesystem bind mounts.
-func (m *Manager) pluginCommand(bin string) *exec.Cmd {
+// pluginCommand passes the plugin's data dir and the runtime DNS choice to
+// connector plugins. The plugin SDK configures its own Go resolver and Termux
+// CA bundle, so plugins stay native processes and do not require proot or
+// filesystem bind mounts.
+func (m *Manager) pluginCommand(key, bin string) *exec.Cmd {
 	cmd := safeexec.Command(bin)
 	// Plugins can be third-party binaries; none of them reads the daemon's DSN.
-	cmd.Env = envscrub.ScrubOSEnv()
+	cmd.Env = append(envscrub.ScrubOSEnv(), wickplugin.EnvDataDir+"="+DataDirFor(key))
 	if wickenv.IsTermux() && m.dnsServers != nil {
 		cmd.Env = append(cmd.Env, "WICK_DNS_SERVERS="+m.dnsServers())
 	}

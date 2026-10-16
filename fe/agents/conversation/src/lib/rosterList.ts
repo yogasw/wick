@@ -32,7 +32,28 @@ export function rosterEntries(agents: AgentItem[], groups: GroupItem[], query: s
   const at = (e: RosterEntry) => ts(e.kind === "agent" ? e.agent.last_active : e.group.last_active);
   const name = (e: RosterEntry) => (e.kind === "agent" ? e.agent.name : e.group.name);
   const captain = (e: RosterEntry) => (e.kind === "agent" && e.agent.is_captain ? 1 : 0);
-  return list.sort((x, y) => captain(y) - captain(x) || at(y) - at(x) || name(x).localeCompare(name(y)));
+  // An agent waiting on someone (a question, an approval, a teammate's
+  // question back to its sender) sits right under the Captain.
+  const waits = (e: RosterEntry) => (e.kind === "agent" && !e.agent.disabled && (e.agent.needs_attention || e.agent.team_asks) ? 1 : 0);
+  return list.sort((x, y) => captain(y) - captain(x) || waits(y) - waits(x) || at(y) - at(x) || name(x).localeCompare(name(y)));
+}
+
+/** dozing: an idle row last active before today dozes — eyes closed and
+    a "z", in full colour (only a disabled agent greys out). Last active
+    is the newest of any of its chats (last_any_active), so a side chat
+    that moved today keeps it awake even when the main chat is older.
+    Anything it is doing, waits on or has unread keeps it awake too. */
+export function dozing(
+  a: Pick<AgentItem, "last_active" | "last_any_active" | "disabled">,
+  st: { work: string; attention: boolean; unread: boolean },
+  nowMs: number = Date.now(),
+): boolean {
+  if (a.disabled || st.work !== "idle" || st.attention || st.unread) return false;
+  const at = Math.max(ts(a.last_active), ts(a.last_any_active));
+  if (!at) return false;
+  const today = new Date(nowMs);
+  today.setHours(0, 0, 0, 0);
+  return at < today.getTime();
 }
 
 export const PIN_COUNT = 3;
@@ -66,14 +87,14 @@ export function unreadLabel(count?: number): string {
   return count > 9 ? "9+" : String(Math.floor(count));
 }
 
-/** rowTone is how a roster row reads (chat-app pattern): an unread row
-    has its name and preview in bold and its time in the accent colour;
-    a read one stays plain and grey. */
-export function rowTone(unread: boolean): { name: string; preview: string; time: string } {
-  return unread
+/** rowTone is how a roster row reads: name and preview keep their weight;
+    an unread row, or one waiting on someone (waits), has its time in the
+    accent colour (the badge counts); otherwise the time stays grey. */
+export function rowTone(unread: boolean, waits = false): { name: string; preview: string; time: string } {
+  return unread || waits
     ? {
-        name: "font-bold text-black-900 dark:text-white-100",
-        preview: "font-semibold text-black-900 dark:text-white-100",
+        name: "font-medium text-black-900 dark:text-white-100",
+        preview: "text-black-800 dark:text-black-600",
         time: "font-semibold text-green-600 dark:text-green-400",
       }
     : {
@@ -94,3 +115,10 @@ export function silentPreview(text: string, flag?: boolean): { text: string; sil
 /** Classes of a silent preview: dimmed and italic, like the muted-bell
     reply in the thread. */
 export const silentPreviewClass = "italic text-black-600 dark:text-black-700";
+
+/** withSaved merges a saved agent into the roster. Saving one as captain
+    clears the flag on every other agent, so the CAPTAIN badge and the
+    header's " · Team lead" move with it. */
+export function withSaved(agents: AgentItem[], next: AgentItem): AgentItem[] {
+  return agents.map((a) => (a.id === next.id ? { ...a, ...next } : next.is_captain ? { ...a, is_captain: false } : a));
+}

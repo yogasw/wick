@@ -75,6 +75,8 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	if err := configsSvc.Bootstrap(context.Background()); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
 	}
+	// file_io.* admin settings, read per write so edits apply live.
+	connectors.SetFileSettingLoader(configsSvc.Get)
 	encSvc, err := enc.New(configsSvc.EncryptionKey())
 	if err != nil {
 		log.Fatal().Msgf("enc init: %s", err.Error())

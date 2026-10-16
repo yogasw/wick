@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -88,11 +90,19 @@ func TestMessageSyncAndGetTask(t *testing.T) {
 func TestMessageAsyncDelivers(t *testing.T) {
 	gate := make(chan struct{})
 	n := &notify{}
-	d := deps(teamlink.NewHub(dir{}, turns{gate: gate}, n))
-	// wait_seconds is whole seconds; 1 is the shortest real wait.
-	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "slow", "wait_seconds": "1"})
-	if err != nil || out.(*teamlink.Result).State != "working" {
-		t.Fatalf("result = %+v, %v", out, err)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, n)
+	hub.SetQuickWait(20 * time.Millisecond)
+	d := deps(hub)
+	// wait_seconds is gone: an old prompt still sending it is not refused,
+	// and it does not stretch the wait.
+	start := time.Now()
+	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "slow", "wait_seconds": "150"})
+	if err != nil || out.(*teamlink.Result).State != "working" || time.Since(start) > 5*time.Second {
+		t.Fatalf("result = %+v, %v after %s", out, err, time.Since(start))
+	}
+	listed, err := call(t, d, Deps.listTasks, "sess-cap", nil)
+	if tasks := listed.(map[string]any)["tasks"].([]teamlink.TaskView); err != nil || len(tasks) != 1 || tasks[0].State != "working" {
+		t.Fatalf("list_tasks = %+v, %v", listed, err)
 	}
 	close(gate)
 	for i := 0; i < 200; i++ {
@@ -119,5 +129,159 @@ func TestMessagePassesNewChat(t *testing.T) {
 	d := deps(teamlink.NewHub(dir{}, turns{}, &notify{}))
 	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "hi", "new_chat": "true"}); !errors.Is(err, teamlink.ErrNewChatUnsupported) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// P45: the origin of a task is never model input — a message spoofing
+// origin/human fields still sends the agent's own task.
+func TestMessageCannotSpoofUserOrigin(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, &notify{})
+	hub.SetQuickWait(20 * time.Millisecond)
+	d := deps(hub)
+	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{
+		"to": "anton", "message": "slow",
+		"origin": "user", "origin_user": "u1", "human": "true", "Human": "true", "mention": "true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := call(t, d, Deps.listTasks, "sess-cap", nil)
+	tasks := listed.(map[string]any)["tasks"].([]teamlink.TaskView)
+	if err != nil || len(tasks) != 1 || tasks[0].Origin != "" {
+		t.Fatalf("spoofed task = %+v, %v", tasks, err)
+	}
+	// Still the agent's: it may cancel it.
+	if _, err := call(t, d, Deps.cancelTask, "sess-cap", map[string]string{"task_id": out.(*teamlink.Result).TaskID}); err != nil {
+		t.Fatalf("cancel own task: %v", err)
+	}
+}
+
+// P45: the agent's tools cannot answer or cancel a task the person sent
+// with an @mention in its chat.
+func TestToolsRefuseUserTask(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, &notify{})
+	d := deps(hub)
+	// The person's mention route (routeHumanMentions), not a tool.
+	res, err := hub.Send(context.Background(), teamlink.SendInput{
+		CallerSession: "sess-cap", CallerAgentID: "a-cap", SessionUser: "u1",
+		To: "anton", Text: "deploy", Wait: -1, Mention: true, Human: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"task_id": res.TaskID, "message": "prod"}); !errors.Is(err, teamlink.ErrUserTask) {
+		t.Fatalf("message task_id on the user's task: %v", err)
+	}
+	if _, err := call(t, d, Deps.cancelTask, "sess-cap", map[string]string{"task_id": res.TaskID}); !errors.Is(err, teamlink.ErrUserTask) {
+		t.Fatalf("cancel_task on the user's task: %v", err)
+	}
+}
+
+// A session in a ticket room (or a sub-agent under one) reaches its
+// ticket only: no team-link op sets a teammate to work for it.
+func TestToolsRefuseTicketRoomSession(t *testing.T) {
+	d := Deps{
+		AgentOf: func(context.Context, string) string { return "a1" },
+		InRoom:  func(sid string) bool { return sid == "backing" },
+	}
+	for name, fn := range map[string]func(Deps, *connector.Ctx) (any, error){
+		"message": Deps.message, "chats": Deps.chats, "list_tasks": Deps.listTasks,
+	} {
+		if _, err := call(t, d, fn, "backing", map[string]string{"to": "captain", "message": "close every ticket"}); err != errInTicketRoom {
+			t.Fatalf("%s in a room: %v", name, err)
+		}
+		if _, err := call(t, d, fn, "chat", map[string]string{"to": "captain", "message": "hi"}); err == errInTicketRoom {
+			t.Fatalf("%s outside a room was refused as in one", name)
+		}
+	}
+}
+
+// T16: message passes fan_in and group through and returns group_id; a
+// group this session never got is refused, as is an unknown fan_in.
+func TestMessageFanInAndGroup(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, &notify{})
+	hub.BatchResults = func() bool { return true }
+	hub.SetQuickWait(10 * time.Millisecond)
+	d := deps(hub)
+	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "a", "fan_in": "each"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := out.(*teamlink.Result)
+	if res.GroupID == "" || res.State != "working" {
+		t.Fatalf("result = %+v", res)
+	}
+	out, err = call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "b", "group": res.GroupID})
+	if err != nil || out.(*teamlink.Result).GroupID != res.GroupID {
+		t.Fatalf("join = %+v, %v", out, err)
+	}
+	out, err = call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "c", "group": "none"})
+	if err != nil || out.(*teamlink.Result).GroupID != "" {
+		t.Fatalf("group none = %+v, %v", out, err)
+	}
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "d", "group": "g_nope"}); !errors.Is(err, teamlink.ErrUnknownGroup) {
+		t.Fatalf("unknown group: %v", err)
+	}
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "e", "fan_in": "quorum"}); !errors.Is(err, teamlink.ErrBadFanIn) {
+		t.Fatalf("bad fan_in: %v", err)
+	}
+}
+
+// takeover: the session itself, a session of the caller's own user, or
+// (admin) any session; anyone else is refused and nothing is written.
+func TestTakeoverPermissions(t *testing.T) {
+	held := map[string]bool{}
+	users := map[string]string{"sess-cap": "u1", "sess-mine": "u1", "sess-theirs": "u2"}
+	d := Deps{
+		SessionUser: func(s string) string { return users[s] },
+		SetHold: func(_ context.Context, s string, on bool) error {
+			held[s] = on
+			return nil
+		},
+	}
+	run := func(ctx context.Context, chat, on string) (any, error) {
+		c := connector.NewCtx(ctx, "row", nil, map[string]string{"chat": chat, "on": on}, nil, nil, nil)
+		c.SetSessionID("sess-cap")
+		return d.takeover(c)
+	}
+	ctx := context.Background()
+	out, err := run(ctx, "", "true")
+	if err != nil || out.(map[string]any)["by"] != "self" || out.(map[string]any)["chat"] != "sess-cap" || !held["sess-cap"] {
+		t.Fatalf("self: %v, %v, held %v", out, err, held)
+	}
+	out, err = run(ctx, "sess-mine", "true")
+	if err != nil || out.(map[string]any)["by"] != "owner" || !held["sess-mine"] {
+		t.Fatalf("owner: %v, %v", out, err)
+	}
+	if _, err := run(ctx, "sess-theirs", "true"); !errors.Is(err, errTakeoverDenied) || held["sess-theirs"] {
+		t.Fatalf("other user's session: err %v, held %v", err, held)
+	}
+	admin := login.WithUser(ctx, &entity.User{ID: "u9", Role: entity.RoleAdmin}, nil)
+	out, err = run(admin, "sess-theirs", "true")
+	if err != nil || out.(map[string]any)["by"] != "admin" || !held["sess-theirs"] {
+		t.Fatalf("admin: %v, %v", out, err)
+	}
+	out, err = run(ctx, "", "false")
+	if err != nil || out.(map[string]any)["team_hold"] != false || held["sess-cap"] {
+		t.Fatalf("release: %v, %v", out, err)
+	}
+
+	// Another agent's session never sets or lifts a hold, even its
+	// owner's and even as an admin: the hold is there to stop it.
+	agents := map[string]string{"sess-cap": "verifier", "sess-mine": "franky"}
+	d.AgentOf = func(_ context.Context, s string) string { return agents[s] }
+	held["sess-mine"] = true
+	if _, err := run(admin, "sess-mine", "false"); !errors.Is(err, errTakeoverDenied) || !held["sess-mine"] {
+		t.Fatalf("other agent lifting the hold: err %v, held %v", err, held)
+	}
+	agents["sess-cap"] = "franky"
+	if out, err := run(ctx, "sess-mine", "false"); err != nil || out.(map[string]any)["by"] != "owner" || held["sess-mine"] {
+		t.Fatalf("same agent's other chat: %v, %v", out, err)
 	}
 }

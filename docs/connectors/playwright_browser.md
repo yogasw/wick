@@ -56,6 +56,11 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | CloakBrowser | `CloakExecutablePath` | Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download (free tier) or the CLI resolution (pro tier). Applies to both cloak engines. |
 | CloakBrowser | `CloakLicenseKey` | CloakBrowser Pro license key (`cb_...`). Required by the `cloakbrowser-pro` engine; leave empty for the free `cloakbrowser` engine. Passed to the browser at launch so it runs at its licensed tier. |
 | CloakBrowser | `CloakCLIPath` | Path to the `cloakbrowser` CLI used by the `cloakbrowser-pro` engine. Default: resolved on `PATH`. Only needed for a non-`PATH` install. |
+| Moli *(collapsed)* | `MoliExecutablePath` | Path to an already-installed `moli` binary. Empty = the one downloaded from the Browser card. |
+| Moli | `MoliLayout` | Run with the real layout renderer (`--layout`), needed for screenshots, element geometry and coordinate clicks. Default on. |
+| Moli | `MoliResource` | Also fetch images, fonts and media (`--resource`). Default off: faster, but screenshots miss images and web fonts. |
+| Moli | `MoliBlockPrivateNetworks` | Refuse requests to private and loopback addresses (`--block-private-networks`). Default off. |
+| Moli | `MoliBlockCIDRs` | Comma-separated CIDRs to block in addition (`--block-cidrs`), e.g. `10.0.0.0/8,169.254.169.254/32`. |
 
 **The browser picker** is a [`html=` widget](/reference/config-tags#html-—-server-rendered-widget) — the connector renders its own status card per engine (installed / not installed, version, a Download button) and the widget wires clicks back to `browser_status` / `browser_install`. This is the reference implementation for `html=` in the docs.
 
@@ -71,7 +76,8 @@ Ephemeral: open a URL, do one thing, close the browser.
 |---|---|---|
 | `screenshot` | `url`, `full_page`, `selector`, `wait_for` | PNG screenshot as base64. `full_page` captures the whole scrollable page; `selector` scopes to one element. |
 | `get_content` | `url`, `selector`, `as_text` (default true), `wait_for` | Rendered content after JS runs — visible text by default, or HTML when `as_text` is false. |
-| `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **Chromium only** — errors on firefox/webkit/cloakbrowser/cloakbrowser-pro instances. |
+| `get_markdown` | `url`, `format` (`markdown` \| `semantic_tree_text`), `wait_selector` | One-shot `moli fetch`: the page as Markdown, or a compact semantic outline. No screenshot or JS interaction, but much faster than `get_content`. **Only offered on `Browser=moli` instances** (`VisibleWhen = "browser:moli"`). |
+| `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **chromium and moli only** — `VisibleWhen = "browser:chromium\|moli"`, so other engine instances never list it. |
 | `scrape` | `url`, `fields` (JSON map of key → CSS selector), `wait_for` | Structured extraction — each selector's inner text is returned under its key; a selector matching nothing returns `""`. |
 | `eval` | `url`, `script` | Evaluates a JS expression in the page, returns the JSON-serialized result. Marked **destructive** — arbitrary JavaScript can submit forms and change remote state. |
 
@@ -274,6 +280,21 @@ Backs the manager's browser picker. **Manager-only** — hidden from the MCP too
 | `browser_update` | — | `browser` | Re-fetches an engine's binary to the newest available build. Backs the picker's ⋮ **Update** menu item — see [Installing, updating, uninstalling](#installing-updating-uninstalling). |
 | `browser_uninstall` | — | `browser` | Removes an engine's downloaded binary. Backs the picker's ⋮ **Uninstall** menu item. |
 
+## Moli
+
+`moli` is a lightweight Rust headless browser ([lexmount/moli](https://github.com/lexmount/moli)) driven over CDP: fast and low-RAM, but headless only — no extensions, no WebGL/media. Pick it in the Browser card (it downloads like the cloak engine) or point `MoliExecutablePath` at an installed binary. The usual ops reach it over CDP; it additionally serves `get_markdown`, which skips CDP entirely and runs one `moli fetch`.
+
+### Ops gated by engine (`VisibleWhen`)
+
+Two ops declare `Operation.VisibleWhen` against the `browser` config, so an instance only lists the ops its engine can serve:
+
+| Op | Visible when `browser` is |
+|---|---|
+| `get_markdown` | `moli` |
+| `pdf` | `chromium`, `moli` |
+
+On any other instance the op is missing from `wick_list` / `wick_search` / `wick_get`, `wick_execute` refuses it (`operation "pdf" is not available on this instance (requires browser:…)`), and the admin op table shows it greyed with a "Hidden: requires …" chip. The Test panel still runs it. An instance with no saved `browser` uses the default `chromium`.
+
 ## CloakBrowser
 
 `cloakbrowser` and `cloakbrowser-pro` are two engine options alongside chromium/firefox/webkit — a patched, stealth Chromium published by [CloakHQ](https://github.com/CloakHQ/CloakBrowser). Neither is a Playwright-managed browser (no `playwright.Install`); they differ in how the binary is obtained and what limits apply:
@@ -300,7 +321,7 @@ Clicking a not-yet-installed row's **Download** button installs it: the free eng
 
 ## Quirks worth knowing
 
-- `pdf` only works on Chromium instances — set `Browser` to `chromium` (the default) if you need PDF rendering.
+- `pdf` is hidden on firefox/webkit instances — set `Browser` to `chromium` (the default) if you need PDF rendering. `get_markdown` likewise exists only on `moli` instances.
 - Live-session browsers are detached OS processes (not tied to the plugin subprocess), reconnected over CDP on each call — verified to work around Windows' fixed-debug-port restrictions via a dynamic `--remote-debugging-port=0`.
 - CloakBrowser (free) installs run in the background and can take a while (~200MB download); poll `browser_status` (or watch the picker) for progress rather than expecting `browser_install` to block until done.
 - `Device` overrides `ViewportWidth` / `ViewportHeight` when set.

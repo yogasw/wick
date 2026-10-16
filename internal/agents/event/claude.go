@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -66,6 +68,100 @@ type ClaudeParser struct {
 	// result said 134,763 where the window actually held 34,673. Read
 	// as a level, that sum climbs past 100% and keeps going.
 	lastLevel int
+
+	// synthKind / synthReset carry what this turn's synthetic message
+	// (see isSyntheticText) said about the account, for the result frame
+	// that ends the turn: claude's error result does not always repeat
+	// the wording — error_during_execution leaves .result empty.
+	synthKind  ErrKind
+	synthReset time.Time
+	// synthCoded: that message carried claude's own error code, which
+	// then outranks whatever the result's wording suggests.
+	synthCoded bool
+
+	// spentModel / spentCost are the previous `result` frame's per-model
+	// counters and total_cost_usd. Claude keeps ONE process alive for the
+	// whole session and those fields are running totals of that process,
+	// not of the turn: two turns 5 s apart read 20.29M and 20.41M cache
+	// read, $6.33 and $6.37, for +461 output tokens. A turn's own spend
+	// is the difference from this baseline (see turnSpend). The parser is
+	// built fresh per spawn, so the baseline lives exactly as long as the
+	// process whose totals it tracks.
+	spentModel map[string]claudeModelUsage
+	spentCost  float64
+}
+
+// claudeSyntheticModel is the model id claude stamps on an assistant
+// message it wrote itself instead of calling the API — the limit notice,
+// an API error it is relaying, "No response requested.".
+const claudeSyntheticModel = "<synthetic>"
+
+// claudeErrorKinds maps the error code claude puts on a message it wrote
+// itself (`"error":"rate_limit"` next to `"isApiErrorMessage":true`) to
+// what it says about the account. A code not listed — invalid_request
+// (an image it could not read), max_output_tokens, unknown — is about
+// the request, not the account: ErrNone.
+var claudeErrorKinds = map[string]ErrKind{
+	"rate_limit":            ErrLimit,
+	"rate_limit_error":      ErrLimit,
+	"billing_error":         ErrLimit,
+	"authentication_failed": ErrAuth,
+	"authentication_error":  ErrAuth,
+	"oauth_org_not_allowed": ErrAuth,
+	"permission_error":      ErrAuth,
+	"overloaded":            ErrUnavailable,
+	"overloaded_error":      ErrUnavailable,
+	"server_error":          ErrUnavailable,
+	"api_error":             ErrUnavailable,
+}
+
+// errorCode reads an `error` field that is either the bare code
+// ("rate_limit") or an API error object ({"type":"rate_limit_error"}).
+func errorCode(b json.RawMessage) string {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return ""
+	}
+	var code string
+	if b[0] == '"' {
+		_ = json.Unmarshal(b, &code)
+		return code
+	}
+	var obj struct {
+		Type  string `json:"type"`
+		Error *struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(b, &obj) == nil {
+		if obj.Error != nil && obj.Error.Type != "" {
+			return obj.Error.Type
+		}
+		return obj.Type
+	}
+	return ""
+}
+
+// claudeSyntheticMarkers are the notices claude writes itself on an
+// account problem, matched only when a frame carries neither the
+// synthetic model id nor an error code (an older CLI).
+// Narrower than ClassifyError's markers on purpose: this runs on assistant
+// text, where the model may well be talking ABOUT a 429. Lower-case.
+var claudeSyntheticMarkers = []string{
+	"you've hit your", "you have hit your", "usage limit reached",
+	"invalid api key", "please run /login", "oauth token has expired",
+	"api error: 4", "api error: 5", "credit balance is too low",
+	"failed to authenticate",
+}
+
+// isSyntheticText reports whether an un-streamed assistant frame's text
+// is claude's own notice rather than the model's: short, and worded the
+// way claude words its limit/auth/API-error messages.
+func isSyntheticText(text string) bool {
+	if len(text) > 500 {
+		return false
+	}
+	return containsAny(strings.ToLower(text), claudeSyntheticMarkers)
 }
 
 // NewClaudeParser returns a fresh parser ready to consume Claude
@@ -95,13 +191,20 @@ type claudeRaw struct {
 	// LinkURL is a system remote_link line's URL.
 	LinkURL string `json:"url,omitempty"`
 
+	// APIError is the error code on an assistant message claude wrote
+	// itself ("rate_limit", "authentication_failed", …), and
+	// IsAPIErrorMessage the flag that comes with it. See claudeErrorKinds.
+	APIError          json.RawMessage `json:"error,omitempty"`
+	IsAPIErrorMessage bool            `json:"isApiErrorMessage,omitempty"`
+
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
 
 	// `result` carries the turn's token accounting. .usage is the LAST
 	// message's usage (what the context window currently holds);
-	// .modelUsage is per-model totals for the whole turn and is only
-	// read here for contextWindow.
+	// .modelUsage and total_cost_usd are per-model running totals of the
+	// whole PROCESS, which spans many turns; turnSpend turns them into
+	// this turn's share before anything reads them.
 	// `system subtype=compact_boundary` reports a compaction under
 	// .compact_metadata.
 	CompactMeta *claudeCompactMeta `json:"compact_metadata,omitempty"`
@@ -109,10 +212,24 @@ type claudeRaw struct {
 	Usage      *claudeUsage                `json:"usage,omitempty"`
 	ModelUsage map[string]claudeModelUsage `json:"modelUsage,omitempty"`
 	CostUSD    float64                     `json:"total_cost_usd,omitempty"`
+	// UsageScope "turn" says modelUsage / total_cost_usd already count
+	// this turn alone (the wick engine writes it), so they are not
+	// running totals to difference. Claude's own CLI never sets it.
+	UsageScope string `json:"usage_scope,omitempty"`
+
+	// modelTotal keeps the frame's running totals once turnSpend has
+	// replaced ModelUsage with the turn's share; the model is picked by
+	// these, not by who happened to work this turn.
+	modelTotal map[string]claudeModelUsage
 
 	// `stream_event` (only when --include-partial-messages is set)
 	// wraps an Anthropic Messages-API streaming event in .event.
 	Event *claudeStreamEvent `json:"event,omitempty"`
+
+	// `rate_limit_event` carries the account's rate-limit windows under
+	// .rate_limit_info. Kept raw so an odd field there can never fail the
+	// whole line: parseClaudeRateLimit reads it field by field.
+	RateLimitInfo json.RawMessage `json:"rate_limit_info,omitempty"`
 }
 
 // claudeStreamEvent mirrors the Anthropic Messages API streaming event
@@ -169,15 +286,64 @@ func (u claudeUsage) level() int {
 }
 
 // claudeModelUsage is one entry of the result frame's per-model totals.
-// Its counts are turn-wide sums — right for "what did this turn spend",
-// wrong for "how full is the window" (every iteration re-reads the same
-// cached prefix, so the sum far exceeds what the window held).
+// Claude sends them as running totals of the process; once turnSpend has
+// taken the difference they are turn-wide sums — right for "what did
+// this turn spend", wrong for "how full is the window" (every iteration
+// re-reads the same cached prefix, so the sum far exceeds what the
+// window held).
 type claudeModelUsage struct {
 	ContextWindow       int `json:"contextWindow"`
 	InputTokens         int `json:"inputTokens"`
 	OutputTokens        int `json:"outputTokens"`
 	CacheReadTokens     int `json:"cacheReadInputTokens"`
 	CacheCreationTokens int `json:"cacheCreationInputTokens"`
+}
+
+// turnSpend rewrites a `result` frame's modelUsage and total_cost_usd
+// from the process's running totals into this turn's own share, and
+// moves the baseline on. The first result of a process is taken whole.
+// A model whose counter went DOWN was reset under us (a CLI reset, a
+// model switch), so its new value is taken as it stands; the same goes
+// for the cost. The context level is not touched: it never came from
+// these counters.
+func (p *ClaudeParser) turnSpend(r *claudeRaw) {
+	if r.UsageScope == "turn" {
+		return
+	}
+	if len(r.ModelUsage) > 0 {
+		turn := make(map[string]claudeModelUsage, len(r.ModelUsage))
+		for name, mu := range r.ModelUsage {
+			prev, ok := p.spentModel[name]
+			if ok && mu.InputTokens >= prev.InputTokens && mu.OutputTokens >= prev.OutputTokens &&
+				mu.CacheReadTokens >= prev.CacheReadTokens && mu.CacheCreationTokens >= prev.CacheCreationTokens {
+				d := mu
+				d.InputTokens -= prev.InputTokens
+				d.OutputTokens -= prev.OutputTokens
+				d.CacheReadTokens -= prev.CacheReadTokens
+				d.CacheCreationTokens -= prev.CacheCreationTokens
+				turn[name] = d
+				continue
+			}
+			turn[name] = mu
+		}
+		// Merged per model, never replaced: a model missing from one
+		// frame still has its totals when it shows up again.
+		if p.spentModel == nil {
+			p.spentModel = make(map[string]claudeModelUsage, len(r.ModelUsage))
+		}
+		for name, mu := range r.ModelUsage {
+			p.spentModel[name] = mu
+		}
+		r.modelTotal = r.ModelUsage
+		r.ModelUsage = turn
+	}
+	cost := r.CostUSD
+	if cost >= p.spentCost {
+		r.CostUSD = cost - p.spentCost
+	}
+	if cost > 0 {
+		p.spentCost = cost
+	}
 }
 
 // contextUsage builds the end-of-turn context reading, or nil when the
@@ -205,24 +371,38 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 	}
 	out := &TokenUsage{ContextUsed: level, CostUSD: r.CostUSD}
 
-	// Flows come from modelUsage, which totals the WHOLE turn; .usage is
-	// only the last message and would under-report a turn that looped
-	// through several tool calls. Level comes from .usage for the
-	// opposite reason: modelUsage re-counts the cached prefix on every
+	// Flows come from modelUsage, which (after turnSpend) totals the WHOLE
+	// turn; .usage is only the last message and would under-report a turn
+	// that looped through several tool calls. Level comes from .usage for
+	// the opposite reason: modelUsage re-counts the cached prefix on every
 	// iteration, so its sum is far larger than the window ever held.
 	//
 	// Picking the model: a turn can touch more than one (a cheap model
 	// for a side task, the main one for the conversation). Take the
-	// entry with the most input tokens — map iteration order is random,
-	// so "first" would flap between turns.
-	best := -1
-	for name, mu := range r.ModelUsage {
+	// entry with the most input tokens in the running totals, so a turn
+	// where only the side model worked keeps the main one; ties go to
+	// the smaller name, since map iteration order is random. The flows
+	// are every model's share of this turn summed: the side model's
+	// tokens were spent too, and dropping them would lose them from the
+	// ledger for good.
+	totals := r.modelTotal
+	if totals == nil {
+		totals = r.ModelUsage
+	}
+	best, pick := -1, ""
+	for name, mu := range totals {
 		weight := mu.InputTokens + mu.CacheReadTokens + mu.CacheCreationTokens
-		if weight > best {
-			best = weight
-			out.Model, out.Window = name, mu.ContextWindow
-			out.Input, out.CacheRead, out.CacheWrite = mu.InputTokens, mu.CacheReadTokens, mu.CacheCreationTokens
-			out.Output = mu.OutputTokens
+		if weight > best || (weight == best && name < pick) {
+			best, pick = weight, name
+		}
+	}
+	if best >= 0 {
+		out.Model, out.Window = pick, totals[pick].ContextWindow
+		for _, mu := range r.ModelUsage {
+			out.Input += mu.InputTokens
+			out.CacheRead += mu.CacheReadTokens
+			out.CacheWrite += mu.CacheCreationTokens
+			out.Output += mu.OutputTokens
 		}
 	}
 	if best < 0 {
@@ -240,6 +420,14 @@ type claudeMessage struct {
 	// Usage is the per-request accounting on an `assistant` frame — the
 	// only place the true context level is reported. See lastLevel.
 	Usage *claudeUsage `json:"usage,omitempty"`
+
+	// Model is the model that wrote the message; claudeSyntheticModel
+	// when claude wrote it itself.
+	Model string `json:"model,omitempty"`
+
+	// Error is the same code as claudeRaw.APIError, when a CLI puts it on
+	// the message instead of the line.
+	Error json.RawMessage `json:"error,omitempty"`
 }
 
 // UnmarshalJSON tolerates two string-shaped frames that would otherwise
@@ -270,12 +458,16 @@ func (m *claudeMessage) UnmarshalJSON(b []byte) error {
 	var probe struct {
 		Content json.RawMessage `json:"content"`
 		Usage   *claudeUsage    `json:"usage"`
+		Model   string          `json:"model"`
+		Error   json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(b, &probe); err != nil {
 		return err
 	}
 	// Usage is decoded normally — only .content needs the two shapes.
 	m.Usage = probe.Usage
+	m.Model = probe.Model
+	m.Error = probe.Error
 	trimmed := bytes.TrimSpace(probe.Content)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil
@@ -495,12 +687,19 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 				}
 			}
 		}
+		// A message claude wrote itself is never streamed as deltas, so
+		// the suppression below must not swallow it.
+		code := errorCode(raw.APIError)
+		if code == "" {
+			code = errorCode(raw.Message.Error)
+		}
+		synthModel := raw.Message.Model == claudeSyntheticModel || code != "" || raw.IsAPIErrorMessage
 		// If --include-partial-messages already streamed the text via
 		// stream_event content_block_delta, suppress the trailing
 		// `assistant` frame's text — it's the same content concatenated,
 		// emitting it again would double-render in the UI bubble and
 		// double the assistant turn body in conversation.jsonl.
-		if p.partialTextEmitted {
+		if p.partialTextEmitted && !synthModel {
 			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
 		// No tool_use/thinking — return concatenated text as TextDelta.
@@ -513,11 +712,39 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		if buf.Len() == 0 {
 			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
-		return live(AgentEvent{
+		ev := AgentEvent{
 			Type: TextDelta,
 			Text: buf.String(),
 			Raw:  trimmed,
-		})
+		}
+		// claude announces a limit as an assistant message of its own
+		// before the error result: shown as text, but not output the
+		// model produced.
+		// The wording alone counts only on a frame that names no model:
+		// a real reply may well talk about a 401 or a quota.
+		if synthModel || (raw.Message.Model == "" && isSyntheticText(ev.Text)) {
+			if code != "" {
+				// claude's own code decides; the wording only dates it.
+				ev.ErrKind = claudeErrorKinds[code]
+				if ev.ErrKind == ErrLimit {
+					if at, ok := ParseResetAt(ev.Text, nowFunc()); ok {
+						ev.ResetAt = at
+					}
+				}
+				// A code that says nothing about the account (invalid_request:
+				// claude carries on) must not mask how the turn ends.
+				if ev.ErrKind != ErrNone {
+					p.synthCoded = true
+				}
+			} else {
+				ev = classifyErr(ev, ev.Text)
+			}
+			ev.Synthetic = true
+			if ev.ErrKind != ErrNone {
+				p.synthKind, p.synthReset = ev.ErrKind, ev.ResetAt
+			}
+		}
+		return live(ev)
 
 	case "user":
 		// In headless stream-json mode claude wraps tool_result blocks
@@ -551,20 +778,14 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// for short replies — claude can batch them).
 		p.partialTextEmitted = false
 		p.partialThinkingEmitted = false
-		if raw.IsError {
-			p.lastLevel = 0
-			// error_during_execution puts the detail on stderr, leaving
-			// .result empty — fall back to subtype so the error isn't blank.
-			msg := raw.Result
-			if msg == "" {
-				msg = raw.Subtype
-			}
-			return AgentEvent{
-				Type:     Error,
-				ErrorMsg: msg,
-				Raw:      trimmed,
-			}, nil
-		}
+		synthKind, synthReset, synthCoded := p.synthKind, p.synthReset, p.synthCoded
+		p.synthKind, p.synthReset, p.synthCoded = ErrNone, time.Time{}, false
+		// Error results carry the same running totals (error_max_turns,
+		// error_during_execution report what was spent before stopping),
+		// so they move the baseline too and hand their own share to the
+		// ledger: otherwise that spend is lost, or charged to the next
+		// turn.
+		p.turnSpend(&raw)
 		u := raw.tokenUsage()
 		if u != nil && p.lastLevel > 0 {
 			u.ContextUsed = p.lastLevel
@@ -572,18 +793,107 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// The next turn measures itself; carrying this one's level over
 		// would report a stale window if that turn reports none.
 		p.lastLevel = 0
+		if raw.IsError {
+			// error_during_execution puts the detail on stderr, leaving
+			// .result empty — fall back to subtype so the error isn't blank.
+			msg := raw.Result
+			if msg == "" {
+				msg = raw.Subtype
+			}
+			ev := classifyErr(AgentEvent{
+				Type:     Error,
+				ErrorMsg: msg,
+				Raw:      trimmed,
+			}, msg)
+			// The result may say less than the notice before it did, and
+			// a coded notice outranks the wording either way.
+			if synthCoded || ev.ErrKind == ErrNone {
+				ev.ErrKind = synthKind
+			}
+			if ev.ResetAt.IsZero() && ev.ErrKind == synthKind {
+				ev.ResetAt = synthReset
+			}
+			if ev.ErrKind != ErrLimit {
+				ev.ResetAt = time.Time{}
+			}
+			ev.Usage = u
+			return ev, nil
+		}
+		// A turn whose only reply was a limit notice can still end in a
+		// "success" result; carry the notice's kind so the end of the
+		// turn says what stopped it.
 		return AgentEvent{
 			Type:       Done,
 			SessionID:  p.sessionID,
 			Raw:        trimmed,
 			Usage:      u,
 			RemoteNote: raw.RemoteNote,
+			ErrKind:    synthKind,
+			ResetAt:    synthReset,
 		}, nil
 	}
 
-	// Pass-through for anything else (rate_limit_event, status, etc.) —
-	// store them in raw.jsonl but don't drive downstream state.
+	// Pass-through for anything else (status, etc.) — store them in
+	// raw.jsonl but don't drive downstream state.
+	if raw.Type == "rate_limit_event" {
+		// Still Unknown for every consumer that drives a turn: only the
+		// RateLimit field is new, and only the usage cache reads it.
+		return AgentEvent{Type: Unknown, Raw: trimmed, RateLimit: parseClaudeRateLimit(raw.RateLimitInfo, time.Now())}, nil
+	}
 	return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+}
+
+// parseClaudeRateLimit reads a rate_limit_event's rate_limit_info. Every
+// field is optional and read on its own: a missing or malformed one is
+// skipped, never an error. utilization is a fraction (0..1, may exceed
+// 1) and becomes a percent here; resetsAt is unix seconds.
+//
+// The windows come from unifiedWindows. An event without them still
+// yields the one window rateLimitType names, when it carries a
+// utilization of its own. Nil only when info is not an object at all.
+func parseClaudeRateLimit(info json.RawMessage, now time.Time) *RateLimitInfo {
+	var fields map[string]json.RawMessage
+	if len(info) == 0 || json.Unmarshal(info, &fields) != nil || fields == nil {
+		return nil
+	}
+	out := &RateLimitInfo{ObservedAt: now, Windows: map[string]RateLimitWindow{}}
+	_ = json.Unmarshal(fields["status"], &out.Status)
+	var unified map[string]json.RawMessage
+	_ = json.Unmarshal(fields["unifiedWindows"], &unified)
+	for key, val := range unified {
+		if w, ok := parseClaudeRateLimitWindow(val); ok && key != "" {
+			out.Windows[key] = w
+		}
+	}
+	if len(out.Windows) == 0 {
+		var key string
+		_ = json.Unmarshal(fields["rateLimitType"], &key)
+		if w, ok := parseClaudeRateLimitWindow(info); ok && key != "" {
+			out.Windows[key] = w
+		}
+	}
+	return out
+}
+
+// parseClaudeRateLimitWindow reads {utilization, resetsAt}; ok is false
+// without a numeric utilization.
+func parseClaudeRateLimitWindow(raw json.RawMessage) (RateLimitWindow, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return RateLimitWindow{}, false
+	}
+	var util float64
+	if json.Unmarshal(fields["utilization"], &util) != nil {
+		return RateLimitWindow{}, false
+	}
+	// Rounded to hundredths of a percent: 0.39*100 must read 39, not
+	// 39.00000000000001.
+	w := RateLimitWindow{Utilization: math.Round(util*10000) / 100}
+	var resets float64
+	if json.Unmarshal(fields["resetsAt"], &resets) == nil && resets > 0 {
+		w.ResetsAt = time.Unix(int64(resets), 0)
+	}
+	return w, true
 }
 
 // SessionID returns the captured CLI session ID, or "" if no `system

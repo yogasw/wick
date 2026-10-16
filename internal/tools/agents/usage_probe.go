@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 )
 
 // The usage endpoint is a shared, rate-limited resource. Every provider
@@ -60,6 +63,17 @@ const (
 	// our own backoff but never this floor — and never a cooldown the
 	// server itself asked for.
 	usageManualMinInterval = 10 * time.Second
+
+	// usageAutoMinInterval is the floor between two refreshes nobody
+	// clicked for: the failover side asking for a fresh reading of an
+	// account it has marked limited. Longer than the button's floor,
+	// because nobody is waiting on it.
+	usageAutoMinInterval = time.Minute
+
+	// usageAutoMaxBackoff caps the doubling of usageAutoMinInterval after
+	// consecutive failed probes, so a broken endpoint is asked at most
+	// twice an hour by the failover side.
+	usageAutoMaxBackoff = 30 * time.Minute
 )
 
 // paceGate serialises outbound probes with a randomised gap. Callers
@@ -104,13 +118,34 @@ func randomDuration(min, max time.Duration) time.Duration {
 // usageFetch performs the actual remote read.
 type usageFetch func() ([]logintty.UsageWindow, error)
 
+// resetsFetch reads the account's saved resets (savedresets.SavedResets).
+// It is an optional companion of a usageFetch: it runs in the SAME
+// flight, right after the usage read and behind the same pace slot, so
+// saved resets never add a probe of their own and Re-check refreshes
+// both. Its failure never fails the usage reading; the section is
+// simply left out.
+type resetsFetch func() (*savedresets.SavedResets, error)
+
+// firstResets picks the optional companion out of a variadic tail.
+func firstResets(rs []resetsFetch) resetsFetch {
+	for _, r := range rs {
+		if r != nil {
+			return r
+		}
+	}
+	return nil
+}
+
 // usageEntry is one account's probe state.
 type usageEntry struct {
 	windows []logintty.UsageWindow
-	goodAt  time.Time // when the last successful reading was taken
-	err     error     // last failure, kept for display and backoff
-	fails   int       // consecutive failures, drives the backoff
-	nextAt  time.Time // earliest a manual re-check is accepted
+	// resets is the last saved-resets reading that succeeded, nil when
+	// none has (unsupported type, or every read failed).
+	resets *savedresets.SavedResets
+	goodAt time.Time // when the last successful reading was taken
+	err    error     // last failure, kept for display and backoff
+	fails  int       // consecutive failures, drives the backoff
+	nextAt time.Time // earliest a manual re-check is accepted
 	// attemptedAt is when the last probe finished, successful or not.
 	// A manual refresh is measured against this, not against goodAt:
 	// failed attempts cost the endpoint just as much as good ones.
@@ -118,6 +153,12 @@ type usageEntry struct {
 	// serverUntil is a cooldown the SERVER asked for (Retry-After).
 	// Nothing overrides it — not the backoff reset, not the button.
 	serverUntil time.Time
+	// fromDisk marks an entry loaded from the account's usage file;
+	// diskProbed is set once its one post-restart refresh was started.
+	fromDisk, diskProbed bool
+	// persistedAt is when the entry was last handed to the usage file;
+	// observe uses it to skip rewriting a file that says the same thing.
+	persistedAt time.Time
 }
 
 // usageCache is the per-account probe cache described above.
@@ -127,6 +168,12 @@ type usageCache struct {
 	now   func() time.Time
 	sleep func(time.Duration)
 	run   func(func())
+
+	// load and save connect the cache to the per-account usage files
+	// (provider/usage_disk.go): load fills a miss, so a restart serves
+	// the last reading instead of probing; save writes every good one.
+	load func(key string) (provider.UsageDisk, bool)
+	save func(provider.UsageDisk)
 
 	mu       sync.Mutex
 	entries  map[string]*usageEntry
@@ -140,6 +187,8 @@ func newUsageCache(ttl time.Duration) *usageCache {
 		now:      time.Now,
 		sleep:    time.Sleep,
 		run:      func(f func()) { go f() },
+		load:     provider.UsageDiskLookup,
+		save:     provider.RecordUsage,
 		entries:  map[string]*usageEntry{},
 		inflight: map[string]chan struct{}{},
 	}
@@ -155,7 +204,16 @@ var usageProbes = newUsageCache(usageCacheTTL)
 // passed off as a live one.
 type usageView struct {
 	Windows []logintty.UsageWindow
-	Err     error
+	// SavedResets rides along with the windows; nil = nothing to show.
+	SavedResets *savedresets.SavedResets
+	Err         error
+	// LastErr is the failure of the most recent probe when an OLDER
+	// reading is still being served in Windows; nil when the newest
+	// attempt succeeded. Err keeps its meaning (no reading, only a
+	// failure), so callers that ignore this field see what they did.
+	LastErr error
+	// Fails counts the consecutive failed probes behind LastErr.
+	Fails int
 	// Known is false while the first reading for this account is still
 	// pending — neither data nor a failure yet.
 	Known bool
@@ -186,8 +244,8 @@ func (v usageView) Age(now time.Time) time.Duration {
 // to show; everything after that is Re-check.
 // credsAt is when this account's stored credentials last changed (zero
 // when unknown); it is what licenses the one retry described in rule 4.
-func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time) usageView {
-	c.schedule(key, fetch, false, credsAt)
+func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time, resets ...resetsFetch) usageView {
+	c.schedule(key, fetch, false, credsAt, resets...)
 	c.mu.Lock()
 	e := c.entries[key]
 	_, checking := c.inflight[key]
@@ -204,8 +262,8 @@ func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time) usageV
 //
 // Bounded by ctx: a caller that runs out of budget gets the blank and
 // the probe keeps going in the background for the next reader.
-func (c *usageCache) getWait(ctx context.Context, key string, fetch usageFetch, credsAt time.Time) usageView {
-	v := c.get(key, fetch, credsAt)
+func (c *usageCache) getWait(ctx context.Context, key string, fetch usageFetch, credsAt time.Time, resets ...resetsFetch) usageView {
+	v := c.get(key, fetch, credsAt, resets...)
 	if v.Known {
 		return v
 	}
@@ -238,20 +296,23 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v := usageView{FetchedAt: e.goodAt, NextAt: e.nextAt}
+	v := usageView{FetchedAt: e.goodAt, NextAt: e.nextAt, SavedResets: e.resets}
 	if !e.goodAt.IsZero() {
 		// Served however old it is. Nothing refreshes on its own any
 		// more, so a cutoff would simply blank the card and leave the
 		// user with less than they had — and the age is on screen, so
 		// nobody is being told this number is fresh.
 		v.Windows, v.Known = e.windows, true
+		if e.err != nil && !errors.Is(e.err, logintty.ErrUsageUnsupported) {
+			v.LastErr, v.Fails = e.err, e.fails
+		}
 		return v
 	}
 	if e.err != nil {
 		v.Err, v.Known = e.err, true
 		return v
 	}
-	return usageView{NextAt: e.nextAt}
+	return usageView{NextAt: e.nextAt, SavedResets: e.resets}
 }
 
 // schedule starts a probe for key. It declines when one is already
@@ -260,19 +321,28 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 // cost an upstream request. force comes only from forceRefresh, which
 // has already applied the cooldowns. Returns the channel that closes
 // when the running probe finishes, or nil when none was started.
-func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt time.Time) chan struct{} {
+func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt time.Time, resets ...resetsFetch) chan struct{} {
+	readResets := firstResets(resets)
 	c.mu.Lock()
 	if ch, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
 		return ch // rule 2: one flight per account
 	}
-	if e := c.entries[key]; e != nil && !force && !retryOnNewCreds(e, credsAt, c.now()) {
+	if e := c.entryLocked(key); e != nil && !force && !retryOnNewCreds(e, credsAt, c.now()) {
 		// An entry exists, so this account has been read at least once.
 		// Refreshing it is a human's decision (forceRefresh), never a
 		// side effect of someone having a page open — that automatic
 		// refresh is exactly what fed the rate limit before.
-		c.mu.Unlock()
-		return nil
+		//
+		// One exception: a reading loaded from disk that is older than
+		// the TTL gets ONE background refresh the first time it is read
+		// in this process — what a cold start always did before the
+		// file existed, never more. It is served meanwhile.
+		if !c.staleFromDiskLocked(e) {
+			c.mu.Unlock()
+			return nil
+		}
+		e.diskProbed = true
 	}
 	ch := make(chan struct{})
 	c.inflight[key] = ch
@@ -289,22 +359,50 @@ func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt 
 			c.sleep(wait) // rule 3: randomised gap between providers
 		}
 		windows, err := fetch()
-		c.store(key, windows, err)
+		var saved []*savedresets.SavedResets
+		if readResets != nil && !errors.Is(err, logintty.ErrUsageUnsupported) && !logintty.IsRateLimited(err) {
+			// Same flight, same pace slot; a failure only leaves the
+			// section out (rule 4 still governs the usage reading).
+			r, rerr := readResets()
+			if rerr != nil {
+				r = nil
+			}
+			// Beside a good usage reading a missing one is current too:
+			// the account stopped reporting resets, so the old copy goes.
+			if r != nil || err == nil {
+				saved = append(saved, r)
+			}
+		}
+		c.store(key, windows, err, saved...)
 	})
 	return ch
 }
 
 // store records a probe result and decides when the next one is allowed.
-func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error) {
+func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error, saved ...*savedresets.SavedResets) {
 	now := c.now()
+	// The file write runs after the unlock (deferred first, so it runs
+	// last): readers of every account must not wait on disk I/O.
+	var persist func()
+	defer func() {
+		if persist != nil {
+			persist()
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() { persist = c.persistLocked(key, err) }()
 	e := c.entries[key]
 	if e == nil {
 		e = &usageEntry{}
 		c.entries[key] = e
 	}
 	e.attemptedAt = now
+	e.persistedAt = now
+	e.fromDisk = false // a real probe replaced the file's reading
+	if len(saved) > 0 {
+		e.resets = saved[0]
+	}
 	if after := logintty.RetryAfterOf(err); after > 0 {
 		e.serverUntil = now.Add(after)
 	}
@@ -366,14 +464,14 @@ func retryOnNewCreds(e *usageEntry, credsAt, now time.Time) bool {
 // Returns accepted=false plus how long to wait when it declines, so the
 // UI can say "10s more" instead of looking broken. A probe already in
 // flight counts as accepted — that click got what it asked for.
-func (c *usageCache) forceRefresh(key string, fetch usageFetch) (accepted bool, wait time.Duration) {
+func (c *usageCache) forceRefresh(key string, fetch usageFetch, resets ...resetsFetch) (accepted bool, wait time.Duration) {
 	now := c.now()
 	c.mu.Lock()
 	if _, running := c.inflight[key]; running {
 		c.mu.Unlock()
 		return true, 0
 	}
-	if e := c.entries[key]; e != nil {
+	if e := c.entryLocked(key); e != nil {
 		if d := e.serverUntil.Sub(now); d > 0 {
 			c.mu.Unlock()
 			return false, d
@@ -387,6 +485,223 @@ func (c *usageCache) forceRefresh(key string, fetch usageFetch) (accepted bool, 
 	// force: schedule() declines an account that already has a reading,
 	// and this is the one caller allowed to override that — a human
 	// asked, and the cooldowns above already said yes.
-	c.schedule(key, fetch, true, time.Time{})
+	c.schedule(key, fetch, true, time.Time{}, resets...)
 	return true, 0
+}
+
+// instanceResetsFetch is the saved-resets companion for one instance, or
+// nil when its type registered no reader (the field is then omitted).
+// Lookup goes through the logintty registry, never a switch on the type,
+// so a provider that registers a reader is picked up here unchanged.
+func instanceResetsFetch(t provider.Type, env []string) resetsFetch {
+	read, ok := savedresets.ReaderFor(string(t))
+	if !ok {
+		return nil
+	}
+	return func() (*savedresets.SavedResets, error) { return read(env) }
+}
+
+// entryLocked is c.entries[key], filled from the account's usage file on
+// a miss. A loaded reading counts as an existing one: it is served, and
+// replacing it is a refresh like any other. The probe bookkeeping comes
+// back with it, so a restart keeps honouring Retry-After and the
+// backoff. Callers hold c.mu.
+func (c *usageCache) entryLocked(key string) *usageEntry {
+	if e := c.entries[key]; e != nil || c.load == nil {
+		return e
+	}
+	d, ok := c.load(key)
+	if !ok {
+		return nil
+	}
+	e := entryFromDisk(d)
+	c.entries[key] = e
+	return e
+}
+
+// entryFromDisk turns one account's usage file into a probe entry,
+// bookkeeping included.
+func entryFromDisk(d provider.UsageDisk) *usageEntry {
+	e := &usageEntry{
+		goodAt: d.ObservedAt, resets: d.SavedResets, fromDisk: true,
+		attemptedAt: d.AttemptedAt, fails: d.Fails, serverUntil: d.ServerUntil,
+	}
+	// The last failure is loaded even when a reading exists, so a
+	// restart does not pass an old reading off as the latest check.
+	// Nothing gates on e.err while goodAt is set (see retryOnNewCreds).
+	if d.LastError != "" {
+		e.err = errors.New(d.LastError)
+	}
+	for _, w := range d.Windows {
+		e.windows = append(e.windows, logintty.UsageWindow{
+			Key: w.Key, Utilization: w.Utilization, ResetsAt: w.ResetsAt,
+			ObservedAt: w.ObservedAt, Account: w.Account, Error: w.Error,
+		})
+	}
+	e.nextAt = e.attemptedAt.Add(usageManualMinInterval)
+	if e.serverUntil.After(e.nextAt) {
+		e.nextAt = e.serverUntil
+	}
+	return e
+}
+
+// peek serves the account's usage as the file holds it right now. It
+// never probes, not even for a cold account, and never writes the
+// in-memory entries: opening a panel is a read, nothing more.
+//
+// The memory entry and the in-flight flag are taken BEFORE the file, so
+// a probe that lands between the two reads shows up in the file the
+// caller is about to read, never as "checking" with the old number. When
+// both exist the newer attempt wins: a failed disk write (disk full)
+// must not hide a reading the process already holds.
+func (c *usageCache) peek(key string) usageView {
+	c.mu.Lock()
+	var mem *usageEntry
+	if m := c.entries[key]; m != nil {
+		cp := *m
+		mem = &cp
+	}
+	_, checking := c.inflight[key]
+	c.mu.Unlock()
+
+	e := mem
+	if c.load != nil {
+		if d, ok := c.load(key); ok {
+			if f := entryFromDisk(d); mem == nil || f.attemptedAt.After(mem.attemptedAt) {
+				e = f
+			}
+		}
+	}
+	v := c.serve(e)
+	v.Checking = checking
+	return v
+}
+
+// staleFromDiskLocked: the entry came from disk, is older than the TTL,
+// has not had its one refresh yet, and the backoff allows one. Callers
+// hold c.mu.
+func (c *usageCache) staleFromDiskLocked(e *usageEntry) bool {
+	if !e.fromDisk || e.diskProbed {
+		return false
+	}
+	now := c.now()
+	if !e.goodAt.IsZero() && now.Sub(e.goodAt) <= c.ttl {
+		return false
+	}
+	return autoAllowed(e, now)
+}
+
+// autoAllowed is the gate for every probe nobody clicked: never inside a
+// server cooldown, and never sooner than the backoff after the last
+// attempt or reading.
+func autoAllowed(e *usageEntry, now time.Time) bool {
+	if e.serverUntil.After(now) {
+		return false
+	}
+	last := e.attemptedAt
+	if e.goodAt.After(last) {
+		last = e.goodAt
+	}
+	return last.IsZero() || now.Sub(last) >= autoBackoff(e.fails)
+}
+
+// autoBackoff doubles usageAutoMinInterval per consecutive failure, up
+// to usageAutoMaxBackoff: 1, 2, 4, 8, 16, 30 minutes.
+func autoBackoff(fails int) time.Duration {
+	d := usageAutoMinInterval
+	for i := 1; i < fails && d < usageAutoMaxBackoff; i++ {
+		d *= 2
+	}
+	return min(d, usageAutoMaxBackoff)
+}
+
+// persistLocked snapshots the entry for its usage file and returns the
+// write, to run after c.mu is released (nil = nothing to write). The
+// last good reading stays on disk through failures; the bookkeeping
+// (attempt, failures, server cooldown) is always current. An
+// unsupported verdict drops the file. Callers hold c.mu.
+func (c *usageCache) persistLocked(key string, err error) func() {
+	if c.save == nil {
+		return nil
+	}
+	if errors.Is(err, logintty.ErrUsageUnsupported) {
+		return func() { provider.UsageDiskDrop(key) }
+	}
+	e := c.entries[key]
+	if e == nil {
+		return nil
+	}
+	d := provider.UsageDisk{
+		Key: key, ObservedAt: e.goodAt, SavedResets: e.resets,
+		AttemptedAt: e.attemptedAt, Fails: e.fails, ServerUntil: e.serverUntil,
+	}
+	if e.err != nil {
+		d.LastError = e.err.Error()
+	}
+	if !e.goodAt.IsZero() {
+		for _, w := range e.windows {
+			d.Windows = append(d.Windows, provider.UsageDiskWindow{
+				Key: w.Key, Utilization: w.Utilization, ResetsAt: w.ResetsAt,
+				ObservedAt: w.ObservedAt, Account: w.Account, Error: w.Error,
+			})
+		}
+	}
+	save := c.save
+	return func() { save(d) }
+}
+
+// autoRefresh is a refresh nobody clicked: the failover side wants a
+// newer reading of an account it marked limited. It obeys everything
+// the button obeys — one flight, the server's Retry-After — plus the
+// autoAllowed backoff, and goes through the same pace gate. Returns the
+// channel of the probe it started or joined, nil when it declined.
+func (c *usageCache) autoRefresh(key string, fetch usageFetch, resets ...resetsFetch) chan struct{} {
+	now := c.now()
+	c.mu.Lock()
+	if ch, running := c.inflight[key]; running {
+		c.mu.Unlock()
+		return ch
+	}
+	if e := c.entryLocked(key); e != nil && !autoAllowed(e, now) {
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+	return c.schedule(key, fetch, true, time.Time{}, resets...)
+}
+
+// readInstanceUsage is THE read of an instance's rate-limit windows.
+// Every surface (providers list aside, which fans out over many
+// instances) goes through it, so the cache key, the credentials hint and
+// the saved-resets companion cannot drift between endpoints.
+func readInstanceUsage(ctx context.Context, ins provider.Instance) usageView {
+	env := provider.AccountEnv(ins)
+	return usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, env)
+	}, logintty.CredentialsChangedAt(ins.Type, env), instanceResetsFetch(ins.Type, env))
+}
+
+// refreshInstanceUsage is the Re-check counterpart of readInstanceUsage.
+func refreshInstanceUsage(ins provider.Instance) (accepted bool, wait time.Duration) {
+	env := provider.AccountEnv(ins)
+	return usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, env)
+	}, instanceResetsFetch(ins.Type, env))
+}
+
+// peekInstanceUsage is readInstanceUsage without the probe: the usage
+// file as it is now. For surfaces opened by a click (context panel,
+// /usage); the handler probes once only when the account has no file.
+func peekInstanceUsage(ins provider.Instance) usageView {
+	return usageProbes.peek(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)))
+}
+
+// usageRateLimited reports whether err is the usage endpoint refusing on
+// rate-limit grounds. A failure loaded back from the usage file is only
+// its message, so the 429 status in the text counts too.
+func usageRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	return logintty.IsRateLimited(err) || strings.Contains(err.Error(), "429")
 }

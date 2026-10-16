@@ -1,6 +1,6 @@
 ---
 name: wick-plugins
-description: Use when the user asks about installing, updating, removing, disabling, or building a wick plugin — a connector, tool, job, or service shipped as a standalone binary that wick runs in its own process. Covers the four kinds, plugin sources (upload, link, GitHub release incl. private + PAT), Add new plugin, the plugin CLI, plugins.json, install verification and signing, releasing from a plugins repo, troubleshooting, and how to disable a connector type entirely.
+description: Use when the user asks about installing, updating, removing, disabling, or building a wick plugin — a connector, tool, job, or service shipped as a standalone binary that wick runs in its own process. Covers the four kinds, plugin sources (upload, link, GitHub release incl. private + PAT), Add new plugin, the plugin CLI, plugins.json, install verification and signing, releasing from a plugins repo, the Host access tab (what a plugin may call in wick: scopes, per-item blocks, revoke, audit), troubleshooting, and how to disable a connector type entirely.
 ---
 
 # Using wick plugins
@@ -144,6 +144,52 @@ POST /manager/api/connectors/{key}/type-enable
 ```
 
 Use **type disable** to stop an entire connector until it is reconfigured; use **per-row Disable** to hide one credential set without affecting others.
+
+## Host access (what a plugin may call in wick)
+
+Plugins can call back into wick through the Host API (users, sessions, tickets, config, other connectors' ops, wick's REST API and database). An admin controls it on **Admin → Plugins → Host access**; the JSON behind the page is `/manager/api/plugin-host-access` (calls: `/manager/api/plugin-host-calls`). Reference: `docs/plugins/host-api.md`.
+
+The tab lists every plugin that declares a scope, used one in the last 7 days, or is blocked/revoked. Per scope it shows the label, status, declared items and 24 h counts (calls, failed, denied). Statuses:
+
+| Status | Meaning |
+|---|---|
+| `allowed` | calls go through (default or allowed by an admin) |
+| `blocked` | an admin blocked the scope |
+| `off-by-default` | a default-OFF scope nobody allowed yet |
+| `undeclared` | used by the plugin but missing from its manifest |
+| `unknown` | declared, but this wick does not know the scope; every call denied |
+
+Scopes, with their default (OFF ones need an admin to allow them):
+
+| Scope | Default | Notes |
+|---|---|---|
+| `whoami` | allow | identify itself |
+| `users.read` | allow | read users |
+| `accounts.read` | allow | accounts linked to a connector instance |
+| `sessions.read` | allow | session metadata, as the acting user |
+| `sessions.notify` | allow | message a session — destructive |
+| `tickets.read` | allow | read tickets |
+| `tickets.write` | allow | create/update tickets — destructive |
+| `config.read_other` | allow | other owners' config, secrets hidden |
+| `config.read_secret` | **OFF** | other owners' declared secrets — sensitive, shown highlighted |
+| `connectors.read` | allow | list connector instances |
+| `connectors.execute` | allow | the declared connector ops, as the acting user; destructive ops show red |
+| `rest.read` | allow | declared GET paths of wick's API |
+| `rest.write` | **OFF** | declared write paths — destructive |
+| `db.read` | **OFF** | read-only SQL on declared tables |
+| `db.write` | **OFF** | SQL that changes declared tables — destructive |
+| `datadir` | allow | declarative only, nothing to toggle |
+| `net.listen` | allow | declarative only, nothing to toggle |
+
+What the admin can do (applies immediately, no plugin restart):
+
+- **Allow / block a scope**, or reset it to the default.
+- **Block one item** — a connector op (`slack.send_message`), a REST pattern (`POST /api/tickets`), a table mode (`tickets:write`), a config key (`job:x/token`) — while the rest of the scope stays allowed.
+- **Block all host access** — denies every scope of the plugin at once; per-scope choices are kept for when it is lifted.
+- **Revoke / Restore** — revoke drops the plugin's live tokens and broker access over both doors and persists across restarts until restored.
+- **Audit** — each call (RPC, scope, item, acting user and whether it came from the caller or `wick_pat`, result code, duration) is kept 7 days; filter to failed calls only. Config values are never recorded.
+
+Every user-level call runs as a person — the user who triggered the plugin, else the owner of the PAT in the plugin's `wick_pat` config. A plugin failing with "no user identity" needs `wick_pat` set on its config page (use a bot/admin PAT only when it truly needs those rights; the audit shows whose PAT it was). A `PermissionDenied` names the scope and item to look at on this tab.
 
 ## Troubleshooting
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -63,6 +64,65 @@ func (liveProbe) usage(_ context.Context, t provider.Type, env []string) ([]logi
 	return logintty.ReadUsage(t, env)
 }
 
+func (liveProbe) savedResets(t provider.Type, env []string) resetsFetch {
+	return instanceResetsFetch(t, env)
+}
+
+// savedResetsProbe is the optional half of connectionsProbe: a probe
+// that can also read saved resets hands back the companion reader.
+type savedResetsProbe interface {
+	savedResets(t provider.Type, env []string) resetsFetch
+}
+
+// savedResetsDTO is savedresets.SavedResets on the wire, one shape for
+// every usage surface (providers list, usage panel, /usage popover,
+// composer picker).
+type savedResetsDTO struct {
+	Supported     bool                `json:"supported"`
+	Available     int                 `json:"available"`
+	Total         int                 `json:"total,omitempty"`
+	Items         []savedResetItemDTO `json:"items,omitempty"`
+	CooldownUntil string              `json:"cooldown_until,omitempty"`
+	Note          string              `json:"note,omitempty"`
+	Hint          string              `json:"hint,omitempty"`
+}
+
+type savedResetItemDTO struct {
+	ID            string `json:"id,omitempty"`
+	Label         string `json:"label,omitempty"`
+	ExpiresAt     string `json:"expires_at,omitempty"`
+	StartsAt      string `json:"starts_at,omitempty"`
+	UsableNow     bool   `json:"usable_now"`
+	RequiresLimit bool   `json:"requires_limit,omitempty"`
+}
+
+func rfc3339OrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// savedResetsDTOOf converts a cached reading; nil stays nil so the
+// field is omitted.
+func savedResetsDTOOf(r *savedresets.SavedResets) *savedResetsDTO {
+	if r == nil {
+		return nil
+	}
+	out := &savedResetsDTO{
+		Supported: r.Supported, Available: r.Available, Total: r.Total,
+		CooldownUntil: rfc3339OrEmpty(r.CooldownUntil), Note: r.Note, Hint: r.Hint,
+	}
+	for _, it := range r.Items {
+		out.Items = append(out.Items, savedResetItemDTO{
+			ID: it.ID, Label: it.Label,
+			ExpiresAt: rfc3339OrEmpty(it.ExpiresAt), StartsAt: rfc3339OrEmpty(it.StartsAt),
+			UsableNow: it.UsableNow, RequiresLimit: it.RequiresLimit,
+		})
+	}
+	return out
+}
+
 // usageWindowDTO is one rate-limit window on the wire.
 type usageWindowDTO struct {
 	Key         string  `json:"key"`
@@ -101,6 +161,15 @@ type providerConnectionDTO struct {
 	// frozen on a number that is deliberately not refetched per paint.
 	UsageChecking bool   `json:"usage_checking,omitempty"`
 	UsageErr      string `json:"usage_err,omitempty"`
+	// UsageLastErr is the failure of the latest probe while Windows
+	// still holds an older reading, so the card can call that reading
+	// cached instead of current. Empty when the latest probe succeeded;
+	// UsageErr stays the "no reading at all" failure.
+	UsageLastErr string `json:"usage_last_err,omitempty"`
+	// UsageRateLimited: UsageLastErr is the endpoint answering 429.
+	UsageRateLimited bool `json:"usage_rate_limited,omitempty"`
+	// UsageFails counts the consecutive failed probes behind UsageLastErr.
+	UsageFails int `json:"usage_fails,omitempty"`
 	// UsageFetchedAt is when this reading was actually taken upstream,
 	// and UsageAgeS the same thing as seconds-ago so the card can say
 	// "cached 42s ago" without trusting client clock skew. Readings are
@@ -113,6 +182,8 @@ type providerConnectionDTO struct {
 	// happens — it clamps at 0, meaning "due on the next poll".
 	UsageNextS int              `json:"usage_next_s,omitempty"`
 	Windows    []usageWindowDTO `json:"windows,omitempty"`
+	// SavedResets: see savedResetsDTO. Omitted when there is none to show.
+	SavedResets *savedResetsDTO `json:"saved_resets,omitempty"`
 }
 
 // ProviderConnectionsResponse is GET /api/providers/connections.
@@ -173,9 +244,13 @@ func collectConnections(ctx context.Context, instances []provider.Instance, p co
 	for key := range probeEnv {
 		key, env, t := key, probeEnv[key], probeType[key]
 		g.Go(func() error {
+			var resets resetsFetch
+			if sp, ok := p.(savedResetsProbe); ok {
+				resets = sp.savedResets(t, env)
+			}
 			v := cache.getWait(gctx, key, func() ([]logintty.UsageWindow, error) {
 				return p.usage(gctx, t, env)
-			}, p.credentialsChangedAt(t, env))
+			}, p.credentialsChangedAt(t, env), resets)
 			mu.Lock()
 			results[key] = v
 			mu.Unlock()
@@ -215,6 +290,7 @@ func collectConnections(ctx context.Context, instances []provider.Instance, p co
 			dto.Windows = usageWindowDTOs(res.Windows)
 		}
 		dto.UsageChecking = res.Checking
+		dto.SavedResets = savedResetsDTOOf(res.SavedResets)
 		applyUsageProvenance(&dto, res, now)
 		out = append(out, dto)
 	}
@@ -234,6 +310,11 @@ func applyUsageProvenance(dto *providerConnectionDTO, v usageView, now time.Time
 		if d := v.NextAt.Sub(now); d > 0 {
 			dto.UsageNextS = int(d.Round(time.Second) / time.Second)
 		}
+	}
+	if v.LastErr != nil {
+		dto.UsageLastErr = v.LastErr.Error()
+		dto.UsageRateLimited = usageRateLimited(v.LastErr)
+		dto.UsageFails = v.Fails
 	}
 }
 

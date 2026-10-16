@@ -104,6 +104,12 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 	if cerr != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("resolve creds: %w", cerr)
 	}
+	// This path calls op.Execute directly, past connectors.Service.Execute,
+	// so it repeats that guard: an op whose VisibleWhen the row's config
+	// does not meet is refused here too.
+	if op.VisibleWhen != "" && !pkgconnector.OpVisible(*op, pkgconnector.EffectiveConfigValues(mod, creds)) {
+		return workflow.NodeOutput{}, fmt.Errorf("operation %q is not available on this instance (requires %s)", n.Op, op.VisibleWhen)
+	}
 
 	// Workflows run headless — no cookie-session middleware stamps the
 	// user. Connector ops that gate on login.GetUser (e.g. notifications'
@@ -118,18 +124,18 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 	resp, execErr := op.Execute(cctx)
 
 	e.Registry.WriteAudit(ctx, connector.RunRecord{
-		WorkflowID: rc.Workflow.ID,
-		RunID:      rc.RunID,
-		NodeID:       n.ID,
-		Module:       n.Module,
-		Op:           n.Op,
-		Row:          n.Row,
-		Source:       "workflow",
-		RequestArgs:  argsMap,
-		Response:     resp,
-		Status:       statusOf(execErr),
-		Error:        errStr(execErr),
-		Destructive:  op.Destructive,
+		WorkflowID:  rc.Workflow.ID,
+		RunID:       rc.RunID,
+		NodeID:      n.ID,
+		Module:      n.Module,
+		Op:          n.Op,
+		Row:         n.Row,
+		Source:      "workflow",
+		RequestArgs: argsMap,
+		Response:    resp,
+		Status:      statusOf(execErr),
+		Error:       errStr(execErr),
+		Destructive: op.Destructive,
 	})
 	if execErr != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("%s.%s: %w", n.Module, n.Op, execErr)

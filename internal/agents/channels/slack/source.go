@@ -60,10 +60,14 @@ func (s *ConfigSource) load() (agentconfig.SlackChannelConfig, string) {
 	return cfg, pubURL
 }
 
-// Hash fingerprints fields that materially affect connection state.
+// Hash fingerprints fields that materially affect connection state. A
+// rotated app token pair the channel stored itself fingerprints as the pair
+// it was configured with, so a refresh does not trigger a reload; the
+// expiry the refresh writes is left out for the same reason.
 func (s *ConfigSource) Hash() string {
 	cfg, pubURL := s.load()
-	return cfg.Mode + "|" + cfg.BotToken + "|" + cfg.AppToken + "|" +
+	return cfg.Mode + "|" + cfg.BotToken + "|" + s.ch.tokenOrigin(cfg.AppToken) + "|" +
+		s.ch.tokenOrigin(cfg.AppRefreshToken) + "|" + cfg.ClientID + "|" + cfg.ClientSecret + "|" +
 		cfg.SigningSecret + "|" + pubURL + "|" +
 		cfg.UsersMode + "|" + cfg.AllowedUsers + "|" +
 		cfg.GroupsMode + "|" + cfg.AllowedGroups + "|" +

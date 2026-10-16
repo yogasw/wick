@@ -8,6 +8,7 @@
    shared ticker loop while on screen. Every other size — roster rows,
    mentions, pickers — is a still PNG drawn once and cached by look, so a
    long list never owns a canvas or a loop. */
+import { AVATAR_KIND_IMAGE, isImageKind, type AvatarImageSpec } from "./image.js";
 import { createRuntime } from "./blob/core/runtime";
 import { drawFrame } from "./blob/render/canvas";
 import { EXPRESSIONS, PALETTE, SHAPES, type BlobExpression, type BlobShape, type BlobState, type Gaze } from "./blob/core/types";
@@ -89,15 +90,21 @@ export function blobColor(c: string | null | undefined): string {
   return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v.toLowerCase() : BLOB_COLORS[8];
 }
 
-export type AvatarSpec = { kind?: string; shape: string; color: string; expression?: string; events?: Record<string, { state?: string; expression?: string; off?: boolean }> };
+export type AvatarSpec = {
+  kind?: string; shape: string; color: string; expression?: string; events?: Record<string, { state?: string; expression?: string; off?: boolean }>;
+  /** The uploaded picture's crop (image.ts): drawn for kind "image", kept
+      under the other kinds so switching back restores it. */
+  image?: AvatarImageSpec;
+};
 
 /** switchAvatarKind converts a stored avatar between classic and blob,
     keeping the color and any shape both kinds share (circle, squircle,
-    triangle). A classic spec carries no kind/expression keys at all, so it
+    triangle), and an uploaded picture's crop. A classic spec carries no kind/expression keys at all, so it
     compares and encodes exactly like a row written before blobs. The
     event table (events.ts) belongs to the agent, not the look: it stays. */
 export function switchAvatarKind(a: AvatarSpec, kind: string): AvatarSpec {
-  const ev = a.events ? { events: a.events } : {};
+  const ev = { ...(a.events ? { events: a.events } : {}), ...(a.image ? { image: a.image } : {}) };
+  if (isImageKind(kind)) return { kind: AVATAR_KIND_IMAGE, shape: normalizeShape(a.shape), color: a.color, ...ev };
   if (isBlobKind(kind)) return { kind: AVATAR_KIND_BLOB, shape: normalizeBlobShape(a.shape), color: a.color, expression: normalizeBlobExpression(a.expression), ...ev };
   return { shape: normalizeShape(a.shape), color: a.color, ...ev };
 }

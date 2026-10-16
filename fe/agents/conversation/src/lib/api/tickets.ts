@@ -9,6 +9,15 @@ import type {
   TicketDetail,
   TicketFilter,
 } from "../types/agents.js";
+import { forgetBoards } from "../ticketBoardCache.js";
+import { migrateTicketFilter } from "../ticketAssigneeFilter.js";
+import { invalidateProjectOptions } from "./projectOptionsCache.js";
+
+/* A write that can change a project's board drops its cached boards
+   (ticketBoardCache), once it has succeeded. No project named = every
+   project's, since the ticket's could be any of them. */
+const dropsBoards = (projectId?: string) =>
+  <A, E, R>(e: Effect.Effect<A, E, R>) => e.pipe(Effect.tap(() => Effect.sync(() => forgetBoards(projectId))));
 
 const DEFAULT_STATUSES = ["open", "in_progress", "waiting", "done"];
 
@@ -24,7 +33,8 @@ export type BoardOptions = {
   rows?: number;
   /** Only these statuses. Omitted = every column; `[]` = no cards at all. */
   statuses?: string[];
-  /** Only this person's tickets. "" = everyone, "me" resolves server-side. */
+  /** Only these people's tickets: a comma list of user ids, "me" (resolved
+      server-side) and "none" (unassigned). ""/absent = everyone. */
   assignee?: string;
   /** Ask for the untracked rows. Off unless switched on — the rail is the
       board's most expensive part and stays unbuilt until wanted. Its COUNT
@@ -40,7 +50,9 @@ export type BoardOptions = {
   untrackedOwner?: string;
 };
 
-export const getProjectTickets = (base: string, projectId: string, opt: BoardOptions = {}) => {
+/** boardQuery is the query string getProjectTickets sends for opt: the
+    request itself, so it also names a cached board (ticketBoardCache). */
+export function boardQuery(opt: BoardOptions = {}): string {
   const q = new URLSearchParams();
   if (opt.rows !== undefined) q.set("rows", String(opt.rows));
   // Set even when empty: "?statuses=" is an explicit "no columns", which is
@@ -51,7 +63,11 @@ export const getProjectTickets = (base: string, projectId: string, opt: BoardOpt
   if (opt.untrackedLimit !== undefined) q.set("untracked_limit", String(opt.untrackedLimit));
   if (opt.untrackedAfter) q.set("untracked_after", opt.untrackedAfter);
   if (opt.untrackedOwner === "me") q.set("untracked_owner", "me");
-  const qs = q.toString();
+  return q.toString();
+}
+
+export const getProjectTickets = (base: string, projectId: string, opt: BoardOptions = {}) => {
+  const qs = boardQuery(opt);
   return apiGetE<TicketBoard>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/tickets${qs ? "?" + qs : ""}`,
   ).pipe(
@@ -90,10 +106,16 @@ export const createTicket = (
     fields?: Record<string, string>;
     session_id?: string;
   },
-) => apiPostE<TicketCard>(`${base}/api/projects/${encodeURIComponent(projectId)}/tickets`, body);
+) => apiPostE<TicketCard>(`${base}/api/projects/${encodeURIComponent(projectId)}/tickets`, body).pipe(dropsBoards(projectId));
 
-export const getTicket = (base: string, ticketId: string) =>
-  apiGetE<TicketDetail>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`).pipe(
+/* Ticket ids are unique per project only (an adopted external id can sit in
+   two projects), so every per-ticket call that knows its project names it:
+   the server then never has to guess, and refuses an id it cannot place. */
+const inProject = (projectId: string | undefined, sep: "?" | "&" = "?") =>
+  projectId ? `${sep}project=${encodeURIComponent(projectId)}` : "";
+
+export const getTicket = (base: string, ticketId: string, projectId?: string) =>
+  apiGetE<TicketDetail>(`${base}/api/tickets/${encodeURIComponent(ticketId)}${inProject(projectId)}`).pipe(
     Effect.map((r) => ({
       ...r,
       sessions: r.sessions ?? [],
@@ -117,7 +139,8 @@ export const updateTicket = (
     assignees?: string[];
     fields?: Record<string, string>;
   },
-) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);
+  projectId?: string,
+) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}${inProject(projectId)}`, patch).pipe(dropsBoards(projectId));
 
 /** The receiver's own JSON reply, passed through by the server. Every field
     is optional — a receiver that answers `{}` is still a working receiver —
@@ -161,10 +184,10 @@ export type ActionResult = {
 
 /** One custom-button click: the server POSTs the ticket to the button's URL
     and reports how that went — the user is waiting to see their "Sync" land. */
-export const runTicketAction = (base: string, ticketId: string, buttonId: string) =>
+export const runTicketAction = (base: string, ticketId: string, buttonId: string, projectId?: string) =>
   apiPostE<ActionResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}`,
-  );
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}${inProject(projectId)}`,
+  ).pipe(dropsBoards(projectId));
 
 /** The list-toolbar twin of runTicketAction: the server POSTs the board's
     CURRENT filter — who it is narrowed to, which columns — plus the tickets
@@ -188,7 +211,7 @@ export const runBoardAction = (
   apiPostE<ActionResult>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/board-actions/${encodeURIComponent(buttonId)}`,
     { assignee: filter.assignee ?? "", statuses: filter.statuses ?? [] },
-  );
+  ).pipe(dropsBoards(projectId));
 
 /** Deleting a ticket either keeps its chats (they become untracked) or
     deletes them with it. The destructive shape has to be named: a ticket is
@@ -197,25 +220,26 @@ export const deleteTicket = (
   base: string,
   ticketId: string,
   sessions: "keep" | "delete" = "keep",
+  projectId?: string,
 ) =>
   apiDeleteE<{ status: string; sessions_deleted: number; sessions_kept: number }>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}?sessions=${sessions}`,
-  );
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}?sessions=${sessions}${inProject(projectId, "&")}`,
+  ).pipe(dropsBoards(projectId));
 
 /** A ticket the moved chat just left, when that emptied it — the caller is
     offered its removal rather than left with a husk on the board. */
 export type EmptiedTicket = { id: string; title: string };
 type MoveResult = { status: string; emptied_ticket?: EmptiedTicket };
 
-export const attachSession = (base: string, ticketId: string, sessionId: string) =>
+export const attachSession = (base: string, ticketId: string, sessionId: string, projectId?: string) =>
   apiPutE<MoveResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}`,
-  );
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}${inProject(projectId)}`,
+  ).pipe(dropsBoards(projectId));
 
-export const detachSession = (base: string, ticketId: string, sessionId: string) =>
+export const detachSession = (base: string, ticketId: string, sessionId: string, projectId?: string) =>
   apiDeleteE<MoveResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}`,
-  );
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/sessions/${encodeURIComponent(sessionId)}${inProject(projectId)}`,
+  ).pipe(dropsBoards(projectId));
 
 /* ── standing answers to ticket prompts ──────────────────────────────── */
 
@@ -231,11 +255,11 @@ export const saveTicketPrefs = (base: string, prefs: TicketPrefs) =>
 
 /** A notes scope is a ticket or a session; a session that belongs to a
     ticket resolves server-side to that ticket's notes. */
-export type NotesScope = { ticketId: string } | { sessionId: string };
+export type NotesScope = { ticketId: string; projectId?: string } | { sessionId: string };
 
 function scopeQuery(scope: NotesScope): string {
   return "ticketId" in scope
-    ? `ticket_id=${encodeURIComponent(scope.ticketId)}`
+    ? `ticket_id=${encodeURIComponent(scope.ticketId)}${inProject(scope.projectId, "&")}`
     : `session_id=${encodeURIComponent(scope.sessionId)}`;
 }
 
@@ -264,15 +288,18 @@ export const deleteNote = (base: string, scope: NotesScope, noteId: string) =>
 
 /* ── project config + saved board filter ─────────────────────────────── */
 
+/* ticket_enabled rides on every project-options row (a chat's board jump
+   keys off it), so a saved config drops those cached rows. */
 export const saveTicketConfig = (base: string, projectId: string, cfg: TicketConfig) =>
   apiPutE<{ status: string }>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/ticket-config`,
     cfg,
-  );
+  ).pipe(Effect.tap(() => invalidateProjectOptions()));
 
 export const getTicketFilter = (base: string, projectId: string) =>
   apiGetE<TicketFilter>(`${base}/api/me/ticket-filters/${encodeURIComponent(projectId)}`).pipe(
-    Effect.map((f) => f ?? {}),
+    // An older server still answers with the single `assignee`.
+    Effect.map((f) => migrateTicketFilter(f ?? {})),
   );
 
 export const saveTicketFilter = (base: string, projectId: string, f: TicketFilter) =>
@@ -280,10 +307,58 @@ export const saveTicketFilter = (base: string, projectId: string, f: TicketFilte
 
 /* ── rail layout (per user) ───────────────────────────────────────────── */
 
-export type RailPrefsWire = { order?: string[]; visible?: number };
+export type RailPrefsWire = { order?: string[]; hidden?: string[] | null; visible?: number; labels?: boolean };
 
 export const getRailPrefs = (base: string) =>
   apiGetE<RailPrefsWire>(`${base}/api/me/rail`).pipe(Effect.map((r) => r ?? {}));
 
 export const saveRailPrefs = (base: string, prefs: RailPrefsWire) =>
   apiPutE<{ status: string }>(`${base}/api/me/rail`, prefs);
+
+/* ── the ticket's room (Team › Tickets) ─────────────────────────────── */
+
+export type TicketRoomMember = {
+  kind: "agent" | "project_default";
+  agent_id?: string;
+  handle: string;
+  name: string;
+  /** Whom it works for; absent on the project default (works for anyone). */
+  owner_id?: string;
+  owner_handle?: string;
+  owner_name?: string;
+  home?: boolean;
+  is_captain?: boolean;
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: unknown };
+  /** The caller can ask it (their own agent, or the project default). */
+  mine: boolean;
+};
+
+export type TicketRoom = {
+  session_id: string;
+  ticket_id: string;
+  project_id: string;
+  members: TicketRoomMember[];
+  /** The caller's own "share the full thread" toggle. */
+  share_full: boolean;
+  /** Who a message of the caller's with no @ goes to ("" = nobody). */
+  responder: string;
+};
+
+const roomURL = (base: string, ticketId: string, projectId: string, rest = "") =>
+  `${base}/api/tickets/${encodeURIComponent(ticketId)}/room${rest}${inProject(projectId)}`;
+
+export const getTicketRoom = (base: string, ticketId: string, projectId: string) =>
+  apiGetE<{ room: TicketRoom | null }>(roomURL(base, ticketId, projectId));
+
+/** Create the ticket's room, or return the one it has. */
+export const openTicketRoom = (base: string, ticketId: string, projectId: string) =>
+  apiPostE<TicketRoom>(roomURL(base, ticketId, projectId), {});
+
+export const setRoomShareFull = (base: string, ticketId: string, projectId: string, shareFull: boolean) =>
+  apiPatchE<TicketRoom>(roomURL(base, ticketId, projectId), { share_full: shareFull });
+
+export const addRoomMembers = (base: string, ticketId: string, projectId: string, agentIds: string[]) =>
+  apiPostE<TicketRoom>(roomURL(base, ticketId, projectId, "/members"), { agent_ids: agentIds });
+
+export const removeRoomMember = (base: string, ticketId: string, projectId: string, agentId: string) =>
+  apiDeleteE<TicketRoom>(roomURL(base, ticketId, projectId, `/members/${encodeURIComponent(agentId)}`));

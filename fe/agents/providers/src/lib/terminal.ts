@@ -1,7 +1,11 @@
-/* terminal.ts — client for the web terminal (gotty) of an omp/opencode
-   instance. The browser only ever names a command KEY from the server's
-   allowlist; the server starts gotty on 127.0.0.1 and returns a path
-   under wick's own proxy for the iframe. Admin-only server-side. */
+/* terminal.ts — client for the web terminal (gotty) of a provider
+   instance whose type the backend registered a terminal for (the detail
+   payload's has_terminal). Generic over type/name: any page can list the
+   commands (apiTerminalStatus), start one (apiTerminalStart) and show it
+   in TerminalModal, which closes it (apiTerminalClose). The browser only
+   ever names a command KEY from the server's allowlist; the server starts
+   gotty on 127.0.0.1 and returns a path under wick's own proxy for the
+   iframe. Admin-only server-side. */
 
 import { get, post } from "./api.js";
 

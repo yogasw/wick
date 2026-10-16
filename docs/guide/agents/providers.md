@@ -335,6 +335,25 @@ The release's assets must carry a GitHub `digest` (all assets uploaded since mid
 
 Endpoints (`/tools/agents/api/managed-binaries…`): `GET` list, `GET {type}/releases`, `POST {type}/check`, `POST {type}/install[?tag=]`, `POST {type}/activate?version=`, `POST {type}/remove?version=`, `POST {type}/verify`. Every POST is admin-only.
 
+### Adding a web terminal for a provider
+
+The Detail page's **Terminal** section (gotty, admin-only) is driven by a registry in `internal/agents/terminal`: one file per type calling `terminal.Register` from `init`. The API, the `has_terminal` flag on the detail payload and the UI pick the new type up with no other change:
+
+```go
+// internal/agents/terminal/provider_<type>.go
+func init() {
+	terminal.Register(provider.Type<Name>, terminal.Provider{
+		Commands: func(ins provider.Instance) []terminal.Command { // the allowlist; required
+			return []terminal.Command{{Key: "tui", Label: "<binary>"}, {Key: "login", Label: "<binary> login", Args: []string{"login"}}}
+		},
+		Env:     nil, // optional: adjust the env after the account env, e.g. blank config overrides
+		Prepare: nil, // optional: runs before gotty starts, e.g. create a data dir
+	})
+}
+```
+
+The browser only ever sends a command key; argv comes from `Commands`, never from the request.
+
 Integration test: `WICK_E2E_PROVIDER_BIN=1 go test ./internal/agents/provider/managedbin -run E2E -v` downloads the real previous + latest omp and opencode into a temp dir (or `WICK_E2E_PROVIDER_BIN_DIR`), verifies, runs `--version`, then checks a same-version update is a no-op and that rollback needs no download.
 
 ### Why scan exists

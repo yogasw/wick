@@ -156,6 +156,10 @@ type ConversationTurn struct {
 	// Only the postback endpoint sets it: text that merely looks like a
 	// postback is an ordinary message.
 	Postback *Postback `json:"postback,omitempty"`
+	// ReplyTo is the message this user turn answers (a web "Reply").
+	// Only the send endpoint sets it, from the stored turn; absent on
+	// every older turn and on channel turns.
+	ReplyTo *ReplyTo `json:"reply_to,omitempty"`
 }
 
 // Speaker is who said an assistant turn. Via is how the turn came to be:
@@ -169,6 +173,15 @@ type Speaker struct {
 	// session, whose trace and tool calls the group thread does not copy.
 	// Set for via "group" only.
 	SessionID string `json:"session_id,omitempty"`
+	// OwnerID is whom the speaking agent works for, in a ticket room —
+	// several people's agents share one thread there, under one handle
+	// ("captain"). Empty elsewhere.
+	OwnerID string `json:"owner_id,omitempty"`
+	// OwnerHandle and Name label another person's agent for viewers who
+	// do not have it ("Captain · @hana"); set where OwnerID is, in an
+	// ordinary ticket session. Empty elsewhere.
+	OwnerHandle string `json:"owner_handle,omitempty"`
+	Name        string `json:"name,omitempty"`
 }
 
 // Speaker.Via values.
@@ -211,6 +224,19 @@ func PostbackFrom(ctx context.Context) *Postback {
 // SystemTurnKind values for ConversationTurn.Kind.
 const KindProviderSwitch = "provider_switch"
 
+// KindProviderFailover is the notice of an AUTOMATIC switch: the provider
+// hit a limit, an auth error or an outage mid-turn and wick moved the
+// session along its home's failover chain (extras: from, to, home,
+// reason, note, continue). A kind of its own so it is never mistaken for
+// a manual switch — the switcher collapses trailing provider_switch
+// turns, and a failover notice must survive that.
+const KindProviderFailover = "provider_failover"
+
+// KindProviderReturn is the notice of a session moving back to its home
+// (or a higher target of the home's chain) once that recovered, at a turn
+// boundary (extras: from, to, home, note). Never collapsed either.
+const KindProviderReturn = "provider_return"
+
 // Kinds of the server-recorded Team events (system turns). Each is
 // written by wick itself, never by an agent, so none can be forged from a
 // reply. Extras per kind are listed where each is emitted.
@@ -246,6 +272,11 @@ const (
 	// change in a group chat (extras: agent_id, handle, by).
 	KindGroupMemberAdded   = "group_member_added"
 	KindGroupMemberRemoved = "group_member_removed"
+	// KindTicketRoomOpened is a ticket room's first line; nobody joined.
+	KindTicketRoomOpened = "ticket_room_opened"
+	// KindTicketStatus is a ticket's status change, posted into its room
+	// (extras: from, to, by). It adds nobody to the room.
+	KindTicketStatus = "ticket_status"
 )
 
 // KindCompaction marks the point where the CLI folded older turns into
@@ -373,6 +404,25 @@ type Store struct {
 	// replaces it. Guarded by mu.
 	timedOut string
 
+	// lockMu guards the inflight bookkeeping below. appendInflight runs on
+	// the Apply goroutine, but Flush can come from a Stop on another one.
+	lockMu sync.Mutex
+	// turnLock is the session's inflight.lock flock, held from the first
+	// inflight.jsonl frame of a turn until the turn is written out. A
+	// successor process booting during a graceful upgrade sees it held and
+	// leaves the turn alone instead of recovering it as interrupted.
+	turnLock *inflightLock
+	// inflightTurnID stamps every inflight frame of the turn in progress,
+	// so a recovery that raced the live turn files its partial under an id
+	// the finished turn can name in Replaces. "" between turns.
+	inflightTurnID string
+	// inflightFile is inflight.jsonl as this turn created it. Gone or a
+	// different file means someone recovered it meanwhile; inflightLost
+	// latches that, checked before each frame because the turn's next
+	// append recreates the file — maybe on the very inode just freed.
+	inflightFile os.FileInfo
+	inflightLost bool
+
 	now func() time.Time
 }
 
@@ -475,15 +525,33 @@ func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attac
 // AppendUserTurnWithPostback is AppendUserTurnWithSender for a turn that
 // may be an actioncard click. postback nil = an ordinary message.
 func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Attachment, sender *Sender, postback *Postback) error {
+	return s.AppendUserTurnWithReply(role, source, text, atts, sender, postback, nil, "")
+}
+
+// AppendUserTurnWithReply is AppendUserTurnWithPostback for a turn that
+// may answer an earlier message. reply nil = not a reply. text stays the
+// person's own words; the quote lives in reply, never in text.
+//
+// Every turn gets a real id (turnID, else UnixNano like the other turns),
+// so a reply can point at it the moment it is stored. Turns written before
+// this keep the position id the conversation API backfills, and since ids
+// are only filled where empty, those positions do not move.
+func (s *Store) AppendUserTurnWithReply(role, source, text string, atts []Attachment, sender *Sender, postback *Postback, reply *ReplyTo, turnID string) error {
 	s.setTimedOut("")
+	now := s.now().UTC()
+	if turnID == "" {
+		turnID = fmt.Sprintf("%d", now.UnixNano())
+	}
 	turn := ConversationTurn{
-		Timestamp:   s.now().UTC(),
+		TurnID:      turnID,
+		Timestamp:   now,
 		Role:        role,
 		Source:      source,
 		Sender:      sender,
 		Text:        text,
 		Attachments: atts,
 		Postback:    postback,
+		ReplyTo:     reply,
 	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
@@ -636,6 +704,9 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return false, nil
 
 	case event.Done:
+		// The turn is over whether or not its flush lands: drop the turn
+		// lock, so a leftover inflight.jsonl is recoverable, not guarded.
+		defer s.endInflight()
 		// Token accounting goes to the session ledger (usage.json), not
 		// onto the turn: the questions it answers are aggregate ones, and
 		// a failure to record must never fail the turn that earned it.
@@ -655,12 +726,19 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return true, nil
 
 	case event.Error:
-		// An errored turn ended too: plot the level it climbed to (as a
-		// usage-less Done does), and leave nothing for the next turn.
-		if s.turnLevel > 0 {
+		defer s.endInflight()
+		// An errored turn ended too. If it reported what it spent (claude's
+		// error_max_turns / error_during_execution results do), record it
+		// like Done; otherwise plot the level it climbed to, as a
+		// usage-less Done does. Leave nothing for the next turn. A result
+		// frame yields exactly one of Done or Error, and the Error wick
+		// adds on process exit carries no usage, so nothing lands twice.
+		if ev.Usage != nil {
+			_ = s.recordUsage(ev.Usage, s.now().UTC())
+		} else if s.turnLevel > 0 {
 			_ = s.recordLevelPoint(s.turnLevel, s.now().UTC())
-			s.turnLevel = 0
 		}
+		s.turnLevel = 0
 		// On error we still want whatever partial text accumulated;
 		// don't lose it.
 		if err := s.flushAssistantTurn(false); err != nil {
@@ -834,6 +912,9 @@ func (s *Store) takeInterruptCause() (string, string) {
 }
 
 func (s *Store) Flush() error {
+	// Flush ends the turn (a stop, a dying process): release the turn lock
+	// on every path, including the nothing-buffered one below.
+	defer s.endInflight()
 	s.mu.RLock()
 	evEmpty := len(s.eventBuf) == 0
 	bufEmpty := s.turnBuf.Len() == 0
@@ -896,9 +977,17 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		return nil
 	}
 	body := s.turnBuf.String()
+	// A recovery that ran while this turn was still alive already filed
+	// its partial as an interrupted turn; this one stands in for it (see
+	// Replaces below) so the history keeps one turn per turn.
+	taken := s.inflightTaken()
 	// A resumed turn replays the interrupted one from its first word; drop
-	// what the reader already has. See resume_dedupe.go.
-	body = s.dedupeResumedPrefix(body)
+	// what the reader already has. See resume_dedupe.go. Not for a turn
+	// that replaces that partial: it is shown instead of it, so it keeps
+	// every word.
+	if taken == "" {
+		body = s.dedupeResumedPrefix(body)
+	}
 	truncated := wasInterrupted
 	s.mu.Lock()
 	evSnap := s.eventBuf
@@ -929,6 +1018,9 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		RemoteNote:  note,
 		Replaces:    s.replacedBy(note),
 	}
+	if turn.Replaces == "" {
+		turn.Replaces = taken
+	}
 	if wasInterrupted {
 		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()
 	}
@@ -948,6 +1040,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 	if err := os.Remove(s.layout.SessionInflight(s.sessionID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// non-fatal: log left to caller's discretion via raw.jsonl audit
 	}
+	s.endInflight()
 	return nil
 }
 
@@ -1210,6 +1303,10 @@ type InflightEntry struct {
 	// Display mirrors TurnEvent.Display. A binary's bytes are not in it
 	// (Blob is never serialized); recovery re-derives them from Text.
 	Display *event.Display `json:"display,omitempty"`
+	// TurnID is the id the live turn reserved for a recovery of itself;
+	// RecoverInflight files the partial under it. Empty in files written
+	// before it existed.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 // appendInflight writes one entry to the session's inflight.jsonl.
@@ -1217,13 +1314,86 @@ type InflightEntry struct {
 // crash but never blocks the live event pipeline. Caller passes the
 // already-built entry so the struct is identical to what consumers
 // see at replay time.
+//
+// The first frame of a turn takes the session's turn lock (see
+// beginInflightLocked); the turn's flush drops it.
 func (s *Store) appendInflight(e InflightEntry) error {
-	return storage.AppendJSONL(
-		s.layout.SessionInflight(s.sessionID),
-		"wick-inflight-v1",
-		s.sessionID,
-		e,
-	)
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	if s.inflightTurnID == "" {
+		s.beginInflightLocked()
+	}
+	e.TurnID = s.inflightTurnID
+	path := s.layout.SessionInflight(s.sessionID)
+	if s.inflightFile != nil && !s.inflightLost {
+		if fi, serr := os.Stat(path); serr != nil || !os.SameFile(fi, s.inflightFile) {
+			s.inflightLost = true
+		}
+	}
+	err := storage.AppendJSONL(path, "wick-inflight-v1", s.sessionID, e)
+	if s.inflightFile == nil {
+		if fi, serr := os.Stat(path); serr == nil {
+			s.inflightFile = fi
+		}
+	}
+	return err
+}
+
+// beginInflightLocked opens a turn's inflight bookkeeping: reserves its
+// recovery id and takes the turn lock. Failing to get the lock never blocks
+// the turn — the lock only tells a successor to keep its hands off, and an
+// unlocked turn just loses that protection.
+//
+// Getting the lock fresh while an inflight.jsonl is already there means
+// its writer is gone: a predecessor that died mid-turn after the boot
+// recovery passed over it because it was still alive then. That leftover
+// is recovered now, before this turn streams on top of it. Caller holds
+// lockMu.
+func (s *Store) beginInflightLocked() {
+	if l, ok := tryLockInflight(inflightLockPath(s.layout, s.sessionID)); ok {
+		s.turnLock = l
+		if _, err := RecoverInflight(s.layout, s.sessionID, s.agentName, s.provider, s.now); err != nil {
+			// The leftover stays on disk and this turn appends after it;
+			// the next recovery folds both. Nothing better to do mid-event.
+			_ = err
+		}
+	}
+	s.inflightTurnID = fmt.Sprintf("%d", s.now().UTC().UnixNano())
+	s.inflightFile = nil
+	s.inflightLost = false
+}
+
+// endInflight closes the turn's inflight bookkeeping and drops the turn
+// lock. Called once the turn is written out (or found to have nothing to
+// write); idempotent.
+func (s *Store) endInflight() {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	s.turnLock.release()
+	s.turnLock = nil
+	s.inflightTurnID = ""
+	s.inflightFile = nil
+	s.inflightLost = false
+}
+
+// inflightTaken returns the turn's reserved recovery id when its
+// inflight.jsonl was taken away from under it — deleted, or replaced by a
+// new file — which only a recovery does while the turn is alive. "" when
+// the file is still the one this turn started.
+func (s *Store) inflightTaken() string {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	if s.inflightTurnID == "" || s.inflightFile == nil {
+		return ""
+	}
+	if s.inflightLost {
+		return s.inflightTurnID
+	}
+	fi, err := os.Stat(s.layout.SessionInflight(s.sessionID))
+	if err == nil && os.SameFile(fi, s.inflightFile) {
+		return ""
+	}
+	return s.inflightTurnID
 }
 
 // LoadInflight reads inflight.jsonl for a session and returns every
@@ -1318,6 +1488,14 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 	text := body.String()
 	ts := now().UTC()
 	turnID := fmt.Sprintf("%d", ts.UnixNano())
+	// The live turn reserved an id for exactly this; using it lets the
+	// turn, if it was still alive after all, replace this partial.
+	for _, e := range entries {
+		if e.TurnID != "" {
+			turnID = e.TurnID
+			break
+		}
+	}
 	hasTrace := writeTraceIndexStatic(layout, sessionID, turnID, events, DefaultTraceInlineBytes)
 	turn := ConversationTurn{
 		TurnID:      turnID,
@@ -1358,45 +1536,47 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 // and the new provider's next spawn resumes a conversation it never had
 // ("No conversation found with session ID: ..."). A stale event still
 // parks its id under its OWN type — that is where it belongs — but it
-// must not touch CLISessionID once the entry has moved to another type.
+// must not touch CLISessionID once the entry has moved to another
+// instance — even of the same type, whose config dir may differ.
 func (s *Store) persistCLISessionID(id string) error {
-	sess, err := session.Load(s.layout, s.sessionID)
-	if err != nil {
-		return err
-	}
-	scope := session.ProviderScope(s.provider)
-	updated := false
-	for i := range sess.Agents {
-		if sess.Agents[i].Name != s.agentName {
-			continue
+	// Locked read-modify-write: a provider switch (or failover) may save
+	// agents.json at this very moment, at the end of the same turn.
+	return session.UpdateAgents(s.layout, s.sessionID, func(agents []session.AgentEntry) ([]session.AgentEntry, bool, error) {
+		scope := session.ProviderScope(s.provider)
+		inst := session.ProviderInstance(s.provider)
+		for i := range agents {
+			if agents[i].Name != s.agentName {
+				continue
+			}
+			// A store built without a provider (legacy/test paths) cannot tell
+			// stale from current; fall back to attributing the id to whatever
+			// the entry currently points at, as it always did.
+			if scope == "" {
+				scope = session.ProviderScope(agents[i].Provider)
+				inst = session.ProviderInstance(agents[i].Provider)
+			}
+			current := session.ProviderInstance(agents[i].Provider) == inst
+			if agents[i].ProviderSessions[scope] == id &&
+				(inst == "" || agents[i].ProviderSessions[inst] == id) &&
+				(!current || agents[i].CLISessionID == id) {
+				return agents, false, nil // already up to date
+			}
+			if agents[i].ProviderSessions == nil {
+				agents[i].ProviderSessions = map[string]string{}
+			}
+			// Under the type (older readers) and the instance that minted it.
+			agents[i].ProviderSessions[scope] = id
+			if inst != "" {
+				agents[i].ProviderSessions[inst] = id
+			}
+			if current {
+				agents[i].CLISessionID = id
+				agents[i].LastActive = s.now().UTC()
+			}
+			return agents, true, nil
 		}
-		// A store built without a provider (legacy/test paths) cannot tell
-		// stale from current; fall back to attributing the id to whatever
-		// the entry currently points at, as it always did.
-		if scope == "" {
-			scope = session.ProviderScope(sess.Agents[i].Provider)
-		}
-		sameScope := session.ProviderScope(sess.Agents[i].Provider) == scope
-		if sess.Agents[i].ProviderSessions[scope] == id &&
-			(!sameScope || sess.Agents[i].CLISessionID == id) {
-			return nil // already up to date
-		}
-		if sess.Agents[i].ProviderSessions == nil {
-			sess.Agents[i].ProviderSessions = map[string]string{}
-		}
-		// Keyed by type: any instance of this type can resume it later.
-		sess.Agents[i].ProviderSessions[scope] = id
-		if sameScope {
-			sess.Agents[i].CLISessionID = id
-			sess.Agents[i].LastActive = s.now().UTC()
-		}
-		updated = true
-		break
-	}
-	if !updated {
 		// No matching agent — caller might not have created it yet.
 		// Don't fabricate one here; leave session.AddAgent in charge.
-		return nil
-	}
-	return session.SaveAgents(s.layout, s.sessionID, sess.Agents)
+		return agents, false, nil
+	})
 }

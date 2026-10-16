@@ -126,8 +126,10 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 			updateInput{}, h.update, wickdocs.Docs{}),
 		connector.Op("ticket_attach_session", "Attach Session",
 			"Attach a session to a ticket, so its conversation counts as work on that ticket and it reads the ticket's notes. "+
-				"Idempotent. Omit session_id to attach the calling session.",
-			attachInput{}, h.attach, wickdocs.Docs{}),
+				"Idempotent. Omit session_id to attach the calling session. "+
+				"A session already on ANOTHER ticket is refused with that ticket's id and title, and nothing changes; "+
+				"pass move=true to take it off that ticket (its notes come along) and attach it here.",
+			attachSessionInput{}, h.attach, wickdocs.Docs{}),
 		connector.Op("ticket_settings_get", "Get Ticket Settings",
 			"Read a project's ticket configuration: whether ticket mode is on, the custom field schema, "+
 				"the stale-followup and auto-resolve windows, and the auto-create rules that decide which new "+
@@ -237,6 +239,15 @@ type attachInput struct {
 	TicketID  string `wick:"required;desc=Ticket id."`
 	SessionID string `wick:"desc=Session to attach or detach. Defaults to the calling session."`
 	ProjectID string `wick:"desc=Project the ticket belongs to. Defaults to the calling session's project."`
+}
+
+// attachSessionInput is attachInput plus the explicit move switch, which
+// only attaching has: detaching has nowhere to move from.
+type attachSessionInput struct {
+	TicketID  string `wick:"required;desc=Ticket id."`
+	SessionID string `wick:"desc=Session to attach. Defaults to the calling session."`
+	ProjectID string `wick:"desc=Project the ticket belongs to. Defaults to the calling session's project."`
+	Move      bool   `wick:"desc=Move the session here when it is already on another ticket. Without it such a session is refused, naming the ticket it is on."`
 }
 
 // handlers carries the layout every op needs.

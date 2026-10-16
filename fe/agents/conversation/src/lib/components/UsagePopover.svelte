@@ -28,6 +28,7 @@
      own observation time and are dated per window, because "last check
      just now" describes when WE looked, not when codex last knew. */
   import type { ComposerUsage, ComposerUsageAccount, ComposerUsageWindow } from "../api/usage.js";
+  import { SavedResetsSection } from "@wick-fe/common-ui";
 
   type Props = {
     open: boolean;
@@ -372,6 +373,11 @@
             {/each}
           </div>
         {/if}
+        {/if}
+
+        {#if data.supported}
+          <!-- Saved resets from the same cached reading; hidden when absent. -->
+          <SavedResetsSection resets={data.savedResets} />
         {/if}
 
         {#if data.ageS >= 0 && data.fetchedAt}

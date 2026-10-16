@@ -212,8 +212,8 @@ func SetAutoSwap(s AutoSwap) {
 }
 
 // HandoverTimeout is how long a process waits for its successor to report
-// ready before giving up on it and continuing to serve.
-func HandoverTimeout() time.Duration { return upgradeTimeout }
+// ready before giving up on it and continuing to serve. 0 means no limit.
+func HandoverTimeout() time.Duration { return upgradeTimeout() }
 
 // processStart is when this process began. Used to measure how long a boot
 // actually takes here, which is the only honest basis for telling an operator
@@ -280,8 +280,10 @@ func AutoSwapStatus() AutoSwap {
 	elapsed := time.Since(v.since)
 	v.ElapsedSeconds = int(elapsed.Seconds())
 	if v.State == "handing_over" {
-		if left := HandoverTimeout() - elapsed; left > 0 {
-			v.GivesUpInSeconds = int(left.Seconds())
+		if limit := HandoverTimeout(); limit > 0 {
+			if left := limit - elapsed; left > 0 {
+				v.GivesUpInSeconds = int(left.Seconds())
+			}
 		}
 	}
 	return v
@@ -343,10 +345,22 @@ type Upgrader struct {
 	never   chan struct{} // Exit() when disabled: never closes
 }
 
-// upgradeTimeout bounds how long a parent waits for its successor to report
-// ready. Generous on purpose: the child has to restore the whole registry
-// before it can serve, and a host under agent load is slow.
-const upgradeTimeout = 3 * time.Minute
+// upgradeTimeout is how long a parent waits for its successor to report
+// ready. No limit by default: a fixed ceiling killed every successor here a
+// few seconds short of ready (boot ~173s against a 3-minute limit), so the
+// swap could never land. Waiting costs nothing — this process keeps serving
+// the whole time, and a successor that CRASHES is still noticed at once
+// (tableflip reports "child exited"); only a hung one is waited on.
+//
+// WICK_HANDOVER_TIMEOUT (any Go duration) sets a ceiling for a host that
+// wants one. 0 means no limit.
+func upgradeTimeout() time.Duration {
+	return envDuration("WICK_HANDOVER_TIMEOUT", 0)
+}
+
+// noHandoverLimit is what "no limit" becomes for tableflip, which treats 0 as
+// "use my 1-minute default".
+const noHandoverLimit = 100 * 365 * 24 * time.Hour
 
 // Wanted reports whether the operator asked for graceful upgrades.
 //
@@ -467,12 +481,21 @@ func SetTrigger(fn func() error) {
 
 // Trigger starts a successor, exactly as SIGHUP would. ErrUnsupported when
 // graceful upgrade is not available here.
+//
+// The outcome is recorded like a SIGHUP's, so a click or the binary watcher
+// that failed leaves "last attempt failed: …" on the page instead of nothing.
+// A second request racing one already underway is not an attempt of its own
+// and must not overwrite the real result.
 func Trigger() error {
 	fn, _ := trigger.Load().(func() error)
 	if fn == nil {
 		return ErrUnsupported
 	}
-	return fn()
+	err := fn()
+	if err == nil || !strings.Contains(err.Error(), "upgrade in progress") {
+		recordHandover(err)
+	}
+	return err
 }
 
 // BeforeSpawn runs in this process immediately before a successor is forked.

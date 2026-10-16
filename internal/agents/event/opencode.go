@@ -217,8 +217,9 @@ func (p *OpencodeParser) events(raw opencodeRaw, trimmed string) []AgentEvent {
 			return []AgentEvent{{Type: Warning, ErrorMsg: opencodeErrorText(raw.Error), Raw: trimmed}}
 		}
 		p.errored = true
-		msg := accountErrorMsg("opencode", p.instance, opencodeErrorText(raw.Error))
-		return []AgentEvent{{Type: Error, ErrorMsg: msg, Raw: trimmed}}
+		text := opencodeErrorText(raw.Error)
+		msg := accountErrorMsg("opencode", p.instance, text)
+		return []AgentEvent{classifyErr(AgentEvent{Type: Error, ErrorMsg: msg, Raw: trimmed}, text)}
 	}
 	return []AgentEvent{{Type: Trace, Text: trimmed, Raw: trimmed}}
 }

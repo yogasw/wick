@@ -6,6 +6,8 @@ vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   createAgent: (b: string, body: unknown) => createAgent(b, body),
   listAgentConnectors: () => Promise.resolve([]),
+  // The Mentions step lists the owner's other agents.
+  listAgents: () => Promise.resolve({ agents: [], captain_id: "" }),
   getProjectPersona: () => Promise.resolve({ name: "Ops", description: "", system_prompt: "" }),
   runApi: <T,>(p: Promise<T>) => p,
 }));
@@ -34,6 +36,9 @@ async function pickModel() {
 async function toModelStep() {
   await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
   await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+  // No connector added: the first Next only warns (not on a convert).
+  const go = screen.queryByRole("button", { name: "Continue without connectors →" });
+  if (go) await fireEvent.click(go);
 }
 
 async function fillAndCreate() {
@@ -84,6 +89,7 @@ describe("AgentWizard › step 3 Model", () => {
     // Step 2 no longer creates.
     expect(screen.queryByRole("button", { name: "Create agent" })).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Continue without connectors →" }));
     expect(screen.getByTestId("aw-model-step")).toBeDefined();
     expect(screen.getByRole("button", { name: "Provider & model" }).textContent).toContain("Choose provider & model…");
     const create = screen.getByRole("button", { name: "Create agent" }) as HTMLButtonElement;

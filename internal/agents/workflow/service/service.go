@@ -454,7 +454,7 @@ func (s *FileService) Publish(id, actorID string) (workflow.Workflow, error) {
 	// internal helpers — gets the same guarantees. Without it the MCP
 	// op could promote a draft with dash-id triggers that the UI form
 	// would have rejected upfront.
-	if r := parse.Validate(w); !r.Ok() {
+	if r := parse.ValidatePublish(w); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("cannot publish — fix validation errors:\n%s", r.Error())
 	}
 	w.Version++

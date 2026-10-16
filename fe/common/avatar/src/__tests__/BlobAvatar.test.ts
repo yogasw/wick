@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import AgentAvatar from "../AgentAvatar.svelte";
+import BlobAvatar from "../BlobAvatar.svelte";
 import BlobAvatarPicker from "../BlobAvatarPicker.svelte";
 import { clearStillCache } from "../blob.js";
 import { stubCanvas, motion } from "./canvasStub.js";
@@ -53,6 +54,19 @@ describe("AgentAvatar kind=blob", () => {
     expect(el.dataset.mode).toBe("live");
   });
 
+  test.each([
+    [true, "wink"],
+    [false, "sleep"],
+  ])("a live sleeping blob with dozing=%s reads %s after a click", async (dozing, state) => {
+    stubCanvas();
+    motion(false);
+    const { container } = render(BlobAvatar, { props: { shape: "cloud", expression: "happy", color: "#4b8fea", size: 72, live: true, pose: "sleep", dozing } });
+    const el = node(container)!;
+    expect(el.dataset.mode).toBe("live");
+    await fireEvent.click(el);
+    expect(el.dataset.state).toBe(state);
+  });
+
   test("prefers-reduced-motion turns live into a still", () => {
     stubCanvas();
     motion(true);
@@ -95,5 +109,12 @@ describe("BlobAvatarPicker", () => {
     const { container } = render(BlobAvatarPicker, { props: { onChange: vi.fn() } });
     expect(container.querySelectorAll("[data-mode=still]")).toHaveLength(24);
     expect(container.querySelector("canvas")).toBeNull();
+  });
+});
+
+describe("AgentAvatar kind=classic: a failed tool", () => {
+  test("a live toolError draws alert (the fail pose), not idle", () => {
+    const { container } = render(AgentAvatar, { props: { shape: "circle", color: "#27b199", working: true, toolName: "Bash", toolError: true } });
+    expect(container.querySelector("svg.agent-avatar")?.getAttribute("data-state")).toBe("alert");
   });
 });

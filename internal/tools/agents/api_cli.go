@@ -9,8 +9,11 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	"github.com/yogasw/wick/internal/agents/clitoken"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -341,7 +344,14 @@ func apiCLISend(c *tool.Ctx) {
 	// inheriting an HTTP context would kill the agent the moment this
 	// response returns.
 	bg := log.Ctx(c.Context()).WithContext(context.Background())
-	if err := globalPool.Send(bg, g.SessionID, agentName, "cli", "user", req.Text); err != nil {
+	// The token names the person who minted it: carry them as the caller so
+	// the spawn gets their access, not the session owner's.
+	bg = agentchannels.WithCallerUserID(bg, g.UserID)
+	if InTicketRoom(g.SessionID) {
+		c.JSON(http.StatusConflict, map[string]string{"error": team.ErrRoomSession.Error()})
+		return
+	}
+	if err := globalPool.Send(teamlink.WithPersonMessage(bg), g.SessionID, agentName, "cli", "user", req.Text); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("cli send %s: %s", g.SessionID, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

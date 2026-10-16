@@ -14,6 +14,8 @@
   import { renderMarkdown } from "../markdown.js";
   import NotesPanel from "./NotesPanel.svelte";
   import AssigneePicker from "./AssigneePicker.svelte";
+  import GroupPickerDialog from "./GroupPickerDialog.svelte";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
 
   type Props = {
     base: string;
@@ -22,18 +24,30 @@
     onOpenSession: (sessionId: string) => void;
     /* Starts a new session already attached to this ticket. */
     onNewSession: (ticketId: string) => void;
+    /* The ticket's project: named on every call, since a ticket id is
+       unique per project only. */
+    projectId?: string;
+    /* Team › Tickets: the back link reads "Tickets" and the header names
+       the ticket's project (📁). Elsewhere the defaults stand. */
+    backLabel?: string;
+    projectName?: string;
+    /* The ticket was read: its title, for a composer outside this page
+       that names the ticket. */
+    onTitle?: (title: string) => void;
   };
 
-  let { base, ticketId, onBack, onOpenSession, onNewSession }: Props = $props();
+  let { base, ticketId, onBack, onOpenSession, onNewSession, projectId, backLabel = "Back to board", projectName, onTitle }: Props = $props();
 
   let data = $state<TicketDetail | null>(null);
+  let groupPickerOpen = $state(false);
   let error = $state("");
 
   function load() {
-    Effect.runPromise(getTicket(base, ticketId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(getTicket(base, ticketId, projectId).pipe(Effect.provide(WickClientLayer)))
       .then((d) => {
         data = d;
         error = "";
+        onTitle?.(d.ticket.title || d.ticket.id);
       })
       .catch((e: unknown) => {
         error = e instanceof Error ? e.message : "Failed to load ticket";
@@ -67,13 +81,13 @@
   }
 
   function patch(body: Parameters<typeof updateTicket>[2]) {
-    Effect.runPromise(updateTicket(base, ticketId, body).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(updateTicket(base, ticketId, body, projectId).pipe(Effect.provide(WickClientLayer)))
       .then(load)
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to update ticket"));
   }
 
   function detach(sessionId: string) {
-    Effect.runPromise(detachSession(base, ticketId, sessionId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(detachSession(base, ticketId, sessionId, projectId).pipe(Effect.provide(WickClientLayer)))
       .then(load)
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to detach session"));
   }
@@ -141,8 +155,10 @@
      contract as the fields. */
   const SESSIONS_SHOWN = 5;
   let showAllSessions = $state(false);
+  /* A former ticket room is listed here as one more session. */
+  const listedSessions = $derived(data?.sessions ?? []);
   const visibleSessions = $derived(
-    showAllSessions ? (data?.sessions ?? []) : (data?.sessions ?? []).slice(0, SESSIONS_SHOWN),
+    showAllSessions ? listedSessions : listedSessions.slice(0, SESSIONS_SHOWN),
   );
 
   /* ── custom buttons ──
@@ -162,7 +178,7 @@
     if (!b.id || actionBusy !== "") return;
     actionBusy = b.id;
     Effect.runPromise(
-      runTicketAction(base, ticketId, b.id).pipe(Effect.provide(WickClientLayer)),
+      runTicketAction(base, ticketId, b.id, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then((r) => {
         /* The receiver's own words when it gave any — a sync that answers
@@ -200,7 +216,7 @@
     if (!data) return;
     deleting = true;
     Effect.runPromise(
-      deleteTicket(base, data.ticket.id, sessions).pipe(Effect.provide(WickClientLayer)),
+      deleteTicket(base, data.ticket.id, sessions, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => { confirmDelete = false; onBack(); })
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to delete the ticket"))
@@ -209,10 +225,9 @@
 </script>
 
 {#if error}
-  <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">{error}</div>
-{:else if data}
-  {@const t = data.ticket}
-  <div class="flex flex-col gap-4">
+  <!-- A ticket that cannot be opened (gone, or a project the caller cannot
+       reach) says why and keeps the way back. -->
+  <div class="flex flex-col gap-3" data-testid="ticket-detail-error">
     <button
       type="button"
       onclick={onBack}
@@ -221,14 +236,30 @@
       <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
         <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
       </svg>
-      Back to board
+      {backLabel}
+    </button>
+    <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">Couldn't open this ticket: {error}</div>
+  </div>
+{:else if data}
+  {@const t = data.ticket}
+  <!-- pb: the last card never sits under the floating composer. -->
+  <div class="flex flex-col gap-4 pb-24">
+    <button
+      type="button"
+      onclick={onBack}
+      class="inline-flex w-fit items-center gap-1.5 text-xs text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+    >
+      <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+      {backLabel}
     </button>
 
     <!-- Two panes: the work reads down the main column — title, description,
          conversations, then the notes as the comment thread (notes are long
          and wide by nature, so they get the width). The ticket's state sits
          in the properties rail on the right; on a phone it drops below. -->
-    <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+    <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
     <div class="flex min-w-0 flex-col gap-4">
     <!-- Header. Identity first (code + status), then the title with room to
          be a sentence — the layout every ticketing tool converged on. -->
@@ -242,6 +273,9 @@
         >
           {t.id}
         </span>
+        {#if projectName}
+          <span class="shrink-0 truncate text-[11px] text-black-700 dark:text-black-600" data-testid="ticket-detail-project">📁 {projectName}</span>
+        {/if}
         <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold " + pillFor(t.status)}>
           {labelOf(t.status)}
         </span>
@@ -338,6 +372,12 @@
         </div>
         <button
           type="button"
+          data-testid="discuss-in-group"
+          onclick={() => (groupPickerOpen = true)}
+          class="shrink-0 rounded-lg border border-white-300 px-3 py-1.5 text-xs font-semibold text-black-800 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600"
+        >👥 Discuss in a group</button>
+        <button
+          type="button"
           onclick={() => onNewSession(t.id)}
           class="shrink-0 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-green-700"
         >+ New session</button>
@@ -355,8 +395,18 @@
                 class="min-w-0 flex-1 text-left"
               >
                 <span class="block truncate text-sm text-black-900 dark:text-white-100">
-                  {s.label || s.id}
+                  {#if s.group}<span aria-hidden="true">👥 </span><span class="font-medium">{s.group.name}</span>{#if s.label} · {/if}{/if}{s.label || (s.group ? "" : s.id)}
                 </span>
+                {#if s.group && s.group.members.length}
+                  <span class="mt-1 flex flex-wrap items-center gap-1" data-testid="ticket-session-group-members">
+                    {#each s.group.members as m (m.id)}
+                      <span class="inline-flex items-center gap-1 rounded-full bg-white-200 px-1.5 py-0.5 text-[11px] text-black-800 dark:bg-navy-700 dark:text-black-600">
+                        <AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} color={m.avatar?.color} expression={m.avatar?.expression} image={m.avatar?.image} size={14} />
+                        {m.name || m.handle}{#if s.group.owner_handle && s.group.owner_id !== data.me} · @{s.group.owner_handle}{/if}
+                      </span>
+                    {/each}
+                  </span>
+                {/if}
                 <span class="mt-0.5 flex items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
                   <span class="font-mono">#{s.id.slice(0, 8)}</span>
                   {#if s.lifecycle}<span class="rounded bg-pos-100 px-1.5 py-0.5 text-pos-400">{s.lifecycle}</span>{/if}
@@ -403,7 +453,7 @@
       </p>
       <NotesPanel
         {base}
-        scope={{ ticketId: t.id }}
+        scope={{ ticketId: t.id, projectId }}
         notes={data.notes}
         users={data.users}
         onChanged={load}
@@ -513,7 +563,7 @@
        is spelled out rather than implied. -->
   {#if confirmDelete}
     {@const n = data.sessions.length}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black-900/40 p-4">
       <div class="w-full max-w-md rounded-xl border border-white-300 bg-white-100 p-5 shadow-xl dark:border-navy-600 dark:bg-navy-700">
         <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
           Delete ticket {t.id}?
@@ -587,4 +637,8 @@
   {/if}
 {:else}
   <p class="py-12 text-center text-sm text-black-700 dark:text-black-600">Loading…</p>
+{/if}
+
+{#if groupPickerOpen && data}
+  <GroupPickerDialog {base} ticketId={data.ticket.id} {projectId} onClose={() => (groupPickerOpen = false)} onAttached={() => { groupPickerOpen = false; toastOk("Ticket attached to the group chat"); load(); }} />
 {/if}

@@ -112,6 +112,16 @@ type Config struct {
 	// cloakbrowser-pro engine to install/update the licensed binary via the CLI.
 	CloakLicenseKey string `wick:"secret;group=CloakBrowser;desc=CloakBrowser Pro license key (cb_...). Passed as CLOAKBROWSER_LICENSE_KEY at launch so a paid binary runs at its licensed tier. Required by the cloakbrowser-pro engine, leave empty for the free cloakbrowser engine."`
 	CloakCLIPath    string `wick:"group=CloakBrowser;desc=Path to the 'cloakbrowser' CLI used by the cloakbrowser-pro engine. Default: resolved on PATH. Only needed for a non-PATH install."`
+
+	// Moli — a Rust headless browser kernel (github.com/lexmount/moli), not a
+	// Chromium build. Run as `moli serve` and driven over CDP; see moli.go.
+	MoliExecutablePath string `wick:"group=Moli|Lightweight Rust headless browser (lexmount/moli) driven over CDP. Fast and low-RAM; headless only, no extensions, no WebGL/media.|collapsed;desc=Path to an already-installed moli binary. Leave empty to use the one downloaded from the Browser card."`
+	MoliLayout         bool   `wick:"bool;default=true;group=Moli;desc=Run with the real layout renderer (--layout). Needed for screenshots, element geometry, and coordinate clicks. Turn off for text-only scraping at a lower cost."`
+	MoliResource       bool   `wick:"bool;group=Moli;desc=Also fetch images, fonts, audio, video and text tracks (--resource). Off by default: Moli skips them, which is faster but makes screenshots show missing images and web fonts."`
+	// SSRF guard. Moli enforces these itself on every request it connects to
+	// directly; a proxied request is the proxy's business, not Moli's.
+	MoliBlockPrivateNetworks bool   `wick:"bool;group=Moli;desc=Refuse requests to private and loopback addresses (--block-private-networks), so a page cannot reach this host's own services or the internal network. Off by default, matching the Chromium engines."`
+	MoliBlockCIDRs           string `wick:"group=Moli;desc=Comma-separated CIDRs to block in addition (--block-cidrs). Example: 10.0.0.0/8,169.254.169.254/32"`
 }
 
 // ── Per-operation input structs ──────────────────────────────────────
@@ -130,6 +140,14 @@ type getContentInput struct {
 	Selector string `wick:"desc=Optional CSS selector. When set, returns that element's inner text, otherwise the whole page."`
 	AsText   bool   `wick:"bool;default=true;desc=Return visible text (default) instead of the rendered HTML."`
 	WaitFor  string `wick:"desc=Optional CSS selector to wait for before reading. Useful for JS-rendered content."`
+}
+
+// getMarkdownInput is the argument schema for the "get_markdown" operation.
+// Only what `moli fetch` supports: it has no element scoping, so no selector.
+type getMarkdownInput struct {
+	URL          string `wick:"url;required;desc=Page URL to open."`
+	Format       string `wick:"dropdown=markdown|semantic_tree_text;default=markdown;desc=Output format. markdown is the page as Markdown, semantic_tree_text is a compact accessibility-style outline of the page structure."`
+	WaitSelector string `wick:"desc=Optional CSS selector to wait for before reading. Useful for JS-rendered content."`
 }
 
 // pdfInput is the argument schema for the "pdf" operation.
@@ -237,7 +255,7 @@ type browserStatusInput struct{}
 
 // browserInstallInput downloads one engine's browser binary.
 type browserInstallInput struct {
-	Browser string `wick:"dropdown=chromium|firefox|webkit|cloakbrowser|cloakbrowser-pro;required;desc=Engine to download."`
+	Browser string `wick:"dropdown=chromium|firefox|webkit|cloakbrowser|cloakbrowser-pro|moli;required;desc=Engine to download."`
 }
 
 // Module returns the connector definition served over gRPC by main().
@@ -247,12 +265,24 @@ type browserInstallInput struct {
 // plugins dir where this plugin's persistent data lives (see sessionDir).
 const pluginKey = "playwright_browser"
 
+// pdfVisibleWhen lists the engines whose instances offer pdf: the ones
+// renderPDF accepts (session.chromium in repo.go). The values must match what
+// the browser picker stores (browserEngines).
+var pdfVisibleWhen = "browser:" + defBrowser + "|" + moliEngine
+
+// visibleWhen sets op.VisibleWhen: the op is hidden from agents unless the
+// instance config matches predicate (`field:a|b`).
+func visibleWhen(op connector.Operation, predicate string) connector.Operation {
+	op.VisibleWhen = predicate
+	return op
+}
+
 func Module() connector.Module {
 	return connector.Module{
 		Meta: connector.Meta{
 			Key:         pluginKey,
 			Name:        "Playwright Browser",
-			Description: "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
+			Description: "Drive a real browser (Chromium/Firefox/WebKit, or the lightweight Moli engine) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
 			Icon:        "🎭",
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Browser},
 		},
@@ -275,13 +305,22 @@ func Module() connector.Module {
 					getContentInput{},
 					getContent, wickdocs.Docs{},
 				),
-				connector.Op(
+				// Only a Moli instance can serve it, so other engines never list it.
+				visibleWhen(connector.Op(
+					"get_markdown",
+					"Get Page Markdown",
+					"Fast page-to-markdown with the Moli engine: open {url} and return it as Markdown (or a semantic tree outline). No screenshot or JS interaction, but ~10x faster than get_content. Needs browser=moli on this instance.",
+					getMarkdownInput{},
+					getMarkdown, wickdocs.Docs{},
+				), "browser:"+moliEngine),
+				// Only the engines renderPDF accepts list it (chromium, moli).
+				visibleWhen(connector.Op(
 					"pdf",
 					"Render Page as PDF",
-					"Open {url} and return the page rendered to PDF as base64. Chromium only; errors on firefox/webkit instances.",
+					"Open {url} and return the page rendered to PDF as base64. Offered on chromium and moli instances only.",
 					pdfInput{},
 					renderPDF, wickdocs.Docs{},
-				),
+				), pdfVisibleWhen),
 				connector.Op(
 					"scrape",
 					"Scrape Fields",
@@ -428,7 +467,7 @@ func Module() connector.Module {
 				connector.OpConfigOnly(
 					"browser_status",
 					"Browser Status",
-					"Report which browser engines (chromium/firefox/webkit) are installed and their versions. Read-only; used by the manager UI's browser picker.",
+					"Report which browser engines (chromium/firefox/webkit/cloakbrowser/moli) are installed and their versions. Read-only; used by the manager UI's browser picker.",
 					browserStatusInput{},
 					browserStatusOp, wickdocs.Docs{},
 				),
@@ -438,7 +477,7 @@ func Module() connector.Module {
 				connector.OpConfigOnly(
 					"browser_install",
 					"Install Browser",
-					"Download one browser engine's binary (chromium/firefox/webkit). Blocks until the download completes. Idempotent. Used by the manager UI's Download button.",
+					"Download one browser engine's binary (chromium/firefox/webkit/cloakbrowser/moli). Blocks until the download completes. Idempotent. Used by the manager UI's Download button.",
 					browserInstallInput{},
 					browserInstallOp, wickdocs.Docs{},
 				),
@@ -481,6 +520,14 @@ func getContent(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return withSession(c, func(s *session) (any, error) { return s.getContent(in) })
+}
+
+func getMarkdown(c *connector.Ctx) (any, error) {
+	in, err := parseGetMarkdown(c)
+	if err != nil {
+		return nil, err
+	}
+	return moliFetch(c, in)
 }
 
 func renderPDF(c *connector.Ctx) (any, error) {

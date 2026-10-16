@@ -35,6 +35,15 @@ const maxTeamListed = 12
 const CaptainRoleAddon = "Help the owner run their Team — who handles what — " +
 	"and handle yourself whatever doesn't fit another agent."
 
+// replyHint follows the team_message pointer: a reply that is not quick
+// comes back on its own, so the agent ends its turn instead of waiting.
+const replyHint = "A reply not ready within seconds returns state=working: end your turn, it is delivered to you."
+
+// sourceHint asks an agent with teammates to tag each point it took from
+// a teammate, so the web chat can show the source name beside it and the
+// Slack/Telegram bridge can rewrite the tag to plain text.
+const sourceHint = "When your answer combines teammates' replies, end each point that came from a teammate with [from:@handle] (several: [from:@a,@b]). Do not tag your own points."
+
 // Member is one Team agent as the identity block names it. Name and
 // Description come from the agent's project, Handle from its row; Tagline
 // is the short one-liner when the agent has one.
@@ -70,12 +79,14 @@ func WhoYouAre(self Member, team []Member) string {
 	if self.IsCaptain {
 		if line := teamLine(team); line != "" {
 			b.WriteString("Your Team: " + line + "\n")
-			b.WriteString("Reach a member with team_message (to: \"@handle\"), e.g. team_message to \"@" + team[0].Handle + "\".\n")
+			b.WriteString("Reach a member with team_message (to: \"@handle\"), e.g. team_message to \"@" + team[0].Handle + "\". " + replyHint + "\n")
+			b.WriteString(sourceHint + "\n")
 		}
 	} else {
 		for _, m := range team {
 			if m.IsCaptain {
-				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team. Reach it with team_message (to: \"@%s\").\n", m.Name, m.Handle, m.Handle)
+				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team. Reach it with team_message (to: \"@%s\"). %s\n", m.Name, m.Handle, m.Handle, replyHint)
+				b.WriteString(sourceHint + "\n")
 				break
 			}
 		}
@@ -144,15 +155,15 @@ func YourTeam(team []Member) string {
 }
 
 // SharedWithOwner is the "Shared with your owner" block: agents of other
-// people shared with this agent's owner. Agents never hand turns across
-// owners, so it says who can reach them — the owner, by @mention.
+// people shared with this agent's owner. The agent may message them like
+// a teammate; their turns run in the owner's own chat with them.
 func SharedWithOwner(shared []Member) string {
 	if len(shared) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("## Shared with your owner\n")
-	b.WriteString("Agents other people shared with your owner. You cannot message them (team_message refuses another owner's agent); your owner reaches one by writing @handle in a chat. Point the owner to one when it fits the request.\n")
+	b.WriteString("Agents other people shared with your owner. You can message them like a teammate (team_message or @handle); each turn runs in your owner's own chat with that agent, under its own mention setting. Use one when it fits the request.\n")
 	for i, m := range shared {
 		if i == maxTeamListed {
 			fmt.Fprintf(&b, "- +%d more\n", len(shared)-maxTeamListed)

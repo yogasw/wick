@@ -13,6 +13,12 @@
   line-height: 1.5;        /* 16/24 like Claude — tight within a paragraph */
   max-width: 68ch;         /* ~65-70 chars/line — the readable measure */
 }
+/* A turn that delegated (grouped §3 `.prose.serif.sm`) reads a step
+   smaller under its folded team row. */
+.wick-prose.wick-prose-sm {
+  font-size: 15px;
+  line-height: 1.55;
+}
 /* Code stays monospace even inside serif prose — never serif code. */
 .wick-prose code,
 .wick-prose pre,

@@ -104,3 +104,25 @@ func TestWhoYouAreCaptainAddonFollowsRole(t *testing.T) {
 		t.Fatalf("non-captain got the addon:\n%s", got)
 	}
 }
+
+func TestWhoYouAreSourceTagRuleOnlyWithTeammates(t *testing.T) {
+	const rule = "end each point that came from a teammate with [from:@handle] (several: [from:@a,@b]). Do not tag your own points."
+	withCaptain := WhoYouAre(Member{Name: "Cap", Handle: "cap", IsCaptain: true}, []Member{{Name: "Ops", Handle: "ops"}})
+	withMember := WhoYouAre(Member{Name: "Bob", Handle: "bob"}, []Member{{Name: "Cap", Handle: "cap", IsCaptain: true}})
+	for _, got := range []string{withCaptain, withMember} {
+		if !strings.Contains(got, rule) {
+			t.Errorf("source rule missing:\n%s", got)
+		}
+	}
+	alone := []string{
+		WhoYouAre(Member{Name: "Cap", Handle: "cap", IsCaptain: true}, nil),
+		WhoYouAre(Member{Name: "Bob", Handle: "bob"}, nil),
+		// A member whose Team has no Captain has nobody to reach.
+		WhoYouAre(Member{Name: "Bob", Handle: "bob"}, []Member{{Name: "Ops", Handle: "ops"}}),
+	}
+	for _, got := range alone {
+		if strings.Contains(got, "[from:@") {
+			t.Errorf("source rule without teammates:\n%s", got)
+		}
+	}
+}

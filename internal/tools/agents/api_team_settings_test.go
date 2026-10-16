@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -12,11 +13,12 @@ import (
 
 // teamSettingsWire is the GET/PUT answer as the drawer reads it.
 type teamSettingsWire struct {
-	Prompt             string `json:"prompt"`
-	OpenTeam           bool   `json:"open_team"`
-	IdleAnimations     bool   `json:"idle_animations"`
-	MaxPromptBytes     int    `json:"max_prompt_bytes"`
-	OperatorPromptHref string `json:"operator_prompt_href"`
+	Prompt             string   `json:"prompt"`
+	OpenTeam           bool     `json:"open_team"`
+	IdleAnimations     bool     `json:"idle_animations"`
+	MaxPromptBytes     int      `json:"max_prompt_bytes"`
+	OperatorPromptHref string   `json:"operator_prompt_href"`
+	TicketProjects     []string `json:"ticket_projects"`
 }
 
 func decodeTeamSettings(t *testing.T, body string) teamSettingsWire {
@@ -128,5 +130,76 @@ func TestTeamSettingsAPIRejectsUnknownAndMistyped(t *testing.T) {
 	apiTeamSettingsGet(c)
 	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || d.OpenTeam {
 		t.Fatalf("a refused body was partly saved: %s", w.Body)
+	}
+}
+
+// enableTickets turns ticket mode on for project id.
+func enableTickets(t *testing.T, id string) {
+	t.Helper()
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		t.Fatalf("project %s missing", id)
+	}
+	meta := p.Meta
+	meta.Ticket.Enabled = true
+	if _, err := globalMgr.UpdateProject(context.Background(), id, meta); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ticket_projects takes only projects the caller can open with ticket
+// mode on, and a read hides one whose ticket mode was turned off since.
+func TestTeamSettingsAPITicketProjects(t *testing.T) {
+	withTeamWorld(t)
+	u1 := &entity.User{ID: "u1"}
+	seedTeamProject(t, "mine", "u1")
+	seedTeamProject(t, "mine2", "u1")
+	seedTeamProject(t, "notickets", "u1")
+	seedTeamProject(t, "theirs", "u2")
+	for _, id := range []string{"mine", "mine2", "theirs"} {
+		enableTickets(t, id)
+	}
+
+	w, c := teamReq(t, u1, http.MethodGet, "/api/team/settings", nil, nil)
+	apiTeamSettingsGet(c)
+	if d := decodeTeamSettings(t, w.Body.String()); d.TicketProjects == nil || len(d.TicketProjects) != 0 {
+		t.Fatalf("default ticket_projects should be []: %s", w.Body)
+	}
+
+	for name, ids := range map[string][]string{
+		"another user's project": {"mine", "theirs"},
+		"ticket mode off":        {"mine", "notickets"},
+		"unknown project":        {"ghost"},
+	} {
+		w, c := teamReq(t, u1, http.MethodPut, "/api/team/settings", map[string]any{"ticket_projects": ids}, nil)
+		apiTeamSettingsSave(c)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", name, w.Code)
+		}
+	}
+
+	w, c = teamReq(t, u1, http.MethodPut, "/api/team/settings", map[string]any{"ticket_projects": []string{"mine2", "mine", "mine2"}}, nil)
+	apiTeamSettingsSave(c)
+	if d := decodeTeamSettings(t, w.Body.String()); w.Code != http.StatusOK || strings.Join(d.TicketProjects, ",") != "mine2,mine" {
+		t.Fatalf("save: %d %s", w.Code, w.Body)
+	}
+
+	p, _ := globalMgr.Registry().Project("mine2")
+	meta := p.Meta
+	meta.Ticket.Enabled = false
+	if _, err := globalMgr.UpdateProject(context.Background(), "mine2", meta); err != nil {
+		t.Fatal(err)
+	}
+	w, c = teamReq(t, u1, http.MethodGet, "/api/team/settings", nil, nil)
+	apiTeamSettingsGet(c)
+	if d := decodeTeamSettings(t, w.Body.String()); strings.Join(d.TicketProjects, ",") != "mine" {
+		t.Fatalf("tickets-off project still listed: %s", w.Body)
+	}
+
+	// u2 neither sees u1's selection nor u1's projects through it.
+	w, c = teamReq(t, &entity.User{ID: "u2"}, http.MethodGet, "/api/team/settings", nil, nil)
+	apiTeamSettingsGet(c)
+	if d := decodeTeamSettings(t, w.Body.String()); len(d.TicketProjects) != 0 {
+		t.Fatalf("u2 reads u1's selection: %s", w.Body)
 	}
 }

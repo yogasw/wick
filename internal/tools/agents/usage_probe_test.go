@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 )
 
 // testUsageCache is the production cache wired for tests: refreshes run
@@ -86,7 +88,7 @@ func TestUsageCacheNeverRefetchesOnItsOwn(t *testing.T) {
 	}
 
 	c.get("acct", fetch, time.Time{}) // the one automatic probe: this account was cold
-	for range 50 {       // a page open for an hour, polling throughout
+	for range 50 {                    // a page open for an hour, polling throughout
 		clk.advance(time.Minute)
 		c.get("acct", fetch, time.Time{})
 	}
@@ -600,4 +602,157 @@ func TestUsageCacheCredentialsChangeRespectsLimits(t *testing.T) {
 			t.Errorf("fetched %d times, want 1 — Retry-After is never overridden", calls)
 		}
 	})
+}
+
+// Saved resets ride in the usage probe's own flight: no extra probe, and
+// a failed saved-resets read never fails the usage reading.
+func TestUsageCacheSavedResetsCompanion(t *testing.T) {
+	c, _ := clockedCache(time.Minute)
+	usageCalls, resetCalls := 0, 0
+	fetch := func() ([]logintty.UsageWindow, error) { usageCalls++; return windows(10), nil }
+	resets := func() (*savedresets.SavedResets, error) {
+		resetCalls++
+		return &savedresets.SavedResets{Supported: true, Available: 1}, nil
+	}
+	v := c.get("acct", fetch, time.Time{}, resets)
+	v = c.get("acct", fetch, time.Time{}, resets)
+	if usageCalls != 1 || resetCalls != 1 {
+		t.Fatalf("calls usage=%d resets=%d, want 1/1", usageCalls, resetCalls)
+	}
+	if v.SavedResets == nil || v.SavedResets.Available != 1 || len(v.Windows) != 1 {
+		t.Fatalf("view = %+v", v)
+	}
+
+	c2, _ := clockedCache(time.Minute)
+	failing := func() (*savedresets.SavedResets, error) { return nil, errors.New("boom") }
+	v2 := c2.get("acct", fetch, time.Time{}, failing)
+	if v2.Err != nil || !v2.Known || v2.SavedResets != nil || len(v2.Windows) != 1 {
+		t.Fatalf("failed resets must leave usage intact and omit the field: %+v", v2)
+	}
+}
+
+// A re-check whose usage reading is good but carries no saved resets
+// drops the old ones (the account stopped reporting them); one whose
+// usage read failed keeps the last good copy, like the windows.
+func TestUsageCacheSavedResetsDropWhenNoLongerReported(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	usageFail, resetsFail := false, false
+	fetch := func() ([]logintty.UsageWindow, error) {
+		if usageFail {
+			return nil, errors.New("boom")
+		}
+		return windows(10), nil
+	}
+	resets := func() (*savedresets.SavedResets, error) {
+		if resetsFail {
+			return nil, errors.New("no block")
+		}
+		return &savedresets.SavedResets{Supported: true, Available: 2}, nil
+	}
+	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets == nil {
+		t.Fatalf("first reading: %+v", v)
+	}
+
+	usageFail = true
+	clk.advance(usageManualMinInterval)
+	if ok, _ := c.forceRefresh("acct", fetch, resets); !ok {
+		t.Fatal("re-check refused")
+	}
+	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets == nil || v.SavedResets.Available != 2 {
+		t.Fatalf("failed usage read must keep the last saved resets: %+v", v.SavedResets)
+	}
+
+	usageFail, resetsFail = false, true
+	clk.advance(time.Hour)
+	if ok, _ := c.forceRefresh("acct", fetch, resets); !ok {
+		t.Fatal("re-check refused")
+	}
+	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets != nil {
+		t.Fatalf("stale saved resets served after the account stopped reporting them: %+v", v.SavedResets)
+	}
+}
+
+// peek is a plain file read: it serves what is on disk, never probes,
+// and sees a file written after the cache already had an entry.
+func TestUsageCachePeekReadsFileWithoutProbing(t *testing.T) {
+	c, _ := clockedCache(time.Minute)
+	disk := map[string]provider.UsageDisk{}
+	c.load = func(k string) (provider.UsageDisk, bool) { d, ok := disk[k]; return d, ok }
+
+	if v := c.peek("k"); v.Known || v.Checking {
+		t.Fatalf("no file: want blank view, got %+v", v)
+	}
+
+	disk["k"] = provider.UsageDisk{
+		Key: "k", ObservedAt: time.Now(),
+		Windows: []provider.UsageDiskWindow{{Key: "five_hour", Utilization: 20}},
+	}
+	v := c.peek("k")
+	if !v.Known || len(v.Windows) != 1 || v.Windows[0].Utilization != 20 {
+		t.Fatalf("file written elsewhere not served: %+v", v)
+	}
+
+	disk["k"] = provider.UsageDisk{
+		Key: "k", ObservedAt: time.Now(),
+		Windows: []provider.UsageDiskWindow{{Key: "five_hour", Utilization: 55}},
+	}
+	if v := c.peek("k"); v.Windows[0].Utilization != 55 {
+		t.Fatalf("peek served a stale in-memory copy: %+v", v)
+	}
+	if len(c.entries) != 0 {
+		t.Fatalf("peek must not fill the in-memory entries: %d", len(c.entries))
+	}
+}
+
+// A reading the process holds must not be hidden by an older file (a
+// failed disk write), and a failed-only file must not look like data.
+func TestUsageCachePeekPrefersNewerMemoryOverFile(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	c.load = func(k string) (provider.UsageDisk, bool) {
+		return provider.UsageDisk{
+			Key: k, ObservedAt: clk.now().Add(-time.Hour), AttemptedAt: clk.now().Add(-time.Hour),
+			Windows: []provider.UsageDiskWindow{{Key: "five_hour", Utilization: 10}},
+		}, true
+	}
+	c.save = func(provider.UsageDisk) {} // the write "fails": file stays old
+	c.store("k", windows(70), nil)
+
+	if v := c.peek("k"); !v.Known || v.Windows[0].Utilization != 70 {
+		t.Fatalf("newer memory reading hidden by older file: %+v", v)
+	}
+}
+
+func TestUsageCachePeekFailedOnlyFileIsNotData(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	c.load = func(k string) (provider.UsageDisk, bool) {
+		return provider.UsageDisk{Key: k, AttemptedAt: clk.now(), LastError: "401"}, true
+	}
+	v := c.peek("k")
+	if v.Known != true || v.Err == nil || len(v.Windows) != 0 {
+		t.Fatalf("failed-only file: want Known with Err and no windows, got %+v", v)
+	}
+}
+
+// After a restart the failure behind an old reading comes back from the
+// usage file as text; it must still be reported, and a 429 still read as
+// a rate limit.
+func TestUsageCachePeekFileKeepsLastErrorBehindReading(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	c.load = func(k string) (provider.UsageDisk, bool) {
+		return provider.UsageDisk{
+			Key: k, ObservedAt: clk.now().Add(-48 * time.Hour), AttemptedAt: clk.now(), Fails: 3,
+			LastError: (&logintty.RateLimitedError{Status: "429 Too Many Requests"}).Error(),
+			Windows:   []provider.UsageDiskWindow{{Key: "seven_day", Utilization: 100}},
+		}, true
+	}
+	v := c.peek("k")
+	if v.Err != nil || len(v.Windows) != 1 {
+		t.Fatalf("old reading not served as data: %+v", v)
+	}
+	if v.LastErr == nil || v.Fails != 3 || !usageRateLimited(v.LastErr) {
+		t.Fatalf("last failure lost across the file: last=%v fails=%d", v.LastErr, v.Fails)
+	}
+	if usageRateLimited(context.DeadlineExceeded) || usageRateLimited(nil) {
+		t.Fatal("non-429 errors read as a rate limit")
+	}
 }

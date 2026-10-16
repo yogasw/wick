@@ -4,6 +4,9 @@
 package main
 
 import (
+	"errors"
+	"net/http"
+
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/wickdocs"
@@ -26,16 +29,28 @@ func Module() connector.Module {
 
 const Key = "bitbucket"
 
+// Configs is grouped so the page opens short: credentials first, then the
+// collapsible sections. "collapsed" is the third pipe segment of group=.
 type Configs struct {
-	BaseURL          string `wick:"url;required;default=https://api.bitbucket.org/2.0;desc=Bitbucket Cloud API base URL."`
-	Email            string `wick:"email;secret;required;desc=Atlassian account email used with the API token for Basic Auth."`
-	APIToken         string `wick:"secret;required;desc=Bitbucket Cloud API token. Needs read repository scopes for read ops and write repository scopes for write ops."`
-	DefaultWorkspace string `wick:"desc=Optional default Bitbucket workspace slug used when an operation omits workspace."`
+	BaseURL          string `wick:"url;required;default=https://api.bitbucket.org/2.0;group=Authentication;desc=Bitbucket Cloud API base URL."`
+	Email            string `wick:"email;secret;required;group=Authentication;desc=Atlassian account email used with the API token for Basic Auth."`
+	APIToken         string `wick:"secret;required;group=Authentication;desc=Bitbucket Cloud API token. Needs read repository scopes for read ops and write repository scopes for write ops."`
+	DefaultWorkspace string `wick:"group=Authentication;desc=Optional default Bitbucket workspace slug used when an operation omits workspace."`
 	// PermissionStatus is a read-only widget: the per-operation allowed/denied
 	// checklist probed live from the token. Not a stored value — the html op renders it.
-	PermissionStatus string `wick:"html=permission_status;desc=Live checklist of which operations this token can run. Fill the credentials and default_workspace first."`
-	DefaultPagelen   int    `wick:"default=20;desc=Default Bitbucket page length for list/search operations."`
-	MaxPagelen       int    `wick:"default=100;desc=Maximum page length allowed by this connector."`
+	PermissionStatus string `wick:"html=permission_status;group=Permission status|Which operations this token can run.|collapsed;desc=Live checklist of which operations this token can run. Fill the credentials and default_workspace first."`
+
+	// RulesEditor is the only place merge_rules is edited: mode as a dropdown and
+	// approvers found by name among the workspace's Bitbucket users.
+	RulesEditor string `wick:"html=rules_editor;group=Merge rules|Checked by merge_pull_request before every merge. A repository no row matches merges without checks, so keep a * row as the default.|collapsed;desc=Edit the merge rules. Every button saves."`
+	MergeRules  string `wick:"kvlist=repo|mode|min_approvals|required_approvers;hidden;default=[{\"repo\":\"*\",\"mode\":\"allow\",\"min_approvals\":\"1\",\"required_approvers\":\"5efc131e3404690bae882041\",\"approver_names\":\"Taufik Budi S\"},{\"repo\":\"integration-helm\",\"mode\":\"deny\",\"min_approvals\":\"\",\"required_approvers\":\"\"}];desc=Managed by the Merge rules editor. One row per repository. repo: slug or workspace/slug, globs allowed (* matches every repo). The row with the fewest * wins. mode: allow or deny (deny refuses every merge, e.g. integration-helm). min_approvals: approvals the PR needs. required_approvers: comma-separated account_id, {uuid} or nickname. Each one who is on the PR must have approved, someone not on the PR is not required."`
+	// RulesTest checks a real pull request against the saved rules, without merging.
+	RulesTest string `wick:"html=rules_test_panel;group=Test merge rules|Paste a pull request and see the checklist merge_pull_request would apply.|collapsed;desc=Test a pull request against the saved rules. Nothing is merged."`
+	// The test panel's last input, persisted so a re-mount of the widget does not wipe it.
+	RulesTestPR string `wick:"hidden;desc=Last pull request tested in the merge rules panel."`
+
+	DefaultPagelen int `wick:"default=20;group=Paging||collapsed;desc=Default Bitbucket page length for list/search operations."`
+	MaxPagelen     int `wick:"default=100;group=Paging;desc=Maximum page length allowed by this connector."`
 }
 
 // PermissionStatusInput: the manager's html widget always passes the current
@@ -113,6 +128,14 @@ type CreatePullRequestInput struct {
 	SourceBranch      string `wick:"required;desc=Source branch name."`
 	DestinationBranch string `wick:"required;desc=Destination branch name. Example: main"`
 	CloseSourceBranch bool   `wick:"default=false;desc=Close source branch after merge."`
+	Reviewers         string `wick:"desc=Optional reviewers, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. The PR author cannot be a reviewer."`
+}
+
+type AddPullRequestReviewersInput struct {
+	Workspace     string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
+	RepoSlug      string `wick:"required;desc=Repository slug."`
+	PullRequestID int    `wick:"required;desc=Pull request ID."`
+	Reviewers     string `wick:"required;desc=Reviewers to add, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. Existing reviewers are kept. The PR author cannot be a reviewer."`
 }
 
 type CreatePullRequestCommentInput struct {
@@ -170,6 +193,78 @@ func Operations() []connector.Category {
 		connector.Cat(
 			"Maintenance",
 			"Backs the manager's config widget (permission status); not meant for agent use.",
+			connector.OpConfigOnly(
+				"rules_editor",
+				"Merge Rules Editor",
+				"Render the merge rules editor in the config page. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditor,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_editor_save",
+				"Save Merge Rules",
+				"Save the rules from the merge rules editor. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditorSave,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_editor_add_row",
+				"Add Merge Rule Row",
+				"Add an empty row to the merge rules editor. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditorAddRow,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_editor_delete_row",
+				"Delete Merge Rule Row",
+				"Delete one row from the merge rules and save. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditorDeleteRow,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_editor_search",
+				"Search Bitbucket Users",
+				"Find Bitbucket workspace members by name for the merge rules editor. Read-only. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditorSearch,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_editor_add_approver",
+				"Add Required Approver",
+				"Add a required approver to one merge rule and save. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditorAddApprover,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_editor_remove_approver",
+				"Remove Required Approver",
+				"Remove a required approver from one merge rule and save. Backs the config form only; never called by an agent.",
+				RulesEditorInput{},
+				rulesEditorRemoveApprover,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_test_panel",
+				"Merge Rules Test Panel",
+				"Render the merge rules test form in the config page. Backs the config form only; never called by an agent.",
+				RulesTestInput{},
+				rulesTestPanel,
+				wickdocs.Docs{},
+			),
+			connector.OpConfigOnly(
+				"rules_test_run",
+				"Run Merge Rules Test",
+				"Check one pull request against the saved merge_rules and render the checklist. Read-only, never merges. Backs the config form only; never called by an agent.",
+				RulesTestInput{},
+				rulesTestRun,
+				wickdocs.Docs{},
+			),
 			connector.OpConfigOnly(
 				"permission_status",
 				"Permission Status",
@@ -279,6 +374,14 @@ func Operations() []connector.Category {
 				wickdocs.Docs{},
 			),
 			connector.OpDestructive(
+				"add_pull_request_reviewers",
+				"Add Pull Request Reviewers",
+				"Add reviewers to an existing pull request by account_id or {uuid}. Reviewers already on the PR are kept; nobody is removed. Returns the updated pull request.",
+				AddPullRequestReviewersInput{},
+				addPullRequestReviewers,
+				wickdocs.Docs{},
+			),
+			connector.OpDestructive(
 				"create_pull_request_comment",
 				"Create Pull Request Comment",
 				"Post a comment to a pull request — top-level, or inline on a file via inline_path plus inline_to (new-side line) or inline_from (old-side line). Mutates the PR discussion.",
@@ -305,7 +408,7 @@ func Operations() []connector.Category {
 			connector.OpDestructive(
 				"merge_pull_request",
 				"Merge Pull Request",
-				"Merge a pull request into its destination branch. Optional merge_strategy (merge_commit, squash, fast_forward), commit message, and close_source_branch. Returns the merged pull request. Irreversible.",
+				"Merge a pull request into its destination branch. Optional merge_strategy (merge_commit, squash, fast_forward), commit message, and close_source_branch. Refused when the connector's merge_rules say so (repo denied, too few approvals, or a required approver on the PR has not approved); the error lists every failed rule. Returns the merged pull request. Irreversible.",
 				MergePullRequestInput{},
 				mergePullRequest,
 				wickdocs.Docs{},
@@ -430,6 +533,33 @@ func createPullRequest(c *connector.Ctx) (any, error) {
 	return sendJSON(c, p, body)
 }
 
+// addPullRequestReviewers reads the PR first because Bitbucket's update
+// replaces the reviewer list: sending only the new names would drop everyone
+// already on it.
+func addPullRequestReviewers(c *connector.Ctx) (any, error) {
+	add, err := parseReviewers(c.Input("reviewers"))
+	if err != nil {
+		return nil, err
+	}
+	if len(add) == 0 {
+		return nil, errors.New("reviewers is required")
+	}
+	get, err := validatePullRequest(c, "pullrequest")
+	if err != nil {
+		return nil, err
+	}
+	current, err := fetchJSON(c, get)
+	if err != nil {
+		return nil, err
+	}
+	pr, _ := current.(map[string]any)
+	body := map[string]any{
+		"title":     pr["title"],
+		"reviewers": mergeReviewers(pr["reviewers"], add),
+	}
+	return sendJSON(c, requestParams{Method: http.MethodPut, URL: get.URL}, body)
+}
+
 func createPullRequestComment(c *connector.Ctx) (any, error) {
 	p, body, err := validateCreatePullRequestComment(c)
 	if err != nil {
@@ -454,10 +584,21 @@ func requestChangesPullRequest(c *connector.Ctx) (any, error) {
 	return sendJSON(c, p, map[string]any{})
 }
 
+// mergePullRequest checks merge_rules before merging. The rules are read from
+// the pull request as it is right now, so an approval withdrawn a minute ago
+// counts as withdrawn.
 func mergePullRequest(c *connector.Ctx) (any, error) {
 	p, body, err := validateMergePullRequest(c)
 	if err != nil {
 		return nil, err
+	}
+	workspace, repo, _ := workspaceAndRepo(c)
+	v, _, err := checkMergeRules(c, workspace, repo, c.InputInt("pull_request_id"))
+	if err != nil {
+		return nil, err
+	}
+	if !v.Allowed {
+		return nil, errMergeRefused(v)
 	}
 	return sendJSON(c, p, body)
 }

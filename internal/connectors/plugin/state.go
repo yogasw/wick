@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -27,6 +28,24 @@ func (s *StateStore) Enabled(key string) bool {
 		return true
 	}
 	return st.Enabled
+}
+
+// EnabledErr is Enabled for a caller that polls: a missing row is still
+// default-on, but a read error is returned instead of turning into true, so a
+// poller can keep its last known state rather than re-enable a plugin an
+// admin disabled because the database blinked.
+func (s *StateStore) EnabledErr(key string) (bool, error) {
+	if s == nil || s.db == nil {
+		return true, nil
+	}
+	var st entity.PluginState
+	if err := s.db.Where("key = ?", key).First(&st).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	return st.Enabled, nil
 }
 
 // SetEnabled upserts the overlay row for key. A map is used so gorm writes the

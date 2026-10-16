@@ -83,3 +83,59 @@ func TestUserFromHeaders(t *testing.T) {
 		t.Fatalf("user = %+v", u)
 	}
 }
+
+// whoModule echoes WebhookCtx.TokenUser so the SDK path is tested end to
+// end: host-injected headers → wrap → tool.WebhookCtx.TokenUser.
+func whoModule() tool.Module {
+	return tool.Module{
+		Meta: tool.Tool{Key: "who", Name: "Who"},
+		Register: func(r tool.Router) {
+			r.WebhookGroup("/mcp").POST("", func(c *tool.WebhookCtx) {
+				u, ok := c.TokenCaller()
+				if !ok {
+					c.W.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				_, person := c.TokenUser()
+				c.JSON(200, map[string]any{"id": u.ID, "source": u.Source, "admin": u.IsAdmin, "email": u.Email, "person": person})
+			})
+		},
+	}
+}
+
+// An SSO call carries no Authorization header, so TokenUser must answer
+// from what the host injected — the case S2 found returning false.
+func TestWebhookTokenUserWithoutBearer(t *testing.T) {
+	h := Handler(whoModule(), nil)
+	cases := []struct {
+		name, id, role, source, email string
+		want                          string
+	}{
+		{"sso", "u9", "admin", wickplugin.TokenUserSourceSSO, "a@b.c", `{"admin":true,"email":"a@b.c","id":"u9","person":true,"source":"sso"}`},
+		{"system", wickplugin.TokenUserSystemID, "system", wickplugin.TokenUserSourceSystem, "", `{"admin":false,"email":"","id":"system:wick","person":false,"source":"system"}`},
+		// An older host sent no source header; it only injected PAT owners.
+		{"legacy pat", "u1", "user", "", "x@y.z", `{"admin":false,"email":"x@y.z","id":"u1","person":true,"source":"pat"}`},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest("POST", "/tools/who/mcp", nil)
+		req.Header.Set(wickplugin.HeaderTokenUserID, tc.id)
+		req.Header.Set(wickplugin.HeaderTokenUserRole, tc.role)
+		if tc.email != "" {
+			req.Header.Set(wickplugin.HeaderTokenUserEmail, tc.email)
+		}
+		if tc.source != "" {
+			req.Header.Set(wickplugin.HeaderTokenUserSource, tc.source)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != tc.want {
+			t.Errorf("%s: %d %s, want %s", tc.name, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/tools/who/mcp", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no injected identity: code %d, want 401", rec.Code)
+	}
+}

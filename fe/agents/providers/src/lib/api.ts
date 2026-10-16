@@ -17,7 +17,9 @@ import type {
   ConfigFieldDTO,
   ProviderConnection,
 } from "./types.js";
-import type { ModelCaps } from "@wick-fe/common-ui";
+import type { ModelCaps, ComposerModelOption } from "@wick-fe/common-ui";
+import type { ProviderListItem } from "@wick-fe/common-api";
+import { parseSavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
 interface WireProviderInstance {
   type: string;
@@ -27,6 +29,8 @@ interface WireProviderInstance {
   max_concurrent: number;
   send_mode: string;
   idle_compact?: { seconds: number; trigger: string; threshold: number; scope?: string; match?: string[] } | null;
+  failover?: { enabled?: boolean; targets?: string[] | null } | null;
+  health?: { kind: string; since?: string; until?: string; reason?: string; retrying?: boolean } | null;
 }
 
 interface WireProviderCap {
@@ -172,6 +176,9 @@ interface WireConfigField {
 
 interface WireProvidersListResponse {
   is_admin?: boolean;
+  can_create?: boolean;
+  can_host_config?: boolean;
+  create_perms?: Record<string, boolean> | null;
   providers: WireProviderStatus[] | null;
   gate: WireGateStatus | null;
   mcp: WireMCPStatus | null;
@@ -183,10 +190,34 @@ interface WireProvidersListResponse {
   supported_keys: string[] | null;
 }
 
+interface WireProviderCaps {
+  configure?: boolean;
+  models?: boolean;
+  env?: boolean;
+  extra_args?: boolean;
+  binary?: boolean;
+  extra_mcp_servers?: boolean;
+  external_skills?: boolean;
+  sandbox?: boolean;
+  airouter_raw_config?: boolean;
+  borrow_login?: boolean;
+  rename?: boolean;
+  delete?: boolean;
+  airouter?: boolean;
+  storage_sync?: boolean;
+  rescan?: boolean;
+  view_sessions?: boolean;
+  failover?: boolean;
+}
+
 interface WireProviderDetailResponse {
   read_only?: boolean;
   can_manage?: boolean;
   secrets_hidden?: boolean;
+  is_admin?: boolean;
+  has_terminal?: boolean;
+  can?: WireProviderCaps;
+  owner_perms?: Record<string, boolean> | null;
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
@@ -282,6 +313,10 @@ function mapInstance(w: WireProviderInstance): ProviderInstanceDTO {
     SendMode: w.send_mode ?? "",
     IdleCompact: w.idle_compact
       ? { Seconds: w.idle_compact.seconds ?? 0, Trigger: w.idle_compact.trigger ?? "", Threshold: w.idle_compact.threshold ?? 0, Scope: w.idle_compact.scope ?? "skip", Match: w.idle_compact.match ?? [] }
+      : null,
+    Failover: w.failover ? { Enabled: w.failover.enabled ?? false, Targets: w.failover.targets ?? [] } : null,
+    Health: w.health
+      ? { Kind: w.health.kind ?? "", Since: w.health.since ?? "", Until: w.health.until ?? "", Reason: w.health.reason ?? "", Retrying: w.health.retrying ?? false }
       : null,
   };
 }
@@ -400,6 +435,10 @@ export function normalizeProviders(r: WireProvidersListResponse): ProvidersListR
     // (or a field that silently disappears) must render the read-only
     // page, never hand out admin chrome the API would refuse anyway.
     IsAdmin: r.is_admin ?? false,
+    CanCreate: r.can_create ?? false,
+    CanHostConfig: r.can_host_config ?? false,
+    // Absent (older server) = nothing beyond what CanHostConfig said.
+    CreatePerms: r.create_perms ?? {},
     Providers: (r.providers ?? []).map(mapProviderStatus),
     Gate: mapGate(r.gate),
     MCPClients: mapMCP(r.mcp),
@@ -594,6 +633,28 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     ReadOnly: r.read_only ?? true,
     CanManage: r.can_manage ?? false,
     SecretsHidden: r.secrets_hidden ?? false,
+    IsAdmin: r.is_admin ?? false,
+    HasTerminal: r.has_terminal ?? false,
+    Can: {
+      Configure: r.can?.configure ?? false,
+      Models: r.can?.models ?? false,
+      Env: r.can?.env ?? false,
+      ExtraArgs: r.can?.extra_args ?? false,
+      Binary: r.can?.binary ?? false,
+      ExtraMCPServers: r.can?.extra_mcp_servers ?? false,
+      ExternalSkills: r.can?.external_skills ?? false,
+      Sandbox: r.can?.sandbox ?? false,
+      AIRouterRawConfig: r.can?.airouter_raw_config ?? false,
+      BorrowLogin: r.can?.borrow_login ?? false,
+      Rename: r.can?.rename ?? false,
+      Delete: r.can?.delete ?? false,
+      AIRouter: r.can?.airouter ?? false,
+      StorageSync: r.can?.storage_sync ?? false,
+      Rescan: r.can?.rescan ?? false,
+      ViewSessions: r.can?.view_sessions ?? false,
+      Failover: r.can?.failover ?? false,
+    },
+    OwnerPerms: r.owner_perms ?? {},
     Instance: mapInstance(r.instance),
     Path: r.path ?? "",
     PathFound: r.path_found ?? false,
@@ -1021,6 +1082,21 @@ export async function apiAIRouterSlots(base: string, type: string, routerId: str
 // apiSaveAIRouter persists an instance's AI-router settings (toggle +
 // selected router + per-slot models + optional key) in one request. Slot
 // models are sent as airouter_model_<slot>. A blank key keeps the stored one.
+// apiSaveOwnerPerms stores what the owner of one instance may do to it
+// (admin-only). Returns the instance's effective owner permissions.
+export async function apiSaveOwnerPerms(
+  base: string,
+  type: string,
+  name: string,
+  perms: Record<string, boolean>,
+): Promise<Record<string, boolean>> {
+  const r = await post<{ owner_perms?: Record<string, boolean> }>(
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/owner-perms`,
+    perms,
+  );
+  return r?.owner_perms ?? perms;
+}
+
 export async function apiSaveAIRouter(
   base: string,
   type: string,
@@ -1524,7 +1600,11 @@ interface WireProviderConnection {
   usage_fetched_at?: string;
   usage_age_s?: number;
   usage_next_s?: number;
+  usage_last_err?: string;
+  usage_rate_limited?: boolean;
+  usage_fails?: number;
   windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
+  saved_resets?: WireSavedResets | null;
 }
 
 export function normalizeConnections(
@@ -1546,11 +1626,15 @@ export function normalizeConnections(
     usageFetchedAt: c.usage_fetched_at ?? "",
     usageAgeS: c.usage_age_s ?? 0,
     usageNextS: c.usage_next_s ?? 0,
+    usageLastErr: c.usage_last_err ?? "",
+    usageRateLimited: c.usage_rate_limited ?? false,
+    usageFails: c.usage_fails ?? 0,
     windows: (c.windows ?? []).map((w) => ({
       key: w.key ?? "",
       utilization: w.utilization ?? 0,
       resetsAt: w.resets_at ?? "",
     })),
+    savedResets: parseSavedResets(c.saved_resets),
   }));
 }
 
@@ -1688,4 +1772,104 @@ export async function apiIdleCompactProbe(
     throw new ApiError(resp.status, msg);
   }
   return JSON.parse(text) as IdleCompactProbe;
+}
+
+/* ── Failover ─────────────────────────────────────────────────────────
+   Wire shapes of /providers/detail/{type}/{name}/failover, kept snake
+   case like IdleCompactProbe: only FailoverCard reads them. */
+
+export interface FailoverTarget {
+  /* instance is the "type/name" tag; model_id the pin ("" = default). */
+  instance: string;
+  model_id?: string;
+}
+
+export interface FailoverConfig {
+  enabled: boolean;
+  triggers: string[];
+  chain: FailoverTarget[];
+  recheck_minutes: number;
+  return_home: boolean;
+}
+
+export interface FailoverResponse {
+  config: FailoverConfig;
+  warnings: { instance: string; message: string }[];
+  /* errors: on GET what the stored chain no longer satisfies, on a
+     refused POST why nothing was saved. */
+  errors: string[];
+  can_edit: boolean;
+}
+
+function failoverPath(base: string, type: string, name: string): string {
+  return `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/failover`;
+}
+
+function normalizeFailover(r: Partial<FailoverResponse> | null | undefined): FailoverResponse {
+  const c = r?.config;
+  return {
+    config: {
+      enabled: c?.enabled ?? false,
+      triggers: c?.triggers ?? [],
+      chain: c?.chain ?? [],
+      recheck_minutes: c?.recheck_minutes ?? 10,
+      return_home: c?.return_home ?? true,
+    },
+    warnings: r?.warnings ?? [],
+    errors: r?.errors ?? [],
+    can_edit: r?.can_edit ?? false,
+  };
+}
+
+export async function apiGetFailover(base: string, type: string, name: string): Promise<FailoverResponse> {
+  return normalizeFailover(await get<Partial<FailoverResponse>>(failoverPath(base, type, name)));
+}
+
+/* apiSaveFailover stores the whole config. A refused save (400) is not
+   thrown: it resolves with the server's errors so the card can list them
+   next to the form. Anything else non-OK throws. */
+export async function apiSaveFailover(base: string, type: string, name: string, cfg: FailoverConfig): Promise<FailoverResponse> {
+  const resp = await fetch(failoverPath(base, type, name), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(cfg),
+  });
+  const text = await resp.text().catch(() => "");
+  let body: (Partial<FailoverResponse> & { error?: string }) | null = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    /* not JSON */
+  }
+  if (resp.ok || (resp.status === 400 && body?.errors)) return normalizeFailover(body);
+  throw new ApiError(resp.status, body?.error || text || `HTTP ${resp.status}`);
+}
+
+/* apiResetProviderHealth forgets the account's recorded failure. */
+export async function apiResetProviderHealth(base: string, type: string, name: string): Promise<void> {
+  await post<unknown>(`${failoverPath(base, type, name)}/reset-health`);
+}
+
+/* apiFailoverOptions lists the instances the caller may pick, the same
+   access-filtered list every provider picker reads. */
+export async function apiFailoverOptions(base: string): Promise<ProviderListItem[]> {
+  return (await get<ProviderListItem[] | null>(`${base}/providers/options`)) ?? [];
+}
+
+/* apiFailoverOptionModels backs ProviderPicker's lazy model loader; the
+   caller attaches the list stamp (withModelListMeta). */
+export async function apiFailoverOptionModels(
+  base: string,
+  optionValue: string,
+  opts?: { entry?: string; refresh?: boolean },
+): Promise<{ models?: ComposerModelOption[] | null; fetched_at?: string; source?: string; can_refresh?: boolean }> {
+  const s = optionValue.indexOf("/");
+  const type = s < 0 ? optionValue : optionValue.slice(0, s);
+  const name = s < 0 ? optionValue : optionValue.slice(s + 1);
+  const q = new URLSearchParams();
+  if (opts?.entry) q.set("entry", opts.entry);
+  if (opts?.refresh) q.set("refresh", "1");
+  const qs = q.toString();
+  return get(`${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${qs ? `?${qs}` : ""}`);
 }

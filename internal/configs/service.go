@@ -93,6 +93,13 @@ func (s *Service) RegisterValidator(owner string, fn ConfigValidator) {
 
 // validate runs owner's validator, if one is registered.
 func (s *Service) validate(owner, key, value string) error {
+	if owner == "" {
+		if fn := appValidators[key]; fn != nil {
+			if err := fn(value); err != nil {
+				return err
+			}
+		}
+	}
 	s.mu.RLock()
 	fn := s.validators[owner]
 	s.mu.RUnlock()
@@ -319,6 +326,15 @@ func (s *Service) GetOwned(owner, key string) string {
 	return s.cache[ownerKey{Owner: owner, Key: key}].Value
 }
 
+// Lookup returns the cached row for (owner, key) — value plus its metadata
+// (IsSecret, Type, ...) — and whether such a row exists.
+func (s *Service) Lookup(owner, key string) (entity.Config, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	row, ok := s.cache[ownerKey{Owner: owner, Key: key}]
+	return row, ok
+}
+
 // envOverrideForUI shapes an env-supplied value into the form the UI
 // widget for v.Type expects. For kvlist, the env var is a CSV (one
 // origin per item) but the widget parses Value as a JSON array of
@@ -496,6 +512,40 @@ func (s *Service) setOwned(ctx context.Context, owner, key, value string) error 
 	fresh.Value = plaintext
 	s.mu.Lock()
 	s.cache[ownerKey{Owner: owner, Key: key}] = *fresh
+	s.mu.Unlock()
+	return nil
+}
+
+// ClearOwned empties the stored value for (owner, key). Unlike SetOwned
+// with "", it bypasses the keep-on-empty shortcut for secret rows, so an
+// admin can deliberately remove a stored secret. Refuses undeclared,
+// locked and env-overridden rows.
+func (s *Service) ClearOwned(ctx context.Context, owner, key string) error {
+	ck := ownerKey{Owner: owner, Key: key}
+	s.mu.RLock()
+	m, ok := s.meta[ck]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown config %s/%s", owner, key)
+	}
+	if m.Locked {
+		return fmt.Errorf("config %q is locked and cannot be cleared", key)
+	}
+	if owner == "" {
+		if envName, _, set := EnvOverrideFor(key); set {
+			return fmt.Errorf("config %q is overridden by the %s environment variable — unset it and restart to edit from the UI", key, envName)
+		}
+	}
+	if err := s.repo.SetValue(ctx, owner, key, ""); err != nil {
+		return err
+	}
+	fresh, err := s.repo.FindByOwnerKey(ctx, owner, key)
+	if err != nil {
+		return err
+	}
+	fresh.Value = ""
+	s.mu.Lock()
+	s.cache[ck] = *fresh
 	s.mu.Unlock()
 	return nil
 }

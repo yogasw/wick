@@ -111,6 +111,14 @@ func (s *Server) SetVersion(v string) {
 //	"slow"    → waits 3 s, then completes
 //	"big N"   → one artifact of N bytes
 //	"fail"    → failed "boom"
+//	"reject"  → rejected "not my job"
+//	"cancel"  → canceled "stopped by its owner"
+//	"auth"    → auth_required "sign in first"
+//	"hold auth", "hold ask" → auth_required "sign in first" or
+//	            input-required "Which environment?", then the stream stays
+//	            open until the client goes, as an a2a-go server does for a
+//	            state that is not final
+//	"loud N"  → failed with an N-rune message full of control characters
 //	anything  → "echo: " + text in two artifact chunks, completed
 type executor struct{ s *Server }
 
@@ -137,6 +145,15 @@ func (e executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.
 			return a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(s))
 		}
 		switch {
+		case text == "hold auth" || text == "hold ask":
+			ev := a2a.NewStatusUpdateEvent(ec, a2a.TaskStateAuthRequired, say("sign in first"))
+			if text == "hold ask" {
+				ev = a2a.NewStatusUpdateEvent(ec, a2a.TaskStateInputRequired, say("Which environment?"))
+			}
+			if !yield(ev, nil) {
+				return
+			}
+			<-ctx.Done()
 		case ec.StoredTask != nil && ec.StoredTask.Status.State == a2a.TaskStateInputRequired:
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, say("deploying to "+text)), nil)
 		case strings.HasPrefix(text, "ask"):
@@ -157,8 +174,20 @@ func (e executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.
 				return
 			}
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+		case strings.HasPrefix(text, "loud "):
+			n := 0
+			for _, r := range strings.TrimPrefix(text, "loud ") {
+				n = n*10 + int(r-'0')
+			}
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, say(strings.Repeat("\x1b[31mx\a", n/4))), nil)
 		case text == "fail":
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, say("boom")), nil)
+		case text == "reject":
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateRejected, say("not my job")), nil)
+		case text == "cancel":
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCanceled, say("stopped by its owner")), nil)
+		case text == "auth":
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateAuthRequired, say("sign in first")), nil)
 		default:
 			first := a2a.NewArtifactEvent(ec, a2a.NewTextPart("echo: "))
 			if !yield(first, nil) {

@@ -19,7 +19,7 @@ func TestSelectBoardTicketsAppliesTheToolbarFilter(t *testing.T) {
 		{ID: "T-3", Status: "open", Assignee: "usr_2", UpdatedAt: base.Add(2 * time.Hour)},
 	}
 
-	rows, n, truncated := selectBoardTickets(tickets, nil, "")
+	rows, n, truncated := selectBoardTickets(tickets, nil, assigneeFilter{})
 	if n != 3 || len(rows) != 3 || truncated {
 		t.Fatalf("no filter = %d rows (%d matched, truncated=%v), want all three", len(rows), n, truncated)
 	}
@@ -28,7 +28,7 @@ func TestSelectBoardTicketsAppliesTheToolbarFilter(t *testing.T) {
 		t.Fatalf("order = %s,%s,%s, want newest first", rows[0].ID, rows[1].ID, rows[2].ID)
 	}
 
-	rows, n, _ = selectBoardTickets(tickets, map[string]bool{"open": true}, "usr_1")
+	rows, n, _ = selectBoardTickets(tickets, map[string]bool{"open": true}, parseAssigneeFilter("usr_1", ""))
 	if n != 1 || len(rows) != 1 || rows[0].ID != "T-1" {
 		t.Fatalf("open + usr_1 = %+v (%d matched), want just T-1", rows, n)
 	}
@@ -36,7 +36,7 @@ func TestSelectBoardTicketsAppliesTheToolbarFilter(t *testing.T) {
 	// The field map travels whole: a receiver's join key is exactly the
 	// kind of field nobody marks show_on_card.
 	withFields := []ticket.Ticket{{ID: "T-9", Status: "open", Fields: map[string]string{"notion_page_id": "abc"}}}
-	rows, _, _ = selectBoardTickets(withFields, nil, "")
+	rows, _, _ = selectBoardTickets(withFields, nil, assigneeFilter{})
 	if rows[0].Fields["notion_page_id"] != "abc" {
 		t.Fatalf("fields = %+v, want the full map", rows[0].Fields)
 	}
@@ -49,7 +49,7 @@ func TestSelectBoardTicketsCapsRowsButNotTheCount(t *testing.T) {
 	for i := range tickets {
 		tickets[i] = ticket.Ticket{ID: "T-" + string(rune('a'+i%26)), Status: "open"}
 	}
-	rows, n, truncated := selectBoardTickets(tickets, nil, "")
+	rows, n, truncated := selectBoardTickets(tickets, nil, assigneeFilter{})
 	if len(rows) != maxBoardActionTickets {
 		t.Fatalf("rows = %d, want the cap %d", len(rows), maxBoardActionTickets)
 	}

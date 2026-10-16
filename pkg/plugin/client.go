@@ -25,11 +25,24 @@ type ExecCall struct {
 	// answers c.InstanceID() and c.CallerUserID() the same way.
 	InstanceID   string
 	CallerUserID string
+	// AccountID / OwnerBotID mirror c.AccountID() and c.OwnerBotID().
+	AccountID  string
+	OwnerBotID string
+	// RawInput mirrors c.RawInput() (the untyped arguments); nil = none.
+	RawInput map[string]any
+	// HealthCheck runs the module's HealthCheck hook instead of Operation;
+	// the result JSON is the []connector.OpHealth report.
+	HealthCheck bool
+	// Progress receives the op's c.ReportProgress calls. Only ExecuteStream
+	// delivers them; the unary Execute has no channel back and drops them.
+	Progress func(progress, total int, message string)
 }
 
 // ExecResult is what one plugin operation returns: the result JSON plus the
 // values the operation passed to c.Mask / c.MaskIgnoreCase. The plugin has no
 // encryption key, so those values arrive in the clear and the host masks them.
+// On an operation error (ErrPluginOp) the mask lists are still filled, so the
+// host can scrub the error message as well.
 type ExecResult struct {
 	JSON           []byte
 	Mask           []string
@@ -49,28 +62,24 @@ type GRPCConn interface {
 // It is what GRPCClient() dispenses; the manager keeps it alive per plugin.
 type grpcClient struct {
 	inner pb.ConnectorClient
+	key   string // plugin key for Host API call ids ("" = none)
 }
 
 // Execute runs one operation in the plugin and returns the raw result JSON.
 func (c *grpcClient) Execute(ctx context.Context, call ExecCall) (ExecResult, error) {
-	args, err := json.Marshal(call.Input)
+	req, err := call.request()
 	if err != nil {
-		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
+		return ExecResult{}, err
 	}
-	resp, err := c.inner.Execute(ctx, &pb.ExecuteRequest{
-		Operation:    call.Operation,
-		ArgsJson:     args,
-		Creds:        call.Creds,
-		RequestId:    call.RequestID,
-		SessionId:    call.SessionID,
-		InstanceId:   call.InstanceID,
-		CallerUserId: call.CallerUserID,
-	})
+	ctx, end := beginHostCallFor(ctx, c.key, KindConnector, call.CallerUserID, call.SessionID, call.InstanceID)
+	defer end()
+	resp, err := c.inner.Execute(ctx, req)
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
 	}
 	if resp.Error != nil {
-		return ExecResult{}, fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
+		return ExecResult{Mask: resp.Mask, MaskIgnoreCase: resp.MaskIgnoreCase},
+			fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
 	}
 	return ExecResult{JSON: resp.ResultJson, Mask: resp.Mask, MaskIgnoreCase: resp.MaskIgnoreCase}, nil
 }
@@ -78,19 +87,13 @@ func (c *grpcClient) Execute(ctx context.Context, call ExecCall) (ExecResult, er
 // ExecuteStream runs one operation and reassembles the streamed result. It
 // removes the default gRPC message ceiling for large results.
 func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) (ExecResult, error) {
-	args, err := json.Marshal(call.Input)
+	req, err := call.request()
 	if err != nil {
-		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
+		return ExecResult{}, err
 	}
-	stream, err := c.inner.ExecuteStream(ctx, &pb.ExecuteRequest{
-		Operation:    call.Operation,
-		ArgsJson:     args,
-		Creds:        call.Creds,
-		RequestId:    call.RequestID,
-		SessionId:    call.SessionID,
-		InstanceId:   call.InstanceID,
-		CallerUserId: call.CallerUserID,
-	})
+	ctx, end := beginHostCallFor(ctx, c.key, KindConnector, call.CallerUserID, call.SessionID, call.InstanceID)
+	defer end()
+	stream, err := c.inner.ExecuteStream(ctx, req)
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
 	}
@@ -101,15 +104,45 @@ func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) (ExecResu
 			return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
 		}
 		if chunk.Error != nil {
-			return ExecResult{}, fmt.Errorf("%w: [%s] %s", ErrPluginOp, chunk.Error.Code, chunk.Error.Message)
+			return ExecResult{Mask: chunk.Mask, MaskIgnoreCase: chunk.MaskIgnoreCase},
+				fmt.Errorf("%w: [%s] %s", ErrPluginOp, chunk.Error.Code, chunk.Error.Message)
 		}
 		if len(chunk.Data) > 0 {
 			out = append(out, chunk.Data...)
+		} else if !chunk.Eof && call.Progress != nil && (chunk.Progress != 0 || chunk.Total != 0 || chunk.Message != "") {
+			call.Progress(int(chunk.Progress), int(chunk.Total), chunk.Message)
 		}
 		if chunk.Eof {
 			return ExecResult{JSON: out, Mask: chunk.Mask, MaskIgnoreCase: chunk.MaskIgnoreCase}, nil
 		}
 	}
+}
+
+// request builds the wire request for call.
+func (call ExecCall) request() (*pb.ExecuteRequest, error) {
+	args, err := json.Marshal(call.Input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal input: %w", err)
+	}
+	var raw []byte
+	if call.RawInput != nil {
+		if raw, err = json.Marshal(call.RawInput); err != nil {
+			return nil, fmt.Errorf("marshal raw input: %w", err)
+		}
+	}
+	return &pb.ExecuteRequest{
+		Operation:    call.Operation,
+		ArgsJson:     args,
+		Creds:        call.Creds,
+		RequestId:    call.RequestID,
+		SessionId:    call.SessionID,
+		InstanceId:   call.InstanceID,
+		CallerUserId: call.CallerUserID,
+		AccountId:    call.AccountID,
+		OwnerBotId:   call.OwnerBotID,
+		RawInputJson: raw,
+		HealthCheck:  call.HealthCheck,
+	}, nil
 }
 
 // ResolveIdentity asks the plugin who an OAuth access token belongs to.

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { clock24 } from "@wick-fe/common-ui";
   /* The Context window panel — what `/context` opens, and what the ring
      in the composer opens when clicked.
 
@@ -16,8 +15,9 @@
      They are labelled and grouped separately for that reason. */
   import { contextTone } from "@wick-fe/common-ui";
 
-  import type { SessionContext, SessionContextProvider } from "../api/context.js";
+  import type { ContextQuery, SessionContext, SessionContextProvider, UsageTotals } from "../api/context.js";
   import type { ComposerUsage } from "../api/usage.js";
+  import ContextTrend from "./ContextTrend.svelte";
 
   /* What the turn on screen is doing right now. Everything else in this
      panel is written when a turn FINISHES — which is exactly the moment
@@ -70,11 +70,15 @@
     usageRecheckWait?: number;
     /** Close this panel and open /usage for the per-account detail. */
     onOpenUsage?: () => void;
+    /** Fetch the reading with every stored point and/or every
+        provider's trail, for the chart's All / All providers. */
+    loadSeries?: (q: ContextQuery) => Promise<SessionContext>;
   };
 
   let {
     open, data, live = null, loading, error, onRefresh, onCompact, compacting, onClose,
     usage = null, onUsageRefresh, usageRefreshing = false, usageRecheckWait = 0, onOpenUsage,
+    loadSeries,
   }: Props = $props();
 
   /* The windows the usage line summarises: the account this session runs
@@ -142,6 +146,7 @@
 
   let el: HTMLDivElement | undefined = $state();
   let confirming = $state(false);
+  let trendEl: ContextTrend | undefined = $state();
 
   $effect(() => {
     if (!open) {
@@ -150,13 +155,28 @@
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
+        // The chart takes Esc first: it clears a selection, closes its
+        // options or its big view, and the panel stays open. Consumed
+        // here, it must not also close the side panel or the drawer
+        // behind — those listen on the window too, below this capture
+        // listener. The big view's own listener sits on the window as
+        // well, so stopPropagation (not Immediate) still lets it close.
+        if (trendEl?.escape()) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         onClose();
       }
     }
     function onDown(e: MouseEvent) {
-      if (el && !el.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      // The big chart is mounted on <body>, outside this box, but it is
+      // still part of the panel: a click in it is not a click outside.
+      if (t instanceof Element && t.closest("[data-context-modal]")) return;
+      if (el && !el.contains(t)) onClose();
     }
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onDown, true);
@@ -170,7 +190,8 @@
     if (!Number.isFinite(n) || n <= 0) return "0";
     if (n < 1000) return String(n);
     if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-    return `${(n / 1_000_000).toFixed(2)}M`;
+    if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+    return `${(n / 1_000_000_000).toFixed(2)}B`;
   }
   function exact(n: number): string {
     return Number.isFinite(n) ? n.toLocaleString() : "0";
@@ -233,99 +254,27 @@
      the number people mean by "how much has this session used". They
      differ by a lot once a conversation is long — the same prefix is
      re-sent (and mostly re-read from cache) every turn. */
-  const spentTokens = $derived(data?.totals.total ?? 0);
   const cacheHit = $derived(Math.round(data?.totals.cache_hit_pct ?? 0));
+
+  /* The headline row is the ACTIVE provider's: its turns and its spend.
+     The session's own totals (every provider) are the Session total row,
+     shown once a second provider exists. An older server without the
+     row falls back to the session totals, which are then the same. */
+  const activeRow = $derived(
+    (data?.providers ?? []).find((p) => p.provider === data?.provider) ?? null,
+  );
+  const headTurns = $derived(activeRow?.turns ?? data?.turns ?? 0);
+  const headTotals = $derived<UsageTotals | null>(activeRow?.totals ?? data?.totals ?? null);
+  /* Fresh is what was not served from cache: input, cache writes and
+     output. Cache read is split out because on a long session it is
+     most of the traffic. */
+  const fresh = (t: UsageTotals) => t.input + t.cache_write + t.output;
+  const spentTokens = $derived(headTotals?.total ?? 0);
 
   const others = $derived<SessionContextProvider[]>(
     (data?.providers ?? []).filter((p) => p.provider !== data?.provider),
   );
 
-  /* Sparkline over the recent per-turn levels. Drawn from the same
-     numbers as the ring, so a rise the ring cannot express ("we jumped
-     30% in one turn") is still visible.
-
-     It is hoverable for the same reason the analytics chart is: the
-     shape raises a question ("what happened there?") that the shape
-     alone cannot answer. Hovering names the turn, its level, and when
-     it ran — so a step in the curve becomes something you can go and
-     look at rather than just notice. */
-  const trend = $derived<number[]>(data?.trend ?? []);
-  const trendAt = $derived<string[]>(data?.trend_at ?? []);
-  const trendSpent = $derived<number[]>(data?.trend_spent ?? []);
-  const trendMax = $derived(Math.max(...trend, 1));
-
-  const SPARK_H = 20;
-  const SPARK_PAD = 1;
-
-  function tx(i: number): number {
-    if (trend.length <= 1) return 50;
-    return (i / (trend.length - 1)) * 100;
-  }
-  function ty(v: number): number {
-    return SPARK_H - SPARK_PAD - (v / trendMax) * (SPARK_H - SPARK_PAD * 2);
-  }
-
-  const spark = $derived(
-    trend.length < 2 ? "" : trend.map((v, i) => `${tx(i).toFixed(1)},${ty(v).toFixed(1)}`).join(" "),
-  );
-  /* The filled area under the line. Same points, closed along the
-     baseline — it makes a shallow curve readable at 32px tall, which a
-     hairline is not. */
-  const sparkArea = $derived(spark === "" ? "" : `0,${SPARK_H} ${spark} 100,${SPARK_H}`);
-
-  let hover = $state<number | null>(null);
-  /* Which point the readout describes: the hovered one, or the newest
-     when nothing is hovered.
-
-     Idle used to read "last N turns · hover for a turn" and nothing else,
-     so the line under the curve was a label rather than information —
-     and reserving room for the second line then left a blank strip. The
-     newest turn is the one anybody would hover first; showing it by
-     default fills both lines with something true, and hovering simply
-     moves the readout to another point. */
-  const shown = $derived(hover ?? (trend.length > 0 ? trend.length - 1 : null));
-
-  function onSparkMove(e: MouseEvent) {
-    const box = (e.currentTarget as SVGElement).getBoundingClientRect();
-    if (box.width === 0 || trend.length === 0) return;
-    const frac = (e.clientX - box.left) / box.width;
-    hover = Math.max(0, Math.min(trend.length - 1, Math.round(frac * (trend.length - 1))));
-  }
-
-  /* The readout, in the line that otherwise says "last N turns". Pinned
-     rather than following the cursor: in a panel this small a tooltip
-     that moves is harder to read than one that stays put. */
-  const hoverPct = $derived(
-    shown === null || !hasWindow ? 0 : Math.round(((trend[shown] ?? 0) / (data?.window ?? 1)) * 100),
-  );
-  /* What the hovered turn actually DID, which is the question a step in
-     the curve raises: how much the window moved, and what that turn put
-     on the wire. Both are differences against the point before it — the
-     first point has no "before", and saying so beats printing a delta
-     measured from nothing. */
-  const hoverDelta = $derived(
-    shown === null || shown === 0 ? null : (trend[shown] ?? 0) - (trend[shown - 1] ?? 0),
-  );
-  const hoverTurnSpend = $derived(
-    shown === null || shown === 0 || trendSpent.length === 0
-      ? null
-      : (trendSpent[shown] ?? 0) - (trendSpent[shown - 1] ?? 0),
-  );
-  const hoverSpent = $derived(shown === null ? 0 : (trendSpent[shown] ?? 0));
-
-  function signed(n: number): string {
-    return `${n > 0 ? "+" : n < 0 ? "−" : ""}${short(Math.abs(n))}`;
-  }
-
-  const hoverTime = $derived.by(() => {
-    if (shown === null) return "";
-    const iso = trendAt[shown];
-    if (!iso) return "";
-    const t = Date.parse(iso);
-    return Number.isFinite(t)
-      ? clock24(t)
-      : "";
-  });
 </script>
 
 {#if open}
@@ -471,79 +420,8 @@
           {/if}
         </p>
 
-        {#if spark}
-          <svg
-            viewBox="0 0 100 20"
-            preserveAspectRatio="none"
-            role="img"
-            class="mt-2 h-8 w-full cursor-crosshair text-black-700 dark:text-black-600"
-            aria-label="Recent context level per turn"
-            data-testid="context-spark"
-            onmousemove={onSparkMove}
-            onmouseleave={() => (hover = null)}
-          >
-            <polygon points={sparkArea} fill="currentColor" opacity="0.12" />
-            <polyline
-              points={spark}
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1"
-              vector-effect="non-scaling-stroke"
-            />
-            {#if hover !== null}
-              <line
-                x1={tx(hover)}
-                y1="0"
-                x2={tx(hover)}
-                y2={SPARK_H}
-                stroke="currentColor"
-                stroke-width="1"
-                opacity="0.5"
-                vector-effect="non-scaling-stroke"
-              />
-              <circle cx={tx(hover)} cy={ty(trend[hover])} r="2" fill="currentColor" />
-            {/if}
-          </svg>
-          <!-- Two lines tall, always. The readout is one line idle and two
-               while hovering, and letting it size itself meant the panel
-               grew and shrank under the cursor as it crossed the curve —
-               a panel anchored to the composer moves its whole body when
-               that happens, so reading it became a moving target. The
-               second line is empty rather than absent when there is
-               nothing to say. -->
-          <p
-            class="min-h-[2.1rem] text-[11px] text-black-700 dark:text-black-600 tabular-nums"
-            data-testid="context-spark-readout"
-          >
-            {#if shown !== null}
-              <span class="font-medium text-black-900 dark:text-white-100">
-                turn {shown + 1}/{trend.length}
-              </span>
-              · {short(trend[shown])}{#if hoverDelta !== null}
-                <span
-                  class={hoverDelta > 0
-                    ? "text-amber-600 dark:text-amber-400"
-                    : hoverDelta < 0
-                      ? "text-green-600 dark:text-green-400"
-                      : ""}>{signed(hoverDelta)}</span
-                >{/if}{#if hasWindow}
-                · {hoverPct}%{/if}{#if hoverTime}
-                · {hoverTime}{/if}
-              <!-- The second line is the spend behind that move: what this
-                   turn cost, and what the session had spent by then. A jump
-                   in the window and a jump in the bill are not the same
-                   event — a cache-heavy turn moves one and not the other. -->
-              <span class="block text-black-700 dark:text-black-600">
-                {#if hoverTurnSpend !== null}this turn {short(hoverTurnSpend)} tokens · {/if}total
-                {short(hoverSpent)}{#if hover === null}
-                  <span class="opacity-70">· hover the curve for another turn</span>
-                {/if}
-              </span>
-            {:else}
-              last {trend.length} turns · hover for a turn
-              <span class="block" aria-hidden="true">&nbsp;</span>
-            {/if}
-          </p>
+        {#if (data.trend?.length ?? 0) > 0}
+          <ContextTrend bind:this={trendEl} {data} {loadSeries} />
         {/if}
       </div>
 
@@ -561,77 +439,83 @@
         </p>
       {/if}
       <div
-        class="px-4 py-2.5 border-t border-white-300 dark:border-navy-600 grid grid-cols-4 gap-2 text-xs"
+        class="ctx-grid px-4 py-2.5 border-t border-white-300 dark:border-navy-600 grid gap-2 text-xs"
         class:border-t-0={levelIsLive}
       >
-        <div>
+        <div class="min-w-0">
           <p class="text-black-700 dark:text-black-600">Provider</p>
           <p class="font-medium text-black-900 dark:text-white-100 truncate" title={data.model}>
             {data.provider || "—"}
           </p>
         </div>
-        <div>
+        <div class="min-w-0">
           <p class="text-black-700 dark:text-black-600">Turns</p>
-          <p class="font-medium text-black-900 dark:text-white-100 tabular-nums">{data.turns}</p>
+          <p class="font-medium text-black-900 dark:text-white-100 tabular-nums">{headTurns}</p>
         </div>
-        <div>
-          <!-- Session total, not the fill level: every token this
-               session sent and received, which is what the bill is made
-               of. Labelled "Tokens" rather than "Used" precisely so it
-               is not read as the meter above. -->
-          <p class="text-black-700 dark:text-black-600">Tokens</p>
+        <div class="min-w-0">
+          <p class="text-black-700 dark:text-black-600">Spent</p>
+          <p class="text-sm font-bold text-black-900 dark:text-white-100 tabular-nums" data-testid="session-spent">
+            {cost(headTotals?.cost_usd ?? 0)}
+          </p>
+        </div>
+        <div class="min-w-0">
+          <!-- Every token this provider sent and received, split into
+               what was new and what was re-read from cache — not the
+               fill level above. -->
+          <p class="text-black-700 dark:text-black-600">Fresh</p>
           <p
             class="font-medium text-black-900 dark:text-white-100 tabular-nums"
             data-testid="session-tokens"
-            title="{exact(spentTokens)} tokens this session — in {exact(data.totals.input)} · cache {exact(
-              data.totals.cache_read,
-            )} · out {exact(data.totals.output)}"
+            title="{exact(spentTokens)} tokens in total — in {exact(headTotals?.input ?? 0)} · cache write {exact(
+              headTotals?.cache_write ?? 0,
+            )} · out {exact(headTotals?.output ?? 0)}"
           >
-            {short(spentTokens)}
+            {short(headTotals ? fresh(headTotals) : 0)}
           </p>
         </div>
-        <div>
-          <p class="text-black-700 dark:text-black-600">Spent</p>
-          <p class="font-medium text-black-900 dark:text-white-100 tabular-nums">
-            {cost(data.totals.cost_usd)}
+        <div class="min-w-0">
+          <p class="text-black-700 dark:text-black-600">Cache read</p>
+          <p class="font-medium text-black-900 dark:text-white-100 tabular-nums" data-testid="session-cache-read">
+            {short(headTotals?.cache_read ?? 0)}
           </p>
         </div>
       </div>
 
-      {#if spentTokens > 0}
-        <!-- The split behind that one number. Cache read is called out
-             because on a long session it is most of the traffic, and
-             seeing it is how someone understands why the total dwarfs
-             the window. -->
+      {#if spentTokens > 0 && headTotals}
         <div
           class="px-4 pb-2.5 -mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-black-700 dark:text-black-600 tabular-nums"
         >
-          <span title="Fresh input tokens — the part that missed the cache">
-            in {short(data.totals.input)}
-          </span>
-          <span title="Input served from the prompt cache">
-            cache {short(data.totals.cache_read)}{#if cacheHit > 0}
-              · {cacheHit}% hit{/if}
-          </span>
-          <span title="Tokens the model generated, reasoning included">
-            out {short(data.totals.output)}
-          </span>
+          <span title="Fresh input tokens — the part that missed the cache">in {short(headTotals.input)}</span>
+          <span title="Input written to the prompt cache">cache write {short(headTotals.cache_write)}</span>
+          <span title="Tokens the model generated, reasoning included">out {short(headTotals.output)}</span>
+          {#if cacheHit > 0}<span>{cacheHit}% cache hit</span>{/if}
         </div>
       {/if}
 
       {#if others.length > 0}
-        <div class="px-4 py-2 border-t border-white-300 dark:border-navy-600">
+        <div class="px-4 py-2 border-t border-white-300 dark:border-navy-600" data-testid="context-others">
           <p class="text-[11px] text-black-700 dark:text-black-600 mb-1">
             Also used in this session
           </p>
           {#each others as p (p.provider)}
-            <div class="flex items-center justify-between text-xs py-0.5">
-              <span class="text-black-900 dark:text-white-100 truncate">{p.provider}</span>
-              <span class="text-black-700 dark:text-black-600 tabular-nums shrink-0 ml-2">
-                {p.turns} turns · {short(p.totals.total)}
-              </span>
+            <div class="ctx-grid grid gap-2 py-0.5 text-xs tabular-nums">
+              <span class="truncate text-black-900 dark:text-white-100">{p.provider}</span>
+              <span class="text-black-700 dark:text-black-600">{p.turns}</span>
+              <span class="font-medium text-black-900 dark:text-white-100">{cost(p.totals.cost_usd)}</span>
+              <span class="text-black-700 dark:text-black-600">{short(fresh(p.totals))}</span>
+              <span class="text-black-700 dark:text-black-600">{short(p.totals.cache_read)}</span>
             </div>
           {/each}
+          <div
+            class="ctx-grid grid gap-2 py-0.5 text-xs tabular-nums mt-1 border-t border-white-300 dark:border-navy-600 pt-1.5 font-medium"
+            data-testid="context-session-total"
+          >
+            <span class="truncate text-black-900 dark:text-white-100">Session total</span>
+            <span class="text-black-700 dark:text-black-600">{data.turns}</span>
+            <span class="font-medium text-black-900 dark:text-white-100">{cost(data.totals.cost_usd)}</span>
+            <span class="text-black-700 dark:text-black-600">{short(fresh(data.totals))}</span>
+            <span class="text-black-700 dark:text-black-600">{short(data.totals.cache_read)}</span>
+          </div>
         </div>
       {/if}
 
@@ -745,3 +629,9 @@
     {/if}
   </div>
 {/if}
+
+<style>
+  .ctx-grid {
+    grid-template-columns: 1.7fr 0.5fr 1fr 1fr 1fr;
+  }
+</style>

@@ -147,29 +147,27 @@ func (s *Service) SyncSystemTagsForAllAdmins(ctx context.Context) error {
 // Idempotent — if the tag already exists the existing tag is reused.
 // Call this whenever a new connector instance row is created by a user.
 func (s *Service) CreateOwnerTag(ctx context.Context, connectorID, userID string) error {
-	name := "owner:" + connectorID
-	toolPath := "/connectors/" + connectorID
+	return s.CreatePathOwnerTag(ctx, connectorID, "/connectors/"+connectorID, userID)
+}
 
-	t, err := s.repo.GetTagByNameExact(ctx, name)
-	if err != nil {
-		// Not found — create it.
-		t = &entity.Tag{
-			Name:     name,
-			IsFilter: true,
-		}
-		if err := s.repo.CreateTag(ctx, t); err != nil {
-			return err
-		}
-	}
-	// Link tag → connector row (so the row is visible to whoever carries the tag).
-	if err := s.repo.LinkToolTag(ctx, toolPath, t.ID); err != nil {
-		return err
-	}
-	// Link tag → user (owner carries the tag).
-	if userID == "" {
-		return nil
-	}
-	return s.repo.LinkUserTag(ctx, userID, t.ID)
+// CreatePathOwnerTag is CreateOwnerTag for any tool path: it creates
+// "owner:{resourceID}" (IsFilter=true), links it to toolPath so the
+// resource is filtered by it, and links userID as a holder (SetOwnerTx,
+// OwnerAdd). Idempotent.
+// Remove it with DeleteResourceOwnerTag(resourceID).
+func (s *Service) CreatePathOwnerTag(ctx context.Context, resourceID, toolPath, userID string) error {
+	return s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return SetOwnerTx(tx, resourceID, toolPath, "", userID, OwnerAdd)
+	})
+}
+
+// SetSoleOwner makes userID the one holder of "owner:{resourceID}" and, when
+// toolPath is given, links the tag to it (SetOwnerTx, OwnerSole). userID ==
+// "" leaves it ownerless.
+func (s *Service) SetSoleOwner(ctx context.Context, resourceID, toolPath, userID string) error {
+	return s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return SetOwnerTx(tx, resourceID, toolPath, "", userID, OwnerSole)
+	})
 }
 
 // DeleteOwnerTag removes the "owner:{connectorID}" tag and all its
@@ -181,6 +179,19 @@ func (s *Service) DeleteOwnerTag(ctx context.Context, connectorID string) error 
 		return nil // tag doesn't exist — nothing to clean up
 	}
 	return s.repo.DeleteTag(ctx, t.ID)
+}
+
+// UserCarriesTagName reports whether the user carries the tag with this
+// exact name. A missing tag is false, not an error.
+func (s *Service) UserCarriesTagName(ctx context.Context, userID, name string) (bool, error) {
+	if userID == "" || name == "" {
+		return false, nil
+	}
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		return false, nil
+	}
+	return s.repo.UserCarriesTag(ctx, userID, t.ID)
 }
 
 // UserOwnsConnector reports whether the user carries the owner tag for the
@@ -202,15 +213,9 @@ func (s *Service) CreateResourceOwnerTag(ctx context.Context, resourceID, userID
 	if resourceID == "" || userID == "" {
 		return nil
 	}
-	name := "owner:" + resourceID
-	t, err := s.repo.GetTagByNameExact(ctx, name)
-	if err != nil {
-		t = &entity.Tag{Name: name, IsFilter: true}
-		if err := s.repo.CreateTag(ctx, t); err != nil {
-			return err
-		}
-	}
-	return s.repo.LinkUserTag(ctx, userID, t.ID)
+	return s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return SetOwnerTx(tx, resourceID, "", "", userID, OwnerAdd)
+	})
 }
 
 // AccessibleResourceIDs returns the set of resource IDs the user has access
@@ -258,6 +263,41 @@ func (s *Service) DeleteResourceOwnerTag(ctx context.Context, resourceID string)
 		return nil
 	}
 	return s.repo.DeleteTag(ctx, t.ID)
+}
+
+// MoveResourceTags carries a renamed resource's tags over in ONE
+// transaction: every tag on each old path is re-linked to its new path
+// (paths maps old → new), and "owner:{oldID}" becomes "owner:{newID}"
+// (skipped when either is empty or they match). Either all of it lands or
+// none of it does, so a failed rename cannot leave the resource untagged.
+func (s *Service) MoveResourceTags(ctx context.Context, paths map[string]string, oldID, newID string) error {
+	return s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for oldPath, newPath := range paths {
+			if oldPath == newPath {
+				continue
+			}
+			if err := tx.Model(&entity.ToolTag{}).
+				Where("tool_path = ?", oldPath).
+				Update("tool_path", newPath).Error; err != nil {
+				return err
+			}
+		}
+		if oldID == "" || newID == "" || oldID == newID {
+			return nil
+		}
+		return tx.Model(&entity.Tag{}).
+			Where("name = ?", "owner:"+oldID).
+			Update("name", "owner:"+newID).Error
+	})
+}
+
+// ClearToolPaths unlinks every tag from the given paths — the resource
+// behind them is gone.
+func (s *Service) ClearToolPaths(ctx context.Context, paths ...string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	return s.repo.db.WithContext(ctx).Where("tool_path IN ?", paths).Delete(&entity.ToolTag{}).Error
 }
 
 // ToolTagIDs returns a map from tool_path to the list of tag ids it has.

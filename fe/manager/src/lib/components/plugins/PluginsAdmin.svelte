@@ -11,7 +11,9 @@
      install-state and sort filters. Uninstall works for every kind, from
      Installed and Marketplace. Add: Upload a zip, Link (plugins.json or a .zip,
      installed once) or GitHub release (public, or private with a PAT that is
-     write-only). Everyone logged in can read; actions are admin-only
+     write-only). Host access (admin): what each plugin may call back into
+     wick, with per-scope / per-item switches and the call audit. Everyone
+     logged in can read; actions are admin-only
      server-side and hidden here for non-admins. */
   import { Button, TextInput, KebabMenu, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -23,10 +25,11 @@
     type InstalledPlugin, type OfficialCatalog, type PluginOrigin, type PluginProgress,
   } from "$lib/api.js";
   import PluginUpdateProgress from "./PluginUpdateProgress.svelte";
+  import HostAccess from "./host/HostAccess.svelte";
   import { pluginPhaseLabel } from "./updateProgress.js";
   import {
     parseQuery, queryString, filterInstalled, facetCounts, sortInstalled, paginate, matchesText,
-    canUpdate, hasError, hasUpdateSource, KINDS, ORIGINS, STATUSES, SORTS, PAGE_SIZES,
+    canUpdate, hasError, hasUpdateSource, isActive, loadFailed, loadPending, KINDS, ORIGINS, STATUSES, SORTS, PAGE_SIZES,
     marketRows, filterMarket, sortMarket, matchesMarket, uninstallBody, MARKET_FILTERS, MARKET_SORTS,
     type Tab, type ListQuery, type Page, type MarketRow,
   } from "./pluginsList.js";
@@ -275,10 +278,10 @@
 
   const counts = $derived({
     total: installed.length,
-    active: installed.filter((p) => p.enabled).length,
+    active: installed.filter(isActive).length,
     disabled: installed.filter((p) => !p.enabled).length,
     updates: installed.filter((p) => p.update_available).length,
-    errors: installed.filter(hasError).length,
+    errors: installed.filter((p) => hasError(p) || loadFailed(p)).length,
     official: installed.filter((p) => p.origin === "official").length,
   });
 
@@ -315,7 +318,7 @@
       if (p.source_id && (p.origin === "source" || p.origin === "url-zip")) {
         items.push({ label: "Check for update", onclick: () => checkUpdates(p.source_id), disabled: busy !== "" });
       }
-      if (p.kind === "connector") items.push({ label: p.enabled ? "Disable" : "Enable", onclick: () => toggle(p), disabled: busy !== "" });
+      if (p.kind === "connector" || p.kind === "tool") items.push({ label: p.enabled ? "Disable" : "Enable", onclick: () => toggle(p), disabled: busy !== "" });
       if (p.kind === "service") items.push({ label: "Restart service", onclick: () => restart(p), disabled: busy !== "" || !p.enabled });
     }
     if (p.source_url) items.push({ label: p.origin === "official" ? "Catalog ↗" : "Source ↗", onclick: () => window.open(p.source_url, "_blank", "noopener") });
@@ -508,6 +511,7 @@
     <button class={tabClass(query.tab === "marketplace")} onclick={() => setTab("marketplace")}>Marketplace <span class="text-xs text-black-700">{market.length}</span></button>
     <button class={tabClass(query.tab === "sources")} onclick={() => setTab("sources")}>Sources <span class="text-xs text-black-700">{sources.length + (official ? 1 : 0)}</span></button>
     {#if isAdmin}
+      <button class={tabClass(query.tab === "host")} onclick={() => setTab("host")}>Host access</button>
       <button class={tabClass(query.tab === "add")} onclick={() => { setTab("add"); editing = null; form = blankForm(); }}>Add new plugin</button>
     {/if}
   </div>
@@ -612,9 +616,14 @@
                   {/if}
                 </td>
                 <td class="whitespace-nowrap px-3 py-2">
-                  {#if hasError(p)}
+                  {#if loadFailed(p)}
+                    <span class="rounded-full bg-red-50 dark:bg-red-900 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400" data-testid="load-error-badge" title={p.status_detail || "not loaded"}>Error</span>
+                    <span class="mt-0.5 block max-w-[16rem] truncate text-[10px] text-black-700 dark:text-black-600 select-text" data-testid="load-error-reason" title={p.status_detail || "not loaded"}>{p.status_detail || "not loaded"}</span>
+                  {:else if loadPending(p)}
+                    <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600" data-testid="load-pending-badge" title="Installed; the running wick loads it within a few seconds">Loading…</span>
+                  {:else if hasError(p)}
                     <span class="rounded-full bg-red-50 dark:bg-red-900 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400" title={p.last_health_detail || "health check failing"}>Failing</span>
-                  {:else if p.enabled}
+                  {:else if isActive(p)}
                     <span class="rounded-full bg-green-200 dark:bg-green-800 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300">Active</span>
                     {#if p.kind === "service" && serviceStates[p.key] === "sleeping"}
                       <span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400" data-testid="sleeping-badge" title="Auto-off: asleep, wakes on the next request">Sleeping</span>
@@ -641,6 +650,11 @@
       {/if}
     </div>
     {@render pager(installedPage)}
+  {:else if query.tab === "host" && isAdmin}
+    <div class="flex flex-wrap items-center gap-2">{@render searchBox("Search plugins…")}</div>
+    <HostAccess filter={query.q} />
+  {:else if query.tab === "host"}
+    <p class="px-4 py-8 text-center text-sm text-black-700 dark:text-black-600" data-testid="host-admin-only">Host access is admin only.</p>
   {:else if query.tab === "sources"}
     <div class="flex flex-wrap items-center gap-2">{@render searchBox("Search sources…")}</div>
     <div class="space-y-3">

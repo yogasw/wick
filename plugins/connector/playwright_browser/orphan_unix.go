@@ -31,7 +31,7 @@ func findOwnedBrowserPIDs(root string) []ownedProc {
 	if err != nil {
 		return nil
 	}
-	prefix := "--user-data-dir=" + root
+	prefixes := []string{"--user-data-dir=" + root, moliProfileFlag + root}
 	self := os.Getpid()
 	var out []ownedProc
 	for _, e := range entries {
@@ -46,12 +46,24 @@ func findOwnedBrowserPIDs(root string) []ownedProc {
 			continue // process exited between ReadDir and here, or unreadable
 		}
 		for _, arg := range bytes.Split(raw, []byte{0}) {
-			s := string(arg)
-			if strings.HasPrefix(s, prefix) {
-				out = append(out, ownedProc{PID: pid, UserDataDir: strings.TrimPrefix(s, "--user-data-dir=")})
+			if dir, ok := ownedDirArg(string(arg), prefixes); ok {
+				out = append(out, ownedProc{PID: pid, UserDataDir: dir})
 				break
 			}
 		}
 	}
 	return out
+}
+
+// ownedDirArg reports whether one argv entry is a profile flag pointing under
+// the session dir — Chromium's --user-data-dir= or moli's --profile-dir= —
+// and returns the directory it names.
+func ownedDirArg(arg string, prefixes []string) (string, bool) {
+	for _, p := range prefixes {
+		if strings.HasPrefix(arg, p) {
+			_, dir, _ := strings.Cut(arg, "=")
+			return dir, true
+		}
+	}
+	return "", false
 }

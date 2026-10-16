@@ -3,6 +3,7 @@ package agents
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
 
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
@@ -16,12 +17,30 @@ import (
 // `system_prompt_team` for every user (not duplicated here). Those two
 // are read-only; PUT refuses them like any unknown key.
 func teamSettingsOf(c *tool.Ctx, st entity.TeamSettings) map[string]any {
-	out := team.SettingValues(st)
+	out := team.SettingValues(st, teamSettingEnv(c))
 	out["max_prompt_bytes"] = team.MaxTeamPromptBytes
 	if u := login.GetUser(c.Context()); u != nil && u.IsAdmin() {
 		out["operator_prompt_href"] = c.Base() + "/settings"
 	}
 	return out
+}
+
+// teamSettingEnv is the caller as team.SettingFields needs them. A Tickets
+// page project must pass the same gate as its own board
+// (projectAccessMW on /api/projects/{id}/tickets) and have ticket mode on.
+// The caller's access is resolved on the first id checked, so a request
+// with no selection never pays for it.
+func teamSettingEnv(c *tool.Ctx) team.SettingEnv {
+	if globalMgr == nil {
+		return team.SettingEnv{}
+	}
+	acc := sync.OnceValue(func() projectAccess { return callerProjectAccess(c) })
+	return team.SettingEnv{
+		TicketProject: func(id string) bool {
+			p, ok := globalMgr.Registry().Project(id)
+			return ok && p.Meta.Ticket.Enabled && acc().allowProject(id)
+		},
+	}
 }
 
 // apiTeamSettingsGet handles GET /api/team/settings: the caller's own
@@ -57,7 +76,7 @@ func apiTeamSettingsSave(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := team.ApplySettings(&st, patch); err != nil {
+	if err := team.ApplySettings(&st, patch, teamSettingEnv(c)); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

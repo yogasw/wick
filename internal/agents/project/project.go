@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -157,10 +158,30 @@ func (p Project) ResolveWidget(global config.GeneralConfig) config.WidgetPolicy 
 	return config.Resolve(config.GlobalWidgetPolicy(global), p.Meta.Widget)
 }
 
+// ValidID reports whether id can name a project (or a ticket) on disk:
+// one path segment — no separator, no "..", no leading dot, no "%", no
+// control character, at most 128 bytes. Ids come from URLs and tool
+// input, so a read checks it before joining id into a path; an id that
+// fails is simply not found.
+func ValidID(id string) bool {
+	if id == "" || len(id) > 128 || strings.HasPrefix(id, ".") || strings.Contains(id, "..") {
+		return false
+	}
+	for _, r := range id {
+		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // Load reads projects/<id>/meta.json.
 func Load(layout config.Layout, id string) (Project, error) {
 	if id == "" {
 		return Project{}, fmt.Errorf("project id is empty")
+	}
+	if !ValidID(id) {
+		return Project{}, fmt.Errorf("invalid project id %q", id)
 	}
 	var meta Meta
 	if err := storage.ReadJSON(layout.ProjectMeta(id), &meta); err != nil {

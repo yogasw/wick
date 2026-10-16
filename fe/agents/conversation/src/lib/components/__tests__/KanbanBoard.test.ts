@@ -138,7 +138,7 @@ function dt() {
 
 describe("KanbanBoard", () => {
   test("renders one column per status with ticket cards in place", () => {
-    renderBoard();
+    renderBoard({ filter: { statuses: ["open", "in_progress", "waiting", "done"] } });
     expect(screen.getByText("Fix the webhook")).toBeTruthy();
     expect(screen.getByText("Old finished thing")).toBeTruthy();
     for (const label of ["Open", "In Progress", "Waiting", "Done"]) {
@@ -181,6 +181,20 @@ describe("KanbanBoard", () => {
     await fireEvent.click(screen.getByTestId("session-row-sess-a"));
     expect(onOpenSession).toHaveBeenCalledWith("sess-a");
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // The multi-project mode added a second argument; this board never sends it.
+  test("single mode calls back with exactly the arguments it always had", async () => {
+    const { onOpen, onOpenSession, onReload } = renderWithRail();
+    await fireEvent.click(screen.getByTestId("ticket-card-T-4F2A"));
+    expect(onOpen.mock.calls[0]).toEqual(["T-4F2A"]);
+    await fireEvent.click(screen.getByTestId("untracked-loose-1"));
+    expect(onOpenSession.mock.calls[0]).toEqual(["loose-1"]);
+    const transfer = dt();
+    await fireEvent.dragStart(screen.getByTestId("untracked-loose-1"), { dataTransfer: transfer });
+    await fireEvent.drop(screen.getByTestId("ticket-card-T-4F2A"), { dataTransfer: transfer });
+    await vi.waitFor(() => expect(onReload).toHaveBeenCalled());
+    expect(onReload.mock.calls[0]).toEqual([]);
   });
 
   test("clicking a card opens the ticket", async () => {
@@ -319,12 +333,42 @@ describe("KanbanBoard", () => {
     expect(screen.getByText("+5 more sessions")).toBeTruthy();
   });
 
+  // Done only grows, and a board button acts on the columns on screen, so
+  // with nothing saved it starts collapsed: its chip off, its cards undrawn.
+  test("the terminal column starts collapsed", () => {
+    const { container } = renderBoard();
+    expect(screen.getByText("Fix the webhook")).toBeTruthy();
+    expect(screen.queryByText("Old finished thing")).toBeNull();
+    const labels = [...container.querySelectorAll('[role="list"][aria-label]')].map((e) => e.getAttribute("aria-label"));
+    expect(labels).toEqual(["Open", "In Progress", "Waiting"]);
+    const done = screen.getAllByRole("button", { pressed: false }).find((c) => c.textContent?.trim() === "Done");
+    expect(done).toBeTruthy();
+  });
+
+  test("opening Done saves the explicit list, so it stays open", async () => {
+    const { onFilter } = renderBoard();
+    const done = screen
+      .getAllByRole("button", { pressed: false })
+      .find((c) => c.textContent?.trim() === "Done")!;
+    await fireEvent.click(done);
+    expect(onFilter).toHaveBeenCalledWith({ statuses: ["open", "in_progress", "waiting", "done"] });
+  });
+
   test("toggling a status chip emits the reduced filter", async () => {
     const { onFilter } = renderBoard();
     const chips = screen.getAllByRole("button", { pressed: true });
-    const done = chips.find((c) => c.textContent?.trim() === "Done")!;
+    const waiting = chips.find((c) => c.textContent?.trim() === "Waiting")!;
+    await fireEvent.click(waiting);
+    expect(onFilter).toHaveBeenCalledWith({ statuses: ["open", "in_progress"] });
+  });
+
+  test("collapsing Done again goes back to the default (empty) selection", async () => {
+    const { onFilter } = renderBoard({ filter: { statuses: ["open", "in_progress", "waiting", "done"] } });
+    const done = screen
+      .getAllByRole("button", { pressed: true })
+      .find((c) => c.textContent?.trim() === "Done")!;
     await fireEvent.click(done);
-    expect(onFilter).toHaveBeenCalledWith({ statuses: ["open", "in_progress", "waiting"] });
+    expect(onFilter).toHaveBeenCalledWith({ statuses: [] });
   });
 
   // Turning the last column off is a legitimate request — no cards at all —
@@ -343,7 +387,7 @@ describe("KanbanBoard", () => {
   });
 
   test("a status filter with every chip off draws no columns", () => {
-    renderBoard({ filter: { statuses: [" none"] } });
+    renderBoard({ filter: { statuses: ["\u0000none"] } });
     expect(screen.queryByText("Fix the webhook")).toBeNull();
     expect(screen.getByText(/No columns selected/)).toBeTruthy();
   });
@@ -353,19 +397,55 @@ describe("KanbanBoard", () => {
   // hide nothing and would mask a request that asked for the wrong person.
   test("picking an assignee emits it for the next request", async () => {
     const { onFilter } = renderBoard();
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    await fireEvent.change(select, { target: { value: "me" } });
-    expect(onFilter).toHaveBeenCalledWith({ assignee: "me" });
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    expect(onFilter).toHaveBeenCalledWith({ assignees: ["me"] });
+  });
+
+  // Several people at once: the pick grows, the old single key goes.
+  test("ticking a second person adds to the pick", async () => {
+    const { onFilter } = renderBoard({ filter: { assignee: "me" } });
+    expect(screen.getByTestId("assignee-filter-button").textContent).toContain("Assignee: Me");
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Other Person" }));
+    expect(onFilter).toHaveBeenCalledWith({ assignees: ["me", "u-2"] });
+  });
+
+  test("Everyone clears the pick", async () => {
+    const { onFilter } = renderBoard({ filter: { assignees: ["u-2", "none"], view_mode: "card" } });
+    expect(screen.getByTestId("assignee-filter-button").textContent).toContain("Assignee: Other, Unassigned");
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    await fireEvent.click(screen.getByRole("checkbox", { name: /Everyone/ }));
+    expect(onFilter).toHaveBeenCalledWith({ view_mode: "card" });
   });
 
   // Everyone the project names stays listed even while their cards are
   // filtered out — otherwise the dropdown could not be reset from itself.
-  test("the assignee list survives a filter that excluded those people", () => {
+  test("the assignee list survives a filter that excluded those people", async () => {
     renderBoard({
-      filter: { assignee: "u-me" },
+      filter: { assignees: ["u-me"] },
       board: { ...board, tickets: [board.tickets[0]] },
     });
-    expect(screen.getByRole("option", { name: "Assignee: Other Person" })).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("assignee-filter-button"));
+    expect(screen.getByRole("checkbox", { name: "Other Person" })).toBeTruthy();
+  });
+
+  // A board button sends what the toolbar shows: several picks as the
+  // board's own comma list.
+  test("a board button sends the ticked assignees as a comma list", async () => {
+    renderBoard({
+      filter: { assignees: ["me", "none"] },
+      board: {
+        ...board,
+        config: {
+          ...board.config,
+          integrations: { buttons: [{ id: "b1", label: "Sync", url: "https://x.test/hook", placement: "board" }] },
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+    const sent = calls.find((c) => c.url.includes("/board-actions/b1"));
+    expect((sent?.body as { assignee: string }).assignee).toBe("me,none");
   });
 
   // Statuses are per project, so a renamed board must draw ITS columns —
@@ -445,15 +525,33 @@ describe("KanbanBoard", () => {
     expect(call!.body).toEqual({ assignee: "me", statuses: ["open"] });
   });
 
-  test("every chip off sends the empty-selection sentinel, not the whole board", async () => {
-    // " none" is how the board spells "no columns selected"; an empty list
-    // means "all of them" on the wire, which would act on tickets the
-    // clicker cannot even see.
-    renderBoard({ board: withButtons, filter: { statuses: [" none"] } });
+  // The first Sync of a fresh board must not reconcile every finished
+  // ticket: a collapsed Done is not one of the statuses sent.
+  test("with nothing saved, a click sends every column but the collapsed Done", async () => {
+    renderBoard({ board: withButtons });
     await fireEvent.click(screen.getByText("Sync from Notion"));
 
     const call = calls.find((c) => c.url.includes("/board-actions/"));
-    expect(call!.body).toEqual({ assignee: "", statuses: [" none"] });
+    expect(call!.body).toEqual({ assignee: "", statuses: ["open", "in_progress", "waiting"] });
+  });
+
+  test("an opened Done is sent like any other column", async () => {
+    renderBoard({ board: withButtons, filter: { statuses: ["waiting", "done"] } });
+    await fireEvent.click(screen.getByText("Sync from Notion"));
+
+    const call = calls.find((c) => c.url.includes("/board-actions/"));
+    expect(call!.body).toEqual({ assignee: "", statuses: ["waiting", "done"] });
+  });
+
+  test("every chip off sends the empty-selection sentinel, not the whole board", async () => {
+    // "\u0000none" is how the board spells "no columns selected"; an empty list
+    // means "all of them" on the wire, which would act on tickets the
+    // clicker cannot even see.
+    renderBoard({ board: withButtons, filter: { statuses: ["\u0000none"] } });
+    await fireEvent.click(screen.getByText("Sync from Notion"));
+
+    const call = calls.find((c) => c.url.includes("/board-actions/"));
+    expect(call!.body).toEqual({ assignee: "", statuses: ["\u0000none"] });
   });
 });
 
@@ -496,11 +594,22 @@ describe("KanbanBoard — search", () => {
   });
 
   test("clicking the chip clears the search and brings the board back", async () => {
-    renderBoard();
+    renderBoard({ filter: { statuses: ["open", "in_progress", "waiting", "done"] } });
     await type("webhook");
     await fireEvent.click(screen.getByTestId("board-search-chip"));
     expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
     expect(screen.queryByTestId("board-search-chip")).toBeNull();
+  });
+
+  // Done starts collapsed, but a search still finds what is in it — and the
+  // column closes again once the search is cleared.
+  test("a search reaches the collapsed Done column", async () => {
+    renderBoard();
+    expect(screen.queryByTestId("ticket-card-T-99ZZ")).toBeNull();
+    await type("old finished");
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("board-search-chip"));
+    expect(screen.queryByTestId("ticket-card-T-99ZZ")).toBeNull();
   });
 
   // A local search must not become a saved view: it is a moment, not a

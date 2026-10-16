@@ -540,11 +540,18 @@ func (p *CodexParser) parse(line string) (AgentEvent, error) {
 
 	case "error":
 		log.Debug().Str("message", raw.Message).Msg("codex.parse: error event")
-		return AgentEvent{
+		ev := AgentEvent{
 			Type:     Error,
 			ErrorMsg: raw.Message,
 			Raw:      trimmed,
-		}, nil
+		}
+		// codex reports its own stream retries ("Reconnecting... 2/5")
+		// as top-level errors and then carries on or ends in turn.failed;
+		// only the terminal frame speaks for the account.
+		if isCodexReconnect(raw.Message) {
+			return ev, nil
+		}
+		return classifyErr(ev, raw.Message), nil
 
 	case "turn.failed":
 		// A failed turn carries its detail nested under error.message
@@ -555,11 +562,11 @@ func (p *CodexParser) parse(line string) (AgentEvent, error) {
 			msg = raw.Error.Message
 		}
 		log.Debug().Str("message", msg).Msg("codex.parse: turn.failed event")
-		return AgentEvent{
+		return classifyErr(AgentEvent{
 			Type:     Error,
 			ErrorMsg: msg,
 			Raw:      trimmed,
-		}, nil
+		}, msg), nil
 	}
 
 	// Known control frames carry no user-facing signal — skip them (they
@@ -628,4 +635,12 @@ func diffTail(prev, cur string) string {
 		return cur[len(prev):]
 	}
 	return cur
+}
+
+// isCodexReconnect reports whether a top-level codex error is one of its
+// own retry notices ("Reconnecting... 2/5 (stream disconnected before
+// completion)"), which say nothing final about the account.
+func isCodexReconnect(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "reconnecting") || strings.Contains(m, "retrying")
 }

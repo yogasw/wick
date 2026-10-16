@@ -16,6 +16,7 @@ package ticket
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -214,6 +215,13 @@ var uuidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // somebody reserved it by hand.
 var generatedIDRe = regexp.MustCompile(`^T-[` + idAlphabet + `]{4}$`)
 
+// ValidID reports whether id can name a ticket (or project) on disk: one
+// path segment — no separator, no "..", no leading dot, no control
+// character. Ids come from URLs and tool input, so every read through
+// Load / Exists checks it before joining id into a path; an id that fails
+// is simply not found.
+func ValidID(id string) bool { return project.ValidID(id) }
+
 // NormalizeID canonicalises a caller-supplied ticket id.
 //
 // Any id in the safe charset is kept verbatim — "TIK-2026-001" stays what
@@ -339,6 +347,9 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 func Load(layout config.Layout, projectID, ticketID string) (Ticket, error) {
 	if projectID == "" || ticketID == "" {
 		return Ticket{}, fmt.Errorf("project id and ticket id are required")
+	}
+	if !ValidID(projectID) || !ValidID(ticketID) {
+		return Ticket{}, fmt.Errorf("invalid ticket id %q", ticketID)
 	}
 	var tk Ticket
 	if err := storage.ReadJSON(layout.TicketFile(projectID, ticketID), &tk); err != nil {
@@ -535,10 +546,31 @@ func List(layout config.Layout, projectID string) ([]Ticket, error) {
 
 // Exists reports whether a ticket is on disk.
 func Exists(layout config.Layout, projectID, ticketID string) bool {
-	if projectID == "" || ticketID == "" {
+	if !ValidID(projectID) || !ValidID(ticketID) {
 		return false
 	}
 	return storage.PathExists(layout.TicketFile(projectID, ticketID))
+}
+
+// ErrSessionInOtherTicket is returned by AttachSession when the session is
+// already on a different ticket. It names that ticket so the caller can say
+// where the session is, and nothing has been changed when it comes back.
+// Match it with errors.As.
+type ErrSessionInOtherTicket struct {
+	SessionID string
+	TicketID  string
+	Title     string
+}
+
+func (e *ErrSessionInOtherTicket) Error() string {
+	return fmt.Sprintf("session %s is already on ticket %s (%q)", e.SessionID, e.TicketID, e.Title)
+}
+
+// IsSessionInOtherTicket reports whether err is (or wraps) an
+// ErrSessionInOtherTicket.
+func IsSessionInOtherTicket(err error) bool {
+	var e *ErrSessionInOtherTicket
+	return errors.As(err, &e)
 }
 
 // AttachSession adds a session to a ticket and brings its notes along.
@@ -547,10 +579,22 @@ func Exists(layout config.Layout, projectID, ticketID string) bool {
 // a session is not an edit to the ticket's own state and should not reset
 // its staleness.
 //
-// When the session was on another ticket it is detached from that one
-// first, so a session is never on two tickets at once — that is what makes
-// dragging a session between cards a move rather than a copy.
+// A session that is already on another ticket is refused with
+// *ErrSessionInOtherTicket and left where it is: taking a session off a
+// ticket is a move, and a move has to be asked for (AttachSessionMove).
 func AttachSession(layout config.Layout, projectID, ticketID, sessionID string) error {
+	return attachSession(layout, projectID, ticketID, sessionID, false)
+}
+
+// AttachSessionMove is AttachSession that also takes the session off the
+// ticket it was on, carrying its notes across, so a session is never on two
+// tickets at once — that is what makes dragging a session between cards a
+// move rather than a copy.
+func AttachSessionMove(layout config.Layout, projectID, ticketID, sessionID string) error {
+	return attachSession(layout, projectID, ticketID, sessionID, true)
+}
+
+func attachSession(layout config.Layout, projectID, ticketID, sessionID string, move bool) error {
 	if sessionID == "" {
 		return fmt.Errorf("session id is required")
 	}
@@ -568,6 +612,9 @@ func AttachSession(layout config.Layout, projectID, ticketID, sessionID string) 
 	// before writing, so its notes can be carried across in one step.
 	from := ""
 	if prev, ok := FindBySession(layout, projectID, sessionID); ok {
+		if !move {
+			return &ErrSessionInOtherTicket{SessionID: sessionID, TicketID: prev.ID, Title: prev.Title}
+		}
 		from = prev.ID
 		if derr := detachOnly(layout, projectID, prev.ID, sessionID); derr != nil {
 			return derr

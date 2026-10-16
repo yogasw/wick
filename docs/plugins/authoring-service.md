@@ -172,11 +172,25 @@ request:
 req, err := env.CallbackRequest(ctx, http.MethodGet, "/x/-/api/whoami", nil)
 ```
 
-The callback API lives under `/x/-/api/`. Today it has one endpoint,
-`GET /x/-/api/whoami`, which answers `{"plugin": "<key>", "scopes": [...]}`
-and needs no scope. `CallbackScopes` lists the scopes the plugin's token
-carries for endpoints added later; a call to an endpoint whose scope is not
-listed gets 403.
+The callback API lives under `/x/-/api/` and is the HTTP door of the
+[Host API](./host-api.md): users, sessions, tickets, config, other
+connectors' declared ops and more, each under a scope the manifest declares
+in `host_scopes` (`wickplugin.DeclareHostAccess` in `main`). wick also sets
+`WICK_HOST_API_URL`, a private address for the same door; prefer it over
+`WICK_BASE_URL`. From Go, `host.Default()` uses both env values for you:
+
+```go
+h, err := host.Default()
+users, err := h.ListUsers(r.Context(), &hostpb.ListUsersRequest{Q: "ad"})
+```
+
+`GET /x/-/api/whoami` still answers `{"plugin": "<key>", "scopes": [...]}`
+(the original shape, now with the Host API fields beside it).
+`CallbackScopes` is the older, pre-Host-API list; new plugins declare
+`host_scopes` instead. User-level calls run as the person behind the route —
+the signed-in user on a `Session` route, the access token's owner on a
+`Token` route, the plugin's `wick_pat` on a `Public` route or in background
+work. Pass `r.Context()` so the request's call id goes along.
 
 The callback token lives only in memory and is replaced on every start. An
 admin can revoke it from the **Callback to wick** card; while revoked the

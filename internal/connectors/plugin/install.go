@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
@@ -34,6 +35,11 @@ func InstallFromDir(srcDir, destRoot string) error {
 	// could carry a key the build never checked, and key becomes the install
 	// dir name. Rejects empty, too-long, and path-traversal/illegal-char keys.
 	if err := wickplugin.ValidateKey(key); err != nil {
+		return err
+	}
+	// Same module checks `--dump-manifest` runs, for a manifest that never
+	// went through it (e.g. an op VisibleWhen naming an unknown field).
+	if err := connector.ValidateModule(env.Module); err != nil {
 		return err
 	}
 	entry := env.Entry

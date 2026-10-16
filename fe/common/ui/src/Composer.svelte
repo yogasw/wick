@@ -15,6 +15,8 @@
   import CapabilityChips from "./CapabilityChips.svelte";
   import CapabilityModal from "./CapabilityModal.svelte";
   import ProviderIcon from "./ProviderIcon.svelte";
+  import UsageMiniRings from "./usage/UsageMiniRings.svelte";
+  import { usageStore, loadUsage } from "./usage/base/index.js";
   import { modelListMeta, describeModelListMeta, type ModelListMeta } from "./model-list-meta.js";
   import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption, ComposerMentionAgent } from "./composer-types.js";
   import { agentMentionRows, fileMentionRows } from "./mention-menu.js";
@@ -22,7 +24,12 @@
 
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
+    /** Esc in the textarea while no menu of the composer is open. Return
+        true when it was used (e.g. cancelling a reply) so it goes no further. */
+    onEscape?: () => boolean;
     disabled?: boolean;
+    /** Locks the textarea too (not just Send) — a chat the viewer can only read. */
+    readOnly?: boolean;
     placeholder?: string;
     submitLabel?: string;
     /** Initial textarea height in rows (grows with content up to a cap). 1 = the
@@ -92,7 +99,9 @@
 
   let {
     onSend,
+    onEscape,
     disabled = false,
+    readOnly = false,
     placeholder = "Message…",
     submitLabel,
     minRows = 1,
@@ -352,7 +361,7 @@
   }
 
   function selectItem(item: MenuItem | undefined) {
-    if (!menuKind || !item) return;
+    if (!menuKind || !item || item.disabled) return;
     const prefix = text.slice(0, menuTriggerPos);
     const suffix = text.slice(menuTextEnd);
     if (item.run) {
@@ -416,7 +425,7 @@
     return () => window.removeEventListener("keydown", onGlobalKeydown);
   });
 
-  const canSend = $derived(!disabled && (!requireContent || text.trim().length > 0 || files.length > 0));
+  const canSend = $derived(!disabled && !readOnly && (!requireContent || text.trim().length > 0 || files.length > 0));
 
   const minHeightPx = $derived(minRows > 1 ? minRows * 22 + 16 : 43);
   const MAX_HEIGHT = 240;
@@ -584,6 +593,12 @@
 
   function handleKeyDown(e: KeyboardEvent) {
     if (handleMenuKeys(e)) return;
+    // A menu owns Esc while it is open (the + menu closes on its own window
+    // listener); only a bare Esc reaches the host.
+    if (e.key === "Escape" && !e.defaultPrevented && !plusOpen && !holdOpen && onEscape?.()) {
+      e.preventDefault();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       doSend();
@@ -681,6 +696,17 @@
   export function openProject() {
     if (project) openProjectPicker();
   }
+  // Imperative start for the parent (e.g. "Ask Captain" → "@captain "):
+  // puts `prefix` in front of the draft unless it already starts with it,
+  // and focuses the box with the caret at the end.
+  export function prefill(prefix: string) {
+    if (!text.startsWith(prefix)) text = prefix + text;
+    queueMicrotask(() => {
+      if (!textareaEl) return;
+      textareaEl.focus();
+      textareaEl.setSelectionRange(text.length, text.length);
+    });
+  }
 
   /* ── screenshot + image editor ──────────────────────────────────────── */
   const canScreenshot = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia;
@@ -751,6 +777,31 @@
   }
   function closeTypeDrill() {
     typeDrillKey = "";
+  }
+  // Usage at a glance on instance rows: refresh the shared store for the
+  // drilled type's instances. loadUsage serves fresh entries without a
+  // request and shares in-flight ones, so opening the menu stays instant.
+  $effect(() => {
+    const base = provider?.usageBase;
+    if (base === undefined || !typeDrillKey) return;
+    for (const o of providerGroups.find((g) => g.type === typeDrillKey)?.opts ?? []) {
+      void loadUsage(base, splitModelPin(o.value).key);
+    }
+  });
+  // A single-instance type never shows the instance list (its type row
+  // applies or drills straight to models), so its glance rides on the type
+  // row and the model-drill header instead. Refresh those the same way.
+  $effect(() => {
+    const base = provider?.usageBase;
+    if (base === undefined || plusView !== "provider") return;
+    for (const g of providerGroups) {
+      if (g.opts.length === 1) void loadUsage(base, splitModelPin(g.opts[0].value).key);
+    }
+  });
+  // soleInstance: the drilled option when it is the only instance of its
+  // type — the case where the model drill is the only place to show usage.
+  function soleInstance(o: ComposerSelectOption): boolean {
+    return providerGroups.find((g) => g.type === rawType(o.value))?.opts.length === 1;
   }
 
   // Lazy live-model loading for the drilled provider. `modelCache` holds the
@@ -1179,7 +1230,9 @@
               type="button"
               role="option"
               aria-selected={i === menuIndex}
+              aria-disabled={item.disabled ? "true" : undefined}
               class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs transition-colors
+                {item.disabled ? 'cursor-not-allowed opacity-50' : ''}
                 {i === menuIndex
                   ? 'bg-green-500/10 text-slate-800 dark:text-white-100'
                   : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
@@ -1246,6 +1299,7 @@
     style="overflow-y: auto; height: {minHeightPx}px;"
     rows={minRows}
     {placeholder}
+    disabled={readOnly}
     bind:this={textareaEl}
     bind:value={text}
     onkeydown={handleKeyDown}
@@ -1266,7 +1320,7 @@
   <!-- Toolbar: everything lives in the + menu (attach, context, commands,
        provider/project/preset) except the + button and the notification bell.
        Right side is just the send button. -->
-  <div bind:this={plusEl} class="relative flex items-center gap-2 rounded-b-2xl border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
+  <div bind:this={plusEl} inert={readOnly} data-testid="composer-toolbar" class="relative flex items-center gap-2 rounded-b-2xl border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2 {readOnly ? 'opacity-60' : ''}">
     <!-- + hub menu -->
     <div class="shrink-0">
       <button
@@ -1399,6 +1453,12 @@
                 placeholder={inSet ? `Search ${inSet.label}…` : `Search ${drill.label} models…`}
                 class="min-w-0 flex-1 bg-transparent text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
               />
+              <!-- Usage at a glance for a single-instance type: it skips the
+                   instance list (where multi-instance types show it), so the
+                   drill header carries it instead. -->
+              {#if provider?.usageBase !== undefined && soleInstance(drill)}
+                <UsageMiniRings glance={$usageStore[splitModelPin(drill.value).key]?.glance} />
+              {/if}
               {#if loading}
                 <svg class="shrink-0 h-3.5 w-3.5 animate-spin text-black-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/></svg>
               {:else if provider?.loadModels}
@@ -1499,6 +1559,9 @@
                   <span class="truncate">{opt.label}</span>
                   {#if opt.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{opt.badge}</span>{/if}
                 </span>
+                {#if provider.usageBase !== undefined}
+                  <UsageMiniRings glance={$usageStore[splitModelPin(opt.value).key]?.glance} />
+                {/if}
                 {#if hasModelDrill(opt)}
                   <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 {:else if isSel}
@@ -1535,6 +1598,9 @@
                   <span class="truncate">{single ? single.label : g.type}</span>
                   {#if single?.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{single.badge}</span>{/if}
                 </span>
+                {#if single && provider.usageBase !== undefined}
+                  <UsageMiniRings glance={$usageStore[splitModelPin(single.value).key]?.glance} />
+                {/if}
                 {#if nested}
                   <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 {:else if single && single.value === selKey}
