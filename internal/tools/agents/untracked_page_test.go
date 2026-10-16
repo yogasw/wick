@@ -227,13 +227,13 @@ func TestSessionRowLifecycleMatchesOrder(t *testing.T) {
 		"parent": {Lifecycle: "idle", SubAgent: "working"},
 		"plain":  {Lifecycle: "idle"},
 	}
-	if got := sessionRow("parent", live, lc, nil).Lifecycle; got != "subagent" {
+	if got := sessionRow("parent", live, lc, nil, nil).Lifecycle; got != "subagent" {
 		t.Fatalf("parent lifecycle = %q, want subagent", got)
 	}
-	if got := sessionRow("plain", live, lc, nil).Lifecycle; got != "idle" {
+	if got := sessionRow("plain", live, lc, nil, nil).Lifecycle; got != "idle" {
 		t.Fatalf("plain lifecycle = %q, want idle", got)
 	}
-	if got := sessionRow("gone", live, lc, nil).Lifecycle; got != "" {
+	if got := sessionRow("gone", live, lc, nil, nil).Lifecycle; got != "" {
 		t.Fatalf("unknown lifecycle = %q, want empty", got)
 	}
 }

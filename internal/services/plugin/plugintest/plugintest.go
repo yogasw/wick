@@ -33,7 +33,9 @@ func StartRepeater(t *testing.T) *serviceplugin.Host {
 	cmd.Dir = filepath.Join(root, "plugins")
 	// plugins/ requires a released wick; only the repo go.work points it at
 	// this checkout, so force it even when the caller runs with GOWORK=off.
-	cmd.Env = append(os.Environ(), "GOWORK="+filepath.Join(root, "go.work"))
+	// A -mod=mod in GOFLAGS (go env -w on the host) is refused in
+	// workspace mode, so the build says readonly explicitly.
+	cmd.Env = append(os.Environ(), "GOWORK="+filepath.Join(root, "go.work"), "GOFLAGS=-mod=readonly")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build %s: %v\n%s", RepeaterKey, err, out)
 	}

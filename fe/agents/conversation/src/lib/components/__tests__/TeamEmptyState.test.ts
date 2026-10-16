@@ -36,6 +36,20 @@ describe("TeamEmptyState", () => {
     render(TeamEmptyState, { props: { onCreate: vi.fn(), onRemote: vi.fn(), candidates: [c], onMakeCaptain } });
     expect(screen.getByRole("heading", { name: "Your Team needs a Captain" })).toBeDefined();
     await fireEvent.click(screen.getByRole("button", { name: /Helper/ }));
-    expect(onMakeCaptain).toHaveBeenCalledWith(c);
+    expect(onMakeCaptain).toHaveBeenCalledWith(c, true);
+  });
+
+  test("Give it your access is ticked by default; unticked passes false", async () => {
+    const onMakeCaptain = vi.fn();
+    const c = { id: "a1", name: "Helper", handle: "helper" };
+    render(TeamEmptyState, { props: { onCreate: vi.fn(), onRemote: vi.fn(), candidates: [c], onMakeCaptain } });
+    const give = screen.getByTestId("team-empty-give-access");
+    expect(give.textContent).toContain("Give it your access");
+    expect(give.textContent).toContain("Run as: Owner · Connector access: Same as me.");
+    const box = give.querySelector("input") as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    await fireEvent.click(box);
+    await fireEvent.click(screen.getByRole("button", { name: /Helper/ }));
+    expect(onMakeCaptain).toHaveBeenCalledWith(c, false);
   });
 });

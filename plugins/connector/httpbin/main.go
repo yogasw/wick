@@ -12,5 +12,7 @@ import (
 )
 
 func main() {
+	// Host API scopes go into plugin.json (host_scopes) via --dump-manifest.
+	wickplugin.DeclareHostAccess(hostScopes, nil)
 	wickplugin.Serve(Module())
 }

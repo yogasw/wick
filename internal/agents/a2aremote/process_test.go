@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/yogasw/wick/internal/agents/a2aremote/a2aremotetest"
 	"github.com/yogasw/wick/internal/agents/provider"
 )
@@ -158,5 +160,106 @@ func TestTurnLimits(t *testing.T) {
 	}
 	if text, res := h.say("still alive"); res.IsError || text != "echo: still alive" {
 		t.Fatalf("after errors: %q %+v", text, res)
+	}
+}
+
+// A remote task that ends failed, rejected, canceled or auth_required is
+// an error in the chat, and the session state keeps the state and the
+// remote's own message, so a team task ends the same way.
+func TestTurnEndedStatesKeepReason(t *testing.T) {
+	for _, streaming := range []bool{true, false} {
+		srv := a2aremotetest.New("Moody")
+		srv.Streaming = streaming
+		h := spawn(t, srv, PlainAuth{}, nil)
+		for _, c := range []struct {
+			say    string
+			state  a2a.TaskState
+			reason string
+		}{
+			{"fail", a2a.TaskStateFailed, "boom"},
+			{"reject", a2a.TaskStateRejected, "not my job"},
+			{"cancel", a2a.TaskStateCanceled, "stopped by its owner"},
+			{"auth", a2a.TaskStateAuthRequired, "sign in first"},
+		} {
+			_, res := h.say(c.say)
+			if !res.IsError || res.Result != "Remote agent: "+c.reason {
+				t.Fatalf("streaming=%v %s: %+v", streaming, c.say, res)
+			}
+			st := LoadState(h.dir)
+			if got, ok := st.EndedState(); !ok || got != c.state || st.Reason != c.reason || st.InputRequired || st.TaskID != "" {
+				t.Fatalf("streaming=%v %s: state %+v", streaming, c.say, st)
+			}
+		}
+		if text, res := h.say("hello"); res.IsError || text != "echo: hello" {
+			t.Fatalf("streaming=%v after: %q %+v", streaming, text, res)
+		}
+		if st := LoadState(h.dir); st.Reason != "" {
+			t.Fatalf("streaming=%v reason kept after completion: %+v", streaming, st)
+		}
+		if _, ok := LoadState(h.dir).EndedState(); ok {
+			t.Fatalf("streaming=%v completed reads as ended", streaming)
+		}
+		srv.Close()
+	}
+}
+
+// auth_required and input_required end the turn even when the remote
+// holds the stream open after them, as an a2a-go server does for a state
+// that is not final: the turn must not wait for the call's timeout.
+func TestTurnEndsOnHeldStream(t *testing.T) {
+	srv := a2aremotetest.New("Holder")
+	defer srv.Close()
+	h := spawn(t, srv, PlainAuth{}, func(c *Config) { c.TimeoutSec = 5 })
+	began := time.Now()
+	if _, res := h.say("hold auth"); !res.IsError || res.Result != "Remote agent: sign in first" {
+		t.Fatalf("auth: %+v", res)
+	}
+	if got, ok := LoadState(h.dir).EndedState(); !ok || got != a2a.TaskStateAuthRequired {
+		t.Fatalf("auth state: %+v", LoadState(h.dir))
+	}
+	if text, res := h.say("hold ask"); res.IsError || text != "Which environment?" {
+		t.Fatalf("ask: %q %+v", text, res)
+	}
+	if st := LoadState(h.dir); !st.InputRequired || st.TaskID == "" {
+		t.Fatalf("ask state: %+v", st)
+	}
+	if took := time.Since(began); took > 3*time.Second {
+		t.Fatalf("turns waited for the held stream: %v", took)
+	}
+}
+
+// A remote's reason is cut and stripped of control characters before
+// the chat, the session state or a team task sees it.
+func TestTurnReasonBounded(t *testing.T) {
+	srv := a2aremotetest.New("Loud")
+	defer srv.Close()
+	h := spawn(t, srv, PlainAuth{}, nil)
+	_, res := h.say("loud 8000")
+	st := LoadState(h.dir)
+	if !res.IsError || res.Result != "Remote agent: "+st.Reason {
+		t.Fatalf("result %q vs reason %q", res.Result, st.Reason)
+	}
+	if n := len([]rune(st.Reason)); n != maxReason+1 || !strings.HasSuffix(st.Reason, "…") {
+		t.Fatalf("reason has %d runes", n)
+	}
+	if strings.ContainsAny(st.Reason, "\x1b\a") {
+		t.Fatal("control characters kept")
+	}
+}
+
+func TestCleanReason(t *testing.T) {
+	for in, want := range map[string]string{
+		"  plain  ":          "plain",
+		"a\x1b[0mb\r\x00c":   "a[0mbc",
+		"line one\n\tline 2": "line one\n\tline 2",
+		"":                   "",
+	} {
+		if got := CleanReason(in); got != want {
+			t.Fatalf("CleanReason(%q) = %q, want %q", in, got, want)
+		}
+	}
+	long := strings.Repeat("é", maxReason+5)
+	if got := CleanReason(long); got != strings.Repeat("é", maxReason)+"…" {
+		t.Fatalf("long: %d runes", len([]rune(got)))
 	}
 }

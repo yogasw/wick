@@ -26,6 +26,17 @@ const (
 	// knob nobody has written yet must not take connectors away from an admin.
 	KeyAdminSeeAllConnectors = "admin_see_all_connectors"
 
+	// KeyAdminSeeAllProviderInstances gates provider instances: which ones
+	// an admin may pick for a project/session/channel/workflow (access
+	// tags) and which ones they look after in the Providers menu (manage
+	// tags). Default ON for the same reason as connectors — before the
+	// knob existed an admin walked past both tags unconditionally.
+	KeyAdminSeeAllProviderInstances = "admin_see_all_provider_instances"
+
+	// KeyAdminSeeAllWorkflows gates the workflow list. Default OFF: an admin
+	// lists the workflows they created or own, like everyone else.
+	KeyAdminSeeAllWorkflows = "admin_see_all_workflows"
+
 	// legacyKeyAdminSeeAll is the pre-split name. Still read as a fallback so
 	// an install that had it on keeps its session visibility after upgrading.
 	legacyKeyAdminSeeAll = "admin_see_all"
@@ -58,4 +69,24 @@ func AdminSeeAllConnectors(r ConfigReader) bool {
 		return true
 	}
 	return r.GetOwned(ConfigOwner, KeyAdminSeeAllConnectors) != "false"
+}
+
+// AdminSeeAllProviderInstances reports whether the admin role alone may use
+// and manage every provider instance. On unless explicitly turned off (see
+// KeyAdminSeeAllProviderInstances); off, an admin follows the provider
+// access and manage tags like everyone else.
+func AdminSeeAllProviderInstances(r ConfigReader) bool {
+	if r == nil {
+		return true
+	}
+	return r.GetOwned(ConfigOwner, KeyAdminSeeAllProviderInstances) != "false"
+}
+
+// AdminSeeAllWorkflows reports whether an admin lists every workflow.
+// Default off.
+func AdminSeeAllWorkflows(r ConfigReader) bool {
+	if r == nil {
+		return false
+	}
+	return r.GetOwned(ConfigOwner, KeyAdminSeeAllWorkflows) == "true"
 }

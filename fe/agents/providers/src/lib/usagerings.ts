@@ -3,6 +3,7 @@
    = the rolling 7-day window. Kept out of the component so the maths is
    unit-testable without rendering. */
 
+import { clock24 } from "@wick-fe/common-ui";
 import { fmtResetsIn, usageLabel, type UsageWindow } from "./logintty.js";
 
 /* connectionKey is the join key between a connection row and the card it
@@ -104,4 +105,42 @@ export function cacheHint(ageS: number, nextS: number): { short: string; full: s
       ? `re-check available in ${fmtSecsShort(nextS)}`
       : "press Re-check for a new reading";
   return { short, full: `${taken}; ${next}` };
+}
+
+/* staleNotice explains a reading that is still on screen although the
+   latest probe for it FAILED: the numbers are cached, not current.
+
+   `lastError` is the server's raw failure (empty when the latest probe
+   succeeded — then this returns null and nothing is labelled), and
+   `rateLimited` marks it a 429. `nextS` is when a re-check would be
+   accepted, rendered as a local clock time.
+
+   `text` is the warning line, `title` the raw error for the tooltip. */
+export function staleNotice(
+  ageS: number,
+  nextS: number,
+  lastError: string,
+  rateLimited: boolean,
+  nowMs: number,
+): { text: string; title: string } | null {
+  const raw = (lastError ?? "").trim();
+  if (!raw) return null;
+  const age = Number.isFinite(ageS) && ageS >= 2 ? `${fmtSecsShort(ageS)} ago` : "just now";
+  const head = `Cached reading from ${age}`;
+  if (rateLimited) {
+    const at = Number.isFinite(nextS) && nextS > 0 ? clock24(new Date(nowMs + nextS * 1000)) : "";
+    return {
+      text: `${head} — last check rate-limited (429)${at ? `, retry after ${at}` : ""}.`,
+      title: raw,
+    };
+  }
+  return { text: `${head} — last check failed: ${shortError(raw)}.`, title: raw };
+}
+
+/* shortError trims a probe failure to something that fits one line:
+   the endpoint prefix every message shares goes, and long text is cut. */
+function shortError(raw: string): string {
+  let s = raw.replace(/^usage endpoint:\s*/i, "").replace(/[.\s]+$/, "");
+  if (s.length > 80) s = `${s.slice(0, 79)}…`;
+  return s;
 }

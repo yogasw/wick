@@ -14,6 +14,7 @@ import type { Writable } from "svelte/store";
 import type {
   AgentEvent,
   Attachment,
+  ReplyTo,
   CardPostback,
   CardState,
   ConversationTurn,
@@ -88,7 +89,11 @@ export interface ThreadStore {
   /* Insert an older history page (infinite scroll up) before the turns
      already loaded, dropping any turn whose id is already present. */
   prependHistory(older: ConversationTurn[]): void;
-  appendUserTurn(text: string, attachments?: Attachment[]): void;
+  /** Returns the optimistic turn's local id (see renameTurn). */
+  appendUserTurn(text: string, attachments?: Attachment[], replyTo?: ReplyTo): string;
+  /** Gives a turn the id the server stored it under (POST /send answers
+      with it), so the bubble can be replied to before any reload. */
+  renameTurn(fromId: string, toId: string): void;
   handleEvent(ev: AgentEvent): void;
   /* Remove a stuck tool card from the live turn (a run with no runId to
      cancel — an orphan from before per-run cancel, or one whose finish event
@@ -104,6 +109,12 @@ export interface ThreadStore {
 }
 
 let _userTurnCounter = 0;
+
+/** A turn this store made client-side (streamed, echoed, error/warning
+    notes) that the persisted history has not given an id of its own. */
+export function isLocalTurnId(id: string): boolean {
+  return /^(live|error|warning|local-user|postback)-/.test(id);
+}
 
 export function createThreadStore(): ThreadStore {
   const turns = writable<ConversationTurn[]>([]);
@@ -560,7 +571,12 @@ export function createThreadStore(): ThreadStore {
         }
         const runId = d.run_id ?? "";
         if (!runId) break;
-        const lt = ensureLive();
+        // Never open a live turn here: a run with no turn in flight (a watch
+        // or schedule polling a connector under this session) has no tool
+        // card to decorate, and ensureLive() would light "thinking…" + Stop
+        // for a session that is idle.
+        const lt = get(live);
+        if (lt === null) break;
         if (d.running) {
           // Bind to the last running tool block that doesn't have a run id yet.
           for (let i = lt.blocks.length - 1; i >= 0; i--) {
@@ -636,7 +652,7 @@ export function createThreadStore(): ThreadStore {
     }
   }
 
-  function appendUserTurn(text: string, attachments?: Attachment[]): void {
+  function appendUserTurn(text: string, attachments?: Attachment[], replyTo?: ReplyTo): string {
     const id = ++_userTurnCounter;
     const turn: ConversationTurn = {
       turn_id: `local-user-${id}`,
@@ -650,8 +666,19 @@ export function createThreadStore(): ThreadStore {
       has_trace: false,
       events: [],
       attachments: attachments ?? [],
+      ...(replyTo ? { reply_to: replyTo } : {}),
     };
     turns.update((ts) => [...ts, turn]);
+    return turn.turn_id;
+  }
+
+  function renameTurn(fromId: string, toId: string): void {
+    if (!fromId || !toId || fromId === toId) return;
+    turns.update((ts) => {
+      // The server's copy may already be here (a history reload won the race).
+      if (ts.some((t) => t.turn_id === toId)) return ts.filter((t) => t.turn_id !== fromId);
+      return ts.map((t) => (t.turn_id === fromId ? { ...t, turn_id: toId } : t));
+    });
   }
 
   return {
@@ -691,12 +718,7 @@ export function createThreadStore(): ThreadStore {
       // a persisted twin has no inline events but its local twin does, graft the
       // local events onto it.
       turns.update((cur) => {
-        const isLocal = (t: ConversationTurn) =>
-          t.turn_id.startsWith("live-") ||
-          t.turn_id.startsWith("error-") ||
-          t.turn_id.startsWith("warning-") ||
-          t.turn_id.startsWith("local-user-") ||
-          t.turn_id.startsWith("postback-");
+        const isLocal = (t: ConversationTurn) => isLocalTurnId(t.turn_id);
 
         // Newlines are normalised out of the key. A message sent WITH a file
         // goes as multipart, and form encoding rewrites every newline to
@@ -761,6 +783,7 @@ export function createThreadStore(): ThreadStore {
       });
     },
     appendUserTurn,
+    renameTurn,
     handleEvent,
     handleKilledLocally() {
       // Final like a server killed edge: a late frame must not relight it.

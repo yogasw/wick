@@ -349,3 +349,14 @@ describe("ConversationHeader", () => {
     });
   });
 });
+
+describe("ConversationHeader - waiting on teammates", () => {
+  test("chip reads working · waiting on N teammates", () => {
+    const { container } = render(ConversationHeader, { props: { ...baseProps, teammatesBusy: 3 } });
+    expect(container.querySelector("[data-teammate-badge]")?.textContent).toContain("working · waiting on 3 teammates");
+  });
+  test("hidden with none", () => {
+    const { container } = render(ConversationHeader, { props: baseProps });
+    expect(container.querySelector("[data-teammate-badge]")).toBeNull();
+  });
+});

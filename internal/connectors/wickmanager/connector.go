@@ -142,7 +142,10 @@ func Operations(deps Deps) []connector.Category {
 			connectorIDInput{}, h.connectorGet, wickdocs.Docs{}),
 		connector.Op("connector_set_config", "Set Connector Config",
 			"Update one of a connector's config values. Rejects locked rows. Returns {ok: true, id, config_key, before, after} (masked if secret). Access: per-connector-access. MCP-permissive vs UI (UI: admin-only). UI: <app_url>/manager/connectors/{id}.",
-			connectorSetConfigInput{}, h.connectorSetConfig, wickdocs.
+			connectorSetConfigInput{}, h.connectorSetConfig, wickdocs.Docs{}),
+		connector.Op("connector_clear_config", "Clear Connector Config",
+			"Empty one of a connector's stored config values — the way to remove a stored secret, since connector_set_config with an empty value keeps it. Rejects locked, required and env-overridden rows. Returns {ok: true, id, config_key, before, after} (masked if secret). Access: per-connector-access. UI: <app_url>/manager/connectors/{id}.",
+			connectorClearConfigInput{}, h.connectorClearConfig, wickdocs.
 
 				// system_* (tray-only + admin)
 				Docs{}),
@@ -234,6 +237,11 @@ type connectorSetConfigInput struct {
 	ID        string `wick:"required;desc=Connector instance id."`
 	ConfigKey string `wick:"required;desc=Config field key declared on the connector's Configs struct."`
 	Value     string `wick:"textarea;desc=New value."`
+}
+
+type connectorClearConfigInput struct {
+	ID        string `wick:"required;desc=Connector instance id."`
+	ConfigKey string `wick:"required;desc=Config field key to empty. Must not be required or locked."`
 }
 
 type systemPrefsSetInput struct {

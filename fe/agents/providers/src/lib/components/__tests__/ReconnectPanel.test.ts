@@ -19,8 +19,10 @@ vi.mock("$lib/logintty.js", async (importOriginal) => {
 vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
+  toastWarn: vi.fn(),
   toasts: { subscribe: vi.fn(() => vi.fn()) },
 }));
+import { toastWarn } from "@wick-fe/common-stores";
 
 function makeStatus(over: Partial<LoginTTYStatus> = {}): LoginTTYStatus {
   return {
@@ -156,6 +158,46 @@ describe("ReconnectPanel", () => {
     expect(await screen.findByText("2m ago")).toBeTruthy();
   });
 
+  it("labels a reading cached and warns when the latest check was rate-limited", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(
+      makeUsage({ ageS: 172800, nextS: 600, lastError: "usage endpoint: 429 Too Many Requests", rateLimited: true }),
+    );
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    expect(await screen.findByText("cached · 2d ago")).toBeTruthy();
+    const warn = screen.getByTestId("panel-usage-stale-warning");
+    expect(warn.textContent).toContain("Cached reading from 2d ago — last check rate-limited (429), retry after");
+    expect(warn.getAttribute("title")).toBe("usage endpoint: 429 Too Many Requests");
+  });
+
+  it("does not label a fresh reading cached", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ ageS: 90 }));
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    expect(await screen.findByText("2m ago")).toBeTruthy();
+    expect(screen.queryByText(/cached ·/)).toBeNull();
+    expect(screen.queryByTestId("panel-usage-stale-warning")).toBeNull();
+  });
+
+  it("toasts when an accepted re-check ends with a failure", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ ageS: 20 }));
+    vi.mocked(logintty.apiLoginTTYUsageRefresh).mockResolvedValue({ accepted: true, checking: true, waitS: 0 });
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(
+      makeUsage({ ageS: 30, lastError: "usage endpoint: 500 Internal Server Error" }),
+    );
+    await fireEvent.click(await screen.findByTestId("panel-usage-recheck"));
+    await vi.waitFor(() => expect(toastWarn).toHaveBeenCalled());
+    expect(vi.mocked(toastWarn).mock.calls[0][1]).toContain("last check failed: 500 Internal Server Error");
+  });
+
   it("shows a queued first probe as pending rather than as a failure", async () => {
     vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
     vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ windows: [], pending: true }));
@@ -163,6 +205,20 @@ describe("ReconnectPanel", () => {
     await screen.findByText("dev@abc.com");
     await fireEvent.click(screen.getByText("Connection"));
     expect(await screen.findByText(/Checking usage/i)).toBeTruthy();
+  });
+
+  it("keeps asking while a probe is in flight, then shows the finished reading", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage)
+      .mockResolvedValueOnce(makeUsage({ checking: true }))
+      .mockResolvedValue(makeUsage({ checking: false }));
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    expect(await screen.findByTestId("panel-usage-checking")).toBeTruthy();
+    // The panel polls on its own; no reload, no second click.
+    await vi.waitFor(() => expect(screen.queryByTestId("panel-usage-checking")).toBeNull(), { timeout: 5000 });
+    expect(vi.mocked(logintty.apiLoginTTYUsage).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("offers a re-check next to the usage bars and sends it", async () => {

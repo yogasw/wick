@@ -172,6 +172,17 @@ Code that needs to iterate every op regardless of grouping calls `module.AllOps(
 | `connector.Op(...)` | Read-only or idempotent writes that can be safely retried |
 | `connector.OpDestructive(...)` | Actions that mutate state in a hard-to-undo way — DELETE, send-message, post-comment, force-push |
 
+#### Hiding an op by instance config (`VisibleWhen`)
+
+When only some configurations of a connector can serve an op (an op one browser engine supports, an endpoint only one API mode has), set `Operation.VisibleWhen` to a `"<configKey>:<a|b|c>"` predicate — the grammar of the config tag `visible_when=` (exact match, `|` = OR):
+
+```go
+op := connector.Op("get_markdown", "Get Page Markdown", "…", getMarkdownInput{}, getMarkdown, wickdocs.Docs{})
+op.VisibleWhen = "browser:moli"
+```
+
+Each instance evaluates it against its effective config (saved values over `default=` seeds). An instance that does not match drops the op from every agent-facing listing (`wick_list`, `wick_search`, `wick_get`, session instances, host API `ListInstances`), and `wick_execute` / workflow connector nodes refuse it with `operation "<key>" is not available on this instance (requires <predicate>)`. The manager's Test panel still runs it. A predicate without `:`, naming an unknown or secret config key, or with no value fails the plugin manifest build and install; the values themselves are not checked, so they must equal exactly what the config field stores.
+
 Destructive ops are **enabled by default** on every new row. The MCP layer appends a `⚠ DESTRUCTIVE: Always confirm with the user before executing this operation.` warning to the op description in every `wick_list` / `wick_search` / `wick_get` response, so the LLM (and user) is aware before calling. Admins can still disable individual ops per row at `/manager/connectors/{key}/{id}`.
 
 ### Description discipline
@@ -370,7 +381,7 @@ Implementation: `Service.SetDisabled` (`internal/connectors/service.go`) writes 
 7. **Operations** — operations grouped into named category cards (one card per `connector.Cat` section: title, description, op count, per-card Enable/Disable all). A sticky "Sections" sidebar on the right lists every category; clicking a row jumps to that card. A global search box filters across all categories (cards with no match hide). Each op row carries:
    - `[Test]` link → opens the test panel (`/test?op=<key>`)
    - `[History]` link → opens the audit log filtered to that op
-   - `Enable / Disable` toggle — toggle individual ops. Destructive ops ship enabled; disable here if you want to restrict them. An op declared with `OpConfigOnly(...)` (backs a config-form widget, e.g. an `html=<op>` picker or status card) shows a **"Config only"** badge instead of the toggle — it's not an agent tool and is excluded from the "Operations N" count, but admins can still run it from `[Test]`.
+   - `Enable / Disable` toggle — toggle individual ops. Destructive ops ship enabled; disable here if you want to restrict them. An op declared with `OpConfigOnly(...)` (backs a config-form widget, e.g. an `html=<op>` picker or status card) shows a **"Config only"** badge instead of the toggle — it's not an agent tool and is excluded from the "Operations N" count, but admins can still run it from `[Test]`. An op whose `VisibleWhen` this instance's config does not satisfy renders greyed with a **"Hidden: requires `<predicate>`"** chip: it is excluded from the count, but its toggle stays editable so the choice holds once the config matches.
    - `SystemDisabled` badge (advisory) — shown when the health check flagged a missing permission, but the op can still be called if `Enabled=true`.
 
 ### AI description

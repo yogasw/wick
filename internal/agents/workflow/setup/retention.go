@@ -4,11 +4,13 @@ import (
 	"context"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
@@ -18,7 +20,7 @@ import (
 // output, so history is capped both by count and by age.
 const (
 	DefaultRunKeepMax       = 50
-	DefaultRunRetentionDays = 7
+	DefaultRunRetentionDays = 1
 	// RunCleanupInterval is how often the background pass sweeps every
 	// workflow, on top of the per-workflow pass after each finished run.
 	RunCleanupInterval = 6 * time.Hour
@@ -26,8 +28,9 @@ const (
 
 // CleanupOptions tunes the run-retention pass.
 type CleanupOptions struct {
-	// KeepMax is the hard cap of finished runs kept per workflow; the
-	// newest KeepMax survive (unless older than TTL), the rest go.
+	// KeepMax is how many finished runs survive a trim. The trim itself only
+	// fires once the history reaches 2 x KeepMax (see PruneAt); the newest
+	// KeepMax stay (unless older than TTL), the rest go.
 	// <= 0 = DefaultRunKeepMax.
 	KeepMax int
 	// TTL removes a finished run whose EndedAt is older than this, even
@@ -35,6 +38,10 @@ type CleanupOptions struct {
 	TTL time.Duration
 	Now func() time.Time
 }
+
+// PruneAt is the number of finished runs at which the count cap kicks in
+// and trims the history back down to KeepMax.
+func (o CleanupOptions) PruneAt() int { return o.KeepMax * 2 }
 
 func (o CleanupOptions) withDefaults() CleanupOptions {
 	if o.KeepMax <= 0 {
@@ -125,8 +132,13 @@ func cleanupWorkflowRuns(layout config.Layout, store *state.FileStore, id string
 	now := opts.Now()
 	removed := 0
 	gone := map[string]bool{}
+	// Count cap with hysteresis: nothing is trimmed until the finished runs
+	// reach PruneAt (2 x KeepMax), then the oldest go until KeepMax remain.
+	// Trimming one run per finished run would rewrite the index every time;
+	// this does it once per KeepMax runs. The TTL still applies on every pass.
+	trim := len(done) >= opts.PruneAt()
 	for i, r := range done {
-		if i < opts.KeepMax && now.Sub(r.ended) <= opts.TTL {
+		if !(trim && i >= opts.KeepMax) && now.Sub(r.ended) <= opts.TTL {
 			continue
 		}
 		if err := removeAll(layout.WorkflowRunDir(id, r.id)); err != nil {
@@ -149,6 +161,42 @@ func cleanupWorkflowRuns(layout config.Layout, store *state.FileStore, id string
 		}); err != nil {
 			return removed, err
 		}
+	}
+	return removed, nil
+}
+
+// adhocSessionPrefix marks the one-off sessions a `session: new` node mints
+// for a single workflow run. session_init creates the folder up front, before
+// anything decides whether an agent turn will run, so a busy cron leaves a
+// fresh empty session behind on every tick — hundreds a day, none ever reused.
+const adhocSessionPrefix = "wf_adhoc_"
+
+// CleanupAdhocSessions deletes idle wf_adhoc_ sessions that nobody has touched
+// for longer than the run-retention TTL. A session that is queued or running is
+// never removed. Best-effort: one unreadable session does not stop the rest.
+func CleanupAdhocSessions(layout config.Layout, opts CleanupOptions) (int, error) {
+	opts = opts.withDefaults()
+	ids, err := session.List(layout)
+	if err != nil {
+		return 0, err
+	}
+	now := opts.Now()
+	removed := 0
+	for _, id := range ids {
+		if !strings.HasPrefix(id, adhocSessionPrefix) {
+			continue
+		}
+		sess, err := session.Load(layout, id)
+		if err != nil || sess.Meta.Status != session.StatusIdle {
+			continue
+		}
+		if now.Sub(sess.Meta.LastActive) <= opts.TTL {
+			continue
+		}
+		if err := session.Delete(context.Background(), layout, id); err != nil {
+			continue
+		}
+		removed++
 	}
 	return removed, nil
 }
@@ -194,6 +242,9 @@ func (m *Manager) StartRunSweep(ctx context.Context) {
 			}
 			if n > 0 {
 				log.Info().Str("component", "wf").Int("removed", n).Msg("workflow run retention")
+			}
+			if n, err := CleanupAdhocSessions(m.Layout, opts()); err == nil && n > 0 {
+				log.Info().Str("component", "wf").Int("removed", n).Msg("workflow adhoc session retention")
 			}
 		}
 		sweep()

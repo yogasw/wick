@@ -44,11 +44,54 @@ func New(layout config.Layout) *FileStore {
 	return &FileStore{Layout: layout}
 }
 
+// MaxStoredOutputBytes caps one node's output in the state.json of a run
+// that finished successfully. A query node that pulled thousands of rows used
+// to leave tens of MB behind per run; past the cap the output is replaced by
+// a {_truncated,_size,preview} stub, the same shape the event stream uses.
+// Run again to see the full data — the live run always had all of it.
+const MaxStoredOutputBytes = 64 << 10
+
+// storedPreviewBytes is how much of a truncated output is kept as a preview.
+const storedPreviewBytes = 4096
+
+// compactOutputs returns st with oversized node outputs replaced by stubs.
+// Only a successful, finished run is compacted: a running or paused run still
+// needs its full outputs to resume, and a failed run is kept whole for
+// debugging. st's own map is left untouched.
+func compactOutputs(st workflow.RunState) workflow.RunState {
+	if st.Status != workflow.StatusSuccess || st.EndedAt == nil || len(st.Outputs) == 0 {
+		return st
+	}
+	var out map[string]any
+	for k, v := range st.Outputs {
+		b, err := json.Marshal(v)
+		if err != nil || len(b) <= MaxStoredOutputBytes {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]any, len(st.Outputs))
+			for k2, v2 := range st.Outputs {
+				out[k2] = v2
+			}
+		}
+		out[k] = map[string]any{
+			"_truncated": true,
+			"_size":      len(b),
+			"preview":    string(b[:storedPreviewBytes]),
+		}
+	}
+	if out != nil {
+		st.Outputs = out
+	}
+	return st
+}
+
 // Save writes state.json atomically.
 func (s *FileStore) Save(id, runID string, st workflow.RunState) error {
 	if st.UpdatedAt.IsZero() {
 		st.UpdatedAt = time.Now().UTC()
 	}
+	st = compactOutputs(st)
 	dir := s.Layout.WorkflowRunDir(id, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

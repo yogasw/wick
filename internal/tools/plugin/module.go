@@ -44,11 +44,49 @@ type Pool struct {
 	ttl      time.Duration
 	stop     chan struct{}
 	once     sync.Once
+	// PublicBase returns wick's public base URL (app_url); set once at
+	// startup, read per request so an app_url edit applies without reload.
+	PublicBase func() string
+
+	// Live loading (see live.go). rmu serialises reconcile passes; loaded
+	// and errs are guarded by mu like runners.
+	rmu     sync.Mutex
+	loaded  map[string]loadedTool
+	errs    map[string]string
+	dir     string
+	enabled func(string) (bool, error)
+	record  func(key, kind, version string) error
+	sink    Sink
+	build   func(connplugin.Found) tool.Module
+
+	// draining holds runners of unloaded versions still finishing their
+	// requests (see Runner.Close); KillAll and Inflight include them.
+	draining map[*Runner]struct{}
+	// seen: keys a reconcile pass has decided on (pending until then);
+	// removing: keys being uninstalled, skipped until their folder is gone.
+	seen     map[string]bool
+	removing map[string]bool
+	started  bool
+	// DrainGrace bounds how long an unloaded version may finish in-flight
+	// requests before its process is killed.
+	DrainGrace time.Duration
 }
+
+// DefaultDrainGrace is Pool.DrainGrace unless set.
+const DefaultDrainGrace = 30 * time.Second
 
 // NewPool returns an empty pool; call Start once tools are loaded.
 func NewPool() *Pool {
-	return &Pool{runners: map[string]*Runner{}, versions: map[string]string{}, ttl: idleTTL(), stop: make(chan struct{})}
+	return &Pool{runners: map[string]*Runner{}, versions: map[string]string{}, ttl: idleTTL(), stop: make(chan struct{}),
+		loaded: map[string]loadedTool{}, errs: map[string]string{}, draining: map[*Runner]struct{}{},
+		seen: map[string]bool{}, removing: map[string]bool{}, DrainGrace: DefaultDrainGrace}
+}
+
+func (p *Pool) publicBase() string {
+	if p.PublicBase == nil {
+		return ""
+	}
+	return p.PublicBase()
 }
 
 func (p *Pool) add(key, version string, r *Runner) {
@@ -58,16 +96,45 @@ func (p *Pool) add(key, version string, r *Runner) {
 	p.versions[key] = version
 }
 
-// Remove stops the process of tool plugin key and drops it from the pool,
-// ahead of an uninstall deleting its files.
+// Remove unloads tool plugin key ahead of an uninstall deleting its files:
+// its process is stopped, its routes and registry entry go (through the
+// attached Sink) and it is dropped from the pool.
 func (p *Pool) Remove(key string) {
+	p.rmu.Lock()
+	defer p.rmu.Unlock()
+	p.unload(key)
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if r, ok := p.runners[key]; ok {
-		r.Stop()
-	}
+	delete(p.errs, key)
+	// The files are deleted next; a watcher tick in between must not load
+	// the half-removed plugin again.
+	p.removing[key] = true
+	p.mu.Unlock()
+}
+
+// stopRunner drops key's runner from the pool and closes it: no new request
+// or spawn, in-flight requests get up to DrainGrace, then the process is
+// killed. Returns when the runner is closed, not when it is killed; done
+// (nil when key had no runner) is closed after the kill.
+func (p *Pool) stopRunner(key string) (done <-chan struct{}) {
+	p.mu.Lock()
+	r, ok := p.runners[key]
 	delete(p.runners, key)
 	delete(p.versions, key)
+	if ok {
+		p.draining[r] = struct{}{}
+	}
+	p.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	ch := r.Close(p.DrainGrace)
+	go func() {
+		<-ch
+		p.mu.Lock()
+		delete(p.draining, r)
+		p.mu.Unlock()
+	}()
+	return ch
 }
 
 // Version returns the installed version of tool plugin key; ok is false for
@@ -90,6 +157,9 @@ func (p *Pool) Inflight() int {
 	for _, r := range p.runners {
 		n += int(r.Inflight())
 	}
+	for r := range p.draining {
+		n += int(r.Inflight())
+	}
 	return n
 }
 
@@ -106,11 +176,13 @@ func (p *Pool) Sweep() int {
 	return n
 }
 
-// Start warms keep_warm tools and starts the idle sweeper.
+// Start warms keep_warm tools and starts the idle sweeper and the plugin
+// folder watcher (live install / update / enable / disable).
 func (p *Pool) Start() {
 	p.once.Do(func() {
 		upgrade.Register("tool plugin requests", p.Inflight)
 		p.mu.Lock()
+		p.started = true
 		for key, r := range p.runners {
 			if r.keepWarm {
 				go func(key string, r *Runner) {
@@ -121,6 +193,7 @@ func (p *Pool) Start() {
 			}
 		}
 		p.mu.Unlock()
+		go p.watch(reconcileInterval)
 		go func() {
 			interval := p.ttl / 2
 			if interval < time.Second {
@@ -152,6 +225,9 @@ func (p *Pool) KillAll() {
 	for _, r := range p.runners {
 		r.Stop()
 	}
+	for r := range p.draining {
+		r.Stop()
+	}
 }
 
 var methods = []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -159,7 +235,7 @@ var methods = []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
 // BuildModule turns one discovered kind=tool plugin into a tool.Module whose
 // routes proxy to the plugin, and registers its runner with the pool.
 func (p *Pool) BuildModule(f connplugin.Found) tool.Module {
-	return p.buildModule(f, spawnProcess, connplugin.RunDir())
+	return p.buildModule(f, spawnFor(f.Key), connplugin.RunDir())
 }
 
 func (p *Pool) buildModule(f connplugin.Found, spawn spawnFn, sockDir string) tool.Module {
@@ -195,7 +271,7 @@ func (p *Pool) buildModule(f connplugin.Found, spawn spawnFn, sockDir string) to
 	}
 	base := "/tools/" + f.Key
 	runner := newRunner(f.Key, f.BinaryPath, sockDir, tm.KeepWarm, spawn)
-	px := &Proxy{key: f.Key, base: base, version: f.Manifest.Version, runner: runner}
+	px := &Proxy{key: f.Key, base: base, version: f.Manifest.Version, runner: runner, publicBase: p.publicBase}
 	for _, h := range tm.Webhooks {
 		g := base + h.Group
 		dup := false
@@ -256,43 +332,29 @@ func hook(g tool.WebhookRouter, method, path string, h tool.WebhookHandlerFunc) 
 	}
 }
 
-// Load registers every enabled, verified kind=tool plugin under dir with
-// register (tools.Register) and returns how many were registered. Call it
+// Load registers every enabled, verified, valid kind=tool plugin under dir
+// with register (tools.Register) and returns how many were registered. Call it
 // before tools.All() so the plugin's config rows are seeded like a built-in
 // tool's. record (optional) is told the kind + version of each plugin.
-func (p *Pool) Load(dir string, enabled func(string) bool, record func(key, kind, version string) error, register func(tool.Module)) int {
-	return p.load(dir, enabled, record, register, p.BuildModule)
+//
+// dir, enabled and record are kept for the live passes that follow (see
+// Reconcile); until Attach hands the pool a Sink those passes do nothing.
+//
+// enabled reports the stored enable flag; a read error keeps the plugin's
+// current state (an unloaded plugin stays unloaded). validate (optional) is
+// the same check the live Sink runs: a module it rejects is not registered
+// and shows Error with the reason — boot never fails on a plugin.
+func (p *Pool) Load(dir string, enabled func(string) (bool, error), record func(key, kind, version string) error,
+	register func(tool.Module), validate func(tool.Module) error) int {
+	return p.load(dir, enabled, record, bootSink{register: register, validate: validate}, p.BuildModule)
 }
 
-func (p *Pool) load(dir string, enabled func(string) bool, record func(key, kind, version string) error,
-	register func(tool.Module), build func(connplugin.Found) tool.Module) int {
-	found, err := connplugin.ScanKind(dir, wickplugin.KindTool)
-	if err != nil {
-		log.Warn().Err(err).Msg("tool plugins: scan failed")
-		return 0
-	}
-	n := 0
-	for _, f := range found {
-		if err := wickplugin.ValidateKey(f.Key); err != nil {
-			log.Warn().Str("plugin", f.Key).Err(err).Msg("tool plugin: skipped (invalid key)")
-			continue
-		}
-		if enabled != nil && !enabled(f.Key) {
-			continue
-		}
-		if err := wickplugin.VerifyManifest(f.Manifest, f.BinaryPath); err != nil {
-			log.Warn().Str("tool", f.Key).Err(err).Msg("tool plugin: skipped (verification failed)")
-			continue
-		}
-		register(build(f))
-		if record != nil {
-			if err := record(f.Key, wickplugin.KindTool, f.Manifest.Version); err != nil {
-				log.Warn().Str("tool", f.Key).Err(err).Msg("tool plugin: state record failed")
-			}
-		}
-		n++
-	}
-	return n
+func (p *Pool) load(dir string, enabled func(string) (bool, error), record func(key, kind, version string) error,
+	sink Sink, build func(connplugin.Found) tool.Module) int {
+	p.rmu.Lock()
+	defer p.rmu.Unlock()
+	p.dir, p.enabled, p.record, p.build = dir, enabled, record, build
+	return p.reconcile(sink)
 }
 
 // rawHTML is a templ component writing trusted plugin HTML verbatim (the

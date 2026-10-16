@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
@@ -887,6 +888,9 @@ func (s *Service) await(
 		// leader's own budget re-reading the same fact, and a repeated
 		// alert is an ignored alert.
 		turnsWarned bool
+		// turnEnded: the last event seen was a Done, so a stream that
+		// closes now closed between turns rather than mid-turn.
+		turnEnded bool
 	)
 	tokens := func() int { return usageIn + usageOut }
 
@@ -980,11 +984,18 @@ func (s *Service) await(
 
 		case ev, ok := <-ch:
 			if !ok {
-				out := finalText()
-				turns = billedTurns()
-				s.finish(ctx, row, entity.DelegationRunning, entity.DelegationDone, out, "", turns)
-				return s.doneResult(ctx, row, turns, tokens(), out), nil
+				if turnEnded {
+					out := finalText()
+					turns = billedTurns()
+					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationDone, out, "", turns)
+					return s.doneResult(ctx, row, turns, tokens(), out), nil
+				}
+				// Closed mid-turn: the turn never reached Done, so what
+				// the accumulator holds is narration, not an answer.
+				return s.unfinishedResult(ctx, row, labelUnfinished(withLastReport(finalText())), billedTurns(),
+					"event stream closed before the turn finished"), nil
 			}
+			turnEnded = ev.Type == event.Done
 			// Usage can ride any event, so account for it before the type
 			// switch decides whether this event ends the run.
 			recordUsage(ev.Raw)
@@ -1070,6 +1081,23 @@ func (s *Service) await(
 					}, nil
 				}
 
+				// The process died before its turn finished; this Done is
+				// the one wick publishes for the exit, not the turn's own.
+				// When the pool restarted the agent, the same session
+				// stream carries the restarted process's events, so keep
+				// waiting on it — the caps above still bound the wait.
+				// Without a restart nothing will ever answer.
+				if exited, restarting := ParseExitDone(ev.Raw); exited {
+					if restarting {
+						log.Debug().Str("delegation", row.ID).
+							Msg("delegation: sub-agent process died mid-turn and is being restarted; waiting for its result")
+						text.Reset()
+						continue
+					}
+					return s.unfinishedResult(ctx, row, labelUnfinished(withLastReport(finalText())), billedTurns(),
+						"sub-agent process died before finishing its turn and was not restarted"), nil
+				}
+
 				// A finished turn with STREAMED text is the sub-agent's
 				// answer. One delegation is one question, so the first
 				// complete turn ends the run rather than leaving the child
@@ -1135,6 +1163,46 @@ func (s *Service) await(
 			}
 		}
 	}
+}
+
+// unfinishedResult closes a run whose sub-agent stopped before its turn
+// finished, as failed rather than done: the text is narration, and a done
+// status would hand it to the caller as an answer.
+func (s *Service) unfinishedResult(ctx context.Context, row *entity.AgentDelegation, out string, turns int, why string) *Result {
+	s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, out, why, turns)
+	return &Result{
+		DelegationID: row.ID, Profile: row.ProfileKey,
+		Status: entity.DelegationFailed, TurnsUsed: turns, Result: out,
+		Note:     "Sub-agent did not finish: " + why + ". The result is its last position, not an answer; re-delegate or continue it.",
+		Envelope: FallbackEnvelope(out),
+	}
+}
+
+// exitDoneType tags the Done wick publishes when an agent process exits
+// abnormally, so a waiting delegation can tell it from a turn's own Done.
+// It rides StreamEvent.Raw, which never reaches a browser.
+const exitDoneType = "wick_process_exit"
+
+// ExitDoneRaw is the Raw payload for the Done published on an abnormal
+// exit; restarting says whether the pool is starting the agent again.
+func ExitDoneRaw(restarting bool) string {
+	return fmt.Sprintf(`{"type":%q,"restarting":%t}`, exitDoneType, restarting)
+}
+
+// ParseExitDone reports whether raw is an ExitDoneRaw payload and, if so,
+// whether the agent is being restarted.
+func ParseExitDone(raw string) (exited, restarting bool) {
+	if !strings.Contains(raw, exitDoneType) {
+		return false, false
+	}
+	var m struct {
+		Type       string `json:"type"`
+		Restarting bool   `json:"restarting"`
+	}
+	if json.Unmarshal([]byte(raw), &m) != nil || m.Type != exitDoneType {
+		return false, false
+	}
+	return true, m.Restarting
 }
 
 // labelUnfinished prefixes a failure-path result so nobody mistakes it

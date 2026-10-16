@@ -59,9 +59,11 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 		if !ok || sess.Meta.ParentSessionID != "" {
 			return false
 		}
-		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants)
+		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) ||
+			sharedAgentChatVisible(c.Context(), uid, sess)
 	}
 	acts := newActivityTracker(sessionParentOf, visible, sessionNeedsAttention)
+	acts.sideAgent = sideChatAgent(uid)
 
 	fmt.Fprintf(w, ": connected\n\n")
 	// Replay what is running right now, so a freshly loaded page paints
@@ -81,6 +83,13 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 				continue
 			}
 			fmt.Fprintf(w, "event: session\ndata: %s\n\n", ev.JSON())
+		}
+		// Conversations waiting on teammates have no process to replay.
+		for sid := range teamWaitingSessions(liveTeamTasks()) {
+			if visible(sid) {
+				ev := Event{SessionID: sid, Type: "lifecycle", SubAgent: "working"}
+				fmt.Fprintf(w, "event: session\ndata: %s\n\n", ev.JSON())
+			}
 		}
 		// The same for the turn's step, so the Team roster paints the
 		// running tool at once rather than "thinking" until the next one.
@@ -128,6 +137,14 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			if ev.SessionID == "" {
 				continue
 			}
+			if ev.Type == evTeamWaiting {
+				if visible(ev.SessionID) {
+					out := Event{SessionID: ev.SessionID, Type: "lifecycle", SubAgent: ev.Data}
+					fmt.Fprintf(w, "event: session\ndata: %s\n\n", out.JSON())
+					flush()
+				}
+				continue
+			}
 			// Activity goes first: on a turn's end the roster clears the
 			// tool before the session event re-reads it.
 			wrote := false
@@ -153,6 +170,11 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 					flush()
 				}
 				continue
+			}
+			// A sub-agent stopping must not clear a row still waiting on
+			// a teammate.
+			if out.SessionID != ev.SessionID && out.SubAgent == "" {
+				out.SubAgent = sidebarWorkMarker(teamWaiting(out.SessionID), "")
 			}
 			fmt.Fprintf(w, "event: session\ndata: %s\n\n", out.JSON())
 			flush()

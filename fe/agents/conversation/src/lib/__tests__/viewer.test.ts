@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { isViewer, setViewerId, viewerId } from "../viewer.js";
+import { describe, test, expect, afterEach } from "vitest";
+import { isViewer, setViewerId, setViewerName, viewerId, viewerName } from "../viewer.js";
 
 describe("isViewer", () => {
   // The point of matching on the WICK user id rather than the platform one:
@@ -32,5 +32,37 @@ describe("isViewer", () => {
   test("viewerId returns what was set", () => {
     setViewerId("wick-9");
     expect(viewerId()).toBe("wick-9");
+  });
+});
+
+describe("viewerName", () => {
+  const mount = (name?: string) => {
+    const el = document.createElement("div");
+    el.id = "app";
+    if (name !== undefined) el.dataset.viewerName = name;
+    document.body.appendChild(el);
+    setViewerName(null);
+  };
+  afterEach(() => { document.getElementById("app")?.remove(); setViewerName(null); });
+
+  test("reads data-viewer-name from #app", () => {
+    mount("Yoga Setiawan");
+    expect(viewerName()).toBe("Yoga Setiawan");
+  });
+
+  test("no attribute or no #app reads empty", () => {
+    mount();
+    expect(viewerName()).toBe("");
+    document.getElementById("app")!.remove();
+    setViewerName(null);
+    expect(viewerName()).toBe("");
+  });
+
+  test("whitespace is trimmed, blank reads empty", () => {
+    mount("  Yoga Setiawan \n");
+    expect(viewerName()).toBe("Yoga Setiawan");
+    document.getElementById("app")!.remove();
+    mount("   ");
+    expect(viewerName()).toBe("");
   });
 });

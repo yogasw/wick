@@ -78,6 +78,9 @@ type Ctx struct {
 	// accountID is the ConnectorAccount the framework resolved for this
 	// call (explicit @accountId on the tool id), "" when none.
 	accountID string
+	// accounts lists the connected OAuth accounts of this instance, wired
+	// by the framework and evaluated lazily. Nil for internal callers.
+	accounts func() []AccountRef
 	// sessionID is the agent session this call was made within, stamped
 	// by the framework from ExecuteParams. Read via SessionID() by ops
 	// that act ON the calling session rather than on an external API —
@@ -85,6 +88,10 @@ type Ctx struct {
 	// parent, which tree the call belongs to, and which project scope to
 	// resolve roles in. Empty on panel-test and retry paths.
 	sessionID string
+
+	// requestID identifies this one execution (the run id on the host), so
+	// a plugin op can correlate its logs with wick's run record.
+	requestID string
 }
 
 // Masker is the narrow slice of the encrypted-fields service
@@ -315,6 +322,11 @@ func (c *Ctx) RawInputValue(key string) (any, bool) {
 	return v, ok
 }
 
+// RawInput returns the whole untyped argument map recorded by SetRawInput
+// (nil when none was). The plugin adapter forwards it so a plugin op sees
+// the same RawInputValue answers as an in-process one.
+func (c *Ctx) RawInput() map[string]any { return c.rawInput }
+
 // ── Session context ──────────────────────────────────────────────────
 
 // SetOwnerBotID records the bot user id of the channel instance that owns
@@ -374,8 +386,37 @@ func (c *Ctx) UserName(userID string) string {
 	return name
 }
 
+// AccountRef names one connected (OAuth) account of a connector instance.
+// It never carries the account's token.
+type AccountRef struct {
+	ID          string
+	DisplayName string
+	WickUserID  string
+}
+
+// SetAccountsLister wires the lookup of this instance's connected accounts.
+// Framework-only.
+func (c *Ctx) SetAccountsLister(fn func() []AccountRef) { c.accounts = fn }
+
+// ConnectedAccounts returns the instance's connected OAuth accounts, or nil
+// when no lister is wired. Runs a query per call, so only config widgets
+// that report on accounts should use it.
+func (c *Ctx) ConnectedAccounts() []AccountRef {
+	if c.accounts == nil {
+		return nil
+	}
+	return c.accounts()
+}
+
 // SetSessionID stamps the calling agent session. Framework-only.
 func (c *Ctx) SetSessionID(sessionID string) { c.sessionID = sessionID }
+
+// SetRequestID stamps the id of this execution (the run id). Called by the
+// framework; connectors only read it via RequestID.
+func (c *Ctx) SetRequestID(id string) { c.requestID = id }
+
+// RequestID is the id of this execution ("" when the caller has none).
+func (c *Ctx) RequestID() string { return c.requestID }
 
 // SessionID returns the agent session this call was made within, or "".
 //

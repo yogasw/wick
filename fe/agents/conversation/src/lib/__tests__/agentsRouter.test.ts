@@ -1,5 +1,5 @@
 import { describe, it, test, expect } from "vitest";
-import { parseAgentsRoute, formatAgentsRoute, type AgentsRoute } from "../agentsRouter.js";
+import { parseAgentsRoute, formatAgentsRoute, isReservedHandle, type AgentsRoute } from "../agentsRouter.js";
 import { hiddenTabsFor } from "../agentMode.js";
 
 const B = "/tools/agents";
@@ -158,22 +158,101 @@ describe("convert route", () => {
 });
 
 describe("group routes", () => {
-  test("/team/g/<id> opens a group, never an agent", () => {
-    const r = parseAgentsRoute("/tools/agents/team/g/abc-123", "", B);
+  test("/team/group/<id> opens a group, never an agent", () => {
+    const r = parseAgentsRoute("/tools/agents/team/group/abc-123", "", B);
     expect(r).toEqual({ handle: null, session: null, panel: null, group: "abc-123" });
   });
   test("group settings panel only on a group", () => {
-    expect(parseAgentsRoute("/tools/agents/team/g/abc", "?panel=group-settings", B).panel).toEqual({ kind: "group-settings" });
+    expect(parseAgentsRoute("/tools/agents/team/group/abc", "?panel=group-settings", B).panel).toEqual({ kind: "group-settings" });
     expect(parseAgentsRoute("/tools/agents/team/anton", "?panel=group-settings", B).panel).toBeNull();
   });
   test("round trip", () => {
     const r: AgentsRoute = { handle: null, session: null, panel: { kind: "group-settings" }, group: "abc" };
     const url = formatAgentsRoute(r, B);
-    expect(url).toBe("/tools/agents/team/g/abc?panel=group-settings");
+    expect(url).toBe("/tools/agents/team/group/abc?panel=group-settings");
     const [path, qs] = url.split("?");
     expect(parseAgentsRoute(path, "?" + qs, B)).toEqual(r);
   });
-  test("a bare /team/g is not a group", () => {
-    expect(parseAgentsRoute("/tools/agents/team/g", "", B).group).toBeUndefined();
+  test("a bare /team/group is not a group", () => {
+    expect(parseAgentsRoute("/tools/agents/team/group", "", B).group).toBeUndefined();
+  });
+  test("the old /team/g/<id> is gone: no group, no alias", () => {
+    const r = parseAgentsRoute("/tools/agents/team/g/abc", "", B);
+    expect(r.group).toBeUndefined();
+    expect(r.handle).toBe("g");
+  });
+});
+
+describe("tickets routes", () => {
+  test("a chat opened on the Tickets page rides after /s/: under its ticket, or the board", () => {
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p%201/T-12/s/abc%2F1", "", B)).toEqual({
+      handle: null,
+      session: null,
+      panel: null,
+      tickets: { project: "p 1", ticket: "T-12", session: "abc/1" },
+    });
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/s/abc", "", B).tickets).toEqual({ project: "p1", session: "abc" });
+    // A ticket id that happens to be "s" is still a ticket.
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/s", "", B).tickets).toEqual({ project: "p1", ticket: "s" });
+    // A bad escape is the board, not a half-read chat.
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/T-1/s/%E0%A4", "", B).tickets).toEqual({});
+    // The session query stays an agent-chat thing.
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1/s/abc", "?session=x", B).session).toBeNull();
+  });
+  test("a Tickets chat formats back to the path it was read from", () => {
+    const routes = [
+      { handle: null, session: null, panel: null, tickets: { project: "p 1", ticket: "T-12", session: "abc/1" } },
+      { handle: null, session: null, panel: null, tickets: { project: "p1", session: "abc" } },
+    ];
+    for (const r of routes) {
+      const url = formatAgentsRoute(r, B);
+      expect(parseAgentsRoute(url, "", B)).toEqual(r);
+    }
+    expect(formatAgentsRoute(routes[0], B)).toBe("/tools/agents/team/tickets/p%201/T-12/s/abc%2F1");
+    expect(formatAgentsRoute(routes[1], B)).toBe("/tools/agents/team/tickets/p1/s/abc");
+  });
+  test("/team/tickets is the board; no agent, no group", () => {
+    expect(parseAgentsRoute("/tools/agents/team/tickets", "", B)).toEqual({ handle: null, session: null, panel: null, tickets: {} });
+    expect(parseAgentsRoute("/tools/agents/team/tickets/", "", B).tickets).toEqual({});
+  });
+  test("/team/tickets/<project>/<ticket> names one ticket; half of one is the board", () => {
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p%201/T-12", "", B).tickets).toEqual({ project: "p 1", ticket: "T-12" });
+    expect(parseAgentsRoute("/tools/agents/team/tickets/p1", "", B).tickets).toEqual({});
+    expect(parseAgentsRoute("/tools/agents/team/tickets/%E0%A4/T-1", "", B).tickets).toEqual({});
+  });
+  test("/team/t is not Tickets", () => {
+    expect(parseAgentsRoute("/tools/agents/team/t", "", B).tickets).toBeUndefined();
+    expect(parseAgentsRoute("/tools/agents/team/t/p1/T-1", "", B).tickets).toBeUndefined();
+  });
+  test("tickets is a reserved handle", () => {
+    expect(isReservedHandle("tickets")).toBe(true);
+    expect(isReservedHandle("ticket")).toBe(false);
+    expect(isReservedHandle("group")).toBe(true);
+    expect(isReservedHandle("groups")).toBe(false);
+  });
+  test("a two-letter handle is still an agent", () => {
+    const r = parseAgentsRoute("/tools/agents/team/tt", "", B);
+    expect(r.handle).toBe("tt");
+    expect(r.tickets).toBeUndefined();
+  });
+  test("the Team settings Tickets tab opens over the page; session is ignored", () => {
+    const r = parseAgentsRoute("/tools/agents/team/tickets", "?panel=team-settings&tab=tickets&session=s1", B);
+    expect(r).toEqual({ handle: null, session: null, panel: { kind: "team-settings", tab: "tickets" }, tickets: {} });
+  });
+  test("format is the inverse", () => {
+    const cases: AgentsRoute[] = [
+      { handle: null, session: null, panel: null, tickets: {} },
+      { handle: null, session: null, panel: null, tickets: { project: "p 1", ticket: "T-12" } },
+      { handle: null, session: null, panel: { kind: "team-settings", tab: "tickets" }, tickets: {} },
+    ];
+    for (const r of cases) {
+      const url = formatAgentsRoute(r, B);
+      const [path, qs = ""] = url.split("?");
+      expect(parseAgentsRoute(path, qs ? "?" + qs : "", B)).toEqual(r);
+    }
+    expect(formatAgentsRoute({ handle: null, session: null, panel: null, tickets: { project: "p 1", ticket: "T-12" } }, B)).toBe("/tools/agents/team/tickets/p%201/T-12");
+    expect(formatAgentsRoute({ handle: null, session: null, panel: { kind: "team-settings", tab: "tickets" }, tickets: {} }, B)).toBe(
+      "/tools/agents/team/tickets?panel=team-settings&tab=tickets",
+    );
   });
 });

@@ -55,6 +55,19 @@ func TestDocsManifestCoversRequirements(t *testing.T) {
 	}
 }
 
+// Slack refuses an agent_view app subscribed to assistant_thread_started
+// ("Agent View should use app_home_opened"): the generated manifest asks
+// for app_home_opened instead.
+func TestGenerateManifestAgentViewEvent(t *testing.T) {
+	ev := GenerateManifest(ManifestInput{Name: "Franky"}).Settings.EventSubscriptions.BotEvents
+	if !slices.Contains(ev, "app_home_opened") {
+		t.Errorf("bot events %v lack app_home_opened", ev)
+	}
+	if slices.Contains(ev, "assistant_thread_started") {
+		t.Errorf("bot events %v still carry assistant_thread_started", ev)
+	}
+}
+
 func TestGenerateManifestFields(t *testing.T) {
 	long := strings.Repeat("x", 10)
 	m := GenerateManifest(ManifestInput{

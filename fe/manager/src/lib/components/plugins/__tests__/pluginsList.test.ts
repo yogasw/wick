@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { InstalledPlugin } from "$lib/api.js";
 import {
   DEFAULT_QUERY, parseQuery, queryString, filterInstalled, facetCounts, sortInstalled, paginate,
-  marketRows, filterMarket, versionNewer,
+  marketRows, filterMarket, versionNewer, isActive, loadFailed, loadPending,
 } from "../pluginsList.js";
 
 function plugin(over: Partial<InstalledPlugin>): InstalledPlugin {
@@ -90,5 +90,23 @@ describe("marketplace rules", () => {
     });
     expect(filterMarket(rows, { q: "", avail: "installed", src: "all" })).toHaveLength(4);
     expect(filterMarket(rows, { q: "", avail: "not-installed", src: "s1" }).map((r) => r.key)).toEqual(["d", "e"]);
+  });
+});
+
+describe("pluginsList load status", () => {
+  it("is Active only when the running wick reports it loaded", () => {
+    expect(isActive(plugin({ status: "active" }))).toBe(true);
+    expect(isActive(plugin({ status: "error", status_detail: "verification failed" }))).toBe(false);
+    expect(isActive(plugin({ enabled: true }))).toBe(true); // older server: no status
+    expect(loadFailed(plugin({ status: "error" }))).toBe(true);
+    expect(loadPending(plugin({ status: "pending" }))).toBe(true);
+    expect(isActive(plugin({ status: "pending" }))).toBe(false);
+  });
+
+  it("files a load failure under error, not active", () => {
+    const f = { q: "", kind: "all" as const, origin: "all" as const, status: "all" as const };
+    const rows = [plugin({ key: "ok", kind: "tool", status: "active" }), plugin({ key: "bad", kind: "tool", status: "error" })];
+    expect(filterInstalled(rows, { ...f, status: "error" }).map((p) => p.key)).toEqual(["bad"]);
+    expect(filterInstalled(rows, { ...f, status: "active" }).map((p) => p.key)).toEqual(["ok"]);
   });
 });

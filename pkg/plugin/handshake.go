@@ -77,16 +77,32 @@ func buildVersionedPlugins() map[int]goplugin.PluginSet {
 // ConnectorGRPCPlugin is the go-plugin descriptor. Impl is set only on the
 // plugin side (it carries the server implementation); the host leaves it
 // nil and receives a client from GRPCClient.
+//
+// HostKey (host side) is the plugin key the Host API is served for over the
+// connection's broker; "" serves none.
 type ConnectorGRPCPlugin struct {
 	goplugin.NetRPCUnsupportedPlugin
-	Impl pb.ConnectorServer
+	Impl    pb.ConnectorServer
+	HostKey string
 }
 
-func (p *ConnectorGRPCPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Server) error {
+func (p *ConnectorGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	pb.RegisterConnectorServer(s, p.Impl)
+	dialHostBroker(broker)
 	return nil
 }
 
-func (p *ConnectorGRPCPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
-	return &grpcClient{inner: pb.NewConnectorClient(c)}, nil
+func (p *ConnectorGRPCPlugin) GRPCClient(_ context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+	serveHostBroker(broker, p.HostKey, KindConnector)
+	return &grpcClient{inner: pb.NewConnectorClient(c), key: p.HostKey}, nil
+}
+
+// VersionedPluginsFor is VersionedPlugins for the plugin key: the host also
+// serves the Host API to the process over the broker.
+func VersionedPluginsFor(key string) map[int]goplugin.PluginSet {
+	out := make(map[int]goplugin.PluginSet, ProtoVersion-MinProtoVersion+1)
+	for _, v := range SupportedProtoVersions() {
+		out[v] = goplugin.PluginSet{PluginName: &ConnectorGRPCPlugin{HostKey: key}}
+	}
+	return out
 }

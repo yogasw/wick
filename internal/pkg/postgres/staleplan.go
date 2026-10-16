@@ -40,6 +40,40 @@ type stalePlanPool struct {
 	gorm.ConnPool
 }
 
+// wrapStalePlan puts stalePlanPool under db. gorm.Open copies ConnPool
+// into db.Statement, and every session reads its pool from there, so
+// both have to change: setting db.ConnPool alone leaves every query on
+// the bare pool.
+func wrapStalePlan(db *gorm.DB) {
+	p := stalePlanPool{ConnPool: db.Statement.ConnPool}
+	db.ConnPool = p
+	db.Statement.ConnPool = p
+}
+
+// BeginTx starts a transaction on the wrapped pool. Statements inside it
+// are not retried: after an error Postgres aborts the transaction, so
+// only the caller can run it again.
+func (p stalePlanPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
+	switch b := p.ConnPool.(type) {
+	case gorm.TxBeginner:
+		return b.BeginTx(ctx, opts)
+	case gorm.ConnPoolBeginner:
+		return b.BeginTx(ctx, opts)
+	}
+	return nil, gorm.ErrInvalidTransaction
+}
+
+// GetDBConn hands db.DB() the *sql.DB under the wrapper.
+func (p stalePlanPool) GetDBConn() (*sql.DB, error) {
+	switch c := p.ConnPool.(type) {
+	case *sql.DB:
+		return c, nil
+	case gorm.GetDBConnector:
+		return c.GetDBConn()
+	}
+	return nil, gorm.ErrInvalidDB
+}
+
 // isStalePlan reports whether err is Postgres telling us this
 // connection's cached plan is stale.
 func isStalePlan(err error) bool {

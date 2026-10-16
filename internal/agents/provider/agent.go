@@ -85,6 +85,12 @@ type Agent struct {
 	// boundary (status stuck "running", nothing flushed).
 	idleKilled bool
 
+	// stopCause is why wick itself last stopped or killed a process of
+	// this agent, and stopCausePID which process it was. Read when an
+	// exit is reported, so a signal death says whether wick sent it.
+	stopCause    string
+	stopCausePID int
+
 	// sliceOOMAtSpawn snapshots the agents slice's oom counter when this
 	// spawn started. ClassifyExit diffs it against the counter at exit to
 	// attribute a kill to the aggregate slice ceiling — the slice counter
@@ -103,6 +109,28 @@ type Agent struct {
 	// turnMsg is the message the current respawn turn started with;
 	// retriedMsg the last one re-run after a quota hit (once per message).
 	turnMsg, retriedMsg string
+	// lastSent is the last message handed to the CLI in any send mode, as
+	// sent (sender line included), and lastSentAt when; a failover
+	// re-sends or quotes it. turnErr: an Error ended a turn since then.
+	lastSent   string
+	lastSentAt time.Time
+	turnErr    bool
+	// turnOpen: a turn was sent and has not ended yet — a message sent
+	// meanwhile joins lastSent instead of replacing it. turns counts the
+	// turns started, so FailoverMsgKey is told only for the first.
+	turnOpen bool
+	turns    int
+	// failingOver latches once the pool took this agent's failed turn
+	// over to another provider (OnFailover): the process only waits to be
+	// killed, so its later Done/Error are swallowed and nothing queued on
+	// it runs here.
+	failingOver bool
+	// asking: OnFailover is deciding on the failed turn right now. A
+	// message written to stdin meanwhile (or after the pool took the turn
+	// over) reaches a process the failover kills before it reads it, so
+	// it is kept in askSent too and TakePending hands it to the failover.
+	asking  bool
+	askSent []string
 	// modelOverride replaces cfg.ModelID once an auto-retry moved this
 	// agent off a refused model (modelretry.go); modelRetryMsg is the
 	// message being retried, modelRetries/modelTried its retries so far.
@@ -132,6 +160,18 @@ type Agent struct {
 	// watcher can cancel the kill when the subprocess produces output
 	// during the KillAfterIdle window.
 	activityCh chan struct{}
+
+	// unanswered holds the messages written to stdin since the last stdout
+	// line. Non-empty at an idle kill means the process took them and never
+	// said a word: the turn never started, and without handing them back
+	// (TakeUnanswered) they died with the process — the person saw no
+	// reply, no event, nothing.
+	unanswered []string
+	// unansweredMid is how many of the trailing unanswered messages were
+	// sent while a turn was already open. The CLI folds those into its NEXT
+	// turn, so output of the turn already running is not an answer to them:
+	// only the end of that turn promotes them (turnEnded).
+	unansweredMid int
 }
 
 // ExitReason classifies why the subprocess ended. The pool uses this
@@ -283,6 +323,20 @@ type Options struct {
 	// instance. Empty = that provider's own default. Forwarded verbatim
 	// into SpawnOptions.
 	ModelID string
+	// OnFailover, when set, is asked once per turn that fails with a
+	// classified error (ErrKind) no model retry or account rotation
+	// already took: a Rerun verdict turns the Error into a Warning notice
+	// before anything else sees it, and the pool carries the turn on
+	// another provider. nil = errors surface as they always did.
+	OnFailover func(FailoverRequest) FailoverVerdict
+	// OnTurnOK fires (in its own goroutine) after a turn ends in Done with
+	// no error since the message that started it, sentAt being when that
+	// message went out. The pool clears the account's failure with it.
+	OnTurnOK func(sentAt time.Time)
+	// FailoverMsgKey marks a spawn made to carry a failover run on: the
+	// first turn's failure reports it (FailoverRequest.MsgKey), so the
+	// pool keeps counting that run's tried targets and hops.
+	FailoverMsgKey string
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -468,7 +522,8 @@ func (a *Agent) Send(text string) error {
 	// Release a.mu before I/O so callers of drainPending (which also
 	// acquires a.mu) cannot deadlock if the stdin pipe blocks.
 	a.mu.Lock()
-	if !a.running || a.proc == nil {
+	// stopped: StopIfIdle claimed the process; the pool re-buffers.
+	if a.stopped || !a.running || a.proc == nil {
 		a.mu.Unlock()
 		return errors.New("agent not running")
 	}
@@ -482,10 +537,215 @@ func (a *Agent) Send(text string) error {
 		)
 	}
 	proc := a.proc
+	// The turn opens BEFORE the write, under the same lock as the stopped
+	// check: a fast CLI's Done can arrive before the write returns, and
+	// StopIfIdle must never see an idle agent a message is going into.
+	prevSent, prevAt, prevErr, prevOpen, prevTurns := a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns
+	midTurn := a.turnOpen
+	a.unanswered = append(a.unanswered, text)
+	if midTurn {
+		a.unansweredMid++
+	}
+	a.noteSentLocked(text)
+	if a.asking || a.failingOver {
+		a.askSent = append(a.askSent, text)
+	}
 	a.mu.Unlock()
 	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
-	_, err := proc.Stdin().Write([]byte(payload + "\n"))
-	return err
+	if _, err := proc.Stdin().Write([]byte(payload + "\n")); err != nil {
+		a.mu.Lock()
+		a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen, a.turns = prevSent, prevAt, prevErr, prevOpen, prevTurns
+		if n := len(a.unanswered); n > 0 && a.unanswered[n-1] == text {
+			a.unanswered = a.unanswered[:n-1]
+			if midTurn && a.unansweredMid > 0 {
+				a.unansweredMid--
+			}
+		}
+		if n := len(a.askSent); n > 0 && a.askSent[n-1] == text {
+			a.askSent = a.askSent[:n-1]
+		}
+		a.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// NoteStopCause records why wick is about to stop or kill the current
+// process. Callers with a more specific reason than Stop's default set it
+// right before Stop. Empty is ignored.
+func (a *Agent) NoteStopCause(cause string) {
+	if cause == "" {
+		return
+	}
+	a.mu.Lock()
+	a.noteStopCauseLocked(cause)
+	a.mu.Unlock()
+}
+
+// noteStopCauseLocked is NoteStopCause with a.mu held. A cause already
+// noted for the same process wins: the caller that set it knew more.
+func (a *Agent) noteStopCauseLocked(cause string) {
+	pid := 0
+	if a.proc != nil {
+		pid = a.proc.Pid()
+	}
+	if a.stopCause != "" && a.stopCausePID == pid {
+		return
+	}
+	a.stopCause, a.stopCausePID = cause, pid
+}
+
+// wickStopCause returns the cause wick noted for the process pid, or "".
+func (a *Agent) wickStopCause(pid int) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopCause == "" || a.stopCausePID != pid {
+		return ""
+	}
+	return a.stopCause
+}
+
+// StopIfIdle is Stop for an agent between turns, decided atomically: it
+// refuses (false) when a turn is open (Send opens it before writing) or a
+// message waits in the queue. Once it says yes, Send answers "agent not running",
+// so a message racing it lands in the pool's buffer, never in a process
+// on its way out.
+func (a *Agent) StopIfIdle() bool {
+	a.mu.Lock()
+	if a.turnOpen || a.turnActive || a.respawning || len(a.pendingQueue) > 0 {
+		a.mu.Unlock()
+		return false
+	}
+	a.stopped = true
+	a.noteStopCauseLocked("idle reap (StopIfIdle)")
+	a.mu.Unlock()
+	_ = a.Stop()
+	return true
+}
+
+// noteSentLocked records text as the message the next turn answers.
+// Caller holds a.mu.
+func (a *Agent) noteSentLocked(text string) {
+	if a.turnOpen && a.lastSent != "" {
+		// Sent mid-turn: the CLI folds it into the running turn, so a
+		// failover must re-send both.
+		a.lastSent += "\n\n" + text
+		return
+	}
+	a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen = text, time.Now(), false, true
+	a.turns++
+}
+
+// turnEnded closes the turn noteSentLocked opened.
+func (a *Agent) turnEnded() {
+	a.mu.Lock()
+	a.turnOpen = false
+	// Messages folded into this turn now head the next one.
+	a.unansweredMid = 0
+	a.mu.Unlock()
+}
+
+// ExitReported reports whether this agent's current process already
+// fired its exit hook — how the pool tells an agent's own exit from a
+// late one of the process it replaced.
+func (a *Agent) ExitReported() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.exitReasonSet
+}
+
+// LastSent is the last message handed to the CLI, as sent.
+func (a *Agent) LastSent() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastSent
+}
+
+// TakePending hands over (and forgets) the messages queued behind the
+// running turn of a respawn-mode agent, and those written to stdin while
+// OnFailover was deciding (append mode), for a failover to re-send them
+// on the next provider. Queued messages come first: they were sent first.
+func (a *Agent) TakePending() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	q := append(a.pendingQueue, a.askSent...)
+	a.pendingQueue, a.askSent = nil, nil
+	return q
+}
+
+// FailingOver reports whether the pool took this agent's turn elsewhere.
+func (a *Agent) FailingOver() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.failingOver
+}
+
+// rotationQueuedLocked: the opencode account rotation already re-queued
+// this turn's message (requeueForRetry), so the turn is retried here and
+// not failed over. Caller holds a.mu.
+func (a *Agent) rotationQueuedLocked() bool {
+	return a.turnMsg != "" && a.retriedMsg == a.turnMsg &&
+		len(a.pendingQueue) > 0 && a.pendingQueue[0] == a.turnMsg
+}
+
+// askFailover offers a failed turn to OnFailover. ev is the Error, text
+// the turn's non-synthetic output. On a Rerun verdict it returns the
+// Warning that replaces ev and latches failingOver.
+func (a *Agent) askFailover(ev event.AgentEvent, text string) (event.AgentEvent, bool) {
+	if a.cfg.OnFailover == nil || a.cfg.Instance == nil {
+		return ev, false
+	}
+	a.mu.Lock()
+	userMsg, rotated, st := a.lastSent, a.rotationQueuedLocked(), a.store
+	msgKey := ""
+	if a.turns == 1 {
+		msgKey = a.cfg.FailoverMsgKey
+	}
+	if !rotated {
+		// From here on a message written to stdin is not in userMsg.
+		a.asking, a.askSent = true, nil
+	}
+	a.mu.Unlock()
+	if rotated {
+		return ev, false
+	}
+	defer func() {
+		// Taken over: what was written meanwhile stays for TakePending
+		// (the pool takes it again once the process is stopped).
+		a.mu.Lock()
+		a.asking = false
+		if !a.failingOver {
+			a.askSent = nil
+		}
+		a.mu.Unlock()
+	}()
+	var inflight []store.TurnEvent
+	if st != nil {
+		inflight = st.InFlightEvents()
+	}
+	snap := NewTurnSnapshot(userMsg, text, inflight)
+	v := a.cfg.OnFailover(FailoverRequest{
+		SessionID: a.cfg.SessionID,
+		Instance:  InstanceTag(a.cfg.Instance.Type, a.cfg.Instance.Name),
+		Kind:      ev.ErrKind,
+		ResetAt:   ev.ResetAt,
+		Text:      userMsg,
+		Produced:  snap.Produced,
+		Snapshot:  snap,
+		ErrorMsg:  ev.ErrorMsg,
+		MsgKey:    msgKey,
+	})
+	if !v.Rerun {
+		return ev, false
+	}
+	a.mu.Lock()
+	a.failingOver = true
+	a.mu.Unlock()
+	notice := v.Notice
+	if notice == "" {
+		notice = "Provider failed over to " + v.Target
+	}
+	return event.AgentEvent{Type: event.Warning, ErrorMsg: notice, ErrKind: ev.ErrKind, ResetAt: ev.ResetAt}, true
 }
 
 // respawnWithMessage stops the current process (if any) and spawns a new one
@@ -515,7 +775,7 @@ func (a *Agent) requeueForRetry(msg string) bool {
 func (a *Agent) drainPending() {
 	a.mu.Lock()
 	a.turnActive = false
-	if a.stopped || len(a.pendingQueue) == 0 {
+	if a.stopped || a.failingOver || len(a.pendingQueue) == 0 {
 		a.mu.Unlock()
 		return
 	}
@@ -608,6 +868,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	// (agent dead, pool frees slot).
 	if a.running && a.proc != nil {
 		a.respawning = true
+		a.noteStopCauseLocked("respawn for the next turn")
 		if a.cancel != nil {
 			a.cancel()
 		}
@@ -636,6 +897,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	a.parser = a.cfg.ParserFactory()
 	a.exitReasonSet = false
 	a.turnMsg = text
+	a.noteSentLocked(text)
 
 	log.Debug().Str("message", text).Str("resume_id", resumeID).Msg("agent.respawn: spawning with initial message")
 
@@ -777,6 +1039,7 @@ func (a *Agent) Stop() error {
 	// stopped latches first so any in-flight drainPending / Send bails out
 	// instead of respawning a fresh process after the kill.
 	a.stopped = true
+	a.noteStopCauseLocked("Stop()")
 	// respawn-mode (codex) is one process per turn: between turns the
 	// process is dead but the AGENT still owns its pool slot. Its reader
 	// exits via ExitClean (which the pool deliberately ignores to keep the
@@ -1164,6 +1427,12 @@ func (a *Agent) run(ctx context.Context) {
 	// refusal after it must not re-run the turn (modelretry.go); retried
 	// latches the one re-queue a turn may make.
 	produced, retried := false, false
+	// turnText is the turn's non-synthetic text, for a failover snapshot;
+	// askedFor is the send (lastSentAt) the last failover question was
+	// about: one question per message, as codex reports one failure as
+	// two Errors.
+	var turnText strings.Builder
+	var askedFor time.Time
 	// Separates the assistant messages of one turn (text → tool → text) so
 	// they do not arrive glued together. Per-run state; the loop below is
 	// the only writer.
@@ -1178,6 +1447,16 @@ func (a *Agent) run(ctx context.Context) {
 				goto drained
 			}
 			line = l
+			// Any output means the process is working on what it was sent,
+			// except what was sent while the turn producing it was already
+			// running: that waits for its own turn (see unansweredMid).
+			a.mu.Lock()
+			if keep := a.unansweredMid; keep > 0 && keep <= len(a.unanswered) {
+				a.unanswered = append([]string(nil), a.unanswered[len(a.unanswered)-keep:]...)
+			} else {
+				a.unanswered, a.unansweredMid = nil, 0
+			}
+			a.mu.Unlock()
 		case <-ctx.Done():
 			// Killed (Stop / respawn). Exit immediately. Do NOT block on
 			// proc.Wait() here — on Windows Wait() can hang for seconds
@@ -1228,6 +1507,18 @@ func (a *Agent) run(ctx context.Context) {
 			evs = []event.AgentEvent{{Type: event.Warning, ErrorMsg: err.Error(), Raw: line}}
 		}
 		for _, ev := range evs {
+			// A live rate-limit report keeps the usage card current without
+			// probing the usage endpoint. Read before any turn handling: it
+			// is about the account, whatever happens to the turn.
+			if ev.RateLimit != nil {
+				observeRateLimit(a.cfg.Instance, ev.RateLimit)
+			}
+			// Taken over by a failover: this process only waits for the
+			// kill, and its turn end must not reach anyone — the turn goes
+			// on (and ends) on the next provider.
+			if (ev.Type == event.Done || ev.Type == event.Error) && a.FailingOver() {
+				continue
+			}
 
 			// A tool boundary ends the current assistant message: text that comes
 			// after it is a NEW message and needs a paragraph break, or the two
@@ -1243,9 +1534,11 @@ func (a *Agent) run(ctx context.Context) {
 			if ev.Type == event.TextDelta {
 				ev.Text = joiner.breakBefore(ev.Text) + ev.Text
 			}
-			switch ev.Type {
-			case event.TextDelta, event.ToolUse, event.ToolResult:
+			if countsAsProduced(ev) {
 				produced = true
+			}
+			if ev.Type == event.TextDelta && !ev.Synthetic {
+				turnText.WriteString(ev.Text)
 			}
 
 			switch ev.Type {
@@ -1290,7 +1583,30 @@ func (a *Agent) run(ctx context.Context) {
 					if !retried {
 						retried = a.retryRefusedModel(watch, produced)
 					}
+					// Failover comes last: a model retry or an account
+					// rotation already re-runs the turn here.
+					a.mu.Lock()
+					sentAt := a.lastSentAt
+					a.mu.Unlock()
+					if !retried && ev.ErrKind != event.ErrNone && (askedFor.IsZero() || !sentAt.Equal(askedFor)) {
+						askedFor = sentAt
+						if w, ok := a.askFailover(ev, turnText.String()); ok {
+							ev = w
+						}
+					}
+					a.mu.Lock()
+					a.turnErr = true
+					a.mu.Unlock()
+				} else if a.cfg.OnTurnOK != nil && ev.ErrKind == event.ErrNone {
+					a.mu.Lock()
+					ok, at := !a.turnErr && !a.lastSentAt.IsZero(), a.lastSentAt
+					a.mu.Unlock()
+					if ok {
+						go a.cfg.OnTurnOK(at)
+					}
 				}
+				turnText.Reset()
+				a.turnEnded()
 				// Turn ended (normally or via error) — always reset
 				// toolInFlight so a crash mid-tool doesn't leave the idle
 				// timer stopped forever.
@@ -1434,6 +1750,27 @@ drained:
 			}
 		}
 	}
+	// Whether wick sent the signal is only answerable here: the exit code
+	// alone reads the same for a wick Stop and a kill from outside.
+	var sigNote string
+	if reason == ExitError {
+		exitPID := 0
+		if proc != nil {
+			exitPID = proc.Pid()
+		}
+		sig := ""
+		if waitErr != nil {
+			sig = exitSignalName(exitCode, waitErr.Error())
+		}
+		cause := a.wickStopCause(exitPID)
+		if sig != "" {
+			ev = ev.Str("signal", sig)
+		}
+		if cause != "" {
+			ev = ev.Str("wick_stop_cause", cause)
+		}
+		sigNote = exitSignalNote(sig, cause)
+	}
 	ev.Msg("agent.reader: subprocess exited")
 
 	// An OOM kill is indistinguishable from any other SIGKILL by exit code
@@ -1480,10 +1817,61 @@ drained:
 	default:
 		detail.ReasonDetail = "subprocess exited abnormally (no exit code or stderr captured)"
 	}
+	if sigNote != "" && oomDetail == "" {
+		detail.ReasonDetail += "; " + sigNote
+	}
 
 	// Chat visibility for kill/crash is handled inside exitReasonD so
 	// idle/stop paths (which only call exitReason) also surface a reason.
 	a.exitReasonD(detail)
+}
+
+// exitSignalName names the signal that ended a process: from the wait
+// error when the process itself was signalled ("signal: terminated"), or
+// from a 128+N exit code when a wrapper exited on its behalf. "" when the
+// exit was not a signal this recognises.
+func exitSignalName(exitCode int, waitErr string) string {
+	byText := map[string]string{
+		"signal: terminated": "SIGTERM",
+		"signal: killed":     "SIGKILL",
+		"signal: interrupt":  "SIGINT",
+		"signal: hangup":     "SIGHUP",
+		"signal: aborted":    "SIGABRT",
+	}
+	if name, ok := byText[strings.TrimSpace(waitErr)]; ok {
+		return name
+	}
+	switch exitCode {
+	case 128 + 1:
+		return "SIGHUP"
+	case 128 + 2:
+		return "SIGINT"
+	case 128 + 6:
+		return "SIGABRT"
+	case 128 + 9:
+		return "SIGKILL"
+	case 128 + 15:
+		return "SIGTERM"
+	}
+	return ""
+}
+
+// exitSignalNote is the clause added to a crash's reason detail: which
+// signal, and whether wick sent it. Never guesses an outside cause — with
+// no wick record it says only that none was recorded. "" when there is
+// neither a signal nor a wick record to report.
+func exitSignalNote(sig, wickCause string) string {
+	if sig == "" && wickCause == "" {
+		return ""
+	}
+	who := "dihentikan dari luar wick (bukan Stop/Kill wick): tidak ada Stop/Kill dari wick yang tercatat"
+	if wickCause != "" {
+		who = "dihentikan oleh wick: " + wickCause
+	}
+	if sig == "" {
+		return who
+	}
+	return sig + ", " + who
 }
 
 // ExitReasonName mirrors the ExitReason iota for log lines. Kept local
@@ -1646,6 +2034,18 @@ func isCleanExitErr(err error) bool {
 	return false
 }
 
+// TakeUnanswered returns, and forgets, the messages written to stdin that
+// the process never produced a single line of output after. Read by the
+// pool after an idle kill so those messages go back to the session buffer
+// for the next spawn instead of vanishing with this one.
+func (a *Agent) TakeUnanswered() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	msgs := a.unanswered
+	a.unanswered, a.unansweredMid = nil, 0
+	return msgs
+}
+
 // procBusy asks the running process whether it is still working on its
 // turn, for those that can say (BusyReporter). A silent stream is then not
 // taken for a dead one: a server-mode turn waiting on a long tool or a
@@ -1671,6 +2071,14 @@ func (a *Agent) procBusy() bool {
 func (a *Agent) idleKill() {
 	a.mu.Lock()
 	a.idleKilled = true
+	a.noteStopCauseLocked("idle timer")
+	if !a.turnOpen {
+		// Every turn that was sent has ended: the process finished what it
+		// took, mid-turn messages included (the CLI folded them into the
+		// answer). An idle reap of a finished agent hands nothing back, or a
+		// reply already given would be re-delivered as "not answered".
+		a.unanswered, a.unansweredMid = nil, 0
+	}
 	proc := a.proc
 	a.mu.Unlock()
 	if a.store != nil && a.state != nil && a.state.Current() != state.Idle {
@@ -1682,4 +2090,18 @@ func (a *Agent) idleKill() {
 		_ = proc.Kill()
 	}
 	a.exitReason(ExitIdle)
+}
+
+// countsAsProduced reports whether ev is output the turn really made: text
+// from the model or a tool that ran. A Synthetic TextDelta is the CLI's
+// own notice (claude's "You've hit your session limit"), not the model's
+// work, so a turn that only got that far has produced nothing.
+func countsAsProduced(ev event.AgentEvent) bool {
+	switch ev.Type {
+	case event.TextDelta:
+		return !ev.Synthetic
+	case event.ToolUse, event.ToolResult:
+		return true
+	}
+	return false
 }

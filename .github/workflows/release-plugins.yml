@@ -414,19 +414,38 @@ jobs:
 
       - name: Commit catalog to master if changed
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- plugins/plugins.json; then
-            echo "catalog unchanged"
-            exit 0
-          fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add plugins/plugins.json
-          git commit -m "chore(plugins): regenerate catalog after release [skip ci]"
-          # Push to master explicitly (we checked it out above). [skip ci] keeps
-          # any push-triggered workflow from re-firing on this chore commit.
-          git push origin HEAD:master
+          # No [skip ci]: the push must fire sync-develop.yml so develop gets
+          # the catalog too. Master can move under us (the develop squash, a
+          # release-sync squash), so a rejected push refetches master,
+          # regenerates the catalog on top of it and tries again. Never forced.
+          for i in 1 2 3; do
+            if git diff --quiet -- plugins/plugins.json; then
+              echo "catalog unchanged"
+              exit 0
+            fi
+            git add plugins/plugins.json
+            git commit -m "chore(plugins): regenerate catalog after release"
+            # Push to master explicitly (we checked it out above).
+            if git push origin HEAD:master; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $i), rebasing on the new master..."
+            sleep 10
+            git fetch origin master
+            # The catalog is generated, so instead of resolving a rebase
+            # conflict drop our commit and regenerate on the new master.
+            git reset --hard origin/master
+            "$RUNNER_TEMP/wick" plugin catalog --repo "$REPO" --out plugins/plugins.json
+          done
+          echo "::error::could not push the catalog to master after 3 attempts"
+          exit 1
 
   # Reclaim the "Latest" badge for the core wick release. Even though plugin
   # releases set make_latest:false, GitHub can still hand Latest to a plugin

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/remote"
 )
 
@@ -226,10 +228,17 @@ func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, err
 	if threadTS == "" {
 		threadTS = ts
 	}
+	// The turn before is only this one's predecessor in the same thread.
+	prevSent := ""
+	if st.ThreadTS == threadTS && st.Channel == channel {
+		prevSent = st.SentTS
+	}
 	st.Target, st.Channel, st.ThreadTS, st.LastTS, st.SentTS = s.placeKey(), channel, threadTS, ts, ts
+	st.Token, st.PrevSentTS = token, prevSent
 	saveState(turn.SessionDir, st)
 	t := newTracker(channel, threadTS, ts, token, s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
 	t.targeted = s.cfg.EffectiveListen() == ListenTarget && s.cfg.TargetID() != ""
+	t.prevSentTS = prevSent
 	s.mu.Lock()
 	s.cur, s.dir = t, turn.SessionDir
 	s.mu.Unlock()
@@ -269,7 +278,7 @@ func (s *Source) Fetch(ctx context.Context, h remote.Handle) ([]remote.Event, re
 	if t == nil {
 		return nil, h, nil
 	}
-	out, err := s.fetch(ctx, t)
+	out, err := s.fetch(ctx, t, false)
 	if err != nil {
 		return nil, h, err
 	}
@@ -279,19 +288,46 @@ func (s *Source) Fetch(ctx context.Context, h remote.Handle) ([]remote.Event, re
 	return out, h, nil
 }
 
-func (s *Source) fetch(ctx context.Context, t *tracker) ([]remote.Event, error) {
-	msgs, err := s.deps.API.Replies(ctx, t.channel, t.threadTS, t.sentTS)
+// fetch reads the turn's thread. strictOld: a failed read of the older
+// window fails the whole read (Recheck) instead of being skipped.
+func (s *Source) fetch(ctx context.Context, t *tracker, strictOld bool) ([]remote.Event, error) {
+	// Two windows: after our message, a page as always; then, when the
+	// turn hears from earlier (readFrom), the window before our message —
+	// read apart so a long earlier turn never pushes this turn's newest
+	// replies off the page.
+	read := func(oldest, latest string) ([]Message, bool, error) {
+		msgs, err := s.deps.API.Replies(ctx, t.channel, t.threadTS, oldest, latest)
+		if err != nil {
+			return nil, false, err
+		}
+		whole := len(msgs) < repliesLimit
+		if t.topLevel {
+			top, err := s.deps.API.History(ctx, t.channel, oldest, latest)
+			if err != nil {
+				return nil, false, err
+			}
+			whole = whole && len(top) < repliesLimit
+			msgs = append(msgs, top...)
+		}
+		return msgs, whole, nil
+	}
+	msgs, newWhole, err := read(t.sentTS, "")
 	if err != nil {
 		return nil, err
 	}
-	whole := len(msgs) < repliesLimit
-	if t.topLevel {
-		top, err := s.deps.API.History(ctx, t.channel, t.sentTS)
-		if err != nil {
+	oldWhole := false
+	if from := t.readFrom(); from != t.sentTS {
+		old, whole, err := read(from, t.sentTS)
+		switch {
+		case err == nil:
+			msgs, oldWhole = append(msgs, old...), whole
+		case strictOld:
 			return nil, err
+		default:
+			// The newest window is what a live turn needs most: its result
+			// stands, the older window is read again next poll.
+			log.Debug().Err(err).Str("channel", t.channel).Msg("slackremote: older window read failed")
 		}
-		whole = whole && len(top) < repliesLimit
-		msgs = append(msgs, top...)
 	}
 	var out []remote.Event
 	seen := map[string]bool{}
@@ -299,10 +335,10 @@ func (s *Source) fetch(ctx context.Context, t *tracker) ([]remote.Event, error) 
 		seen[m.TS] = true
 		out = append(out, t.observe(m)...)
 	}
-	// A page short of the limit is the whole thread since the turn's
-	// message: a reply missing from it was deleted.
-	if whole {
-		out = append(out, t.prune(seen)...)
+	// A page short of the limit is the whole window: a reply missing
+	// from it was deleted.
+	if newWhole || oldWhole {
+		out = append(out, t.prune(seen, newWhole, oldWhole)...)
 	}
 	// Push may have delivered the same change; the tracker reports each
 	// change once, so whatever is left in its buffer is drained here too.
@@ -332,8 +368,11 @@ func (s *Source) End(remote.Handle) {
 		return
 	}
 	s.deps.Router.remove(t)
+	st := LoadState(dir)
+	if st.SentTS != t.sentTS {
+		return // a later turn's state
+	}
 	if t.lastTS != "" {
-		st := LoadState(dir)
 		st.LastTS = t.lastTS
 		saveState(dir, st)
 	}
@@ -359,16 +398,19 @@ func (s *Source) Recheck(ctx context.Context, sessionDir string) (Recheck, error
 	if err != nil {
 		return Recheck{}, errors.New("Slack: " + err.Error())
 	}
-	// The marker's token is not kept, so a marker is matched by its
-	// prefix only: a reply that ends with it is complete.
-	t := newTracker(st.Channel, st.ThreadTS, sent, "", s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
-	evs, err := s.fetch(ctx, t)
+	// State from before the marker's token was kept matches a marker by
+	// its prefix only: a reply that ends with it is complete. With the
+	// token, a message from the turn before edited into this turn's reply
+	// is read as the turn did (tracker.takesOlder).
+	t := newTracker(st.Channel, st.ThreadTS, sent, st.Token, s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
+	t.prevSentTS = st.PrevSentTS
+	evs, err := s.fetch(ctx, t, true)
 	if err != nil && strings.Contains(err.Error(), "thread_not_found") && st.SentTS != "" && st.SentTS != st.ThreadTS {
 		// The turn went out top-level while the state still named a thread
 		// from an earlier target, so its replies sit under the turn's own
 		// message. Read that thread, and keep it for the next turn.
 		t = newTracker(st.Channel, st.SentTS, st.SentTS, "", s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
-		if evs, err = s.fetch(ctx, t); err == nil {
+		if evs, err = s.fetch(ctx, t, true); err == nil {
 			st.ThreadTS, st.Target = st.SentTS, s.placeKey()
 			saveState(sessionDir, st)
 		}
@@ -389,7 +431,10 @@ func (s *Source) Recheck(ctx context.Context, sessionDir string) (Recheck, error
 		out.Label = t.label
 	}
 	t.mu.Unlock()
-	if i := strings.LastIndex(text, MarkerPrefix); i >= 0 && !strings.Contains(text[i:], "\n") {
+	// Without the token (state from before it was kept) a marker is
+	// matched by its prefix; with it, compose already took this turn's
+	// marker off, and another turn's never ends this one.
+	if i := strings.LastIndex(text, MarkerPrefix); t.token == "" && i >= 0 && !strings.Contains(text[i:], "\n") {
 		text, out.Done = strings.TrimRight(text[:i], " \n*_`~"), true
 	}
 	out.Text = text
@@ -448,7 +493,7 @@ func (s *Source) Test(ctx context.Context) remote.TestResult {
 	step := 0
 	steps := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second}
 	for {
-		if evs, ferr := s.fetch(ctx, t); ferr == nil {
+		if evs, ferr := s.fetch(ctx, t, false); ferr == nil {
 			for _, ev := range evs {
 				if (ev.Kind == remote.EventText || ev.Kind == remote.EventDraft) && ev.Text != "" {
 					reply := ev.Text

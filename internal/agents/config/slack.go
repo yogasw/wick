@@ -12,10 +12,24 @@ package config
 // role family (anyone who passed access / workspace admins / a custom list)
 // allowed to resolve interactive gate buttons.
 type SlackChannelConfig struct {
-	Mode          string `wick:"dropdown=socket|http;hidden;key=mode;group=Connection|Transport credentials. Socket mode needs the bot + app token; HTTP mode needs the bot token + signing secret and a public URL.;desc=Connection mode."`
+	Mode string `wick:"dropdown=socket|http;hidden;key=mode;group=Connection|Transport credentials. Socket mode needs the bot + app token. HTTP mode needs the bot token + signing secret and a public URL.;desc=Connection mode."`
+	// Enabled is the instance's on/off switch on the Channels page. "" (a
+	// row saved before the switch existed) counts as on; only "false"
+	// stops the bot, and saving a token never turns it back on.
+	Enabled       string `wick:"bool;default=true;hidden;key=enabled;group=Connection;desc=Run this Slack bot. Off stops it right away and keeps it stopped across restarts. The tokens stay stored. Turn it back on to reconnect — refused while a Team agent holds the same bot. If a Team agent used this app with a rotating app token (xoxe.xapp-), paste fresh tokens first: the stored refresh token has been spent."`
 	BotToken      string `wick:"secret;hidden;key=bot_token;group=Connection;desc=Bot token (xoxb-...)."`
-	AppToken      string `wick:"secret;hidden;key=app_token;group=Connection;desc=App token (xapp-...). Required for socket mode."`
+	AppToken      string `wick:"secret;hidden;key=app_token;group=Connection;desc=App-level token (xapp-... or xoxe.xapp-... when token rotation is on). Required for socket mode."`
 	SigningSecret string `wick:"secret;hidden;key=signing_secret;group=Connection;desc=Signing secret. Required for http mode."`
+
+	// Token rotation (xoxe.xapp- app tokens). wick refreshes the app token
+	// itself through oauth.v2.access and writes the new pair back here.
+	AppRefreshToken string `wick:"secret;hidden;key=app_refresh_token;group=Token Rotation|Only needed when Token rotation is ON in your Slack app (app token starts with xoxe.xapp-). Leave empty otherwise.;desc=Refresh token (xoxe-1-...) issued with a rotating app-level token. Required when the app token starts with xoxe.xapp-."`
+	ClientID        string `wick:"hidden;key=client_id;group=Token Rotation;desc=Slack app Client ID (Basic Information - App Credentials). Required for a rotating app token."`
+	ClientSecret    string `wick:"secret;hidden;key=client_secret;group=Token Rotation;desc=Slack app Client Secret (Basic Information - App Credentials). Required for a rotating app token."`
+	// AppTokenExpiresAt is internal: RFC 3339 expiry of the current rotating
+	// app token, written by wick after each refresh. Never set by hand, and
+	// the `internal` flag keeps it off every config page.
+	AppTokenExpiresAt string `wick:"hidden;internal;key=app_token_expires_at;group=Token Rotation;desc=Internal - expiry of the current rotating app token (RFC 3339). Written by wick after each refresh."`
 
 	UsersMode       string `wick:"dropdown=all|whitelist;default=all;hidden;key=users_mode;group=Access Control|Who may trigger agents. Users, groups and bots are combined via OR (pass when any matches) and channels are an independent gate.;desc=Restrict which Slack users can trigger agents."`
 	AllowedUsers    string `wick:"picker=slack.users;hidden;key=allowed_users;visible_when=users_mode:whitelist;group=Access Control;desc=Allowed users."`
@@ -31,6 +45,8 @@ type SlackChannelConfig struct {
 	// HideSubAgentStatus is phrased as an opt-out so the zero value — every
 	// channel row saved before the field existed — keeps the behaviour on.
 	HideSubAgentStatus bool `wick:"bool;hidden;key=hide_subagent_status;group=Agent Behaviour;desc=Stay quiet about background sub-agents. Off (default): the thread gets one short message when a sub-agent is started in the background, and the assistant banner keeps showing which sub-agents are still working after the agent's own turn ends. On: neither."`
+	// ThreadCatchUpEnabled is opt-in: off for every bot until turned on.
+	ThreadCatchUpEnabled bool `wick:"bool;hidden;key=thread_catchup_enabled;group=Agent Behaviour;desc=Catch the agent up on the thread. Off (default): a mention or the 🤖 switch wakes an existing thread session with only the message that woke it. On: that message is preceded by the replies posted in the thread since the previous waking message (anyone's, the bot's own excluded, up to 30 messages / 8000 bytes, oldest dropped first), marked as data from the thread, not instructions. Costs one conversations.replies call per such turn."`
 
 	ReactionTriggerEnabled bool   `wick:"bool;hidden;key=reaction_trigger_enabled;group=Reaction Auto-Reply|Put 🤖 on a thread's top message to auto-reply to every new reply without a mention — remove it to stop. Threads are still started by @mention only, so this never creates a new session.\nSlack app must subscribe to events reaction_added, reaction_removed, and message.channels, with scopes reactions:read + channels:history. The shipped slack-app-manifest.json already includes them.;desc=Enable the 🤖 auto-reply switch."`
 	ReactionChannelsMode   string `wick:"dropdown=all|whitelist;default=whitelist;hidden;key=reaction_channels_mode;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Which channels honour the 🤖 switch. all = any channel the bot is in. whitelist = only the channels listed below."`
@@ -41,7 +57,6 @@ type SlackChannelConfig struct {
 	GateApproverGroups string `wick:"picker=slack.usergroups;hidden;key=gate_approver_groups;visible_when=gate_approvers:custom;group=Approval Gates;desc=Custom approver user groups."`
 
 	ProjectID string `wick:"dropdown;hidden;key=project_id;group=Routing;desc=Project to use for sessions from this Slack channel. Leave empty to use the global default."`
-	PublicURL string `wick:"hidden;key=public_url;group=Routing;desc=Public URL for Slack HTTP mode webhooks."`
 }
 
 // DefaultSlackChannelConfig returns the empty Slack defaults. Slack stays off

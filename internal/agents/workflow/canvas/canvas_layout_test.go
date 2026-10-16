@@ -154,3 +154,100 @@ func TestComputeLayout_ChildrenUnderTheirPort(t *testing.T) {
 		t.Fatalf("fallback target not one row under its source (y=%d)", y)
 	}
 }
+
+// A note that wrapped a lane follows it through auto layout, and its top
+// sits a full title height above the first card, so the title (heading
+// plus a wrapped summary) is never under the trigger.
+func TestFitNotes_RewrapsLaneAndClearsTitle(t *testing.T) {
+	w := multiTriggerWorkflow()
+	for i := range w.Graph.Nodes {
+		if w.Graph.Nodes[i].ID == "note" {
+			w.Graph.Nodes[i].Content = "### Inquiry baru masuk\nSetiap inquiry baru di #integration-and-ops dicatat dan diberi penanda di thread-nya."
+			w.Graph.Nodes[i].Width, w.Graph.Nodes[i].Height = 320, 700
+		}
+	}
+	// Before: the note's title band is 40 high and lane A's cards sit
+	// right under it, some outside lane B's note.
+	old := map[string]any{
+		"note": map[string]any{"x": 0, "y": 0},
+		"t_a":  map[string]any{"x": 50, "y": 40},
+		"a1":   map[string]any{"x": 50, "y": 200},
+		"a2":   map[string]any{"x": 50, "y": 400},
+		"b1":   map[string]any{"x": 900, "y": 200},
+	}
+	moved := computeLayout(w, nil)
+	notes := fitNotes(w, old, moved)
+	p, ok := notes["note"]
+	if !ok {
+		t.Fatal("the note around lane A was not re-wrapped")
+	}
+	nx, ny := p["x"].(int), p["y"].(int)
+	var note workflow.Node
+	for _, n := range w.Graph.Nodes {
+		if n.ID == "note" {
+			note = n
+		}
+	}
+	title := noteTitleHeight(note.Content, note.Width, note.Height)
+	if title < 100 {
+		t.Fatalf("title band %d too small for a heading and a 3-line summary", title)
+	}
+	for _, id := range []string{"t_a", "a1", "a2"} {
+		x, y := posXY(t, moved, id)
+		if y < ny+title {
+			t.Errorf("%s at y=%d covers the title (note y=%d, title %d)", id, y, ny, title)
+		}
+		if x < nx || x+layoutCardW > nx+note.Width || y+layoutCardH > ny+note.Height {
+			t.Errorf("%s (%d,%d) outside the note (%d,%d %dx%d)", id, x, y, nx, ny, note.Width, note.Height)
+		}
+	}
+	if note.Width < 320 {
+		t.Errorf("note narrowed to %d", note.Width)
+	}
+}
+
+// A note that covered no card, or none that moved, is left alone.
+func TestFitNotes_LeavesLooseNotes(t *testing.T) {
+	w := multiTriggerWorkflow()
+	old := map[string]any{"note": map[string]any{"x": 5000, "y": 5000}, "a1": map[string]any{"x": 50, "y": 200}}
+	if out := fitNotes(w, old, computeLayout(w, nil)); len(out) != 0 {
+		t.Fatalf("loose note moved: %v", out)
+	}
+	if out := fitNotes(w, map[string]any{"note": map[string]any{"x": 0, "y": 0}, "a1": map[string]any{"x": 50, "y": 200}}, map[string]map[string]any{}); len(out) != 0 {
+		t.Fatalf("note moved although none of its cards did: %v", out)
+	}
+}
+
+// A node added without a position lands under the lowest card, a note
+// to the right of everything: never on the canvas origin.
+func TestAddNode_DefaultPosition(t *testing.T) {
+	w := multiTriggerWorkflow()
+	w.Canvas = map[string]any{"positions": map[string]any{
+		"t_a":  map[string]any{"x": 160, "y": 60},
+		"a1":   map[string]any{"x": 160, "y": 280},
+		"done": map[string]any{"x": 160, "y": 1160},
+		"b1":   map[string]any{"x": 800, "y": 280},
+		"note": map[string]any{"x": 120, "y": -80},
+	}}
+	if err := addNode(w, workflow.Node{ID: "fresh", Type: workflow.NodeEnd}); err != nil {
+		t.Fatal(err)
+	}
+	if err := addNode(w, workflow.Node{ID: "memo", Type: workflow.NodeStickyNote, Content: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	pos := w.Canvas["positions"].(map[string]any)
+	if got := pos["fresh"].(map[string]any); got["x"] != 160 || got["y"] != 1160+layoutYGap {
+		t.Fatalf("fresh node at %v, want under done", got)
+	}
+	if got := pos["memo"].(map[string]any); got["x"].(int) <= 800+layoutCardW {
+		t.Fatalf("note at %v overlaps the cards", got)
+	}
+	// An explicit position (e.g. a later move in the same apply) wins.
+	pos["kept"] = map[string]any{"x": 1, "y": 2}
+	if err := addNode(w, workflow.Node{ID: "kept", Type: workflow.NodeEnd}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pos["kept"].(map[string]any); got["x"] != 1 {
+		t.Fatalf("existing position overwritten: %v", got)
+	}
+}

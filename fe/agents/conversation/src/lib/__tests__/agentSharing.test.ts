@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { isSharedAgent, sharedLabel, agentMenu, pickableUsers, PICK_LIMIT, sharedChatMode, SHARED_RAIL_NOTE } from "../agentSharing.js";
+import { isSharedAgent, sharedLabel, initialsOf, shareInfo, agentMenu, pickableUsers, PICK_LIMIT, sharedChatMode, SHARED_RAIL_NOTE } from "../agentSharing.js";
+import { chatNeedsAccessCheck, chatListed, noAccessError } from "../agentSharing.js";
 import { REMOTE_HIDDEN_TABS } from "../remoteAgent.js";
 import { rosterEntries } from "../rosterList.js";
 import type { AgentItem } from "../api/team.js";
@@ -47,5 +48,62 @@ describe("agentSharing", () => {
     }
     expect(sharedChatMode({ role: "" } as AgentItem)).toBeNull();
     expect(sharedChatMode(null)).toBeNull();
+  });
+});
+
+import { shareHistoryNote, shareHistoryOn } from "../agentSharing.js";
+
+describe("share history toggle", () => {
+  test("follows the stored value, else the type default", () => {
+    expect(shareHistoryOn({}, true)).toBe(true);
+    expect(shareHistoryOn({}, false)).toBe(false);
+    expect(shareHistoryOn({ history_visible: false }, true)).toBe(false);
+    expect(shareHistoryOn({ history_visible: true }, false)).toBe(true);
+  });
+  test("words the note per agent type", () => {
+    expect(shareHistoryNote("")).toContain("project folder");
+    expect(shareHistoryNote("a2a")).not.toContain("project folder");
+    expect(shareHistoryNote("slack")).toContain("thread in Slack");
+    expect(shareHistoryNote("plugin")).not.toContain("Slack");
+  });
+});
+
+describe("shared chat ?session= guard", () => {
+  const viewer = { role: "viewer" as const, main_session_id: "mine" };
+  test("only a recipient's non-main ?session= is checked", () => {
+    expect(chatNeedsAccessCheck(viewer, "owners")).toBe(true);
+    expect(chatNeedsAccessCheck(viewer, "mine")).toBe(false);
+    expect(chatNeedsAccessCheck(viewer, null)).toBe(false);
+    expect(chatNeedsAccessCheck({ main_session_id: "mine" }, "owners")).toBe(false);
+    expect(chatNeedsAccessCheck(null, "owners")).toBe(false);
+  });
+  test("chatListed matches the listed rows only", () => {
+    expect(chatListed([{ id: "a" }, { id: "b" }], "b")).toBe(true);
+    expect(chatListed([{ id: "a" }], "owners")).toBe(false);
+    expect(chatListed(null, "owners")).toBe(false);
+  });
+});
+
+describe("noAccessError", () => {
+  test("a 404 history read is an expected state, other errors are not", () => {
+    expect(noAccessError(new Error("HTTP 404: session not found"))).toBe(true);
+    expect(noAccessError("not found")).toBe(true);
+    expect(noAccessError(new Error("HTTP 500: boom"))).toBe(false);
+  });
+});
+
+describe("header share info", () => {
+  test("initials: first and last word, one letter for one word", () => {
+    expect(initialsOf("Yoga Setiawan")).toBe("YS");
+    expect(initialsOf("  ana maria de souza ")).toBe("AS");
+    expect(initialsOf("Bob")).toBe("B");
+    expect(initialsOf("")).toBe("?");
+  });
+  test("recipient sees who shared it, owner sees how many, otherwise nothing", () => {
+    expect(shareInfo({ role: "viewer", shared_by: "Yoga Setiawan" })).toEqual({ kind: "shared-by", owner: "Yoga Setiawan", initials: "YS" });
+    expect(shareInfo({ role: "viewer" })).toEqual({ kind: "shared-by", owner: "its owner", initials: "?" });
+    expect(shareInfo({ share_count: 3 })).toEqual({ kind: "shared-with", count: 3 });
+    expect(shareInfo({ share_count: 0 })).toBeNull();
+    expect(shareInfo({})).toBeNull();
   });
 });

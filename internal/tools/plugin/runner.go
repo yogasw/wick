@@ -34,11 +34,29 @@ var ErrNotReady = errors.New("tool plugin not ready")
 type spawnFn func(binary, socket string) (kill func(), conn wickplugin.ToolConn, alive func() bool, err error)
 
 func spawnProcess(binary, socket string) (func(), wickplugin.ToolConn, func() bool, error) {
+	return spawnFor("")(binary, socket)
+}
+
+// spawnFor is spawnProcess for plugin key: the process also gets the Host
+// API (broker + env).
+func spawnFor(key string) spawnFn {
+	return func(binary, socket string) (func(), wickplugin.ToolConn, func() bool, error) {
+		return spawnTool(key, binary, socket)
+	}
+}
+
+func spawnTool(key, binary, socket string) (func(), wickplugin.ToolConn, func() bool, error) {
+	plugins := wickplugin.ToolVersionedPlugins
+	if key != "" {
+		plugins = wickplugin.ToolVersionedPluginsFor(key, wickplugin.KindTool)
+	}
+	env, release := wickplugin.HostProcessEnv(key, wickplugin.KindTool)
 	client, raw, err := connplugin.Spawn(connplugin.SpawnSpec{
 		Binary:   binary,
-		Plugins:  wickplugin.ToolVersionedPlugins,
+		Plugins:  plugins,
 		Dispense: wickplugin.ToolPluginName,
-		Env:      []string{wickplugin.EnvToolSocket + "=" + socket},
+		Env:      append([]string{wickplugin.EnvToolSocket + "=" + socket}, env...),
+		Release:  release,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -76,8 +94,12 @@ type Runner struct {
 	spawn                spawnFn
 	now                  func() time.Time
 
-	mu       sync.Mutex
-	proc     *proc
+	mu   sync.Mutex
+	proc *proc
+	// closed is set by Stop/Close: the runner belongs to a version that was
+	// unloaded, so it never spawns again and a spawn in flight is killed as
+	// soon as it completes (no orphan process outside the pool).
+	closed   bool
 	sf       singleflight.Group
 	inflight atomic.Int64
 	lastUsed atomic.Int64 // unix nanos
@@ -149,7 +171,20 @@ func (r *Runner) current() *proc {
 	return r.proc
 }
 
+// errClosed is returned to a request that reaches a runner after its plugin
+// was unloaded (disabled, updated, uninstalled).
+var errClosed = errors.New("tool plugin unloaded")
+
+func (r *Runner) isClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
+}
+
 func (r *Runner) ensure(ctx context.Context) (*proc, error) {
+	if r.isClosed() {
+		return nil, fmt.Errorf("%w: %v", ErrNotReady, errClosed)
+	}
 	if p := r.current(); p != nil {
 		return p, nil
 	}
@@ -185,6 +220,11 @@ func (r *Runner) start() (*proc, error) {
 	p := &proc{kill: func() { kill(); _ = os.Remove(socket) }, conn: conn, alive: alive, socket: socket,
 		rt: unixTransport(socket)}
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		p.kill()
+		return nil, errClosed
+	}
 	r.proc = p
 	r.mu.Unlock()
 	r.touch()
@@ -217,10 +257,33 @@ func (r *Runner) sweep(ttl time.Duration) bool {
 	return true
 }
 
-// Stop kills the process unconditionally.
+// Close stops the runner once the requests it is serving finish, waiting at
+// most grace. It is closed at once (no new spawn, no new request); the kill
+// happens in the background and done is closed after it.
+func (r *Runner) Close(grace time.Duration) (done <-chan struct{}) {
+	r.mu.Lock()
+	r.closed = true
+	r.mu.Unlock()
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		deadline := time.Now().Add(grace)
+		for r.inflight.Load() > 0 && time.Now().Before(deadline) {
+			time.Sleep(drainPoll)
+		}
+		r.Stop()
+	}()
+	return ch
+}
+
+// drainPoll is how often Close checks for in-flight requests.
+const drainPoll = 50 * time.Millisecond
+
+// Stop closes the runner and kills the process unconditionally.
 func (r *Runner) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = true
 	if r.proc != nil {
 		r.proc.kill()
 		r.proc = nil

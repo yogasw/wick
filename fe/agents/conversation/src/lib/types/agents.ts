@@ -73,6 +73,10 @@ export type SessionListItem = {
 };
 
 export type SessionMeta = {
+  /** Another person's chat of a shared Team agent: readable, not changeable. */
+  read_only?: boolean;
+  /** The Team agent this web chat talks to; absent for any other session. */
+  agent_id?: string;
   id: string;
   label: string;
   status: string;
@@ -232,9 +236,23 @@ export type ConversationTurn = {
   /** user turn made by clicking an actioncard button — set ONLY by the
       server's postback endpoint, never parsed out of text. */
   postback?: CardPostback;
+  /** user turn answering an earlier bubble (a web "Reply"). Author and
+      excerpt are built by the server from the quoted turn. */
+  reply_to?: ReplyTo;
 };
 
-export type TurnSpeaker = { agent_id: string; handle: string; via: "direct" | "mention" | "group" | string };
+export type ReplyTo = { turn_id: string; role?: string; author?: string; excerpt?: string };
+
+export type TurnSpeaker = {
+  agent_id: string;
+  handle: string;
+  via: "direct" | "mention" | "group" | string;
+  /** Ticket sessions: whom the agent works for, and the labels a viewer
+      who does not have it needs ("Captain · @hana"). */
+  owner_id?: string;
+  owner_handle?: string;
+  name?: string;
+};
 
 export type CardPostback = { card_id: string; value: string; label: string };
 
@@ -619,6 +637,9 @@ export type ProjectOption = {
   /** Someone else owns it; the caller sees it through a tag or sharing. */
   shared?: boolean;
   owner_name?: string;
+  /** Returned only because it was asked for by id (`include`) and the
+      caller cannot open it: shown to name a saved choice, never offered. */
+  no_access?: boolean;
 };
 
 /** One column on a project's board. Statuses are per project: a team names
@@ -689,6 +710,9 @@ export type TicketConfig = {
     session: a ticket holds the work, and several sessions can hang off it. */
 export type TicketCard = {
   id: string; // short quotable code, e.g. "T-4F2A"
+  /** The project the card belongs to. Set by the combined Team board,
+      where one id can exist in two projects; absent on a single board. */
+  project_id?: string;
   title: string;
   status: string;
   /** The first of `assignees` — what a card has room to draw. */
@@ -700,12 +724,33 @@ export type TicketCard = {
   /** The ticket's sessions, listed on the card so one can be dragged to
       another ticket without opening anything. */
   session_rows?: TicketSessionRow[];
+  /** The ticket's room, when it has one (its session is not among
+      session_rows, though `sessions` counts it). */
+  room?: TicketCardRoom;
   sessions: number;
   notes: number;
   open_tasks: number;
   updated_at: string;
   created_at: string;
   stale: boolean;
+};
+
+/** A ticket room as a board card shows it. */
+export type TicketCardRoom = {
+  session_id: string;
+  members: TicketCardRoomAgent[];
+};
+
+/** One room member on a card; `kind` "project_default" is the project's
+    own prompt (no agent, no owner). */
+export type TicketCardRoomAgent = {
+  kind: "agent" | "project_default";
+  agent_id?: string;
+  handle: string;
+  name: string;
+  owner_id?: string;
+  owner_handle?: string;
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: unknown };
 };
 
 /** GET /api/projects/{id}/tickets response. */
@@ -734,6 +779,13 @@ export type TicketSessionRow = {
   status?: string;
   lifecycle?: string;
   last_active?: string;
+  /** A Team group chat discussing the ticket: 👥 and its member chips. */
+  group?: {
+    name: string;
+    owner_id?: string;
+    owner_handle?: string;
+    members: { id: string; handle: string; name: string; avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: string } }[];
+  };
 };
 
 /** The full ticket, as stored. */
@@ -755,6 +807,8 @@ export type Ticket = {
 
 /** GET /api/tickets/{ticketID} response. */
 export type TicketDetail = {
+  /** The ticket's room, when it has one (its session is not in `sessions`). */
+  room?: TicketCardRoom;
   ticket: Ticket;
   config: TicketConfig;
   sessions: TicketSessionRow[];
@@ -783,7 +837,12 @@ export type Note = {
 /** Per-user saved board filter for one project. */
 export type TicketFilter = {
   statuses?: string[];
-  assignee?: string; // "" = all, "me", or a user id
+  /** The old single pick ("" = all, "me", or a user id). Read only: a
+      filter saved before multi-select is migrated into `assignees`. */
+  assignee?: string;
+  /** The people ticked: user ids, "me" and "none" (no assignee). A ticket
+      shows when ANY of its assignees is ticked; empty/absent = everyone. */
+  assignees?: string[];
   view_mode?: string; // "list" | "card"
   /** Adds the untracked chats to the board — and only then does the server
       send that list, which is what keeps a project with hundreds of loose
@@ -811,9 +870,47 @@ export type NotesResponse = {
       which is why it is optional rather than defaulted to false: the rail
       hides its Ticket tab on an explicit `false` and shows it otherwise. */
   ticket_enabled?: boolean;
+  /** An ordinary ticket session's owner (id, and person handle): its home
+      agent answers them only, so other viewers see whose it is. */
+  session_owner?: string;
+  session_owner_handle?: string;
+  /** The rail's Session tab (every session read through session_id): where
+      it lives and who started it. Absent on an older server. */
+  session_info?: {
+    started_by?: string;
+    started_by_name?: string;
+    project_id?: string;
+    project_name?: string;
+    origin?: string;
+    created_at?: string;
+  };
+  /** Humans who wrote in the session, most messages first. */
+  session_people?: SessionPerson[];
+  /** Other people's agents that answered, counted over the whole history
+      (the rail only holds the pages it loaded). Absent on an older server. */
+  session_agents?: ServerSessionAgent[];
   /** The ticket's project board columns, so the rail's status select offers
       the same choices as the board. */
   statuses?: TicketStatus[];
+};
+
+export type ServerSessionAgent = {
+  agent_id: string;
+  handle?: string;
+  name?: string;
+  owner_id: string;
+  owner_handle?: string;
+  via?: string;
+  replies: number;
+};
+
+export type SessionPerson = {
+  id: string;
+  name?: string;
+  handle?: string;
+  channel?: string;
+  messages: number;
+  owner?: boolean;
 };
 
 /** One message between two agents inside a delegation tree. */
@@ -842,4 +939,66 @@ export type TeamTaskItem = {
   max_turns: number;
   started_at: string;
   updated_at: string;
+  /** How long ago it was sent, rounded ("3m"). */
+  age?: string;
+  /** First line of the reply, question or reason. */
+  summary?: string;
+  /** The reply, question or reason itself, capped. */
+  reply?: string;
+  /** The choices a question offers (its "[options: …]" line), shown as
+      quick answers; absent when it offers none. */
+  options?: string[];
+  /** The teammate's chat the task runs in ("" = its main chat). */
+  chat_id?: string;
+  /** input_required that no turn of this chat is handling: it waits
+      for the person. */
+  needs_you?: boolean;
+  /** Failed because wick restarted while the teammate was working on
+      it; sending it again is safe. */
+  interrupted?: boolean;
+  /** "user": the person sent it with an @mention in this chat, so only
+      they answer or cancel it and its question always needs them. */
+  origin?: "user";
+  /** When the teammate last asked a question (input_required); absent
+      until it asks, and on a task recorded before the server kept it. */
+  asked_at?: string;
+  /** When the task ended (replied, failed, declined or canceled); absent
+      until then, and on an older task, where updated_at stands in. */
+  ended_at?: string;
+  /** Messages in the task's thread (brief, replies, questions, answers;
+      capped at 50); absent on a task recorded before the server kept a
+      thread, where turns stands in. */
+  message_count?: number;
+  /** What the teammate's turn is doing right now, one plain line (the
+      sentence before its newest tool call, or "Running <tool>…"); only
+      while the task works, pushed on the team_task event, never stored. */
+  progress?: string;
+  /** The batch (group_id) the task is in. */
+  group?: string;
+  /** "Summarize now" on its batch would hand the agent something now:
+      the server's truth (a holding batch with a reply in and a member
+      still working), so it survives a remount or a reload. */
+  summarizable?: boolean;
+  /** The task this one was sent again for (Retry / Reassign). */
+  retry_of?: string;
+  /** The task the person sent again for this one, how and to whom;
+      absent until it was retried or reassigned. */
+  replaced_by?: string;
+  replaced_how?: "retry" | "reassign";
+  replaced_to_handle?: string;
+  replaced_to_name?: string;
+};
+
+/** One message of a Team task's thread, as the Hub logged it
+    (GET /api/sessions/{id}/team-tasks/{task}/thread): the brief, the
+    teammate's replies and questions, and each answer. */
+export type TeamThreadEntry = {
+  /** captain = the agent that sent the task, user = the person in this
+      chat, teammate = the agent it went to. */
+  role: "captain" | "user" | "teammate";
+  /** The agent that wrote it; absent for the person. */
+  handle?: string;
+  name?: string;
+  text: string;
+  at: string;
 };

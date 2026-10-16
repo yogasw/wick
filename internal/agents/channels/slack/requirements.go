@@ -76,9 +76,13 @@ var requirements = []Feature{
 	{Key: FeatureReactionReply, Label: "🤖 auto-reply", Need: NeedWhenOn,
 		BotScopes: []string{"reactions:read", "reactions:write"},
 		Events:    []string{"reaction_added", "reaction_removed"}},
+	// Slack refuses an agent_view app that subscribes to
+	// assistant_thread_started ("Agent View should use app_home_opened"),
+	// so the manifest asks for app_home_opened; an older app that still
+	// sends assistant_thread_started is answered all the same.
 	{Key: FeatureAgentView, Label: "Agent view and status banner", Need: NeedWhenOn,
 		BotScopes: []string{"assistant:write"},
-		Events:    []string{"assistant_thread_started"}},
+		Events:    []string{"app_home_opened"}},
 	// Instant agents reply under their own name and icon. Missing the scope
 	// is a warning: replies still go out, as the bot.
 	{Key: FeatureInstant, Label: "Instant agents (custom name and icon)", Need: NeedWhenOn,

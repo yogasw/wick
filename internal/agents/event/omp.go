@@ -210,8 +210,9 @@ func (p *OMPParser) parse(line string) (AgentEvent, error) {
 			// One end-of-turn event only: Error already ends the turn, a
 			// Done after it would drain the queue twice.
 			msg := accountErrorMsg("omp", p.instance, p.lastErr)
+			ev := classifyErr(AgentEvent{Type: Error, ErrorMsg: msg, Raw: trimmed}, p.lastErr)
 			p.reset()
-			return AgentEvent{Type: Error, ErrorMsg: msg, Raw: trimmed}, nil
+			return ev, nil
 		}
 		ev := AgentEvent{Type: Done, Raw: trimmed}
 		if p.sawUsage {

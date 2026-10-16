@@ -34,6 +34,9 @@
     // secrets masked), rendered by the BE from the saved settings. Empty on
     // the create form (no saved instance yet).
     configPreview?: string;
+    // rawConfigEditable: false hides the raw-config override (a host
+    // setting a provider owner may not be allowed to change).
+    rawConfigEditable?: boolean;
   };
   let {
     base,
@@ -47,6 +50,7 @@
     apiKeyMasked = false,
     rawConfig = $bindable(),
     configPreview = "",
+    rawConfigEditable = true,
   }: Props = $props();
 
   // Advanced ("show raw config") section is collapsed by default.
@@ -387,7 +391,7 @@
       </div>
     {/if}
 
-    {#if useAirouter}
+    {#if useAirouter && rawConfigEditable}
       <!-- Advanced: the effective config wick passes to the CLI — EDITABLE.
            Collapsed by default; editing it fully overrides the generated
            config (the API key stays in the field above, shown as <API_KEY>). -->

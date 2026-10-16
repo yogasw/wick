@@ -34,6 +34,9 @@ func resolveProject(layout agentconfig.Layout, c *connector.Ctx, explicit string
 	if err != nil {
 		return "", fmt.Errorf("load calling session: %w", err)
 	}
+	if team.SessionInTicketRoom(layout, sess) {
+		return "", fmt.Errorf("in a ticket room you reach only that room's ticket")
+	}
 	if sess.Meta.ProjectID == "" {
 		return "", fmt.Errorf("this session belongs to no project, so project_id must be given")
 	}
@@ -59,6 +62,29 @@ func resolveTicket(layout agentconfig.Layout, c *connector.Ctx, projectID, expli
 		return ticket.Ticket{}, fmt.Errorf("this session is not attached to a ticket — pass ticket_id, or attach it first")
 	}
 	return tk, nil
+}
+
+// resolveRoomOrTicket is resolveProject + resolveTicket for the ops on one
+// ticket, with the ticket room's narrow branch first: a room member's
+// backing session reaches its room's ticket — implicitly, or named — and
+// only that one (team.RoomTicket). Any other ticket goes the usual way.
+func resolveRoomOrTicket(layout agentconfig.Layout, c *connector.Ctx, explicitProject, explicitTicket string) (string, ticket.Ticket, error) {
+	if rp, rt, ok := team.RoomTicket(c.Context(), layout, c.SessionID()); ok {
+		p, t := strings.TrimSpace(explicitProject), strings.TrimSpace(explicitTicket)
+		if (p == "" || p == rp) && (t == "" || t == rt) {
+			tk, err := ticket.Load(layout, rp, rt)
+			if err != nil {
+				return "", ticket.Ticket{}, fmt.Errorf("ticket %q not found in project %s", rt, rp)
+			}
+			return rp, tk, nil
+		}
+	}
+	projectID, err := resolveProject(layout, c, explicitProject)
+	if err != nil {
+		return "", ticket.Ticket{}, err
+	}
+	tk, err := resolveTicket(layout, c, projectID, explicitTicket)
+	return projectID, tk, err
 }
 
 // resolveSession returns the session id to attach/detach.
@@ -343,11 +369,7 @@ func matchRank(where []string) int {
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {
-	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
-	if err != nil {
-		return nil, err
-	}
-	tk, err := resolveTicket(h.layout, c, projectID, c.Input("ticket_id"))
+	_, tk, err := resolveRoomOrTicket(h.layout, c, c.Input("project_id"), c.Input("ticket_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -368,6 +390,9 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 		sid := c.SessionID()
 		if sid == "" {
 			return nil, fmt.Errorf("attach_current_session was set but there is no calling session")
+		}
+		if err := team.RefuseRoomSession(h.layout, sid); err != nil {
+			return nil, err
 		}
 		seed = []string{sid}
 	}
@@ -411,11 +436,7 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) update(c *connector.Ctx) (any, error) {
-	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
-	if err != nil {
-		return nil, err
-	}
-	tk, err := resolveTicket(h.layout, c, projectID, c.Input("ticket_id"))
+	projectID, tk, err := resolveRoomOrTicket(h.layout, c, c.Input("project_id"), c.Input("ticket_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +508,17 @@ func (h *handlers) attach(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := ticket.AttachSession(h.layout, projectID, ticketID, sid); err != nil {
+	if err := team.RefuseRoomSession(h.layout, sid); err != nil {
+		return nil, err
+	}
+	attach := ticket.AttachSession
+	if c.InputBool("move") {
+		attach = ticket.AttachSessionMove
+	}
+	if err := attach(h.layout, projectID, ticketID, sid); err != nil {
+		if ticket.IsSessionInOtherTicket(err) {
+			return nil, fmt.Errorf("%w; pass move=true to move it to %s", err, ticketID)
+		}
 		return nil, err
 	}
 	writeBackPointer(h.layout, sid, ticketID)
@@ -509,6 +540,9 @@ func (h *handlers) detach(c *connector.Ctx) (any, error) {
 	}
 	sid, err := resolveSession(h.layout, c, c.Input("session_id"))
 	if err != nil {
+		return nil, err
+	}
+	if err := team.RefuseRoomSession(h.layout, sid); err != nil {
 		return nil, err
 	}
 	if err := ticket.DetachSession(h.layout, projectID, ticketID, sid); err != nil {

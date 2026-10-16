@@ -86,6 +86,10 @@ type Pool struct {
 	// on disk (a channel binds on the message that creates the session);
 	// ensureSession writes them once the meta exists. key = session id.
 	pendingBindings sync.Map
+	// bindingLocks serialises SetThreadBinding per session (*sync.Mutex), so
+	// two Slack events for one thread cannot interleave their load-modify-
+	// save of the binding and move last_seen_ts back.
+	bindingLocks sync.Map
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState
@@ -107,6 +111,21 @@ type Pool struct {
 	// capacity math is exercised without touching disk or the global
 	// provider registry (which Save mutates via an async rescan).
 	providerMax func(pType, pName string) int
+
+	// foMu guards the failover bookkeeping (failover.go): foActive marks
+	// the session agents being moved to another provider right now,
+	// foRuns the pool's memory of each one's failover run.
+	// foCancel marks a failover a person stopped (Kill) before its
+	// re-send, foRetired the process each failover stopped until its exit
+	// arrives, foResend the run a pending re-send spawn carries on.
+	// foStage is a test seam (nil in production).
+	foMu      sync.Mutex
+	foActive  map[string]bool
+	foRuns    map[string]*failoverRun
+	foCancel  map[string]bool
+	foRetired map[string]*provider.Agent
+	foResend  map[string]resendMark
+	foStage   func(stage string)
 }
 
 // PoolConfig knobs.
@@ -235,6 +254,16 @@ type PoolConfig struct {
 	// want every transition should subscribe to AgentEvent via
 	// the factory's OnEvent. Optional; nil = no callback.
 	OnLifecycle func(LifecycleEvent)
+	// OnFailoverNotify / OnFailoverReply carry an automatic provider
+	// failover's notice out, like SwitchOptions.Notify / Reply of a manual
+	// switch: the system turn's chip and steps for the web UI, the
+	// sentence for channels that show no system turn. Optional.
+	OnFailoverNotify func(sessionID, agentName, chip string, steps []string)
+	OnFailoverReply  func(sessionID, agentName, text string)
+	// OnFailoverAbort publishes the end of a turn a failover took over
+	// but could not carry on (switch refused, re-send failed, session
+	// stopped): the original Error when there is one, then Done. Optional.
+	OnFailoverAbort func(sessionID, agentName string, evs []event.AgentEvent)
 	// OnUserMessage fires when a user-role message is injected into a
 	// session from a NON-web source (a channel or the schedule runner).
 	// It lets the web SSE layer push the incoming turn to connected
@@ -243,6 +272,15 @@ type PoolConfig struct {
 	// turns are skipped here to avoid a duplicate). Optional; nil = no
 	// callback.
 	OnUserMessage func(UserMessageEvent)
+	// OnSend fires at the start of every Send, whatever its source or
+	// role, before the message is routed to a live process or buffered,
+	// with the sender's ctx. It may block: the team task gate holds a
+	// message back while it stops a task's turn in the session. An error
+	// refuses the message (Send returns it). Otherwise done is called once
+	// the send is over, delivered telling whether the message was written
+	// to the live process or the session's buffer. Optional; nil = no
+	// callback.
+	OnSend func(ctx context.Context, sessionID, role string) (done func(delivered bool), err error)
 	// OnSpawnError fires when a spawn fails before the agent process starts
 	// (e.g. the CLI binary can't be launched). The wiring surfaces Message
 	// as a live error event so it shows inline in the conversation instead of
@@ -399,6 +437,14 @@ type FactoryOptions struct {
 	// instance. Pulled from the agent entry by the pool; empty = that
 	// provider's own default.
 	ModelID string
+	// OnFailover / OnTurnOK are the pool's failover hooks for this spawn
+	// (failover.go), forwarded to provider.Options. The factory leaves
+	// OnFailover off for a remote spawner.
+	OnFailover func(provider.FailoverRequest) provider.FailoverVerdict
+	OnTurnOK   func(sentAt time.Time)
+	// FailoverMsgKey is the failover run this spawn re-sends a turn for
+	// ("" = none); see provider.Options.FailoverMsgKey.
+	FailoverMsgKey string
 }
 
 // queueEntry is one request waiting for a slot.
@@ -644,20 +690,25 @@ func (p *Pool) ThreadBinding(sessionID string) (agentchannels.ThreadBinding, boo
 		return agentchannels.ThreadBinding{}, false
 	}
 	return agentchannels.ThreadBinding{
-		Channel:  r.Channel,
-		ChatID:   r.ChatID,
-		ThreadID: r.ThreadID,
-		Instance: r.Instance,
+		Channel:    r.Channel,
+		ChatID:     r.ChatID,
+		ThreadID:   r.ThreadID,
+		Instance:   r.Instance,
+		LastSeenTS: r.LastSeenTS,
 	}, true
 }
 
 // SetThreadBinding persists the binding on the session meta. Idempotent —
-// an unchanged binding writes nothing, so this can be called on every turn
-// without rewriting meta.json each time.
+// an unchanged binding writes nothing. LastSeenTS only moves forward within
+// the same thread; it changes once per Slack message that starts a turn.
 func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding) {
 	if sessionID == "" || b.ChatID == "" {
 		return
 	}
+	lk, _ := p.bindingLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	mu := lk.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
 		// The first message of a thread binds before Send creates the
@@ -666,6 +717,12 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 		// waking the leader — had nowhere to go. Hold it until the
 		// session exists.
 		if !storage.PathExists(p.cfg.Layout.SessionMeta(sessionID)) {
+			if prev, ok := p.pendingBindings.Load(sessionID); ok {
+				if pb := prev.(agentchannels.ThreadBinding); pb.ChatID == b.ChatID && pb.ThreadID == b.ThreadID &&
+					!agentchannels.SlackTSAfter(b.LastSeenTS, pb.LastSeenTS) {
+					b.LastSeenTS = pb.LastSeenTS
+				}
+			}
 			p.pendingBindings.Store(sessionID, b)
 			return
 		}
@@ -674,15 +731,22 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 	}
 	p.pendingBindings.Delete(sessionID)
 	cur := sess.Meta.ChannelRef
+	// Within the same thread the seen ts never moves back: an empty or older
+	// one keeps the stored value. A different thread starts unseen.
+	if cur != nil && cur.ChatID == b.ChatID && cur.ThreadID == b.ThreadID &&
+		!agentchannels.SlackTSAfter(b.LastSeenTS, cur.LastSeenTS) {
+		b.LastSeenTS = cur.LastSeenTS
+	}
 	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
-		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
+		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance && cur.LastSeenTS == b.LastSeenTS {
 		return
 	}
 	sess.Meta.ChannelRef = &session.ChannelRef{
-		Channel:  b.Channel,
-		ChatID:   b.ChatID,
-		ThreadID: b.ThreadID,
-		Instance: b.Instance,
+		Channel:    b.Channel,
+		ChatID:     b.ChatID,
+		ThreadID:   b.ThreadID,
+		Instance:   b.Instance,
+		LastSeenTS: b.LastSeenTS,
 	}
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — save failed")
@@ -765,6 +829,8 @@ func (p *Pool) callerChanged(ctx context.Context, entry *runEntry) bool {
 }
 
 func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
+	// delivered: the message was written to the live process or buffered.
+	delivered := false
 	// An empty agent name means "whoever this session is talking to" — the
 	// same thing a person typing in the composer means. Resolved to the
 	// session's real agent before anything keys off it.
@@ -775,6 +841,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// process. It spawned a second, nameless track instead and every
 	// name-keyed write after it landed on a row nobody reads.
 	agentName = p.resolveAgentName(sessionID, agentName)
+	if p.cfg.OnSend != nil {
+		done, err := p.cfg.OnSend(ctx, sessionID, role)
+		if err != nil {
+			return err
+		}
+		defer func() { done(delivered) }()
+	}
 
 	// Who is speaking, per the originating channel. Resolved once here so
 	// the live and buffered paths below agree, and only for "user" turns:
@@ -790,6 +863,18 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	var postback *store.Postback
 	if role == "user" {
 		postback = store.PostbackFrom(ctx)
+	}
+	// A web "Reply" is put on ctx by the send endpoint after it checked
+	// the quoted turn; never inferred from the text.
+	//
+	// Both are bound to the session they were made for, so a ctx that
+	// travels on (an @mention routed to a sub-agent or a teammate) carries
+	// neither into the other session.
+	var reply *store.ReplyTo
+	var userTurnID string
+	if role == "user" {
+		reply = store.ReplyToFrom(ctx, sessionID)
+		userTurnID = store.UserTurnIDFrom(ctx, sessionID)
 	}
 	// Read once per send so the live and buffered paths below agree even if
 	// the operator changes the setting mid-flight.
@@ -858,6 +943,32 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		entry = nil
 	}
 
+	// A session on a failover stand-in goes back to its home (or up the
+	// home's chain) before a new message, when that is usable again.
+	// Re-read either way: a concurrent send may have switched, stopped or
+	// spawned meanwhile, and a stale entry would write into a dead process.
+	if role == "user" {
+		p.maybeReturnHome(sessionID, agentName)
+		p.mu.Lock()
+		entry, alive = p.active[key]
+		p.mu.Unlock()
+	}
+
+	// The agent is being moved to another provider: the message waits in
+	// the buffer and goes out after the turn it interrupted.
+	if held, err := p.holdForFailover(key, sessionID, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); held {
+		if err != nil {
+			return err
+		}
+		delivered = true
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback, reply, userTurnID)
+		if role == "user" {
+			p.setLabelIfEmpty(sessionID, text)
+			p.notifyUserMessage(sessionID, agentName, source, text, sender)
+		}
+		return nil
+	}
+
 	turnPersisted := false
 	userMsgNotified := false
 	if alive {
@@ -872,7 +983,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
+			_ = entry.store.AppendUserTurnWithReply(role, source, text, atts, sender, postback, reply, userTurnID)
 			turnPersisted = true
 		}
 		if role == "user" {
@@ -880,13 +991,14 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
+		err := entry.agent.Send(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))
+		delivered = err == nil
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
 		// to the agent's pending queue, which fires no lifecycle event on
 		// its own.
 		p.notifyLifecycle(ctx, entry, sessionID, agentName)
-		if err != nil && err.Error() == "agent not running" {
+		if err != nil && (err.Error() == "agent not running" || err.Error() == "agent stopped") {
 			// Race: subprocess exited between the active-map lookup and
 			// Send — onAgentExit hasn't released the slot yet. Evict the
 			// stale entry and fall through to the buffer+spawn path so
@@ -896,7 +1008,16 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 				Str("session", sessionID).
 				Str("agent", agentName).
 				Msg("pool.send: stale active entry (race), evicting and respawning")
-			p.releaseSlot(key)
+			// Not when the entry is a spawn still in flight (published
+			// before Start): evicting it would orphan the starting process
+			// and drop the session's buffer. The message is buffered below
+			// and endSpawn hands it over once the spawn is done.
+			p.mu.Lock()
+			_, spawning := p.spawningKeys[key]
+			p.mu.Unlock()
+			if !spawning {
+				p.releaseSlotIf(key, entry.agent)
+			}
 			alive = false
 		} else {
 			return err
@@ -937,15 +1058,16 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// before the subprocess exists, and drain concatenates them into one
 	// prompt. Stamping at drain would label every one of them with whoever
 	// happened to send last.
-	if err := buf.Append(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
+	if err := buf.Append(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); err != nil {
 		return err
 	}
+	delivered = true
 	// Persist the user turn to conversation.jsonl immediately so a page
 	// refresh while the session is buffered (queued or mid-spawn) still
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
-		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback)
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback, reply, userTurnID)
 	}
 	if role == "user" && !userMsgNotified {
 		p.notifyUserMessage(sessionID, agentName, source, text, sender)
@@ -969,6 +1091,24 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		return nil
 	}
 
+	return p.spawnOrQueue(ctx, sessionID, agentName, source)
+}
+
+// spawnOrQueue starts sessionID's agent on what is buffered when a slot
+// is free, and queues it otherwise. Caller already buffered the message.
+func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source string) error {
+	key := sessionKey(sessionID, agentName)
+	// A failover or return-home is moving the agent right now: a spawn
+	// here could read agents.json before the switch lands and start on the
+	// instance being left. The message stays buffered; whoever ends the
+	// move (Resend, endFailingOver, the return's own send) delivers it.
+	// Every one of them clears foActive before calling here.
+	p.foMu.Lock()
+	moving := p.foActive[key]
+	p.foMu.Unlock()
+	if moving {
+		return nil
+	}
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
 	pType, pName := p.providerForSession(sessionID, agentName)
@@ -978,6 +1118,25 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// will pick up the buffered message — nothing more to do here.
 	if _, spawning := p.spawningKeys[key]; spawning {
 		p.mu.Unlock()
+		return nil
+	}
+	// A process came up meanwhile (a concurrent send spawned it after
+	// this caller saw none): hand it the buffer rather than spawning a
+	// second one over it, which would orphan the first.
+	if e, ok := p.active[key]; ok {
+		p.mu.Unlock()
+		buf, err := p.bufferFor(sessionID)
+		if err != nil || buf.Len() == 0 {
+			return err
+		}
+		text, err := buf.Drain()
+		if err != nil || text == "" {
+			return err
+		}
+		if err := e.agent.Send(text); err != nil {
+			_ = buf.Prepend(text)
+			return err
+		}
 		return nil
 	}
 	// Spawn only when both the global and per-provider caps allow it;
@@ -992,9 +1151,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		// is queued or joins a spawn in flight starts nothing.
 		yieldIdleServers(sessionID, pType, pName)
 		err := p.spawn(ctx, sessionID, agentName, source)
-		p.mu.Lock()
-		delete(p.spawningKeys, key)
-		p.mu.Unlock()
+		p.endSpawn(key, sessionID)
 		return err
 	}
 	// Full — queue the request (dedup: one slot per session+agent; the
@@ -1021,13 +1178,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback, reply *store.ReplyTo, turnID string) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
+	_ = sto.AppendUserTurnWithReply(role, source, text, atts, sender, postback, reply, turnID)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
@@ -1074,6 +1231,7 @@ func (p *Pool) preemptIdleSlot() bool {
 		Msg("pool: preempting idle slot for queued session")
 	go func() {
 		defer p.wg.Done()
+		victim.agent.NoteStopCause("preempted for a queued session")
 		_ = victim.agent.Stop()
 	}()
 	return true
@@ -1109,7 +1267,23 @@ func composeSystemAddon(layout config.Layout, sess session.Session) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) error {
+func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (retErr error) {
+	// A failover re-send this spawn delivers. Taken first, so a spawn that
+	// fails at any step consumes it: the next message must not inherit the
+	// run. startErr is a failure reported in-band (failSpawn, nil return).
+	// providerFault tells the provider failing to build or start apart from
+	// the pool, the session or the host failing around it: only the former
+	// says anything about the target instance.
+	resend := p.takeResend(sessionKey(sessionID, agentName))
+	var startErr error
+	providerFault := false
+	if resend.msgKey != "" {
+		defer func() {
+			if cause := errors.Join(retErr, startErr); cause != nil {
+				p.resendSpawnFailed(sessionID, agentName, resend, cause, providerFault)
+			}
+		}()
+	}
 	// Whose turn caused this process to exist. Baked into the MCP credential
 	// below, and remembered on the entry so a later message from someone else
 	// can be told apart.
@@ -1259,8 +1433,14 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		MaxTurns:       maxTurns,
 		ThinkingTokens: thinkingTokens,
 		ModelID:        modelID,
+		OnFailover:     failoverHook(sess.Meta, p.decideFailover),
+		FailoverMsgKey: resend.msgKey,
+		OnTurnOK: func(sentAt time.Time) {
+			p.turnOK(sessionID, agentName, pType+"/"+pName, sentAt)
+		},
 	})
 	if err != nil {
+		providerFault = true
 		return err
 	}
 	a, st, sto := br.Agent, br.State, br.Store
@@ -1342,6 +1522,9 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	if err != nil {
 		return err
 	}
+	// Published and drained, not started: a message sent from here on is
+	// endSpawn's to deliver (test seam).
+	p.failoverStage("spawn-drained")
 
 	if err := p.markStatus(sessionID, session.StatusRunning); err != nil {
 		return err
@@ -1360,6 +1543,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// too would make /send return 500 and pop a toast — a double report the
 		// caller should not see. The Send "succeeds"; the session is already
 		// back to idle.
+		startErr = err
+		providerFault = true
 		p.failSpawn(ctx, key, sessionID, agentName, pType, pName, st, sto, err)
 		return nil
 	}
@@ -1410,6 +1595,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			// sat "running" with no process and the error only reached the
 			// HTTP caller, which the new-session composer swallowed.
 			l.Error().Err(err).Msg("pool.spawn: first send failed")
+			startErr = err
+			providerFault = true
 			p.failSpawn(ctx, key, sessionID, agentName, pType, pName, st, sto, err)
 			return nil
 		}
@@ -1579,9 +1766,21 @@ func (p *Pool) notifyUserMessage(sessionID, agentName, source, text string, send
 func (p *Pool) releaseSlot(key string) {
 	p.mu.Lock()
 	if e, ok := p.active[key]; ok {
-		delete(p.buffers, e.sessID)
+		p.dropBufferLocked(e.sessID)
 	}
 	delete(p.active, key)
+	p.mu.Unlock()
+}
+
+// releaseSlotIf is releaseSlot only while key's entry still holds agent:
+// a caller holding a stale entry must not evict the process that
+// replaced it.
+func (p *Pool) releaseSlotIf(key string, agent *provider.Agent) {
+	p.mu.Lock()
+	if e, ok := p.active[key]; ok && e.agent == agent {
+		p.dropBufferLocked(e.sessID)
+		delete(p.active, key)
+	}
 	p.mu.Unlock()
 }
 
@@ -1679,10 +1878,62 @@ func (p *Pool) tryGrantQueue() {
 		// serve it go first (as on the direct Send path).
 		yieldIdleServers(q.sessionID, qType, qName)
 		_ = p.spawn(context.Background(), q.sessionID, q.agentName, "queue")
-		p.mu.Lock()
-		delete(p.spawningKeys, key)
-		p.mu.Unlock()
+		p.endSpawn(key, q.sessionID)
 	}()
+}
+
+// endSpawn ends key's spawn and hands the process whatever was buffered
+// after its drain. spawn drains once, right after publishing the entry,
+// but stays "spawning" until Start returns; a message sent in between is
+// buffered by a sender that sees the spawn in flight and leaves it to
+// that drain, which already happened. Checked after spawningKeys is
+// cleared, so every such message is in the buffer by then, and a later
+// sender sees no spawn and delivers its own.
+func (p *Pool) endSpawn(key, sessionID string) {
+	p.mu.Lock()
+	delete(p.spawningKeys, key)
+	e, alive := p.active[key]
+	p.mu.Unlock()
+	if !alive {
+		return
+	}
+	buf, err := p.bufferFor(sessionID)
+	if err != nil || buf.Len() == 0 {
+		return
+	}
+	if text, err := buf.Drain(); err == nil && text != "" {
+		if err := e.agent.Send(text); err != nil {
+			// Gone meanwhile: the next send or spawn drains it.
+			_ = buf.Prepend(text)
+		}
+	}
+}
+
+// dropBufferLocked forgets sessionID's buffer when it is empty. One that
+// still holds messages stays: they were sent meanwhile (held during a
+// failover or a return, or buffered for a spawn) and the next spawn
+// drains them from memory — re-reading PendingInput from meta.json is
+// not safe, as another meta writer may have rewritten it since. Caller
+// holds p.mu.
+func (p *Pool) dropBufferLocked(sessionID string) {
+	if b, ok := p.buffers[sessionID]; ok && b.retireIfEmpty() {
+		delete(p.buffers, sessionID)
+	}
+}
+
+// reviveBuffer is a retired buffer's way back: the session's live buffer
+// when there is one, else old itself, registered again.
+func (p *Pool) reviveBuffer(sessionID string, old *Buffer) *Buffer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cur, ok := p.buffers[sessionID]; ok {
+		return cur
+	}
+	old.mu.Lock()
+	old.retired = false
+	old.mu.Unlock()
+	p.buffers[sessionID] = old
+	return old
 }
 
 // bufferFor returns or lazy-creates the per-session Buffer.
@@ -1697,6 +1948,7 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 	if err != nil {
 		return nil, err
 	}
+	buf.revive = func(old *Buffer) *Buffer { return p.reviveBuffer(sessionID, old) }
 	p.mu.Lock()
 	if existing, ok := p.buffers[sessionID]; ok {
 		// Race: another caller created one. Use theirs.
@@ -2096,6 +2348,7 @@ func (p *Pool) HandoverBlockers() []string {
 			if pid, _ := turnProcess(g.e); pid != g.pid || processAlive(pid) {
 				return
 			}
+			g.e.agent.NoteStopCause("reaped: turn process already gone")
 			_ = g.e.agent.Stop()
 		}(g)
 	}
@@ -2206,6 +2459,7 @@ func (p *Pool) Stop() {
 		close(p.stopCh)
 	}
 	for _, e := range entries {
+		e.agent.NoteStopCause("pool shutdown")
 		_ = e.agent.Stop()
 	}
 	p.wg.Wait()
@@ -2372,6 +2626,9 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 // down — which is the difference between "fine, that was me" and "why did
 // my work vanish". Pass empty strings when nothing is known.
 func (p *Pool) KillBy(sessionID, agentName, by, note string) error {
+	// A failover between processes has nothing to stop yet: cancel its
+	// re-send instead.
+	p.cancelSessionFailovers(sessionID)
 	p.mu.Lock()
 	prefix := sessionID + "::"
 	var entries []*runEntry
@@ -2387,6 +2644,7 @@ func (p *Pool) KillBy(sessionID, agentName, by, note string) error {
 		if by != "" && e.store != nil {
 			e.store.SetInterruptCause(by, note)
 		}
+		e.agent.NoteStopCause(killCause("Kill", by, note))
 		if err := e.agent.Stop(); err != nil {
 			log.Error().Str("session", e.sessID).Str("agent", e.agentNm).Err(err).Msg("pool.kill: agent.Stop failed")
 			return err
@@ -2436,9 +2694,13 @@ func (p *Pool) KillAgent(sessionID, agentName string) error {
 // paths use it so a sub-agent that was stopped by its parent says so,
 // rather than looking like it died on its own.
 func (p *Pool) KillAgentBy(sessionID, agentName, by, note string) error {
+	canceled := p.cancelFailover(sessionKey(sessionID, agentName))
 	p.mu.Lock()
 	e, ok := p.active[sessionID+"::"+agentName]
 	p.mu.Unlock()
+	if !ok && canceled {
+		return nil
+	}
 	// Stop() blocks for up to 5s waiting on the reader goroutine, so it
 	// must never run while holding p.mu — Kill releases the lock first
 	// for the same reason.
@@ -2448,11 +2710,24 @@ func (p *Pool) KillAgentBy(sessionID, agentName, by, note string) error {
 	if by != "" && e.store != nil {
 		e.store.SetInterruptCause(by, note)
 	}
+	e.agent.NoteStopCause(killCause("KillAgent", by, note))
 	if err := e.agent.Stop(); err != nil {
 		log.Error().Str("session", sessionID).Str("agent", agentName).Err(err).Msg("pool.killAgent: agent.Stop failed")
 		return err
 	}
 	return nil
+}
+
+// killCause is the stop cause a Kill/KillAgent leaves on the agent.
+func killCause(op, by, note string) string {
+	c := op
+	if by != "" {
+		c += " by " + by
+	}
+	if note != "" {
+		c += ": " + note
+	}
+	return c
 }
 
 // ReconcileDead scans active entries and Stops any whose subprocess is
@@ -2485,6 +2760,7 @@ func (p *Pool) ReconcileDead() {
 	for _, e := range dead {
 		log.Warn().Str("session", e.sessID).Str("agent", e.agentNm).
 			Int("pid", e.agent.PID()).Msg("pool.reconcile: subprocess dead, releasing slot")
+		e.agent.NoteStopCause("reconcile: subprocess looked dead")
 		_ = e.agent.Stop()
 	}
 }
@@ -2545,6 +2821,7 @@ func (p *Pool) Dequeue(sessionID, agentName string) int {
 // only knows the session id — Dequeue requires an exact agent match,
 // which the UI often can't supply.
 func (p *Pool) DequeueSession(sessionID string) int {
+	p.cancelSessionFailovers(sessionID)
 	p.mu.Lock()
 	out := p.queue[:0]
 	removed := 0
@@ -2580,6 +2857,37 @@ func (p *Pool) DequeueSession(sessionID string) int {
 // claude (append mode) keeps the 1-agent-1-process model: every exit is
 // the agent dying, so all reasons release.
 func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
+	p.HandleExitTurnEnds(sessionID, agentName, reason, reasonDetail)
+}
+
+// HandleExitTurnEnds is HandleExit that also says whether the exit ends a
+// turn (the caller then publishes its synthetic Done): false for the
+// exit of a process a failover stopped. One decision, taken where the
+// exit is handled, so the caller cannot read a failover flag that
+// changed in between.
+func (p *Pool) HandleExitTurnEnds(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
+	turnEnds, _ := p.HandleExitOutcome(sessionID, agentName, reason, reasonDetail)
+	return turnEnds
+}
+
+// HandleExitOutcome is HandleExitTurnEnds that also says whether the exit
+// restarted the agent, so a delegation waiting on its turn keeps waiting
+// for the restarted process instead of closing on half a turn.
+func (p *Pool) HandleExitOutcome(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) (turnEnds, restarting bool) {
+	// A failover stopped this process on purpose; its turn goes on
+	// elsewhere, so there is nothing to heal, re-buffer or recover. A late
+	// exit of it must not release the entry of its replacement.
+	if retired, release := p.retiredExit(sessionKey(sessionID, agentName), true); retired {
+		if release {
+			p.onAgentExit(sessionID, agentName)
+		}
+		return false, false
+	}
+	return true, p.handleExit(sessionID, agentName, reason, reasonDetail)
+}
+
+// handleExit reports whether the agent was restarted (recoverFromExit).
+func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
 	// ExitClean too: omp RPC / opencode report a missing resume as the
 	// turn's own error and exit clean, so the flag, not stderr, says so.
 	if reason == provider.ExitError || reason == provider.ExitClean {
@@ -2598,15 +2906,31 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 			if ok {
 				p.notifyLifecycle(entry.ctx, entry, sessionID, agentName)
 			}
-			return
+			return false
 		}
 	}
+	// An idle kill of a process that was sent messages and never wrote a
+	// line after them: the turn never started. The spawn already drained
+	// them from the buffer, so without this they died with the process —
+	// the person saw no reply and no event, and the next spawn ran without
+	// them. Put them back BEFORE the slot is released, so whichever spawn
+	// comes next (a new message, a sub-agent result) delivers them.
+	var unanswered []string
+	if reason == provider.ExitIdle {
+		unanswered = p.rebufferUnanswered(sessionID, agentName)
+	}
 	p.onAgentExit(sessionID, agentName)
+	if len(unanswered) > 0 {
+		// After onAgentExit, so the notice buffers instead of being written
+		// into the dead process. It does not spawn: a CLI that just sat
+		// silent for the whole idle window would most likely do it again.
+		p.noticeNotify(sessionID, agentName, unansweredNotice(len(unanswered)), errUnansweredRequeued)
+	}
 	// After the slot is released, decide whether this death deserves a
 	// restart and tell the agent what happened. Ordered after
 	// onAgentExit so the restart competes for a free slot like any other
 	// spawn rather than racing the one it just vacated.
-	p.recoverFromExit(sessionID, agentName, reason, reasonDetail)
+	return p.recoverFromExit(sessionID, agentName, reason, reasonDetail)
 }
 
 // recoverFromExit restarts an agent that died for no stated reason, and
@@ -2621,7 +2945,9 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 // it names the cause in the notice so the agent can act on it — a
 // host-OOM kill retried with a generic "carry on" would repeat the exact
 // allocation that got it killed.
-func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
+//
+// Reports whether a restart was started.
+func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) bool {
 	key := sessionKey(sessionID, agentName)
 	if reasonDetail == "" {
 		reasonDetail = "unexpected exit"
@@ -2633,7 +2959,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		p.mu.Lock()
 		p.clearCrashesLocked(key)
 		p.mu.Unlock()
-		return
+		return false
 	}
 
 	l := log.With().
@@ -2654,7 +2980,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		// (OOMDetail) — the agent needs the numbers to propose a smaller
 		// approach.
 		p.notifySession(sessionID, agentName, oomNotice(reasonDetail))
-		return
+		return false
 	}
 
 	p.mu.Lock()
@@ -2675,12 +3001,12 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		if !first {
 			l.Debug().Int("attempts", attempt).
 				Msg("pool.recover: still crashing after giving up; no restart, no notice")
-			return
+			return false
 		}
 		l.Error().Int("attempts", attempt).
 			Msg("pool.recover: repeated unexplained exits; giving up")
 		p.haltNotify(sessionID, agentName, haltNotice(reasonDetail, attempt))
-		return
+		return false
 	}
 
 	l.Warn().Int("attempt", attempt).Msg("pool.recover: unexplained exit; restarting")
@@ -2690,6 +3016,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 	// admission checks as any other. A separate spawn path here would be a
 	// second way to start an agent, and the two would drift.
 	p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt))
+	return true
 }
 
 // haltNotify tells the session that automatic restarts have stopped,
@@ -2729,6 +3056,60 @@ func (p *Pool) noticeNotify(sessionID, agentName, msg string, cause error) {
 		Err:       cause,
 	})
 }
+
+// rebufferUnanswered moves the messages an idle-killed process took and
+// never answered back into the session buffer, in order. Returns them.
+func (p *Pool) rebufferUnanswered(sessionID, agentName string) []string {
+	p.mu.Lock()
+	entry, ok := p.active[sessionKey(sessionID, agentName)]
+	p.mu.Unlock()
+	if !ok || entry.agent == nil {
+		return nil
+	}
+	msgs := entry.agent.TakeUnanswered()
+	if len(msgs) == 0 {
+		return nil
+	}
+	buf, err := p.bufferFor(sessionID)
+	if err != nil {
+		log.Warn().Err(err).
+			Str("component", "pool").
+			Str("session", sessionID).
+			Msg("pool.exit: could not re-buffer unanswered messages")
+		return nil
+	}
+	for _, m := range msgs {
+		if err := buf.Append(m); err != nil {
+			log.Warn().Err(err).
+				Str("component", "pool").
+				Str("session", sessionID).
+				Msg("pool.exit: could not re-buffer an unanswered message")
+		}
+	}
+	log.Warn().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Int("messages", len(msgs)).
+		Msg("pool.exit: idle-killed before answering; messages kept for the next spawn")
+	return msgs
+}
+
+// unansweredNotice is the inline line for messages handed back to the
+// buffer after an idle kill. Shown to the person and read by the agent on
+// its next spawn.
+func unansweredNotice(n int) string {
+	what := "Your last message was"
+	if n > 1 {
+		what = fmt.Sprintf("Your last %d messages were", n)
+	}
+	return what + " not answered: the agent produced no output before the idle timeout and was stopped. " +
+		"They are kept and will be delivered together with the next message (or sub-agent result) that wakes the agent."
+}
+
+// errUnansweredRequeued names the condition for SpawnErrorEvent consumers'
+// logs. Nothing branches on it.
+var errUnansweredRequeued = errors.New("agent idle-killed before answering; messages re-queued")
 
 // errCrashLoopHalted names the condition for the logs of whoever consumes
 // SpawnErrorEvent. Nothing branches on it.

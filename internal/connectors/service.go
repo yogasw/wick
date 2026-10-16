@@ -688,6 +688,9 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 			return nil, ErrFixedInstanceViolation
 		}
 	}
+	if err := s.validateConfigs(mod, "", configs); err != nil {
+		return nil, err
+	}
 	c := &entity.Connector{
 		Key:                    key,
 		Label:                  label,
@@ -966,6 +969,13 @@ func (s *Service) IsManageableBy(ctx context.Context, connectorID, userID string
 // "connector:{id}"); only declared keys are written, unknown keys are
 // silently dropped to keep stale form fields from polluting storage.
 func (s *Service) Update(ctx context.Context, id, label string, configs map[string]string, disabled bool) error {
+	if row, err := s.repo.Get(ctx, id); err == nil {
+		if mod, ok := s.Module(row.Key); ok {
+			if err := s.validateConfigs(mod, ownerForConnector(id), configs); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.repo.Update(ctx, &entity.Connector{
 		ID:       id,
 		Label:    label,
@@ -987,6 +997,59 @@ func (s *Service) Update(ctx context.Context, id, label string, configs map[stri
 		}
 	}
 	return nil
+}
+
+// validateConfigs runs mod's ValidateConfig over the values a write would
+// change. Skipped: empty values (a blank secret keeps the stored one),
+// encrypted tokens (nothing to read), and values equal to what owner
+// already stores, so a bad value saved before validation existed never
+// blocks editing another field. owner "" is a new instance.
+func (s *Service) validateConfigs(mod connector.Module, owner string, configs map[string]string) error {
+	if mod.ValidateConfig == nil {
+		return nil
+	}
+	for k, v := range configs {
+		if strings.TrimSpace(v) == "" || enc.IsToken(v) || enc.IsMasterToken(v) {
+			continue
+		}
+		if owner != "" && s.cfgs.GetOwned(owner, k) == v {
+			continue
+		}
+		if err := mod.ValidateConfig(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ClearConfig empties one stored config value on connector id. Update
+// treats a blank secret as "keep", so this is the only way to remove a
+// stored secret. The key must be declared by the module and not Required
+// (a required field is replaced, never emptied); locked and env-overridden
+// rows are refused by configs.ClearOwned.
+func (s *Service) ClearConfig(ctx context.Context, id, key string) error {
+	row, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	mod, ok := s.Module(row.Key)
+	if !ok {
+		return fmt.Errorf("connector module %q is not registered", row.Key)
+	}
+	var spec *entity.Config
+	for i := range mod.Configs {
+		if mod.Configs[i].Key == key {
+			spec = &mod.Configs[i]
+			break
+		}
+	}
+	if spec == nil {
+		return fmt.Errorf("config %q is not declared by connector %q", key, row.Key)
+	}
+	if spec.Required {
+		return fmt.Errorf("config %q is required — replace its value instead of clearing it", key)
+	}
+	return s.cfgs.ClearOwned(ctx, ownerForConnector(id), key)
 }
 
 // SetDisabled toggles the row-level off-switch.
@@ -1496,7 +1559,9 @@ func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, ful
 		// (which reads this bool map) hides them from the LLM — they remain
 		// runnable from the config UI because Execute reads OperationStatesFull,
 		// where Enabled is untouched.
-		out[k] = st.Enabled && !st.ConfigOnly
+		// HiddenByConfig ops (VisibleWhen not met by this row's config) are
+		// collapsed the same way; Execute re-checks the predicate itself.
+		out[k] = st.Enabled && !st.ConfigOnly && !st.HiddenByConfig
 	}
 	// An agent's checklist can switch ops off for the catalog the LLM
 	// reads; Execute re-checks the same rule at dispatch.
@@ -1529,6 +1594,12 @@ type OpState struct {
 	// Execute (which reads this full state) leaves Enabled intact so /test can
 	// still run it.
 	ConfigOnly bool
+	// VisibleWhen mirrors connector.Operation.VisibleWhen; HiddenByConfig is
+	// true when the row's effective config does not satisfy it. Like
+	// ConfigOnly it leaves Enabled (the admin toggle) untouched and is only
+	// collapsed into false by OperationStates.
+	VisibleWhen    string
+	HiddenByConfig bool
 }
 
 // OperationStatesFull returns the full per-operation state map for a
@@ -1544,7 +1615,32 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	if err != nil {
 		return nil, err
 	}
-	return foldOpStates(mod, rows), nil
+	full := foldOpStates(mod, rows)
+	applyVisibleWhen(mod, func() map[string]string { return s.LoadConfigs(entity.Connector{ID: connectorID}) }, full)
+	return full, nil
+}
+
+// applyVisibleWhen marks every op whose VisibleWhen the row's config does
+// not satisfy as HiddenByConfig. stored loads the row's saved config
+// (LoadConfigs, an in-memory read) — only when some op has a predicate;
+// module defaults fill unsaved fields.
+func applyVisibleWhen(mod connector.Module, stored func() map[string]string, full map[string]OpState) {
+	var vals map[string]string
+	for _, op := range mod.AllOps() {
+		if op.VisibleWhen == "" {
+			continue
+		}
+		st, ok := full[op.Key]
+		if !ok {
+			continue
+		}
+		if vals == nil {
+			vals = connector.EffectiveConfigValues(mod, stored())
+		}
+		st.VisibleWhen = op.VisibleWhen
+		st.HiddenByConfig = !connector.OpVisible(op, vals)
+		full[op.Key] = st
+	}
 }
 
 // foldOpStates folds a connector's stored toggle rows over its module's
@@ -1586,10 +1682,13 @@ type HealthCheckResult struct {
 //
 // The hook itself runs against a Ctx populated from the row's stored
 // configs — encrypted credentials are decrypted on read, identical to
-// Execute. The caller's permission to act on this row is the manager
-// handler's job; this method is unauthenticated by design (it is a
-// background-style operation, not user input).
-func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*HealthCheckResult, error) {
+// Execute. callerUserID is the user who triggered the test: wick_enc_
+// tokens are user-scoped, so they decrypt under that user's key, the
+// same as Execute's p.UserID. Pass "" when no user triggered the run
+// (background job) to fall back to the empty-user key. The caller's
+// permission to act on this row is the manager handler's job; this
+// method is unauthenticated by design.
+func (s *Service) RunHealthCheck(ctx context.Context, connectorID, callerUserID string) (*HealthCheckResult, error) {
 	c, err := s.repo.Get(ctx, connectorID)
 	if err != nil {
 		return nil, fmt.Errorf("connector not found: %w", err)
@@ -1605,10 +1704,10 @@ func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*Heal
 	cfg := s.LoadConfigs(*c)
 	// Decrypt any wick_enc_ tokens in the credential map before handing
 	// them to the hook — the hook calls upstream APIs the same way an
-	// Execute would. Health-check has no per-user context (it runs from
-	// the admin row page), so decrypt under the empty-user master key.
+	// Execute would, so decrypt under the triggering user's key. A token
+	// that user cannot open stays ciphertext and the hook fails upstream.
 	if s.enc != nil && !s.enc.Disabled() {
-		decoded, _, derr := unmaskMap(s.enc, cfg, "")
+		decoded, _, derr := unmaskMap(s.enc, cfg, callerUserID)
 		if derr == nil {
 			cfg = decoded
 		}
@@ -1616,6 +1715,9 @@ func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*Heal
 
 	cctx := connector.NewCtx(ctx, c.ID, cfg, nil, s.httpClient, nil, nil)
 	report, err := mod.HealthCheck(cctx)
+	if errors.Is(err, ErrNoHealthCheck) {
+		return nil, ErrNoHealthCheck
+	}
 	if err != nil {
 		return nil, fmt.Errorf("health check: %w", err)
 	}
@@ -1655,10 +1757,10 @@ var ErrNoHealthCheck = errors.New("connector does not implement HealthCheck")
 
 // decryptInstanceConfig resolves a session-workspace instance's config
 // map to plaintext: wick_cenc_ master tokens (the secret fields) via the
-// system master key, plus any wick_enc_ tokens via the empty-user key.
-// Used by the virtual execute/health paths, which have no DB row to read
-// credentials from.
-func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]string, error) {
+// system master key, plus any wick_enc_ tokens via callerUserID's key
+// ("" = empty-user key). Used by the virtual health path, which has no
+// DB row to read credentials from.
+func (s *Service) decryptInstanceConfig(config map[string]string, callerUserID string) (map[string]string, error) {
 	out := make(map[string]string, len(config))
 	for k, v := range config {
 		out[k] = v
@@ -1676,7 +1778,7 @@ func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]st
 		}
 		out[k] = plain
 	}
-	if decoded, _, derr := unmaskMap(s.enc, out, ""); derr == nil {
+	if decoded, _, derr := unmaskMap(s.enc, out, callerUserID); derr == nil {
 		out = decoded
 	}
 	return out, nil
@@ -1686,8 +1788,9 @@ func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]st
 // against a session-workspace instance's own config — the "test setup"
 // button for an ephemeral instance. Returns ErrNoHealthCheck when the
 // base module registers no hook, so the caller can fall back to running
-// a real operation as the probe.
-func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string) ([]connector.OpHealth, error) {
+// a real operation as the probe. callerUserID decrypts wick_enc_ tokens
+// the same way as RunHealthCheck.
+func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string, callerUserID string) ([]connector.OpHealth, error) {
 	mod, ok := s.Module(baseKey)
 	if !ok {
 		return nil, fmt.Errorf("no implementation registered for base connector key %q", baseKey)
@@ -1695,12 +1798,17 @@ func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, insta
 	if mod.HealthCheck == nil {
 		return nil, ErrNoHealthCheck
 	}
-	cfg, err := s.decryptInstanceConfig(config)
+	cfg, err := s.decryptInstanceConfig(config, callerUserID)
 	if err != nil {
 		return nil, err
 	}
 	cctx := connector.NewCtx(ctx, instanceID, cfg, nil, s.httpClient, nil, nil)
 	report, err := mod.HealthCheck(cctx)
+	if errors.Is(err, ErrNoHealthCheck) {
+		// A plugin hook that turned out absent: the caller falls back to
+		// running an operation, as for a module without a hook.
+		return nil, ErrNoHealthCheck
+	}
 	if err != nil {
 		return nil, fmt.Errorf("health check: %w", err)
 	}
@@ -1760,6 +1868,12 @@ type ExecuteParams struct {
 	// disable rows, admin-only flags, OAuth accounts) are skipped — a
 	// session instance has none of that backing state.
 	SessionInstance *SessionInstanceTarget
+	// ModuleOverride, when non-nil, executes this module instead of the one
+	// registered for the row's key — a candidate plugin binary under an
+	// admin-approved plugin test request. Everything else is the row's: its
+	// config, access checks, op states, masking and run log. The override's
+	// Meta.Key must equal the row's key.
+	ModuleOverride *connector.Module
 }
 
 // SessionInstanceTarget describes an ephemeral session-workspace
@@ -1845,6 +1959,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
 		}
 		mod = m
+		if p.ModuleOverride != nil {
+			if p.ModuleOverride.Meta.Key != c.Key {
+				return nil, fmt.Errorf("candidate plugin %q cannot run against a %q instance", p.ModuleOverride.Meta.Key, c.Key)
+			}
+			mod = *p.ModuleOverride
+		}
 	}
 
 	// Type-level off-switch (manager header kebab). Disabling a connector
@@ -1983,6 +2103,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	} else {
 		configs = s.LoadConfigs(*c)
+	}
+
+	// VisibleWhen gates the op on the instance's own config (e.g. an op only
+	// one browser engine supports). It can only be checked here, once the
+	// config is loaded, and before the account token lands in the map. The
+	// manager's test paths stay open so an admin can still try the op.
+	if op.VisibleWhen != "" && p.Source != entity.ConnectorRunSourceTest && p.Source != entity.ConnectorRunSourcePluginTest &&
+		!connector.OpVisible(*op, connector.EffectiveConfigValues(mod, configs)) {
+		return nil, fmt.Errorf("operation %q is not available on this instance (requires %s)", p.OperationKey, op.VisibleWhen)
 	}
 
 	// Inject the selected account's token. Ownership and per-account op
@@ -2144,6 +2273,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// caller supplied them) so MCP-proxy ops can forward bools/numbers in
 	// their native JSON type rather than the stringified Input form.
 	cctx.SetRawInput(p.RawInput)
+	cctx.SetRequestID(run.ID)
 	// Stamp the effective caller so ops that scope data per owner (data-table
 	// ops) can gate access. Agent spawns authenticate with a shared internal
 	// token (a synthetic admin, NOT the human), so the SESSION's owner — not
@@ -2164,6 +2294,20 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	if s.userName != nil {
 		cctx.SetUserNameResolver(s.userName)
 	}
+	// The row's connected accounts, listed only when an op asks — the Slack
+	// token_access widget names them; no other op pays for the query.
+	rowID := c.ID
+	cctx.SetAccountsLister(func() []connector.AccountRef {
+		accs, err := s.repo.ListAccounts(opCtx, rowID)
+		if err != nil {
+			return nil
+		}
+		out := make([]connector.AccountRef, 0, len(accs))
+		for _, a := range accs {
+			out = append(out, connector.AccountRef{ID: a.ID, DisplayName: a.DisplayName, WickUserID: a.WickUserID})
+		}
+		return out
+	})
 	// Ops that act ON the calling conversation rather than on an external
 	// API need to know which session that is — sub-agent delegation keys
 	// the parent, the tree, and the project scope off it.
@@ -2210,7 +2354,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if masker == nil || s == "" {
 			return s
 		}
-		return masker.svc.Mask(s, masker.snapshot(), p.UserID)
+		exact, folded := masker.snapshot()
+		s = masker.svc.Mask(s, exact, p.UserID)
+		if len(folded) > 0 {
+			s = masker.svc.MaskIgnoreCase(s, folded, p.UserID)
+		}
+		return s
 	}
 
 	res = &ExecuteResult{
@@ -2247,7 +2396,17 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		res.Status = entity.ConnectorRunStatusError
 		res.ErrorMessage = maskOut(execErr.Error())
 	default:
-		bytes, mErr := json.Marshal(value)
+		// A binary file an in-process op returned goes to artifacts/ before
+		// the result is marshalled: its bytes are never copied into JSON nor
+		// run through masking. Text content keeps mask → extract below.
+		v, ferr := takeBinaryFile(value, sessionID)
+		if ferr != nil {
+			res.Status = entity.ConnectorRunStatusError
+			res.ErrorMessage = maskOut(ferr.Error())
+			execErr = ferr
+			break
+		}
+		bytes, mErr := json.Marshal(v)
 		if mErr != nil {
 			res.Status = entity.ConnectorRunStatusError
 			res.ErrorMessage = maskOut("marshal response: " + mErr.Error())
@@ -2255,6 +2414,17 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		} else {
 			res.Status = entity.ConnectorRunStatusSuccess
 			res.ResponseJSON = maskOut(string(bytes))
+			// A file the op returned goes to the session's artifacts/
+			// folder after masking; only its path stays in the result
+			// (and in the run log).
+			if out, ferr := extractFileOutput(res.ResponseJSON, sessionID); ferr != nil {
+				res.Status = entity.ConnectorRunStatusError
+				res.ResponseJSON = ""
+				res.ErrorMessage = maskOut(ferr.Error())
+				execErr = ferr
+			} else {
+				res.ResponseJSON = out
+			}
 		}
 	}
 

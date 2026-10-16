@@ -154,3 +154,70 @@ func TestAgentTelegramRow(t *testing.T) {
 		t.Fatal("telegram delete dropped the slack row")
 	}
 }
+
+// The Enabled switch wins over the token: saving any key (the token
+// included) after switching off keeps the row off, and only the switch
+// turns it back on.
+func TestChannelEnabledSwitchSurvivesSaves(t *testing.T) {
+	db := testDB(t)
+	enabled := func() bool {
+		var ch entity.AgentChannel
+		if err := db.Where("type = ? AND user_id = ?", "slack", "u1").First(&ch).Error; err != nil {
+			t.Fatal(err)
+		}
+		return ch.Enabled
+	}
+	if err := SetChannelConfigKeyForUser(db, "slack", "u1", "bot_token", "xoxb-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled() {
+		t.Fatal("a row with a token and no switch must be on")
+	}
+	if err := SetChannelConfigKeyForUser(db, "slack", "u1", "enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range [][2]string{{"bot_token", "xoxb-2"}, {"users_mode", "all"}, {"app_token", "xapp-1"}} {
+		if err := SetChannelConfigKeyForUser(db, "slack", "u1", kv[0], kv[1]); err != nil {
+			t.Fatal(err)
+		}
+		if enabled() {
+			t.Fatalf("saving %s switched the row back on", kv[0])
+		}
+	}
+	if owners, _ := ListChannelOwners(db, "slack"); len(owners) != 0 {
+		t.Fatalf("a switched-off row must not boot: %v", owners)
+	}
+	if err := SetChannelConfigKeyForUser(db, "slack", "u1", "enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled() {
+		t.Fatal("switching on must turn the row on")
+	}
+	// Clearing the token stops it whatever the switch says.
+	if err := SetChannelConfigKeyForUser(db, "slack", "u1", "bot_token", ""); err != nil {
+		t.Fatal(err)
+	}
+	if enabled() {
+		t.Fatal("a cleared token must leave the row off")
+	}
+}
+
+func TestChannelRowEnabled(t *testing.T) {
+	cases := []struct {
+		m    map[string]string
+		want bool
+	}{
+		{map[string]string{}, false},
+		{map[string]string{"bot_token": "x"}, true},
+		{map[string]string{"bot_token": "x", "enabled": "true"}, true},
+		{map[string]string{"bot_token": "x", "enabled": "false"}, false},
+		{map[string]string{"bot_token": "", "enabled": "true"}, false},
+		{map[string]string{"enabled": "true"}, true}, // REST: no token key
+		{map[string]string{"enabled": "false"}, false},
+	}
+	for _, c := range cases {
+		if got := ChannelRowEnabled(c.m); got != c.want {
+			t.Errorf("ChannelRowEnabled(%v) = %v, want %v", c.m, got, c.want)
+		}
+	}
+}

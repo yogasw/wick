@@ -21,7 +21,7 @@ func TestTrendSpentAnchorsToTheExactTotal(t *testing.T) {
 	// The provider's real total includes history the trail no longer has.
 	total := 1_000_000
 
-	spent := trendSpentOf(series, total)
+	spent := trendSpentOf(series, total, trendStart(len(series), contextTrendMax))
 	if len(spent) != contextTrendMax {
 		t.Fatalf("len = %d, want the same window trendOf returns (%d)", len(spent), contextTrendMax)
 	}
@@ -48,7 +48,7 @@ func TestTrendSpentIgnoresLevelOnlyPoints(t *testing.T) {
 		{At: now.Add(-time.Minute), ContextUsed: 5000}, // compaction
 		{At: now, Input: 40},
 	}
-	spent := trendSpentOf(series, 100)
+	spent := trendSpentOf(series, 100, 0)
 	if spent[1] != spent[0] {
 		t.Fatalf("compaction changed the running total: %v", spent)
 	}

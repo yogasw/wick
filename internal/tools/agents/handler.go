@@ -34,6 +34,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/schedule"
+	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
@@ -41,6 +42,9 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
+	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -102,6 +106,7 @@ func SetPool(p *pool.Pool) {
 	globalPool = p
 	if p != nil {
 		startProviderIdleCompactor()
+		startFailoverRecovery()
 	}
 }
 
@@ -116,6 +121,8 @@ func SetBroadcaster(b *Broadcaster) { globalBcast = b }
 // it the store stays memory-only and a toggle dies with the engine goroutine.
 func SetLayout(l agentconfig.Layout) {
 	globalLayout = l
+	// A session may link a repo from a sibling project (see scm.LinkedRepoTarget).
+	scm.SetLinkRoot(l.ProjectsDir())
 	sessionoverride.SetSessionDirResolver(func(sessionID string) string {
 		if sessionID == "" || l == (agentconfig.Layout{}) {
 			return ""
@@ -124,6 +131,17 @@ func SetLayout(l agentconfig.Layout) {
 			return "" // never let a crafted id escape the sessions dir
 		}
 		return l.SessionDir(sessionID)
+	})
+	// Connector ops that return a file write it to <session cwd>/artifacts/.
+	connectors.SetArtifactDirResolver(func(sessionID string) (string, error) {
+		if err := storage.ValidateSessionID(sessionID); err != nil {
+			return "", err
+		}
+		sess, err := session.Load(l, sessionID)
+		if err != nil {
+			return "", err
+		}
+		return resolveSessionCwd(sess)
 	})
 }
 
@@ -245,6 +263,9 @@ func Register(r tool.Router) {
 	// runs, instead of repeating ownsSession/allowProject in every handler.
 	r.Use("/sessions/{id}", sessionAccessMW)
 	r.Use("/api/sessions/{id}", sessionAccessMW)
+	// Another person's chat of a shared Team agent opens read-only.
+	r.Use("/sessions/{id}", sharedChatReadOnlyMW)
+	r.Use("/api/sessions/{id}", sharedChatReadOnlyMW)
 	r.Use("/projects/{id}", projectAccessMW)
 	r.Use("/api/projects/{id}", projectAccessMW)
 	// A shared agent's chat is chat only: its rail is the owner's project.
@@ -300,6 +321,15 @@ func Register(r tool.Router) {
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
 	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
+	r.POST("/api/sessions/{id}/team-tasks/summarize", sessionTeamTasksSummarize)
+	r.POST("/api/sessions/{id}/team-tasks/cancel-working", sessionTeamTasksCancelWorking)
+	r.GET("/api/sessions/{id}/team-tasks/{task}/thread", sessionTeamTaskThread)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/answer", sessionTeamTaskAnswer)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/cancel", sessionTeamTaskCancel)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/message", sessionTeamTaskMessage)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/retry", sessionTeamTaskRetry)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/reassign", sessionTeamTaskReassign)
+	r.GET("/api/sessions/{id}/team-tasks/{task}/reassign-targets", sessionTeamTaskReassignTargets)
 	// Interactive messages: an actioncard click, and a decision on an
 	// approval_request card.
 	r.POST("/api/sessions/{id}/postback", sessionPostback)
@@ -364,6 +394,8 @@ func Register(r tool.Router) {
 	r.PATCH("/api/team/agents/{id}", apiTeamAgentUpdate)
 	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)
 	r.POST("/api/team/agents/{id}/captain", apiTeamAgentMakeCaptain)
+	r.GET("/api/team/agents/{id}/avatar/image", apiTeamAgentAvatarImage)
+	r.POST("/api/team/agents/{id}/avatar/image", apiTeamAgentAvatarImageUpload)
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
@@ -371,6 +403,7 @@ func Register(r tool.Router) {
 	r.GET("/api/team/agents/{id}/shares", apiTeamAgentShares)
 	r.POST("/api/team/agents/{id}/shares", apiTeamAgentShareAdd)
 	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
+	r.PATCH("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareUpdate)
 	r.GET("/api/team/share-users", apiTeamShareUsers)
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
 	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
@@ -379,6 +412,7 @@ func Register(r tool.Router) {
 	r.PUT("/api/team/agents/{id}/slack", apiTeamAgentSlackConnect)
 	r.PATCH("/api/team/agents/{id}/slack", apiTeamAgentSlackOptions)
 	r.DELETE("/api/team/agents/{id}/slack", apiTeamAgentSlackDisconnect)
+	r.POST("/api/team/agents/{id}/slack/convert", apiTeamAgentSlackConvert)
 	r.GET("/api/team/agents/{id}/slack/health", apiTeamAgentSlackHealth)
 	r.GET("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsGet)
 	r.PATCH("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsPatch)
@@ -464,6 +498,12 @@ func Register(r tool.Router) {
 	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
 	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
 	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
+	// The ticket's room (ticket_room.go).
+	r.GET("/api/tickets/{ticketID}/room", apiTicketRoomGet)
+	r.POST("/api/tickets/{ticketID}/room", apiTicketRoomCreate)
+	r.PATCH("/api/tickets/{ticketID}/room", apiTicketRoomUpdate)
+	r.POST("/api/tickets/{ticketID}/room/members", apiTicketRoomAddMembers)
+	r.DELETE("/api/tickets/{ticketID}/room/members/{agentID}", apiTicketRoomRemoveMember)
 	// A custom ticket button was clicked — POST the ticket to that button's
 	// URL and report the outcome to the clicker.
 	r.POST("/api/tickets/{ticketID}/actions/{buttonID}", apiTicketAction)
@@ -646,6 +686,10 @@ func Register(r tool.Router) {
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
 	r.POST("/providers/detail/{type}/{name}/airouter", saveProviderAIRouter)
+	r.POST("/providers/detail/{type}/{name}/owner-perms", saveProviderOwnerPerms)
+	r.GET("/providers/detail/{type}/{name}/failover", providerFailover)
+	r.POST("/providers/detail/{type}/{name}/failover", saveProviderFailover)
+	r.POST("/providers/detail/{type}/{name}/failover/reset-health", resetProviderHealth)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
 	r.POST("/providers/idle-compact-probe/{type}/{name}", probeIdleCompact)
 	r.GET("/providers/airouter/slots/{type}", providerAIRouterSlots)
@@ -947,7 +991,7 @@ var grantCache sync.Map
 // grants, tag-shared projects, tag-shared data tables — through a short
 // per-user cache. The returned map is SHARED: callers must copy before
 // adding to it.
-func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
+func cachedGrantSet(ctx context.Context, u *entity.User) map[string]struct{} {
 	if e, ok := grantCache.Load(u.ID); ok {
 		if ent := e.(grantCacheEntry); time.Now().Before(ent.expiry) {
 			return ent.set
@@ -955,9 +999,9 @@ func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
 	}
 	set := make(map[string]struct{})
 	if globalTagsSvc != nil {
-		got, err := globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
+		got, err := globalTagsSvc.AccessibleResourceIDs(ctx, u.ID)
 		if err != nil {
-			log.Ctx(c.Context()).Warn().Err(err).Msg("resolve accessible projects")
+			log.Ctx(ctx).Warn().Err(err).Msg("resolve accessible projects")
 		} else {
 			set = got
 		}
@@ -977,7 +1021,7 @@ func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
 		// untagged project stays private to its owner instead of leaking to
 		// every authenticated user.
 		if globalAuth != nil &&
-			globalAuth.CanAccessSharedResource(c.Context(), u, "/projects/"+pid) {
+			globalAuth.CanAccessSharedResource(ctx, u, "/projects/"+pid) {
 			set[pid] = struct{}{}
 		}
 	}
@@ -992,7 +1036,7 @@ func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
 			if _, ok := set[slug]; ok {
 				continue
 			}
-			if globalAuth.CanAccessSharedResource(c.Context(), u, "/data-tables/"+slug) {
+			if globalAuth.CanAccessSharedResource(ctx, u, "/data-tables/"+slug) {
 				set[slug] = struct{}{}
 			}
 		}
@@ -1027,6 +1071,13 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 // A nil user reaches nothing — unlike the caller path, where nil means an
 // internal call with no human to scope to.
 func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
+	return projectAccessForUserCtx(c.Context(), u)
+}
+
+// projectAccessForUserCtx is projectAccessForUser off a bare context, for
+// callers that ask about someone other than the request's user with no
+// request at hand (the share checks).
+func projectAccessForUserCtx(ctx context.Context, u *entity.User) projectAccess {
 	if u == nil {
 		return projectAccess{}
 	}
@@ -1037,7 +1088,14 @@ func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
 	if u.IsAdmin() && adminSeeAll() {
 		return projectAccess{seeAll: true}
 	}
-	grants := cachedGrantSet(c, u)
+	return scopedProjectAccess(ctx, u)
+}
+
+// scopedProjectAccess is the projects u reaches with no see-all bypass:
+// owned, tag-granted, or (for an admin) ownerless. Anything made to run
+// IN a project for u — not merely shown to them — is held to it.
+func scopedProjectAccess(ctx context.Context, u *entity.User) projectAccess {
+	grants := cachedGrantSet(ctx, u)
 	// Copied before the ownership union below: the cached map is shared
 	// across requests and must never be written to.
 	set := make(map[string]struct{}, len(grants)+8)
@@ -1293,10 +1351,28 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.IsAdmin() && adminSeeAll() {
 		return true
 	}
-	// A shared agent's chat is its recipient's alone: the agent's owner
-	// reaches its project but not this conversation.
-	if p, ok := sharedChatAgent(c.Context(), sess); ok {
-		return sharedChatAllowed(c.Context(), u.ID, sess, p)
+	// A group or ticket room member's backing session holds its person's
+	// side of the thread and its tool output: theirs alone, never the
+	// project's or the room's.
+	if sess.Meta.GroupSessionID != "" {
+		return u.ID == sess.Meta.UserID
+	}
+	if p, ok := uiAgentChat(c.Context(), sess); ok {
+		// A shared agent's chats are open to everyone it belongs to right
+		// now — its owner and each recipient (the Chats drawer's All tab).
+		if agentChatViewer(c.Context(), u.ID, sess, p) {
+			return true
+		}
+		// Otherwise a recipient's chat is its recipient's alone, and only
+		// while the agent is still shared with them.
+		if team.IsSharedChat(sess.Meta, &p) {
+			return sharedChatAllowed(c.Context(), u.ID, sess, p)
+		}
+		// A recipient who spoke in the owner's chat is a participant of
+		// it; that opens nothing once the share is gone.
+		if u.ID != sess.Meta.UserID && u.ID != p.OwnerUserID {
+			return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, nil)
+		}
 	}
 	// Owner or any other person who has spoken in it: a Slack thread is
 	// shared work, so replying into one must not leave it unopenable.
@@ -1327,7 +1403,54 @@ func sessionAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
 			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 			return
 		}
+		if sess.Meta.TicketRoom != nil && !roomRouteAllowed(c, sess) {
+			return
+		}
 		next(c)
+	}
+}
+
+// roomRouteAllowed keeps a ticket room to what a room is: read it, send to
+// it (sendRoomMessage), stop or follow it (roomPostAllowed). Moving it to another project, switching its
+// provider, scheduling into it, its workspace and files — none applies to
+// a thread that never runs a provider itself, and several would detach it
+// from its ticket. Deleting it is for its creator, once its ticket is gone
+// (deleting the ticket removes its room). Answers the refusal itself.
+func roomRouteAllowed(c *tool.Ctx, sess session.Session) bool {
+	switch c.R.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	path := strings.TrimRight(c.R.URL.Path, "/")
+	if c.R.Method == http.MethodPost && roomPostAllowed(path, sess.ID) {
+		return true
+	}
+	if c.R.Method == http.MethodDelete && strings.HasSuffix(path, "/sessions/"+sess.ID) {
+		if actorID(c) == sess.Meta.UserID && !ticket.Exists(globalLayout, sess.Meta.ProjectID, sess.Meta.TicketRoom.TicketID) {
+			return true
+		}
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "a ticket room goes with its ticket — delete the ticket instead"})
+		return false
+	}
+	c.JSON(http.StatusBadRequest, map[string]string{"error": errRoomSession})
+	return false
+}
+
+// roomPostAllowed is the POST allowlist of a ticket room: sending, and the
+// controls any member needs — stopping a stuck run (kill, cancel a
+// connector run, drop the queue) and following the room's notifications.
+// Anything else (provider, project move, files, …) stays refused.
+func roomPostAllowed(path, sid string) bool {
+	i := strings.LastIndex(path, "/sessions/"+sid+"/")
+	if i < 0 {
+		return false
+	}
+	switch rest := path[i+len("/sessions/"+sid+"/"):]; rest {
+	case "send", "kill", "dequeue", "subscribe", "unsubscribe":
+		return true
+	default:
+		parts := strings.Split(rest, "/")
+		return len(parts) == 3 && parts[0] == "runs" && parts[1] != "" && parts[2] == "cancel"
 	}
 }
 
@@ -1508,6 +1631,27 @@ func resolveSessionTarget(c *tool.Ctx, formValue, formModel, projectID string) (
 	return normalizeProviderKey("claude"), ""
 }
 
+// userSessionTarget is resolveSessionTarget with no form, for uid rather
+// than the request's caller: the project's default, else the first
+// provider uid may use, else claude.
+func userSessionTarget(ctx context.Context, uid, projectID string) (providerKey, modelID string) {
+	if projectID != "" {
+		if p, perr := project.Load(globalLayout, projectID); perr == nil {
+			if prov := strings.TrimSpace(p.Meta.Defaults.Provider); prov != "" {
+				return normalizeProviderKey(prov), strings.TrimSpace(p.Meta.Defaults.Model)
+			}
+		}
+	}
+	if u, err := lookupWorkflowOwner(ctx, uid); err == nil && u != nil {
+		for _, ps := range providerChoicesCached(ctx) {
+			if userCanAccessProvider(ctx, u, provider.Type(ps.Type), ps.Name) {
+				return normalizeProviderKey(ps.Type + "/" + ps.Name), ""
+			}
+		}
+	}
+	return normalizeProviderKey("claude"), ""
+}
+
 // modelWithProvider returns the model only when a provider accompanies it.
 //
 // A model id is scoped to one provider instance's registry, so a stored
@@ -1558,7 +1702,24 @@ func startNewSession(c *tool.Ctx) {
 	}
 	projectID := c.Form("project_id")
 	provForm, formModel := splitProviderModel(c.Form("provider"))
+	if !providerKeyAllowed(c, provForm) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(provForm))
+		return
+	}
 	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
+	// Team › Tickets starts a ticket's chat as the caller's own Captain
+	// (team_captain=1). Resolved here, never taken from the form, so a
+	// request cannot start a session as anyone else's agent; no Captain
+	// leaves an ordinary session of the project.
+	agentID := ""
+	if c.Form("team_captain") == "1" {
+		if p, ok := ownCaptain(c.Context(), actorID(c)); ok {
+			agentID = p.ID
+			if key, ok := remoteProviderKey(p); ok {
+				prov, modelID = key, ""
+			}
+		}
+	}
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
@@ -1575,6 +1736,7 @@ func startNewSession(c *tool.Ctx) {
 		Origin:    session.OriginUI,
 		Preset:    presetName,
 		UserID:    actorID(c),
+		AgentID:   agentID,
 	}); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose create session: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1613,6 +1775,7 @@ func startNewSession(c *tool.Ctx) {
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
 	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
+	bgCtx = teamlink.WithPersonMessage(bgCtx)
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1714,6 +1877,7 @@ func sessionsPage(c *tool.Ctx) {
 		IdleTimeoutMs: idleTimeoutMs(),
 		RailPrefs:     railPrefsJSON(c),
 		ViewerID:      viewerID(c),
+		ViewerName:    viewerName(c),
 	}))
 }
 
@@ -1764,6 +1928,10 @@ func createSession(c *tool.Ctx) {
 	}
 	projectID := c.Form("project_id")
 	provForm, formModel := splitProviderModel(c.Form("provider"))
+	if !providerKeyAllowed(c, provForm) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(provForm))
+		return
+	}
 	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
 	id := uuid.New().String()
 	presetName := "default"
@@ -1829,8 +1997,13 @@ func sessionDetail(c *tool.Ctx) {
 		IdleTimeoutMs:  idleTimeoutMs(),
 		RailPrefs:      railPrefsJSON(c),
 		ViewerID:       viewerID(c),
+		ViewerName:     viewerName(c),
 	}))
 }
+
+// errProviderSetByAgent answers a provider switch in the chat of a Team
+// agent whose allow_provider_switch is off.
+const errProviderSetByAgent = "provider is set by the agent — change it in agent Settings"
 
 type switchProviderReq struct {
 	Provider string `json:"provider"`
@@ -1858,6 +2031,16 @@ func switchProvider(c *tool.Ctx) {
 	sess, ok := globalMgr.Registry().Session(id)
 	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	// A Team agent's chat switches only while the agent allows it; a
+	// started chat may switch too (the new provider starts fresh when it
+	// cannot resume), so nothing here looks at the turn count.
+	if agentForbidsSwitch(c.Context(), sess) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": errProviderSetByAgent})
+		return
+	}
+	if !requireProviderKeyAccess(c, req.Provider) {
 		return
 	}
 	agentName := sess.Meta.ActiveAgent
@@ -1916,6 +2099,10 @@ func moveSessionToProject(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// An open tab's git watcher is still on the old folder; re-point it.
+	if moved, found := globalMgr.Registry().Session(id); found {
+		RebindGitWatch(moved)
+	}
 	// Kill running subprocess so next Send respawns in the new folder.
 	agentName := sess.Meta.ActiveAgent
 	if agentName == "" && len(sess.Agents) > 0 {
@@ -1930,6 +2117,9 @@ func moveSessionToProject(c *tool.Ctx) {
 
 type sendReq struct {
 	Text string `json:"text"`
+	// ReplyTo is the turn id of the bubble the person clicked "Reply" on.
+	// Only the id is taken from the client; see resolveReplyTo.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 // viewerID is the wick user reading the page, inlined into the SPA shell so
@@ -1992,6 +2182,12 @@ func withComposerSender(c *tool.Ctx, bg context.Context, sessionID string) conte
 	if name == "" {
 		name = u.Email
 	}
+	// The pool reads the caller from ctx to decide whose MCP credential a
+	// spawn gets. bg is detached from the request, so login.GetUser finds
+	// nobody there: without this every web turn looked callerless, the spawn
+	// fell back to the session OWNER's access, and RespawnOnCallerChange
+	// never fired — a teammate typing into an admin's session ran as admin.
+	bg = agentchannels.WithCallerUserID(bg, u.ID)
 	return agentchannels.WithSender(bg, &store.Sender{
 		ID:         u.ID,
 		Name:       name,
@@ -2007,6 +2203,9 @@ func sendMessage(c *tool.Ctx) {
 	id := c.PathValue("id")
 	var req sendReq
 	var atts []agentstore.Attachment
+	// A reply is checked before anything acts on the message (an upload or
+	// a provider switch included), so a refused reply_to changes nothing.
+	var reply *store.ReplyTo
 
 	// Accept multipart/form-data when files are attached; fall back to
 	// the JSON shape so text-only sends from older clients still work.
@@ -2016,6 +2215,19 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		req.Text = trimFormText(c.Form("text"))
+		// The reply is checked before the uploads touch the disk, so a
+		// refused reply_to leaves nothing behind.
+		r, ok := validateReply(c, id, c.Form("reply_to"), req.Text)
+		if !ok {
+			return
+		}
+		reply = r
+		// Nor may anyone but its owner leave files in an ordinary ticket
+		// session: refused before they touch the disk.
+		if c.R.MultipartForm != nil && len(c.R.MultipartForm.File) > 0 && ticketSessionRefusesFiles(c, id) {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": errTicketSessionFiles})
+			return
+		}
 		saved, err := saveUploadsFromMultipart(c, id, c.Base())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -2028,6 +2240,11 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		req.Text = strings.TrimSpace(req.Text)
+		r, ok := validateReply(c, id, req.ReplyTo, req.Text)
+		if !ok {
+			return
+		}
+		reply = r
 	}
 	if req.Text == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
@@ -2036,6 +2253,16 @@ func sendMessage(c *tool.Ctx) {
 	// A group chat never spawns: its members answer in their own sessions.
 	if sess, ok := globalMgr.Registry().Session(id); ok && sess.Meta.AgentGroup != nil {
 		sendGroupMessage(c, sess, req.Text)
+		return
+	}
+	// Nor does a ticket room: the sender's agents answer in theirs.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sess.Meta.TicketRoom != nil {
+		sendRoomMessage(c, sess, req.Text)
+		return
+	}
+	// An ordinary ticket session's home agent answers only its owner: a
+	// mention, or anyone else's message, goes to the sender's own agent.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sendTicketSessionMessage(c, sess, req.Text, len(atts) > 0) {
 		return
 	}
 
@@ -2055,30 +2282,44 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		bcast := globalBcast
-		// No Reply on the UI path — the system turn (via Notify) is the only
-		// bubble the switch should produce.
-		if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
-			Source:   "ui",
-			UserText: req.Text,
-			Notify: func(tag string, steps []string) {
-				if bcast != nil {
-					bcast.PublishRaw(id, agentName, "user_message", req.Text)
-					bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, ""), steps)
-				}
-			},
-		}); err != nil {
-			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		// The tag is a switch the endpoint would refuse (the agent keeps its
+		// provider, or the caller may not pick it): the directive is
+		// dropped with a notice, the words still go to the current provider.
+		if refusal := uiSwitchRefusal(c, sess, r.Tag); refusal != "" {
+			if bcast != nil {
+				bcast.PublishSystemTurn(id, agentName, "Provider switch ignored: "+refusal, nil)
+			}
+			if r.Rest == "" {
+				c.JSON(http.StatusOK, map[string]string{"status": "switch_ignored", "error": refusal})
+				return
+			}
+			req.Text = r.Rest
+		} else {
+			// No Reply on the UI path — the system turn (via Notify) is the only
+			// bubble the switch should produce.
+			if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
+				Source:   "ui",
+				UserText: req.Text,
+				Notify: func(tag string, steps []string) {
+					if bcast != nil {
+						bcast.PublishRaw(id, agentName, "user_message", req.Text)
+						bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, ""), steps)
+					}
+				},
+			}); err != nil {
+				c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if err := globalMgr.RefreshSession(id); err != nil {
+				c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
+				return
+			}
+			if r.Rest == "" {
+				c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
+				return
+			}
+			req.Text = r.Rest
 		}
-		if err := globalMgr.RefreshSession(id); err != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
-			return
-		}
-		if r.Rest == "" {
-			c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
-			return
-		}
-		req.Text = r.Rest
 	}
 
 	sess, ok := globalMgr.Registry().Session(id)
@@ -2098,6 +2339,15 @@ func sendMessage(c *tool.Ctx) {
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
 	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
+	// The reply and the turn id ride only on the send to this chat's own
+	// agent — never on bgCtx, which routeHumanMentions hands on to other
+	// sessions (sub-agents, teammates). They are also bound to this
+	// session id, so a ctx that does travel carries neither.
+	turnID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	sendCtx := teamlink.WithPersonMessage(store.WithUserTurnID(bgCtx, id, turnID))
+	if reply != nil {
+		sendCtx = store.WithReplyTo(sendCtx, id, reply)
+	}
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
@@ -2108,7 +2358,7 @@ func sendMessage(c *tool.Ctx) {
 	if note := humanMentionNote(bgCtx, sess, id, req.Text); note != "" {
 		text = req.Text + "\n\n" + note
 	}
-	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
+	if err := globalPool.SendWithAttachments(sendCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2122,7 +2372,42 @@ func sendMessage(c *tool.Ctx) {
 	// the leader always sees what was said even when a mention took work
 	// straight to someone else.
 	routeHumanMentions(bgCtx, sess, id, req.Text)
-	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+	c.JSON(http.StatusOK, map[string]string{"status": "queued", "turn_id": turnID})
+}
+
+// validateReply checks the reply_to a person sent with a message (see
+// resolveReplyTo). Empty = not a reply. On refusal it answers the request
+// and returns ok=false: 404 for a chat the caller cannot open, 400 for a
+// group chat or an id that names no turn of this chat, 500 when the
+// history cannot be read. A bare slash command is sent without its reply:
+// it is a command, not an answer to anything.
+func validateReply(c *tool.Ctx, id, raw, text string) (*store.ReplyTo, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, true
+	}
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return nil, false
+	}
+	if sess.Meta.AgentGroup != nil || sess.Meta.TicketRoom != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "reply_to: not supported in group chats"})
+		return nil, false
+	}
+	r, err := resolveReplyTo(id, raw, sessionSpeaker(c, id))
+	if errors.Is(err, errReplyTo) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": errReplyTo.Error()})
+		return nil, false
+	}
+	if err != nil {
+		log.Ctx(c.Context()).Error().Msgf("reply_to %s: %s", id, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "reply_to: could not read this chat"})
+		return nil, false
+	}
+	if store.IsBareSlashCommand(text) {
+		return nil, true
+	}
+	return r, true
 }
 
 // trimFormText reads a multipart text field the way the person typed it.
@@ -2148,16 +2433,54 @@ func dequeueAgent(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	// Remove every queued entry for this session (any agent) + clear its
-	// buffered input so it won't execute. Preserve the rest of meta.
-	removed := globalPool.DequeueSession(id)
+	// A ticket room queues nothing itself: the caller's own members queue
+	// in their backing sessions, so that is what gets dropped. In an
+	// ordinary ticket session the same goes for anyone but its owner,
+	// whose own queue is the session's.
+	if sess.Meta.TicketRoom != nil || isTicketSession(sess) {
+		removed := cancelRoomRuns(id, actorID(c), true)
+		for _, b := range roomOwnBackings(c, id) {
+			removed += dequeueSession(b)
+		}
+		if isTicketSession(sess) && ticketSessionHomeReachable(c, sess) {
+			removed += dequeueSession(sess)
+		}
+		c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": dequeueSession(sess)})
+}
+
+// dequeueSession removes every queued entry for sess (any agent) and
+// clears its buffered input so it won't execute, preserving the rest of
+// its meta. Returns how many queue entries went.
+func dequeueSession(sess session.Session) int {
+	removed := globalPool.DequeueSession(sess.ID)
 	meta := sess.Meta
 	meta.Status = session.StatusIdle
 	meta.PendingInput = nil
 	meta.LastActive = time.Now().UTC()
-	_ = session.SaveMeta(globalLayout, id, meta)
+	_ = session.SaveMeta(globalLayout, sess.ID, meta)
 	globalMgr.Register(sessionWithMeta(sess, meta))
-	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
+	return removed
+}
+
+// roomOwnBackings is the caller's own backing sessions in ticket room
+// roomID — where that person's members actually run. Another member's
+// backing is never in it: every member passes ownsSession on the room,
+// and stopping the room must not reach into someone else's work.
+func roomOwnBackings(c *tool.Ctx, roomID string) []session.Session {
+	caller := actorID(c)
+	if caller == "" {
+		return nil
+	}
+	var out []session.Session
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.GroupSessionID == roomID && s.Meta.UserID == caller {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // sessionWithMeta returns a copy of sess with replaced meta, for
@@ -2396,6 +2719,49 @@ func killAgent(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
+	// A ticket room never runs a provider: the caller's own members run in
+	// their backing sessions, so stopping the room stops those — and only
+	// those, never another member's.
+	// An ordinary ticket session is the same for anyone but its owner:
+	// their Stop never reaches the owner's own run.
+	if sess.Meta.TicketRoom != nil || isTicketSession(sess) {
+		// Runs of the caller's still waiting behind the room's lock have
+		// no backing turn yet to stop: cancel them first.
+		cancelled := cancelRoomRuns(id, actorID(c), false)
+		stopped := []string{}
+		if isTicketSession(sess) && ticketSessionHomeReachable(c, sess) {
+			if code, body := stopSessionRun(c, sess); code != http.StatusOK {
+				c.JSON(code, body)
+				return
+			}
+			stopped = append(stopped, sess.ID)
+		}
+		for _, b := range roomOwnBackings(c, id) {
+			if code, body := stopSessionRun(c, b); code != http.StatusOK {
+				c.JSON(code, body)
+				return
+			}
+			stopped = append(stopped, b.ID)
+		}
+		if len(stopped) == 0 && cancelled == 0 {
+			// Say so rather than "killed": nothing of the caller's runs here.
+			c.JSON(http.StatusConflict, map[string]any{"error": "nothing of yours is running in this session", "sessions": stopped})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{"status": "killed", "sessions": stopped})
+		return
+	}
+	code, body := stopSessionRun(c, sess)
+	c.JSON(code, body)
+}
+
+// stopSessionRun stops sess's leader and its sub-agents, returning what
+// killAgent answers. A var so tests can watch which sessions get stopped
+// without real processes behind them.
+var stopSessionRun = killSessionRun
+
+func killSessionRun(c *tool.Ctx, sess session.Session) (int, any) {
+	id := sess.ID
 	agentName := sess.Meta.ActiveAgent
 	if agentName == "" && len(sess.Agents) > 0 {
 		agentName = sess.Agents[0].Name
@@ -2419,8 +2785,7 @@ func killAgent(c *tool.Ctx) {
 	pids := sessionPIDs(id)
 	if err := globalPool.KillBy(id, agentName, "user", stoppedByNote(c)); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return http.StatusInternalServerError, map[string]string{"error": err.Error()}
 	}
 	if !owned {
 		if killed := killOrphanSpawns(id); len(killed) > 0 {
@@ -2428,8 +2793,7 @@ func killAgent(c *tool.Ctx) {
 				Ints("pids", killed).
 				Str("session", id).
 				Msg("kill agent: ended orphaned spawns this pool did not own")
-			c.JSON(http.StatusOK, map[string]any{"status": "killed", "orphans": killed})
-			return
+			return http.StatusOK, map[string]any{"status": "killed", "orphans": killed}
 		}
 	}
 	if survivors := enforceStop(pids); len(survivors) > 0 {
@@ -2437,10 +2801,9 @@ func killAgent(c *tool.Ctx) {
 			Ints("pids", survivors).
 			Str("session", id).
 			Msg("kill agent: agent.Stop left the process running — signalled it directly")
-		c.JSON(http.StatusOK, map[string]any{"status": "killed", "forced": survivors})
-		return
+		return http.StatusOK, map[string]any{"status": "killed", "forced": survivors}
 	}
-	c.JSON(http.StatusOK, map[string]string{"status": "killed"})
+	return http.StatusOK, map[string]string{"status": "killed"}
 }
 
 // cancelSessionRun aborts one in-flight connector run belonging to this session
@@ -2468,7 +2831,8 @@ func cancelSessionRun(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}
-	if run.SessionID != id {
+	ownRun := run.SessionID == id && (!isTicketSession(sess) || ticketSessionHomeReachable(c, sess))
+	if !ownRun && !runInOwnRoomBacking(c, sess, run.SessionID) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "run does not belong to this session"})
 		return
 	}
@@ -2478,6 +2842,21 @@ func cancelSessionRun(c *tool.Ctx) {
 		_ = globalConnectors.FinalizeStaleRun(c.Context(), runID)
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// runInOwnRoomBacking reports whether runSession is one of the caller's
+// own backing sessions in ticket room sess, or in an ordinary ticket
+// session — their runs live there.
+func runInOwnRoomBacking(c *tool.Ctx, sess session.Session, runSession string) bool {
+	if (sess.Meta.TicketRoom == nil && !isTicketSession(sess)) || runSession == "" {
+		return false
+	}
+	for _, b := range roomOwnBackings(c, sess.ID) {
+		if b.ID == runSession {
+			return true
+		}
+	}
+	return false
 }
 
 func deleteSession(c *tool.Ctx) {
@@ -2490,10 +2869,23 @@ func deleteSession(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
+	// An ordinary ticket session's backing sessions — other people's
+	// agents answering in it — and their sub-agents go with it.
+	// Snapshot first, the session itself second: a failed delete leaves
+	// its backing sessions in place.
+	ticketed := isTicketSession(sess)
+	all := globalMgr.Registry().Sessions()
 	if err := globalMgr.DeleteSession(c.Context(), id); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if ticketed {
+		deleteBackings(c.Context(), all, id, "its ticket session was deleted")
+		for k := range roomOwnersOf(all, id) {
+			cancelRoomRuns(id, k, false)
+		}
+		forgetRoom(id)
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
@@ -2593,6 +2985,15 @@ func sessionTurnTrace(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// The turn's hand-offs to teammates, from the Hub (team_trace.go).
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			data = mergeTeamTrace(data, h.SentFrom(id), func(task string) []teamlink.ThreadEntry {
+				entries, _ := h.TaskThread(id, task)
+				return entries
+			})
+		}
+	}
 	c.W.Header().Set("Content-Type", "application/json")
 	_, _ = c.W.Write(data)
 }
@@ -2681,8 +3082,13 @@ func projectSettingsPage(c *tool.Ctx) {
 	}))
 }
 
-// projectOptionsJSON returns [{id, name, path}] for every project —
-// consumed by the allowed_cmds scope dropdown in the settings UI.
+// projectOptionsJSON returns [{id, name, path}] for the projects the caller
+// is actually in — owned, or reached through a tag grant or sharing —
+// for every project picker in the SPAs. It is a picker list, not an admin
+// inventory: the admin see-all knob never widens it, so an admin is offered
+// their own projects rather than everyone's. A Team agent project is listed
+// only for the agent's owner. path is sent only where the caller owns the
+// project (or is an admin): it is a host filesystem path.
 func projectOptionsJSON(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -2713,7 +3119,19 @@ func projectOptionsJSON(c *tool.Ctx) {
 		Shared    bool   `json:"shared,omitempty"`
 		OwnerName string `json:"owner_name,omitempty"`
 	}
-	access := callerProjectAccess(c)
+	// No user = internal / MCP caller: unrestricted, as everywhere else.
+	// A person gets the scoped set with no see-all bypass.
+	u := login.GetUser(c.Context())
+	access := projectAccess{seeAll: true}
+	if u != nil {
+		access = scopedProjectAccess(c.Context(), u)
+	}
+	// full is what the caller may actually OPEN (see-all and tag grants
+	// included). The scoped set above only decides what is LISTED as a
+	// pick; a project asked for by id is flagged no_access against this,
+	// so a project page reached through see-all or a tag still resolves.
+	full := callerProjectAccess(c)
+	me := actorID(c)
 	// include=<id,...> names projects that must come back even when the
 	// caller cannot reach them. A workflow's saved workspace is the case:
 	// dropping it from the options left the picker showing "(use run
@@ -2730,32 +3148,45 @@ func projectOptionsJSON(c *tool.Ctx) {
 	// hide_team=1 drops the Team app's agent projects (the agent wizard
 	// and Settings pickers); the agent's own project comes back via include.
 	hideTeam := c.Query("hide_team") == "1"
-	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
+	// Filter first, so owner names are resolved for the rows sent and not
+	// for every project on the host.
 	ids := make([]string, 0, len(projects))
-	for id := range projects {
-		ids = append(ids, id)
-	}
-	shared := sharedProjectOwners(c, projects, ids)
-	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
 		_, wanted := forced[id]
-		if !access.allowProject(id) && !wanted {
+		if wanted {
+			ids = append(ids, id)
 			continue
 		}
-		if hideTeam && !wanted && project.IsAgentProject(p.Meta) {
+		if !access.allowProject(id) {
 			continue
 		}
+		if project.IsAgentProject(p.Meta) && (hideTeam || (u != nil && p.Meta.OwnerUserID != me)) {
+			// An agent's persona project belongs to the agent's owner; a
+			// tag that happens to reach it does not make it a pick for
+			// anyone else.
+			continue
+		}
+		ids = append(ids, id)
+	}
+	pinned := pinnedProjectID(c)
+	shared := sharedProjectOwners(c, projects, ids)
+	opts := make([]option, 0, len(ids))
+	for _, id := range ids {
+		p := projects[id]
 		managed := p.Meta.CustomPath == ""
-		path := p.Meta.CustomPath
-		if path == "" {
-			path = globalLayout.ProjectManagedPath(id)
+		path := ""
+		if canSeeProjectPath(c, p.Meta.OwnerUserID) {
+			path = p.Meta.CustomPath
+			if path == "" {
+				path = globalLayout.ProjectManagedPath(id)
+			}
 		}
 		opts = append(opts, option{
 			ID:              id,
 			Name:            p.Meta.Name,
 			Path:            path,
-			NoAccess:        !access.allowProject(id),
+			NoAccess:        !full.allowProject(id),
 			Managed:         managed,
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,
@@ -2767,6 +3198,28 @@ func projectOptionsJSON(c *tool.Ctx) {
 		})
 	}
 	c.JSON(http.StatusOK, opts)
+}
+
+// canSeeProjectPath reports whether the caller may see a project's host
+// folder: an internal caller, an admin, or the project's owner. Everyone
+// else who reaches the project (a tag, a share) works in it without
+// learning where it lives on disk. The session view's working directory is
+// the same folder and is shown to anyone who opens that session, on purpose:
+// it is the chat's own context, not a list of projects.
+func canSeeProjectPath(c *tool.Ctx, ownerUserID string) bool {
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsAdmin() {
+		return true
+	}
+	return ownerUserID != "" && ownerUserID == u.ID
+}
+
+// projectPathFor is customPath when the caller may see it, "" otherwise.
+func projectPathFor(c *tool.Ctx, ownerUserID, customPath string) string {
+	if canSeeProjectPath(c, ownerUserID) {
+		return customPath
+	}
+	return ""
 }
 
 // providerOptionsJSON returns [{type, name, version}] for every healthy
@@ -2996,6 +3449,10 @@ func createProject(c *tool.Ctx) {
 		c.Error(http.StatusBadRequest, "project name required")
 		return
 	}
+	if !providerKeyAllowed(c, c.Form("provider")) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(c.Form("provider")))
+		return
+	}
 	// Folder mode radio: "managed" forces an empty custom path regardless
 	// of any stale value in the path input.
 	customPath := strings.TrimSpace(c.Form("custom_path"))
@@ -3071,6 +3528,13 @@ func updateProject(c *tool.Ctx) {
 	meta.Description = c.Form("description")
 	if v := c.Form("preset"); v != "" {
 		meta.Defaults.Preset = v
+	}
+	// Only a CHANGED provider is a choice the caller makes; re-saving the
+	// one already there (set by someone else) must not lock them out of
+	// renaming the project.
+	if prov := strings.TrimSpace(c.Form("provider")); prov != meta.Defaults.Provider && !providerKeyAllowed(c, prov) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(prov))
+		return
 	}
 	meta.Defaults.Provider = strings.TrimSpace(c.Form("provider"))
 	meta.Defaults.Model = modelWithProvider(c.Form("provider"), c.Form("model"))
@@ -3280,8 +3744,7 @@ func streamSSE(c *tool.Ctx) {
 	if sessionID != "" && globalMgr != nil {
 		if sess, found := globalMgr.Registry().Session(sessionID); found {
 			if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
-				globalGitWatch.acquire(sessionID, cwd)
-				defer globalGitWatch.release(sessionID)
+				defer globalGitWatch.acquire(sessionID, cwd).release()
 			}
 		}
 	}
@@ -3400,8 +3863,7 @@ func streamMultiSSE(c *tool.Ctx) {
 		if globalMgr != nil {
 			if sess, found := globalMgr.Registry().Session(id); found {
 				if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
-					globalGitWatch.acquire(id, cwd)
-					defer globalGitWatch.release(id)
+					defer globalGitWatch.acquire(id, cwd).release()
 				}
 			}
 		}

@@ -374,6 +374,24 @@ describe("account mode keeps the grouped Operations layout", () => {
     expect(screen.getByText("UI only")).toBeTruthy();
   });
 
+  it("carries the instance's visible_when / hidden_by_config onto the account rows", async () => {
+    /* Whether the op is hidden follows the ROW's config, not the account. */
+    vi.mocked(api.getConnectorRow).mockResolvedValue(
+      makeRow({
+        label: "Prod",
+        categories: [{ key: "msg", title: "Messaging", description: "Send and edit" }],
+        operations: [
+          { key: "send", name: "Send Message", description: "Post a message", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false, config_only: false, category: "Messaging", visible_when: "mode:bot", hidden_by_config: true },
+        ],
+      }),
+    );
+    vi.mocked(api.getConnectorAccount).mockResolvedValue(makeData({ ops: [makeOp()] }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+    await screen.findByText("@yoga.setiawan");
+
+    expect(await screen.findByText("Hidden: requires mode:bot")).toBeTruthy();
+  });
+
   it("still shows the per-account toggle state, not the instance's", async () => {
     vi.mocked(api.getConnectorAccount).mockResolvedValue(
       makeData({ ops: [makeOp({ state: "off", enabled: false, inherited: true })] }),

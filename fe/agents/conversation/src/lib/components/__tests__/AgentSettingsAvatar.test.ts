@@ -74,7 +74,7 @@ describe("AgentSettings avatar: state samples move", () => {
     });
     const states = [...container.querySelectorAll("[data-kind=blob]")].map((el) => (el as HTMLElement).dataset.mode);
     // Drawer header, two previews and seven states; the pickers' tiles stay still.
-    expect(states.filter((m) => m === "live").length).toBe(10);
+    expect(states.filter((m) => m === "live").length).toBe(19); // 2 previews + 8 states + 9 "Reacts to" rows (live since the s17 fix)
     expect(states.filter((m) => m === "still" || m === "dot").length).toBeGreaterThan(0);
     vi.unstubAllGlobals();
   });

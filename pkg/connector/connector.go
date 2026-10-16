@@ -146,6 +146,16 @@ type Operation struct {
 	// manager's config UI via the /test path, so the widget can still fetch
 	// its data. Use it for read-only "list options for a picker" helpers.
 	ConfigOnly bool
+	// VisibleWhen gates the op on the instance's own config, using the same
+	// "<field>:<a|b|c>" grammar as the config `visible_when=` tag (evaluated
+	// by entity.VisibleWhenMatches). When the instance's value for <field>
+	// (its default when unsaved) is not one of the listed values, the op is
+	// hidden from the agent surface (MCP, host API, session instances) and
+	// Execute refuses it — except from the manager's /test paths. Empty =
+	// always visible. ValidateModule rejects a malformed predicate.
+	//
+	//	op.VisibleWhen = "browser:chromium|moli"
+	VisibleWhen string
 	// Docs carries the opt-in self-documentation fields the workflow
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
 	// quirks, templateable fields, pair-with, common pitfalls).
@@ -252,6 +262,13 @@ type OpHealth struct {
 // project the granted permissions against each operation's requirements.
 type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 
+// ConfigValidateFunc rejects a config value the connector can tell is
+// wrong from its shape alone (e.g. a Slack user token pasted into the bot
+// token field). It sees the value as submitted, and only values that
+// differ from the stored one, so a bad value already saved never blocks
+// editing another field. A non-nil error aborts the whole save.
+type ConfigValidateFunc func(key, value string) error
+
 // OAuthMeta describes how a connector participates in the OAuth 2.0 flow.
 // The generic manager handler uses AuthorizeURL and Scopes to build the
 // consent redirect; GetUserIdentity is called after the token exchange to
@@ -321,6 +338,14 @@ type Module struct {
 	// of group calls AllOps().
 	Operations  []Category
 	HealthCheck HealthCheckFunc `json:"-"`
+	// HasHealthCheck travels in a plugin manifest in place of HealthCheck
+	// (a func cannot be marshalled): the plugin SDK sets it when the module
+	// registers a hook, and the host wires a HealthCheck that runs it in the
+	// plugin. Module authors leave it alone.
+	HasHealthCheck bool `json:"has_health_check,omitempty"`
+	// ValidateConfig is optional. When non-nil, every instance config
+	// write (create, edit, OAuth, the manager MCP tool) runs it first.
+	ValidateConfig ConfigValidateFunc `json:"-"`
 	// OAuth is non-nil when this connector supports user OAuth.
 	OAuth *OAuthMeta
 	// AllowSessionConfig lets this connector be cloned into a per-session

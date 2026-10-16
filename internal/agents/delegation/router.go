@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -62,6 +63,21 @@ type TeamRouter interface {
 	SendTeam(ctx context.Context, sessionID, handle, body string, human bool) error
 }
 
+// TeamHumanRouter is optionally implemented by a TeamRouter whose reach
+// depends on who wrote the line: a person (human) or the agent itself.
+type TeamHumanRouter interface {
+	TeamHandlesFor(ctx context.Context, sessionID string, human bool) []string
+}
+
+// teamHandles is TeamHandles for in's author when the router tells them
+// apart (TeamHumanRouter).
+func (s *Service) teamHandles(ctx context.Context, in RouteInput) []string {
+	if hr, ok := s.TeamRouter.(TeamHumanRouter); ok {
+		return hr.TeamHandlesFor(ctx, in.SessionID, in.Human)
+	}
+	return s.TeamRouter.TeamHandles(ctx, in.SessionID)
+}
+
 // routeTeam acts on the mentions that name a Team agent. A Team handle
 // can never also be a role key (refused when the handle is saved), so
 // these never compete with the tree's own routing.
@@ -69,7 +85,7 @@ func (s *Service) routeTeam(ctx context.Context, in RouteInput) []Dispatch {
 	if s.TeamRouter == nil {
 		return nil
 	}
-	handles := s.TeamRouter.TeamHandles(ctx, in.SessionID)
+	handles := s.teamHandles(ctx, in)
 	if len(handles) == 0 {
 		return nil
 	}
@@ -158,11 +174,17 @@ func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
 	}
 	seen := map[string]bool{}
 	tokens := make([]string, 0, 2)
+	// A person's teammate mention is their own task: nothing of it comes
+	// back into this thread, so the note must not promise it does.
+	var userTasks []string
 	if s.TeamRouter != nil {
-		for _, m := range ParseMentions(in.Text, s.TeamRouter.TeamHandles(ctx, in.SessionID)) {
+		for _, m := range ParseMentions(in.Text, s.teamHandles(ctx, in)) {
 			if !seen[m.Handle] {
 				seen[m.Handle] = true
 				tokens = append(tokens, "@"+m.Handle)
+				if in.Human {
+					userTasks = append(userTasks, "@"+m.Handle)
+				}
 			}
 		}
 	}
@@ -193,9 +215,18 @@ func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
 	if len(tokens) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(
-		"%s wick is dispatching %s for the message above. Do not delegate or message them again for it — that runs the work twice. Their results arrive in this thread on their own.",
+	note := fmt.Sprintf(
+		"%s wick is dispatching %s for the message above. Do not delegate or message them again for it — that runs the work twice.",
 		RoutedMarker, strings.Join(tokens, ", "))
+	switch {
+	case len(userTasks) == 0:
+		note += " Their results arrive in this thread on their own."
+	case len(userTasks) == len(tokens):
+		note += " It is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them."
+	default:
+		note += fmt.Sprintf(" Results of the others arrive in this thread on their own. %s is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them.", strings.Join(userTasks, ", "))
+	}
+	return note
 }
 
 // routeToAgent delivers a mention addressed to a live instance.
@@ -207,6 +238,12 @@ func (s *Service) routeToAgent(ctx context.Context, in RouteInput, rootID string
 	if in.FromHandle == t.Handle {
 		d.Err = "an agent cannot message itself"
 		return d
+	}
+	// A person's mention is a person's message to whoever reads it, so a
+	// team task's turn it reaches is left running on cancel. A peer's is
+	// not (teamlink.WithPersonMessage).
+	if in.Human {
+		ctx = teamlink.WithPersonMessage(ctx)
 	}
 	_, err := s.SendMessage(ctx, SendInput{
 		RootID: rootID, FromHandle: in.FromHandle,

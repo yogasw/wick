@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Button, Select } from "@wick-fe/common-ui";
-  import { toastError } from "@wick-fe/common-stores";
+  import { Button, Select, SavedResetsSection } from "@wick-fe/common-ui";
+  import { seedUsage } from "@wick-fe/common-ui/usage";
+  import { toastError, toastWarn } from "@wick-fe/common-stores";
   import {
     apiLoginTTYStatus,
     apiLoginTTYUsage,
@@ -22,7 +23,7 @@
   import LoginTerminalModal from "$lib/components/LoginTerminalModal.svelte";
   import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
   import AccountList from "$lib/components/AccountList.svelte";
-  import { fmtSecsShort } from "$lib/usagerings.js";
+  import { fmtSecsShort, staleNotice } from "$lib/usagerings.js";
 
   type Props = { base: string; type: string; name: string; defaultExpanded?: boolean };
   let { base, type, name, defaultExpanded = false }: Props = $props();
@@ -66,7 +67,43 @@
   onMount(() => () => {
     destroyed = true;
     if (unknownRetry !== null) clearTimeout(unknownRetry);
+    if (usagePoll !== null) clearTimeout(usagePoll);
   });
+
+  /* While a probe is in flight (checking) or the first reading is still
+     queued behind the pacing gate (pending), the server answers at once
+     with what it has. Ask again until it settles; otherwise "Checking
+     usage…" stays on screen until the page is reloaded. Capped so a
+     stuck probe cannot poll forever. */
+  let usagePoll: ReturnType<typeof setTimeout> | null = null;
+  let usagePolls = 0;
+  const USAGE_POLL_MS = 2000;
+  const USAGE_POLL_MAX = 90;
+
+  function setUsage(next: typeof usage) {
+    usage = next;
+    shareUsage();
+    reportRecheckOutcome(next);
+    if (usagePoll !== null) {
+      clearTimeout(usagePoll);
+      usagePoll = null;
+    }
+    const busy = next?.checking === true || next?.pending === true;
+    if (!busy) {
+      usagePolls = 0;
+      return;
+    }
+    if (destroyed || usagePolls >= USAGE_POLL_MAX) return;
+    usagePolls++;
+    usagePoll = setTimeout(async () => {
+      usagePoll = null;
+      try {
+        setUsage(await apiLoginTTYUsage(base, type, name));
+      } catch {
+        /* keep the last reading; the next manual action retries */
+      }
+    }, USAGE_POLL_MS);
+  }
 
   async function refresh() {
     try {
@@ -77,10 +114,24 @@
     if (unknownRetry !== null) clearTimeout(unknownRetry);
     unknownRetry = status?.account.unknown && !destroyed ? setTimeout(() => void refresh(), 5000) : null;
     try {
-      usage = await apiLoginTTYUsage(base, type, name);
+      setUsage(await apiLoginTTYUsage(base, type, name));
     } catch {
-      usage = null;
+      setUsage(null);
     }
+  }
+
+  /* shareUsage hands the panel's reading to the shared usage store, so the
+     card chip, picker rings and /usage popover show the same numbers. */
+  function shareUsage() {
+    if (!usage?.supported || usage.pending) return;
+    seedUsage(`${type}/${name}`, {
+      supported: true,
+      checked: true,
+      windows: usage.windows,
+      savedResets: usage.savedResets ?? null,
+      error: usage.error,
+      fetchedAt: usage.fetchedAt,
+    });
   }
 
   /* Re-check: ask the server for a fresh reading now. Allowed even when
@@ -89,6 +140,19 @@
      declines. */
   let rechecking = $state(false);
   let recheckWait = $state(0);
+  /* An accepted Re-check whose probe has not settled yet. Its outcome
+     arrives on a later poll; a failure then gets a toast so the click
+     does not end in silence. */
+  let recheckPending = false;
+
+  function reportRecheckOutcome(next: typeof usage): void {
+    if (!recheckPending || !next || next.checking || next.pending) return;
+    recheckPending = false;
+    const notice = staleNotice(next.ageS, next.nextS, next.lastError ?? "", next.rateLimited ?? false, Date.now());
+    if (notice) toastWarn("Re-check did not refresh usage", notice.text);
+    else if (next.error) toastWarn("Re-check failed", next.error);
+  }
+
 
   async function recheckUsage() {
     rechecking = true;
@@ -96,7 +160,9 @@
     try {
       const r = await apiLoginTTYUsageRefresh(base, type, name);
       if (!r.accepted) recheckWait = r.waitS;
-      usage = await apiLoginTTYUsage(base, type, name);
+      else recheckPending = true;
+      usagePolls = 0;
+      setUsage(await apiLoginTTYUsage(base, type, name));
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Failed to re-check usage");
     } finally {
@@ -105,6 +171,13 @@
   }
 
   let usageBusy = $derived(rechecking || usage?.checking === true);
+
+  /* The latest probe failed while an older reading is on screen. */
+  let stale = $derived(
+    usage && !usageBusy
+      ? staleNotice(usage.ageS, usage.nextS, usage.lastError ?? "", usage.rateLimited ?? false, Date.now())
+      : null,
+  );
 
   onMount(async () => {
     await refresh();
@@ -453,15 +526,21 @@
                 {/if}
               </div>
             {/each}
+            <!-- Saved resets ride in the same cached reading; hidden when
+                 there is none to spend or the read failed. -->
+            <SavedResetsSection resets={usage.savedResets} />
             <!-- Shared, cached reading (see UsageCacheChip): say its age
                  rather than implying this panel fetched it on open. -->
             <p class="flex items-center gap-1 text-[11px] text-black-700 dark:text-black-600">
               {#if usageBusy}
                 <span data-testid="panel-usage-checking">Checking usage…</span>
               {:else}
-                <UsageCacheChip ageS={usage.ageS} nextS={usage.nextS} fetchedAt={usage.fetchedAt} />
+                <UsageCacheChip ageS={usage.ageS} nextS={usage.nextS} fetchedAt={usage.fetchedAt} lastError={usage.lastError ?? ""} />
               {/if}
             </p>
+            {#if stale}
+              <p data-testid="panel-usage-stale-warning" class="text-[11px] text-cau-400" title={stale.title}>{stale.text}</p>
+            {/if}
           </div>
         {:else if usage.pending || usageBusy}
           <p class="text-[11px] text-black-700 dark:text-black-600">Checking usage… (probes are paced to stay under the endpoint's rate limit)</p>

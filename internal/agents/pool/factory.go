@@ -118,6 +118,11 @@ type ClaudeFactory struct {
 	// (no ticket, no notes) and nothing is appended.
 	TicketPointerLoader func(sessionID string) string
 
+	// LinkedChatsLoader (optional) returns the "This session" lines that
+	// name the chat paired with sessionID at each Team teammate, "" for
+	// none (nothing is appended).
+	LinkedChatsLoader func(sessionID string) string
+
 	// TeamPromptLoader (optional) returns the Team part of the prompt for
 	// sessionID: the Team overlay plus "Who you are" for a Team agent's
 	// own session, one line for a sub-agent working under one, "" for an
@@ -302,9 +307,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// for providers that get no MCP credential at all.
 	var runAsUserID string
 	spawner := f.Spawner
+	// remote: the turn is a call to another wick; failover is not wired
+	// for it (the remote end owns its providers).
+	remote := false
 	if spawner == nil && f.RemoteSpawnerLoader != nil {
 		if rs, ok := f.RemoteSpawnerLoader(opt.SessionID); ok {
-			spawner = rs
+			spawner, remote = rs, true
 		}
 	}
 	if spawner == nil {
@@ -586,6 +594,23 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		// per-instance override (providers UI) takes precedence over the
 		// type default.
 		SendMode: sendModeFor(pType, resolvedIns.SendMode),
+		OnFailover: func() func(provider.FailoverRequest) provider.FailoverVerdict {
+			if remote || opt.OnFailover == nil {
+				return nil
+			}
+			sid, name := opt.SessionID, opt.AgentName
+			return func(r provider.FailoverRequest) provider.FailoverVerdict {
+				r.SessionID, r.AgentName = sid, name
+				return opt.OnFailover(r)
+			}
+		}(),
+		OnTurnOK: func() func(time.Time) {
+			if remote {
+				return nil
+			}
+			return opt.OnTurnOK
+		}(),
+		FailoverMsgKey: opt.FailoverMsgKey,
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken, RunAsUserID: runAsUserID}, nil
 }
@@ -1037,8 +1062,14 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 	// having it in the system prompt means it is always available — not
 	// only on the first turn where channels inject a one-time context
 	// message.
-	addRaw(sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
-		f.activeRepoLine(opt.SessionID, opt.Workspace)))
+	identity := sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
+		f.activeRepoLine(opt.SessionID, opt.Workspace))
+	if f.LinkedChatsLoader != nil {
+		if linked := f.LinkedChatsLoader(opt.SessionID); linked != "" {
+			identity += "\n\n" + linked
+		}
+	}
+	addRaw(identity)
 
 	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
 	// A ticket accumulates notes for as long as the work lasts, so

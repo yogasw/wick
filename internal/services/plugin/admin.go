@@ -118,11 +118,11 @@ func (h *Host) RegisterAdmin(mux *http.ServeMux, wrap func(http.Handler) http.Ha
 		if name == "" {
 			name = "token"
 		}
-		t, plain, err := h.Tokens.Generate(s.Key, name)
+		t, plain, err := h.Tokens.GenerateBy(s.Key, name, h.actorID(r))
 		tokenReply(w, t, plain, err)
 	})))
 	mux.Handle("POST "+base+"/{key}/tokens/{id}/rotate", hf(h.withService(func(w http.ResponseWriter, r *http.Request, s *Service) {
-		t, plain, err := h.Tokens.Rotate(s.Key, r.PathValue("id"))
+		t, plain, err := h.Tokens.RotateBy(s.Key, r.PathValue("id"), h.actorID(r))
 		tokenReply(w, t, plain, err)
 	})))
 	mux.Handle("DELETE "+base+"/{key}/tokens/{id}", hf(h.withService(func(w http.ResponseWriter, r *http.Request, s *Service) {
@@ -166,4 +166,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// actorID is the signed-in admin making a change ("" when unknown).
+func (h *Host) actorID(r *http.Request) string {
+	if h.SessionUser == nil {
+		return ""
+	}
+	if u := h.SessionUser(r); u != nil {
+		return u.ID
+	}
+	return ""
 }

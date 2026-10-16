@@ -82,8 +82,9 @@
 
   /* Agent-tool count for the header badge: ConfigOnly ops back a config-form
      picker and aren't tools, so they don't count toward "Operations N" (they
-     still render below, flagged "Config only"). */
-  const toolCount = $derived(ops.filter((o) => !o.config_only).length);
+     still render below, flagged "Config only"). Ops hidden by this instance's
+     config (VisibleWhen unmet) never reach agents either, so they don't count. */
+  const toolCount = $derived(ops.filter((o) => !o.config_only && !o.hidden_by_config).length);
 
   /* One card per category title, in declaration order, then a trailing
      untitled group for ops whose category is empty. Built from the visible
@@ -399,7 +400,7 @@
                   </thead>
                   <tbody>
                     {#each group.pageOps as op (op.key)}
-                      <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
+                      <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top {op.hidden_by_config ? 'opacity-60' : ''}">
                         {#if canConfigure}
                           <td class="w-8 px-4 py-3">
                             <input
@@ -416,6 +417,16 @@
                             <span class="font-medium text-black-900 dark:text-white-100">{op.name}</span>
                             {#if op.destructive}
                               <span class="rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">destructive</span>
+                            {/if}
+                            {#if op.hidden_by_config}
+                              <!-- VisibleWhen unmet by this instance's config: the op
+                                   never reaches agents, whatever the toggle says. The
+                                   toggle stays editable so the choice survives a
+                                   config change that makes the op visible again. -->
+                              <span
+                                class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-mono text-[10px] font-medium text-black-700 dark:text-black-600"
+                                title="Not exposed to agents until this instance's config matches."
+                              >Hidden: requires {op.visible_when}</span>
                             {/if}
                           </div>
                           <p class="mt-0.5 font-mono text-[10px] text-black-700 dark:text-black-600">{op.key}</p>

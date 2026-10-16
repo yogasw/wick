@@ -6,6 +6,7 @@
      Config auto-save is owned by ConfigsForm; the rest POSTs through the
      JSON api client. */
   import { Button, TextInput, TextArea, NumberInput, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
+  import HostAccessCard from "./plugins/host/HostAccessCard.svelte";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getConnectorRow,
@@ -16,6 +17,7 @@
     getConnectorAccount,
     setAccountOpState,
     disconnectConnectorAccount,
+    setConnectorHidden,
   } from "$lib/api.js";
   import type { ConnectorDetail, AccountDetail } from "$lib/types.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
@@ -155,8 +157,8 @@
   /* The account view is the SAME page, so its Operations panel has to be the
      same panel: grouped into category cards with the Sections sidebar beside
      them. Only the account endpoint's rows are per-account, and they carry no
-     category / admin_only / config_only — that is instance metadata, the same
-     for every account on the row. So the instance op is the base and the
+     category / admin_only / config_only / visible_when / hidden_by_config —
+     that is instance metadata, the same for every account on the row. So the instance op is the base and the
      account decides only what it actually decides: enabled, and whether the
      health check has locked the op.
 
@@ -175,12 +177,31 @@
         category: inst?.category ?? "",
         admin_only: inst?.admin_only ?? false,
         config_only: inst?.config_only ?? false,
+        visible_when: inst?.visible_when ?? "",
+        hidden_by_config: inst?.hidden_by_config ?? false,
         enabled: o.enabled,
         system_disabled: o.system_disabled,
         system_disabled_reason: o.system_disabled_reason,
       };
     });
   });
+
+  /* "Hide for me" is set from the instance list kebab; the detail page only
+     offers the way back, next to the status badge. */
+  let unhideBusy = $state(false);
+  async function unhide() {
+    if (!data || unhideBusy) return;
+    unhideBusy = true;
+    try {
+      const hidden = await setConnectorHidden(connectorKey, connectorId, false);
+      data.hidden_for_me = hidden;
+      toastOk("Visible again");
+    } catch (e) {
+      toastError("Unhide failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      unhideBusy = false;
+    }
+  }
 
   async function saveLabel() {
     if (!data || !labelDraft.trim()) return;
@@ -288,6 +309,10 @@
               <span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
             {:else}
               <span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
+            {/if}
+            {#if data.hidden_for_me}
+              <span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600" title="Hidden from your list and from wick_list. Access is unchanged.">Hidden for you</span>
+              <Button variant="ghost" size="sm" disabled={unhideBusy} onclick={unhide}>{unhideBusy ? "Unhiding…" : "Unhide"}</Button>
             {/if}
           </div>
           <!-- break-all, because an id is one long token with nowhere to
@@ -451,6 +476,8 @@
         onchanged={refresh}
       />
     {/if}
+
+    <HostAccessCard pluginKey={connectorKey} />
 
     {#if showInstanceConfig}
       <section>

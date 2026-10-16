@@ -48,6 +48,13 @@ const defaultBaseURL = "https://api.github.com"
 type Configs struct {
 	BaseURL string `wick:"url;desc=GitHub API base URL. Leave empty for github.com. Set to https://github.example.com/api/v3 for GitHub Enterprise."`
 	Token   string `wick:"secret;required;desc=Personal Access Token (PAT) or fine-grained token. Needs repo scope for private repos, public_repo for public ones."`
+	// DefaultOwner / DefaultRepo name the repository validate_repo_setup and
+	// the Token & access panel check when none is given.
+	DefaultOwner string `wick:"desc=Default repository owner for validate_repo_setup and the Token & access panel. Optional."`
+	DefaultRepo  string `wick:"desc=Default repository name for validate_repo_setup and the Token & access panel. Optional."`
+	// TokenAccess is a read-only widget, not a stored value: the
+	// token_access op renders who the token is and what it can do.
+	TokenAccess string `wick:"html=token_access;desc=Who the stored token authenticates as, its type and scopes, what each operation category needs, and a Validate setup check for a repository. Checked live with GET /user. The token value is never shown."`
 }
 
 // ListReposInput lists repositories visible to the token.
@@ -545,7 +552,7 @@ func Meta() connector.Meta {
 	return connector.Meta{
 		Key:         Key,
 		Name:        "GitHub",
-		Description: "Comprehensive GitHub REST API connector: repos, issues, PRs (incl. diff/merge), releases, tags, forks, stars, file contents/edits, the authenticated user, and a token health check.",
+		Description: "Comprehensive GitHub REST API connector: repos, issues, PRs (incl. diff/merge), releases, tags, forks, stars, file contents/edits, the authenticated user, read-only repository settings (rulesets, environments) with a release-setup validator, and a token health check.",
 		Icon:        "🐙",
 	}
 }
@@ -1740,6 +1747,91 @@ func Operations() []connector.Category {
 					PairWith:    []string{"connector:github.list_hooks"},
 					InputSample: `{"owner":"abc","repo":"web","url":"https://example.com/hook","events":"push,pull_request"}`,
 				},
+			),
+		),
+
+		// ── REPOSITORY SETTINGS (read-only) ──────────────────────────
+		connector.Cat(
+			"Repository Settings",
+			"Read rulesets, the rules in force on a branch, and deployment environments, and validate them against the release setup. Read-only.",
+			connector.Op(
+				"list_rulesets",
+				"List Rulesets",
+				"List a repository's rulesets (id, name, target branch/tag, enforcement). Read-only; needs repo admin read.",
+				ListRulesetsInput{},
+				listRulesets,
+				wickdocs.Docs{
+					OutputShape: map[string]string{"[]": "Array of {id, name, target, enforcement, source_type, source}."},
+					Quirks:      []string{"403/404 means the token lacks admin read: classic `repo`, or fine-grained Administration: Read."},
+					PairWith:    []string{"connector:github.get_ruleset"},
+					InputSample: `{"owner":"abc","repo":"web"}`,
+				},
+			),
+			connector.Op(
+				"get_ruleset",
+				"Get Ruleset",
+				"Fetch one ruleset with its conditions (ref include/exclude), rules (pull_request, non_fast_forward, deletion, …) and bypass actors. Read-only; needs repo admin read.",
+				GetRulesetInput{},
+				getRuleset,
+				wickdocs.Docs{
+					OutputShape: map[string]string{"rules": "Array of {type, parameters}.", "bypass_actors": "Array of {actor_id, actor_type, bypass_mode}; omitted without admin access."},
+					InputSample: `{"owner":"abc","repo":"web","id":42}`,
+				},
+			),
+			connector.Op(
+				"get_branch_rules",
+				"Get Branch Rules",
+				"List the active ruleset rules that apply to one branch, merged across every ruleset, each with its ruleset_id. Read-only.",
+				GetBranchRulesInput{},
+				getBranchRules,
+				wickdocs.Docs{
+					OutputShape: map[string]string{"[]": "Array of {type, parameters, ruleset_source_type, ruleset_source, ruleset_id}."},
+					InputSample: `{"owner":"abc","repo":"web","branch":"master"}`,
+				},
+			),
+			connector.Op(
+				"list_environments",
+				"List Environments",
+				"List a repository's deployment environments with their protection rules (required reviewers, prevent_self_review, wait timer) and branch policy. Read-only.",
+				ListEnvironmentsInput{},
+				listEnvironments,
+				wickdocs.Docs{
+					OutputShape: map[string]string{"environments": "Array of {id, name, protection_rules, deployment_branch_policy, can_admins_bypass}."},
+					InputSample: `{"owner":"abc","repo":"web"}`,
+				},
+			),
+			connector.Op(
+				"get_environment",
+				"Get Environment",
+				"Fetch one deployment environment with its protection rules and branch policy. Read-only.",
+				GetEnvironmentInput{},
+				getEnvironment,
+				wickdocs.Docs{
+					OutputShape: map[string]string{"protection_rules": "Array of {type, reviewers, prevent_self_review, wait_timer}."},
+					InputSample: `{"owner":"abc","repo":"web","name":"release-approval"}`,
+				},
+			),
+			connector.Op(
+				"validate_repo_setup",
+				"Validate Repo Setup",
+				"Check a repository against the release setup and return pass/fail/warn per check with a reason: master ruleset (PR, approvals 0 or admin bypass, squash only, force push blocked, deletion restricted, not applied to release), develop (PR, linear history off, squash not allowed, force push blocked, admin bypass), tag ruleset covering v* and */v*, the release-approval environment (reviewers, prevent_self_review off), and whether the token can read rulesets and environments. Read-only.",
+				ValidateRepoSetupInput{},
+				validateRepoSetup,
+				wickdocs.Docs{
+					OutputShape: map[string]string{"checks": "Array of {group, name, status (pass|fail|warn), reason}.", "passed": "Count.", "failed": "Count.", "warned": "Count."},
+					InputSample: `{"owner":"abc","repo":"web"}`,
+				},
+			),
+		),
+
+		connector.Cat("Maintenance", "Backs the config page's Token & access panel; not meant for agent use.",
+			connector.OpConfigOnly(
+				"token_access",
+				"Token & Access",
+				"Render who the stored token is, its type and scopes, what each operation category needs, and the Validate setup results. Read-only.",
+				TokenAccessInput{},
+				tokenAccess,
+				wickdocs.Docs{},
 			),
 		),
 	}

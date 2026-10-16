@@ -26,8 +26,10 @@ var ErrHandleTaken = errors.New("handle already used by another agent")
 // with a letter or digit so "@-x" never parses as a mention.
 var handleRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}$`)
 
-// reservedHandles are mention words that address a group, not an agent.
-var reservedHandles = map[string]bool{"all": true, "here": true, "channel": true}
+// reservedHandles are mention words that address a group, not an agent,
+// and the Team app's own pages: "tickets" (/team/tickets) and "group"
+// (/team/group/<id>).
+var reservedHandles = map[string]bool{"all": true, "here": true, "channel": true, "tickets": true, "group": true}
 
 // NormalizeHandle trims and lowercases a typed handle and drops a leading
 // "@", so "@Captain " and "captain" save as the same thing.
@@ -274,6 +276,8 @@ func (s *Store) Delete(ctx context.Context, id string) (err error) {
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	// Best effort: an orphaned picture is only bytes nobody can reach.
+	_ = s.DeleteAvatarImage(ctx, id)
 	return nil
 }
 

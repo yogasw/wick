@@ -81,3 +81,15 @@ describe("applyEvent", () => {
     });
   });
 });
+
+// S5: a row waiting on teammates gets the same delegated-work marker; the
+// leader idling must not clear it, and the clear signal (no keys) does.
+describe("statusDot - waiting on teammates", () => {
+  test("team_waiting marker survives a leader idle and clears on its own signal", () => {
+    let st = applyEvent(undefined, { sub_agent: "working" });
+    st = applyEvent(st, { lifecycle: "idle" });
+    expect(st.subAgent).toBe("working");
+    st = applyEvent(st, {});
+    expect(st.subAgent).toBe("");
+  });
+});

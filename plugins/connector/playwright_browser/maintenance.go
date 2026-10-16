@@ -24,7 +24,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // browserEngines is the fixed set the widget lists. The cloak engines are the
 // odd ones out — not Playwright-managed: cloakbrowser downloads from GitHub and
 // cloakbrowser-pro is managed by the cloakbrowser CLI + a license key (cloak.go).
-var browserEngines = []string{"chromium", "firefox", "webkit", cloakEngine, cloakProEngine}
+var browserEngines = []string{"chromium", "firefox", "webkit", cloakEngine, cloakProEngine, moliEngine}
 
 // engineTitle is the display name for an engine row. strings.Title turns
 // "cloakbrowser-pro" into "Cloakbrowser-Pro" which reads awkwardly, so the pro
@@ -83,6 +83,9 @@ func browserStatus(c *connector.Ctx) (any, error) {
 		// CLI-managed ~/.cloakbrowser binary — its ⋮ "update" just re-runs the CLI.
 		if installed && name == cloakEngine {
 			updateAvail, latest = cloakUpdateAvailable(c)
+		}
+		if installed && name == moliEngine {
+			updateAvail, latest = moliUpdateAvailable(c)
 		}
 		b.WriteString(renderEngineRow(name, version, installed, name == selected, updateAvail, latest))
 	}
@@ -146,6 +149,12 @@ func engineState(c *connector.Ctx, pw *playwright.Playwright, name string) (inst
 	if name == cloakEngine {
 		// Free engine: wick's own GitHub download.
 		return cloakInstalled(c), cloakVersion(c)
+	}
+	if name == moliEngine {
+		if !moliInstalled(c) {
+			return false, ""
+		}
+		return true, moliVersion(c)
 	}
 	if name == cloakProEngine {
 		// Pro engine: report what `cloakbrowser info` says (installed + version +
@@ -271,10 +280,18 @@ func renderEngineMenu(name string, installed, updateAvail bool, latest string) s
 func browserInstall(c *connector.Ctx) (any, error) {
 	name := strings.ToLower(strings.TrimSpace(c.Input("browser")))
 	if name == "" {
-		return nil, fmt.Errorf("browser is required (chromium, firefox, webkit, cloakbrowser, or cloakbrowser-pro)")
+		return nil, fmt.Errorf("browser is required (chromium, firefox, webkit, cloakbrowser, cloakbrowser-pro, or moli)")
 	}
 	if !isKnownEngine(name) {
-		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, cloakbrowser, or cloakbrowser-pro", name)
+		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, cloakbrowser, cloakbrowser-pro, or moli", name)
+	}
+	// Moli: a ~45 MB GitHub release, small enough to download inline.
+	if name == moliEngine {
+		v, err := installMoli(c, false)
+		if err != nil {
+			return nil, fmt.Errorf("install moli: %w", err)
+		}
+		return map[string]any{"browser": name, "installed": true, "version": v}, nil
 	}
 	// Pro engine: delegate to `cloakbrowser install` (downloads the licensed
 	// tier's binary under ~/.cloakbrowser). Requires a license key. Blocks until
@@ -334,6 +351,13 @@ func browserUpdate(c *connector.Ctx) (any, error) {
 		}
 		return map[string]any{"browser": name, "updated": true, "note": "updated via cloakbrowser CLI"}, nil
 	}
+	if name == moliEngine {
+		v, err := installMoli(c, true)
+		if err != nil {
+			return nil, fmt.Errorf("update moli: %w", err)
+		}
+		return map[string]any{"browser": name, "updated": true, "version": v}, nil
+	}
 	if name == cloakEngine {
 		// Free engine: remove the cached download and re-install (picks up the
 		// latest GitHub release) in the background, same progress bar as install.
@@ -373,6 +397,12 @@ func browserUninstall(c *connector.Ctx) (any, error) {
 	}
 	if name == cloakEngine {
 		if err := cloakUninstall(c); err != nil {
+			return nil, err
+		}
+		return map[string]any{"browser": name, "uninstalled": true}, nil
+	}
+	if name == moliEngine {
+		if err := moliUninstall(c); err != nil {
 			return nil, err
 		}
 		return map[string]any{"browser": name, "uninstalled": true}, nil

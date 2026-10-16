@@ -15,6 +15,7 @@ type PluginsSPAVM struct {
 templ PluginsPage(vm PluginsSPAVM, user *entity.User) {
 	@AdminLayout("Admin · Plugins", "plugins", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
+			@pluginsTabs("plugins")
 			if vm.AssetURL == "" {
 				<div class="text-sm text-neg-400">
 					Manager bundle not built yet. Run
@@ -26,5 +27,22 @@ templ PluginsPage(vm PluginsSPAVM, user *entity.User) {
 				<script type="module" src={ vm.AssetURL }></script>
 			}
 		</main>
+	}
+}
+
+// pluginsTabs switches between the installed-plugins view and the
+// development-mode page (plugin test requests) under Admin → Plugins.
+templ pluginsTabs(active string) {
+	<nav class="mb-6 flex gap-1 border-b border-white-300 dark:border-navy-600 text-sm">
+		@pluginsTab("/admin/plugins", "Plugins", active == "plugins")
+		@pluginsTab("/admin/plugins/dev-mode", "Development mode", active == "dev-mode")
+	</nav>
+}
+
+templ pluginsTab(href, label string, on bool) {
+	if on {
+		<a href={ templ.SafeURL(href) } class="-mb-px border-b-2 border-green-600 px-4 py-2 font-medium text-black-900 dark:text-white-100">{ label }</a>
+	} else {
+		<a href={ templ.SafeURL(href) } class="-mb-px border-b-2 border-transparent px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">{ label }</a>
 	}
 }

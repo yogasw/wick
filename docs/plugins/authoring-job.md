@@ -43,6 +43,15 @@ go build -o /tmp/<key> ./job/<key> && /tmp/<key> --dump-manifest   # kind=job
 The job appears on the Jobs page; set its schedule there and use *Run now* to
 test.
 
+## Calling wick (Host API)
+
+`Run` can call back into wick with `wickplugin.Host(ctx)` — read users and
+tickets, create tickets, run another connector's declared op. A job fired by
+cron has no caller, so user-level calls run as the owner of the PAT in the
+job's `wick_pat` config (none → refused). See [Host API](./host-api.md) for
+the scopes, the `host_scopes` / `host_resources` manifest keys (declared with
+`wickplugin.DeclareHostAccess` in `main`) and the identity rules.
+
 ## Notes
 
 - Nothing survives between runs inside the process. Keep state in a file or

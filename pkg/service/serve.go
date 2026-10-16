@@ -13,6 +13,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/plugin/host"
 	pb "github.com/yogasw/wick/pkg/plugin/proto"
 )
 
@@ -64,7 +65,7 @@ func build(mod Module) (http.Handler, *Env) {
 	if mod.RemoteSource != nil {
 		mountRemote(mux, mod.RemoteSource)
 	}
-	return mux, env
+	return host.CallIDHandler(mux), env
 }
 
 // mountRemote serves the remote_source RPC on wickplugin.RemotePath*.

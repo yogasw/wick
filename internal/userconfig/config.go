@@ -47,7 +47,7 @@ type Config struct {
 	Port int `json:"port,omitempty"`
 
 	// LogRetentionDays controls how many days of per-day log files are
-	// kept. 0 = use built-in default (7). Set in config.json to override.
+	// kept. 0 = use built-in default (1). Set in config.json to override.
 	LogRetentionDays int `json:"log_retention_days,omitempty"`
 
 	// DatabasePath overrides the SQLite DB location. Empty = auto-detect.
@@ -289,6 +289,10 @@ type ProviderInstance struct {
 	// login this one uses; empty = its own login. See provider/authshare.go.
 	AuthFrom string `json:"auth_from,omitempty"`
 
+	// OwnerPerms is the per-instance owner permission map (short name →
+	// allowed). Absent keys take the agents tool's defaults.
+	OwnerPerms map[string]bool `json:"owner_perms,omitempty"`
+
 	// MaxConcurrent caps how many parallel spawns this instance may
 	// have running at once. 0 = unlimited (follows the global pool cap).
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
@@ -348,6 +352,30 @@ type ProviderInstance struct {
 	// WickConfig holds the wick provider's instance-level settings
 	// (tools, context budget, generation defaults). nil = defaults.
 	WickConfig *WickConfig `json:"wick_config,omitempty"`
+
+	// Failover is this instance's failover chain: where a turn moves when
+	// the instance hits a usage limit, an auth error or an outage. nil =
+	// never configured (provider.DefaultFailover, which is off).
+	Failover *FailoverConfig `json:"failover,omitempty"`
+}
+
+// FailoverConfig is the persisted form of provider.FailoverConfig. Once
+// stored it is read as-is: an explicit false / empty list is kept, the
+// defaults only apply while the whole block is absent.
+type FailoverConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Triggers: "limit", "auth", "unavailable".
+	Triggers       []string         `json:"triggers,omitempty"`
+	Chain          []FailoverTarget `json:"chain,omitempty"`
+	RecheckMinutes int              `json:"recheck_minutes,omitempty"`
+	ReturnHome     bool             `json:"return_home,omitempty"`
+}
+
+// FailoverTarget is one step of a failover chain: an instance tag
+// ("type/name") and the model pin it runs with ("" = its default).
+type FailoverTarget struct {
+	Instance string `json:"instance"`
+	ModelID  string `json:"model_id,omitempty"`
 }
 
 // WickModel is one registered custom model on the wick provider.

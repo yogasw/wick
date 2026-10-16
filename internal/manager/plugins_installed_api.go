@@ -32,6 +32,8 @@ type installedPlugin struct {
 	Kind             string     `json:"kind"`
 	Version          string     `json:"version"`
 	Enabled          bool       `json:"enabled"`
+	Status           string     `json:"status"`                  // active | disabled | error | pending
+	StatusDetail     string     `json:"status_detail,omitempty"` // why it is in error
 	DetailPath       string     `json:"detail_path"`
 	ExternalURL      string     `json:"external_url,omitempty"` // link-only tool: opens this URL instead of a wick page
 	Origin           string     `json:"origin"`                 // official | source | url-zip | upload | local
@@ -132,6 +134,7 @@ func (h *PluginsHandler) apiInstalled(w http.ResponseWriter, r *http.Request) {
 				p.Enabled = st.Enabled
 				p.LastHealthAt, p.LastHealthOK, p.LastHealthDetail = st.LastHealthAt, st.LastHealthOK, st.LastHealthDetail
 			}
+			p.Status, p.StatusDetail = h.status(kind, f.Key, p.Enabled)
 			p.Origin = resolveOrigin(st)
 			switch p.Origin {
 			case originSource, originURLZip:
@@ -228,3 +231,35 @@ func safeURL(raw string) string {
 	u.User, u.RawQuery, u.Fragment = nil, "", ""
 	return u.String()
 }
+
+// status is what Admin → Plugins shows for one installed plugin. For a kind
+// the running process reports on (loadState), Active means it is loaded right
+// now, Pending that it was installed moments ago and is about to load; an
+// enabled plugin that is not loaded is an error with its reason. Other kinds
+// fall back to the stored enabled flag.
+func (h *PluginsHandler) status(kind, key string, enabled bool) (string, string) {
+	if !enabled {
+		return pluginStatusDisabled, ""
+	}
+	if h.loadState == nil {
+		return pluginStatusActive, ""
+	}
+	switch state, reason := h.loadState(kind, key); state {
+	case "", pluginStatusActive:
+		return pluginStatusActive, ""
+	case pluginStatusPending:
+		return pluginStatusPending, ""
+	default:
+		if reason == "" {
+			reason = "not loaded by the running process"
+		}
+		return pluginStatusError, reason
+	}
+}
+
+const (
+	pluginStatusActive   = "active"
+	pluginStatusDisabled = "disabled"
+	pluginStatusError    = "error"
+	pluginStatusPending  = "pending"
+)

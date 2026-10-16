@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -47,6 +48,12 @@ type Config struct {
 	// receives the same presentation hint the templ admin page already
 	// uses. Pure UI flag — no secret material here.
 	Hidden bool `gorm:"-" json:"hidden,omitempty"`
+	// Internal is set from the `wick:"internal"` tag. Not persisted. The row
+	// is a value wick writes for itself (e.g. a token expiry) — every config
+	// renderer skips it, including dedicated pages that do show Hidden rows,
+	// so it never gets a widget or a "required" badge. Code still loads and
+	// saves it like any other row.
+	Internal bool `gorm:"-" json:"internal,omitempty"`
 	// ColOptions holds per-column select options for kvlist rows. Not persisted.
 	// Key = column name; Value = pipe-separated "label::value" pairs (or just
 	// "value" when label == value). The kvlist component renders a <select>
@@ -107,4 +114,37 @@ func VisibleWhenMatches(predicate string, values map[string]string) bool {
 		}
 	}
 	return false
+}
+
+// DefaultGroupsCollapsed reports the admin setting "config groups start
+// collapsed" (config_groups_collapsed). nil means off. Set once at boot.
+var DefaultGroupsCollapsed func() bool
+
+// EffectiveGroup is Group with that setting applied: a named group with no
+// third segment ("Title" or "Title|Desc") becomes "Title|Desc|collapsed".
+// A group that says so explicitly keeps its own choice — "Title|Desc|open"
+// stays open, "…|collapsed" stays collapsed — and rows with no group (the
+// default "Configuration" card) are never collapsed by the setting.
+func (c Config) EffectiveGroup() string {
+	g := strings.TrimSpace(c.Group)
+	if g == "" || DefaultGroupsCollapsed == nil || !DefaultGroupsCollapsed() {
+		return c.Group
+	}
+	parts := strings.SplitN(g, "|", 3)
+	if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+		return c.Group
+	}
+	for len(parts) < 2 {
+		parts = append(parts, "")
+	}
+	return parts[0] + "|" + parts[1] + "|collapsed"
+}
+
+// MarshalJSON sends the effective group, so the SPA config form follows the
+// collapsed-by-default setting without knowing about it.
+func (c Config) MarshalJSON() ([]byte, error) {
+	type plain Config
+	p := plain(c)
+	p.Group = c.EffectiveGroup()
+	return json.Marshal(p)
 }

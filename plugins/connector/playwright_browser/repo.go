@@ -44,7 +44,7 @@ const fallbackDownloadHost = "https://cdn.playwright.dev"
 // download. Every other engine still goes through the full ensureDriver, which
 // downloads that engine's browser on first use.
 func driverFor(c *connector.Ctx) (*playwright.Playwright, error) {
-	if isCloakEngine(c.Cfg("browser")) {
+	if isCloakEngine(c.Cfg("browser")) || isMoliEngine(c.Cfg("browser")) {
 		return ensureDriverNoInstall()
 	}
 	return ensureDriver()
@@ -194,9 +194,24 @@ func withSessionRun(c *connector.Ctx, pw *playwright.Playwright, fn func(*sessio
 	if err != nil {
 		return nil, err
 	}
-	browser, err := bt.Launch(launchOptions(c))
-	if err != nil {
-		return nil, fmt.Errorf("launch browser: %w", err)
+	var browser playwright.Browser
+	if isMoliEngine(c.Cfg("browser")) {
+		// Moli can't be launched by Playwright: start its CDP server and attach.
+		// Deferred in this order, the browser disconnects before moli is killed.
+		mp, err := startMoli(c, "", "")
+		if err != nil {
+			return nil, err
+		}
+		defer mp.stop()
+		browser, err = bt.ConnectOverCDP(mp.cdpURL)
+		if err != nil {
+			return nil, fmt.Errorf("connect to moli: %w", err)
+		}
+	} else {
+		browser, err = bt.Launch(launchOptions(c))
+		if err != nil {
+			return nil, fmt.Errorf("launch browser: %w", err)
+		}
 	}
 	defer browser.Close()
 
@@ -218,7 +233,7 @@ func withSessionRun(c *connector.Ctx, pw *playwright.Playwright, fn func(*sessio
 		maxTab:   maxTab(c),
 		actMS:    actionTimeout(c),
 		navMS:    navTimeout(c),
-		chromium: strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), "") || strings.EqualFold(c.Cfg("browser"), defBrowser),
+		chromium: strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), "") || strings.EqualFold(c.Cfg("browser"), defBrowser) || isMoliEngine(c.Cfg("browser")),
 	}
 
 	// record_request opt-in: attach a context-level request recorder BEFORE any

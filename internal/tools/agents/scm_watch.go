@@ -90,8 +90,8 @@ const gitWatchBudget = 4000
 // idle sessions.
 type gitWatchManager struct {
 	mu      sync.Mutex
-	entries map[string]*gitWatchEntry // keyed by cwd
-	homes   map[string]string         // session id -> cwd, so release can find its entry
+	entries map[string]*gitWatchEntry   // keyed by cwd
+	leases  map[string][]*gitWatchLease // keyed by session id
 }
 
 type gitWatchEntry struct {
@@ -118,30 +118,34 @@ func (e *gitWatchEntry) attached() []string {
 
 var globalGitWatch = &gitWatchManager{
 	entries: make(map[string]*gitWatchEntry),
-	homes:   make(map[string]string),
+}
+
+// gitWatchLease is one stream's reference on a watcher. It remembers the
+// directory it is attached to, and rebind moves it, so the stream's
+// deferred release drops the reference wherever it ended up — a session
+// moved to another project while its tab stays open is re-pointed in
+// place rather than waiting for a reconnect that a SharedWorker-held
+// stream never makes. cwd is guarded by the manager's mu.
+type gitWatchLease struct {
+	m         *gitWatchManager
+	sessionID string
+	cwd       string
 }
 
 // acquire attaches sessionID to the watcher for cwd, starting it on the
-// first reference.
-func (m *gitWatchManager) acquire(sessionID, cwd string) {
+// first reference. The returned lease is released by the caller (nil is
+// returned, and is safe to release, when there is nothing to watch).
+func (m *gitWatchManager) acquire(sessionID, cwd string) *gitWatchLease {
 	if sessionID == "" || cwd == "" || globalBcast == nil {
-		return
+		return nil
 	}
 	m.mu.Lock()
-	e, running := m.entries[cwd]
-	if !running {
-		e = &gitWatchEntry{sessions: map[string]int{}}
-		m.entries[cwd] = e
+	running := m.attachLocked(sessionID, cwd)
+	l := &gitWatchLease{m: m, sessionID: sessionID, cwd: cwd}
+	if m.leases == nil {
+		m.leases = make(map[string][]*gitWatchLease)
 	}
-	m.homes[sessionID] = cwd
-	e.mu.Lock()
-	e.sessions[sessionID]++
-	e.mu.Unlock()
-	if !running {
-		ctx, cancel := context.WithCancel(context.Background())
-		e.cancel = cancel
-		go runGitWatch(ctx, cwd, e)
-	}
+	m.leases[sessionID] = append(m.leases[sessionID], l)
 	m.mu.Unlock()
 
 	if running {
@@ -152,26 +156,72 @@ func (m *gitWatchManager) acquire(sessionID, cwd string) {
 		// same correct badge the first one got.
 		go publishGitSummary(context.Background(), sessionID, cwd, "")
 	}
+	return l
 }
 
-// release detaches sessionID, stopping the watcher when its last
-// subscriber goes.
-func (m *gitWatchManager) release(sessionID string) {
-	if sessionID == "" {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	cwd, ok := m.homes[sessionID]
-	if !ok {
-		return
-	}
-	e, ok := m.entries[cwd]
-	if !ok {
-		delete(m.homes, sessionID)
-		return
+// attachLocked adds one reference for sessionID on cwd's watcher,
+// starting the watcher if it is new. Reports whether it was already
+// running. Caller holds m.mu.
+func (m *gitWatchManager) attachLocked(sessionID, cwd string) bool {
+	e, running := m.entries[cwd]
+	if !running {
+		e = &gitWatchEntry{sessions: map[string]int{}}
+		m.entries[cwd] = e
 	}
 	e.mu.Lock()
+	e.sessions[sessionID]++
+	e.mu.Unlock()
+	if !running {
+		ctx, cancel := context.WithCancel(context.Background())
+		e.cancel = cancel
+		go runGitWatch(ctx, cwd, e)
+	}
+	return running
+}
+
+// release drops the lease's reference from whichever watcher it is on now.
+func (l *gitWatchLease) release() {
+	if l == nil {
+		return
+	}
+	m := l.m
+	m.mu.Lock()
+	ls := m.leases[l.sessionID]
+	for i, x := range ls {
+		if x == l {
+			ls = append(ls[:i:i], ls[i+1:]...)
+			break
+		}
+	}
+	if len(ls) == 0 {
+		delete(m.leases, l.sessionID)
+	} else {
+		m.leases[l.sessionID] = ls
+	}
+	forget := m.releaseLocked(l.sessionID, l.cwd)
+	m.mu.Unlock()
+	if forget && globalBcast != nil {
+		// Drop this session's replay cache: nobody is watching for it, and
+		// the next acquire publishes a fresh snapshot anyway. Keeps the
+		// cache bounded by live sessions rather than by every session the
+		// process has ever seen.
+		globalBcast.ForgetGitStatus(l.sessionID)
+	}
+}
+
+// releaseLocked drops one reference and reports whether the session now
+// holds none anywhere, so its replay cache can go. A session that never
+// joined cwd is left alone. Caller holds m.mu.
+func (m *gitWatchManager) releaseLocked(sessionID, cwd string) bool {
+	e, ok := m.entries[cwd]
+	if !ok {
+		return false
+	}
+	e.mu.Lock()
+	if _, attached := e.sessions[sessionID]; !attached {
+		e.mu.Unlock()
+		return false
+	}
 	e.sessions[sessionID]--
 	gone := e.sessions[sessionID] <= 0
 	if gone {
@@ -180,22 +230,63 @@ func (m *gitWatchManager) release(sessionID string) {
 	empty := len(e.sessions) == 0
 	e.mu.Unlock()
 
-	if gone {
-		delete(m.homes, sessionID)
-		// Drop this session's replay cache: nobody is watching for it, and
-		// the next acquire publishes a fresh snapshot anyway. Keeps the
-		// cache bounded by live sessions rather than by every session the
-		// process has ever seen.
-		if globalBcast != nil {
-			globalBcast.ForgetGitStatus(sessionID)
-		}
-	}
 	if empty {
 		if e.cancel != nil {
 			e.cancel()
 		}
 		delete(m.entries, cwd)
 	}
+	return gone && !m.attachedLocked(sessionID)
+}
+
+// rebind re-points every open stream of sessionID at newCwd, the
+// session's directory after a move to another project. Without it the
+// open tab stayed on the old project's watcher, whose publishes the
+// session no longer accepts, and the panel went silent. The replay cache
+// still holds the old project's tree, so it is dropped and the new tree
+// published in its place.
+func (m *gitWatchManager) rebind(sessionID, newCwd string) {
+	if sessionID == "" || newCwd == "" {
+		return
+	}
+	m.mu.Lock()
+	moved, joined := false, false
+	for _, l := range m.leases[sessionID] {
+		if l.cwd == newCwd {
+			continue
+		}
+		m.releaseLocked(sessionID, l.cwd)
+		if m.attachLocked(sessionID, newCwd) && !moved {
+			joined = true
+		}
+		l.cwd = newCwd
+		moved = true
+	}
+	m.mu.Unlock()
+	if globalBcast == nil {
+		return
+	}
+	globalBcast.ForgetGitStatus(sessionID)
+	// A watcher this rebind started publishes on its own first pass; only
+	// joining one already running needs a push, as in acquire.
+	if joined {
+		rebindPublish(sessionID, newCwd)
+	}
+}
+
+// RebindGitWatch re-points s's open Source streams at its current
+// directory. Called whenever a session's project changes — a move, or the
+// pool binding an unscoped session to a project on its first send.
+func RebindGitWatch(s session.Session) {
+	if cwd, err := resolveSessionCwd(s); err == nil {
+		globalGitWatch.rebind(s.ID, cwd)
+	}
+}
+
+// rebindPublish pushes the new project's tree after a rebind. A var so a
+// test can watch it instead of racing a real walk.
+var rebindPublish = func(sessionID, cwd string) {
+	go publishGitSummary(context.Background(), sessionID, cwd, "")
 }
 
 // runGitWatch watches cwd recursively (one level of repos deep) and
@@ -377,6 +468,9 @@ func addRecursive(w *fsnotify.Watcher, root, rel string, b *watchBudget, l *zero
 		return
 	}
 	dir := watchDirFor(root, rel)
+	if real, ok := scm.LinkedRepoTarget(dir); ok {
+		dir = real // WalkDir does not follow a root that is itself a link
+	}
 	before := b.used
 	room := true
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -495,6 +589,14 @@ func publishGitSnapshot(sessionID, cwd, touched string, base GitStatusSnapshot) 
 	sess, sessErr := session.Load(globalLayout, sessionID)
 	stored := ""
 	if sessErr == nil {
+		// A stream opened before the session moved to another project is
+		// still attached to the OLD project's watcher. Its tree is not this
+		// session's any more: publishing it would show the old repos, and
+		// following an edit there would select a repo outside the session's
+		// own folder. The move handler rebinds open streams to the new one.
+		if home, err := resolveSessionCwd(sess); err == nil && filepath.Clean(home) != filepath.Clean(cwd) {
+			return ""
+		}
 		stored = sess.Meta.ScmRepo
 	}
 	// Copy the shared snapshot: the repo list is identical for everyone,
@@ -568,4 +670,18 @@ func repoForPath(cwd string, repos []RepoSummary, path string) string {
 		}
 	}
 	return best
+}
+
+// attachedLocked reports whether sessionID still holds a reference on
+// any watcher. Caller holds m.mu.
+func (m *gitWatchManager) attachedLocked(sessionID string) bool {
+	for _, e := range m.entries {
+		e.mu.Lock()
+		_, ok := e.sessions[sessionID]
+		e.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
 }

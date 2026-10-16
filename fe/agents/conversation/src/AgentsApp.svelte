@@ -5,49 +5,66 @@
      artifacts and the rail all come along instead of being rebuilt.
      Settings, other conversations and the + Agent wizard are drawers with
      their own URL (agentsRouter.ts), so they survive a refresh. */
-  import { onMount, untrack } from "svelte";
+  import { viewerName as readViewerName } from "./lib/viewer.js";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
   import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
-  import { agentMenu, isSharedAgent, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
+  import { agentMenu, chatListed, chatNeedsAccessCheck, isSharedAgent, shareInfo, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import TeamEmptyState from "./lib/components/TeamEmptyState.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
-  import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle, remoteWaitLabel } from "./lib/remoteAgent.js";
+  import PresenceDot from "./lib/components/team/PresenceDot.svelte";
+  import Dots from "./lib/components/team/Dots.svelte";
+  import RosterSessionsMenu from "./lib/components/team/RosterSessionsMenu.svelte";
+  import { runningSessions, rowTarget, lastSession, lastSessionKey, loadSeen, markSeen, sessionSignal, sessionTitle } from "./lib/rosterSessions.js";
+  import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
+  import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
+  import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
+  import AgentHeaderTitle from "./lib/components/team/AgentHeaderTitle.svelte";
+  import TeammatesChip from "./lib/components/team/TeammatesChip.svelte";
+  import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteChatMode, remoteTarget, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import DraftChat from "./lib/components/DraftChat.svelte";
   import { startDraftChat, type DraftMessage } from "./lib/agentChats.js";
   import { sendMessage } from "./lib/api/messages.js";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
-  import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
-  import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
+  import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel, type TicketsRoute } from "./lib/agentsRouter.js";
+  import { connectorCaption, hiddenTabsFor, type AgentMode } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
+  import { makeCaptainWithAccess } from "./lib/captainAccess.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, createAgent, updateAgent, makeCaptain, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
-  import { rosterStatus, withTurn, withActivity } from "./lib/rosterStatus.js";
-  import { liveRoster } from "./lib/rosterLive.js";
+  import { rosterStatus, withTurn, withActivity, busyWork, avatarWorking, teamMark } from "./lib/rosterStatus.js";
+  import { mainChatOpen } from "./lib/avatarActivity.js";
+  import { liveRoster, boundedDebounce, singleFlight, ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS } from "./lib/rosterLive.js";
+  import type { SessionActivity } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
-  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass } from "./lib/rosterList.js";
+  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
+  import TicketsPage from "./lib/components/team/TicketsPage.svelte";
+  import { addTicketProject, sessionTarget, ticketsEntryShown } from "./lib/teamTicketLinks.js";
+  import { projectCount, ticketsSubtitle } from "./lib/ticketProjects.js";
+  import { cachedTicketProjects, rememberTicketProjects } from "./lib/ticketBoardCache.js";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
-  const viewerName = appEl?.dataset.viewerName ?? "";
+  const viewerName = readViewerName();
   const account = {
     viewerEmail: appEl?.dataset.viewerEmail ?? "",
     viewerAvatar: appEl?.dataset.viewerAvatar ?? "",
@@ -88,7 +105,7 @@
   // Below lg the roster is a drawer over the chat, opened from the header.
   let rosterOpen = $state(false);
 
-  /* Group chats: listed under the agents; the open one (/team/g/<id>)
+  /* Group chats: listed under the agents; the open one (/team/group/<id>)
      replaces the agent chat. */
   let groups = $state<GroupItem[]>([]);
   let groupsLoaded = $state(false);
@@ -125,39 +142,53 @@
   }
 
   /* One roster read at a time: the poll, a finished turn and a save can
-     all ask at once, and they share the request in flight. */
-  let inflight: Promise<void> | null = null;
-  function load(): Promise<void> {
-    inflight ??= (async () => {
+     all ask at once, and they share the request in flight. A call that
+     lands while one is in flight runs once more after it (singleFlight):
+     the read in flight may predate what it was asked for, a turn that
+     just started. */
+  const load = singleFlight(async () => {
+    try {
+      const r = await runApi(listAgents(base));
+      agents = r.agents ?? [];
+      captainId = r.captain_id ?? "";
+      loadError = "";
       try {
-        const r = await runApi(listAgents(base));
-        agents = r.agents ?? [];
-        captainId = r.captain_id ?? "";
-        loadError = "";
-        try {
-          sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
-        } catch {
-          /* storage full or off */
-        }
-      } catch (e) {
-        loadError = e instanceof Error ? e.message : String(e);
-      } finally {
-        loaded = true;
-        inflight = null;
+        sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
+      } catch {
+        /* storage full or off */
       }
-    })();
-    return inflight;
-  }
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e);
+    } finally {
+      loaded = true;
+    }
+  });
 
   /* Team settings › Idle animations applies to every avatar on the page;
      the drawer updates it on save. A failed read keeps the default (on). */
   async function loadIdleAnimations() {
     try {
-      setIdleAnimations((await runApi(getTeamSettings(base))).idle_animations !== false);
-    } catch {
-      /* keep the default */
+      const s = await runApi(getTeamSettings(base));
+      setIdleAnimations(s.idle_animations !== false);
+      ticketProjects = s.ticket_projects ?? [];
+      ticketLoadError = "";
+    } catch (e) {
+      /* keep the default; Tickets shows the reason, not an empty picker */
+      ticketLoadError = e instanceof Error ? e.message : String(e);
     }
   }
+  let ticketLoadError = $state("");
+  /** Project names for the Tickets header, once the page has read them. */
+  let ticketNames = $state<Record<string, string>>({});
+  /* Team › Tickets: the projects picked for it (Team settings), for the
+     row's count and the page; null until the settings have loaded. The
+     last selection read stands in meanwhile, so the boards are asked for
+     at once. */
+  const ticketProjectsSeen = cachedTicketProjects();
+  let ticketProjects = $state<string[] | null>(ticketProjectsSeen?.length ? ticketProjectsSeen : null);
+  $effect(() => {
+    if (ticketProjects) rememberTicketProjects($state.snapshot(ticketProjects));
+  });
 
   onMount(() => {
     load();
@@ -169,16 +200,29 @@
      rosterLive.ts): turn steps as `activity`, a turn it sees end triggers
      the full read for the preview and unread count, and `agent_changed` or
      a reconnect reads the roster and groups again. No steady poll. */
+  /* The newest turn step, handed to the Chats drawer so its rows stay live. */
+  let lastActivity = $state<SessionActivity | null>(null);
+  /* Roster agents' non-main chats seen mid-turn (sessionSignal); their
+     turn starts and ends coalesce into one roster read, at least every
+     ROSTER_REFETCH_MAX_WAIT_MS under a steady stream. */
+  const activeSessions = new Set<string>();
+  const sessionReload = boundedDebounce(() => load(), ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS);
+  onDestroy(() => sessionReload.cancel());
   onMount(() =>
     liveRoster(base, {
       reload: () => {
         load();
         loadGroups();
       },
+      // A turn's end missed while the stream was down would leave its chat
+      // marked mid-turn, and its next start would read nothing.
+      onReconnect: () => activeSessions.clear(),
       onActivity: (ev) => {
+        lastActivity = ev;
         const next = withActivity(agents, ev);
         agents = next.agents;
         if (next.finished) load();
+        else if (sessionSignal(agents, ev, activeSessions)) sessionReload.call();
       },
     }),
   );
@@ -190,6 +234,11 @@
      or every agent is shared/remote (none can lead, so it is the new-user
      page). */
   const noCaptain = $derived(loaded && !loadError && !captain);
+  // PLAN §6: no Team, no Tickets — the entry, the board and the room.
+  const hasTickets = $derived(ticketsEntryShown({ loaded, loadError, hasCaptain: !!captain }));
+  $effect(() => {
+    if (route.tickets && noCaptain) navigate({ handle: null, session: null, panel: null }, { replace: true });
+  });
   const captainCandidates = $derived(noCaptain ? agents.filter((a) => !a.kind && !isSharedAgent(a)) : []);
 
   /* Agents and groups in one list, newest activity first. The mobile
@@ -198,8 +247,9 @@
   const pins = $derived(query.trim() || noCaptain ? [] : mobilePins(agents));
   const pinIds = $derived(new Set(pins.map((a) => a.id)));
 
+  // Tickets is a page of the app, not a member: no agent is open on it.
   const selected = $derived(
-    route.handle ? agents.find((a) => a.handle === route.handle) : captain,
+    route.tickets ? undefined : route.handle ? agents.find((a) => a.handle === route.handle) : captain,
   );
 
   /* /team names no agent: settle on the Captain, rewriting the URL rather
@@ -219,7 +269,7 @@
       }
       return;
     }
-    if (!route.handle && captain && route.panel?.kind !== "new") {
+    if (!route.handle && !route.tickets && captain && route.panel?.kind !== "new") {
       navigate({ ...route, handle: captain.handle }, { replace: true });
     }
   });
@@ -247,8 +297,17 @@
   // waitStart is when the selected one began waiting; the header counts up.
   let waitStart = $state<number | null>(null);
   let waitNow = $state(Date.now());
+  /* The roster's clock, a minute at a time: stamps turn "Yesterday" and
+     rows start dozing at midnight without waiting for another change. */
+  let rosterNow = $state(Date.now());
+  onMount(() => {
+    const t = setInterval(() => (rosterNow = Date.now()), 60_000);
+    return () => clearInterval(t);
+  });
   // The header reads the selected agent as its roster row does.
   const headerStatus = $derived(selected ? rosterStatus(selected) : null);
+  // Who it is shared by (recipient) or how many have it (owner); null = not shared.
+  const headerShare = $derived(selected ? shareInfo(selected) : null);
   const remoteWaiting = $derived(!!selected && isRemoteAgent(selected) && isWorking(selected.status));
   const waitKey = $derived(remoteWaiting && selected ? selected.id : "");
   $effect(() => {
@@ -275,15 +334,94 @@
     });
   });
 
-  const chatSessionId = $derived(route.session ?? selected?.main_session_id ?? "");
+  /* A shared agent's ?session= other than the recipient's own main chat is
+     checked once against the chats they may list (a 200 read) before the
+     chat mounts. Not listed — e.g. an old link to the owner's chat after
+     history was turned off — drops back to their own chat, no alert. */
+  let chatChecked = $state("");
+  let chatChecking = "";
+  const chatCheckKey = $derived(
+    chatNeedsAccessCheck(selected, route.session) ? `${selected!.id}|${route.session}` : "",
+  );
+  $effect(() => {
+    const key = chatCheckKey;
+    if (!key || key === chatChecked || key === chatChecking) return;
+    const a = selected!;
+    const sid = route.session!;
+    chatChecking = key;
+    runApi(listAgentSessionsAll(base, a.id))
+      .then((r) => {
+        if (chatListed(r.sessions, sid)) chatChecked = key;
+        else if (route.handle === a.handle && route.session === sid) go({ session: null }, true);
+      })
+      // Could not tell: open it; the view treats a 404 as an empty chat.
+      .catch(() => { chatChecked = key; })
+      .finally(() => { if (chatChecking === key) chatChecking = ""; });
+  });
+
+  const chatSessionId = $derived(
+    chatCheckKey && chatCheckKey !== chatChecked ? "" : (route.session ?? selected?.main_session_id ?? ""),
+  );
 
   function go(patch: Partial<AgentsRoute>, replace = false) {
     navigate({ ...route, ...patch }, { replace });
   }
-  function openAgent(a: AgentItem) {
-    rosterOpen = false;
-    navigate({ handle: a.handle, session: null, panel: null });
+
+  /* Team › Tickets: a ticket's chat opens in its agent's Team chat when it
+     is a chat with one of the roster's agents, else right here on the
+     Tickets page (/team/tickets/…/s/<id>) — never out to Agents › Projects.
+     Who may open it is the server's call, as everywhere else. */
+  async function openTicketSession(id: string, project?: string) {
+    const t = await sessionTarget(base, id, agents);
+    if (t.kind === "team") navigate({ handle: t.handle, session: t.session, panel: null });
+    else if (project) navigate({ handle: null, session: null, panel: null, tickets: { project, ticket: route.tickets?.ticket, session: id } });
+    else window.location.href = t.href;
   }
+  /* Ticket titles seen on the Tickets page, "<project>/<ticket>" → title,
+     so the back link from a chat names the ticket; the id stands in after
+     a reload straight onto the chat. */
+  let ticketTitles = $state<Record<string, string>>({});
+  /* Back from a chat opened on the Tickets page: to its ticket, or to the
+     board when it came from the board's rail. */
+  const ticketsBack = $derived<TicketsRoute>(
+    route.tickets?.project && route.tickets.ticket ? { project: route.tickets.project, ticket: route.tickets.ticket } : {},
+  );
+  /* A project chat opened in Team: the session view as on /sessions (its
+     own header), but a ticket jump stays in Team and a delete comes back
+     here instead of to the /sessions list. */
+  const ticketSessionMode = $derived<AgentMode>({
+    onDeleted: () => go({ tickets: ticketsBack }),
+    onOpenTicket: openTicketInTeam,
+  });
+
+  /* The rail's jump from a chat: Team › Tickets in place, and the project
+     put on the Tickets selection when missing. Saving is best-effort and
+     never holds the jump up. */
+  function openTicketInTeam(project: string, ticket?: string) {
+    rosterOpen = false;
+    navigate({ handle: null, session: null, panel: null, tickets: ticket ? { project, ticket } : {} });
+    addTicketProject(base, ticketProjects, project)
+      .then((list) => { if (list) ticketProjects = list; })
+      .catch((e) => toastError(`Couldn't add the project to Tickets: ${e instanceof Error ? e.message : String(e)}`));
+  }
+  /* A row opens the agent's oldest chat still running elsewhere (a Team
+     task, a chat the person opened) while there is one, else its pinned
+     main chat. */
+  function openAgent(a: AgentItem) {
+    openRowChat(a, rowTarget(a));
+  }
+  function openRowChat(a: AgentItem, session: string | null) {
+    rosterOpen = false;
+    navigate({ handle: a.handle, session, panel: null });
+  }
+
+  /* The "Last: …" lines already opened (rosterSessions.lastSession): the
+     chat on screen marks its own as opened. */
+  let seenLast = $state(loadSeen());
+  $effect(() => {
+    const s = selected?.last_session;
+    if (s && route.session === s.id && !seenLast.has(lastSessionKey(s))) seenLast = markSeen(seenLast, lastSessionKey(s));
+  });
   function openPanel(panel: AgentsPanel | null) {
     go({ panel });
   }
@@ -355,7 +493,7 @@
 
   function onSaved(next: AgentItem) {
     const prevHandle = selected?.handle;
-    agents = agents.map((a) => (a.id === next.id ? { ...a, ...next } : next.is_captain ? { ...a, is_captain: false } : a));
+    agents = withSaved(agents, next);
     if (next.is_captain) captainId = next.id;
     // A renamed handle moves the page with it, or the next refresh 404s.
     if (prevHandle && next.handle !== prevHandle) go({ handle: next.handle }, true);
@@ -363,12 +501,13 @@
 
   /* Empty-Team page: hand the Captain role to one of the user's own
      agents (after the old Captain was deleted). */
-  async function claimCaptain(c: { id: string }) {
+  async function claimCaptain(c: { id: string }, giveAccess: boolean) {
     try {
-      const r = await runApi(makeCaptain(base, c.id));
-      onSaved(r.agent);
-      toastOk(`🧭 @${r.agent.handle} is now your Team's Captain`);
-      navigate({ handle: r.agent.handle, session: null, panel: null }, { replace: true });
+      const { agent: a, accessFailed } = await makeCaptainWithAccess(base, c.id, giveAccess);
+      onSaved(a);
+      // A failed access update already toasted that the role moved.
+      if (!accessFailed) toastOk(`🧭 @${a.handle} is now your Team's Captain`);
+      navigate({ handle: a.handle, session: null, panel: null }, { replace: true });
     } catch (err) {
       toastError(err instanceof Error ? err.message : String(err));
     }
@@ -452,6 +591,14 @@
   /* The main chat's tool, off the same stream as its working bubble: the
      row and header switch between thinking and the tool with the thread,
      not a poll later. */
+  /* Teammates the chat on screen waits on, for the header chip. Keyed by
+     the session it came from, so it never follows the user elsewhere. */
+  let teammatesBusy = $state<{ sid: string; n: number } | null>(null);
+  function onTeammatesBusy(n: number) {
+    teammatesBusy = { sid: chatSessionId, n };
+  }
+  const headerTeammates = $derived(teammatesBusy && teammatesBusy.sid === chatSessionId ? teammatesBusy.n : 0);
+
   function onActivity(tool: string | undefined) {
     const a = selected;
     if (!a || route.session) return;
@@ -481,12 +628,14 @@
     onDeleted: () => go({ session: null }),
     onTurnChange,
     onActivity,
+    onTeammatesBusy,
     ...(selected && isRemoteAgent(selected)
       ? { remoteProgress: true, onProgress: ((id: string) => (label: string | undefined) => (progress = label ? { id, label } : null))(selected.id) }
       : {}),
     providerSwitch: !!selected?.allow_provider_switch,
     onOpenSettings: () => openPanel({ kind: "settings", tab: "advanced" }),
     onNewChat: newChat,
+    onOpenTicket: openTicketInTeam,
     agent: selected
       ? {
           id: selected.id,
@@ -498,8 +647,10 @@
           shape: selected.avatar?.shape,
           color: selected.avatar?.color,
           expression: selected.avatar?.expression,
+          image: selected.avatar?.image,
           avatarEvents: selected.avatar?.events,
           caption: remoteMode?.caption ?? connectorCaption(selected.allowed_connectors),
+          showTeammates: selected.channel_show_teammates !== false,
         }
       : undefined,
   });
@@ -510,8 +661,8 @@
     // A [silent] reply previews dimmed, never with its raw marker.
     const last = silentPreview(a.last_preview || "", a.last_silent);
     if (last.text) return last;
-    // A shared agent the user has not chatted with yet says whose it is.
-    return { text: (isSharedAgent(a) ? sharedLabel(a) : "") || a.description || "No chats yet", silent: false };
+    // Never "shared by …": the chat header says whose it is, once.
+    return { text: a.description || "No chats yet", silent: false };
   }
 
   const mutedBell = "M8.7 3.7A6 6 0 0 1 18 8.5c0 3 .5 4.4 1.3 5.6M17 17H4c1.5-1.5 3-3 3-8.5";
@@ -578,7 +729,7 @@
         {#each pins as a (a.id)}
           <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
             <span class="relative inline-flex">
-              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} live working={isWorking(a.status)} asleep={a.disabled} />
+              <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} live working={isWorking(a.status)} asleep={a.disabled} />
               <!-- Same cue as the list's SHARED badge, sized for a pin. -->
               {#if isSharedAgent(a)}<span class="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white-100 bg-white-300 text-black-800 dark:border-navy-700 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="pin-shared-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></svg><span class="sr-only">{sharedLabel(a)}</span></span>{/if}
             </span>
@@ -632,8 +783,13 @@
           {@const a = e.agent}
           {@const active = !route.group && selected?.id === a.id}
           {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
-          {@const tone = rowTone(st.unread)}
+          {@const tone = rowTone(st.unread, st.attention)}
           {@const pv = rowPreview(a)}
+          {@const running = runningSessions(a)}
+          {@const last = lastSession(a, seenLast, route.session)}
+          <!-- The row, plus beside it (a button holds no other button) the
+               count of chats running elsewhere and the Last line. -->
+          <div class="relative {pinIds.has(a.id) ? 'hidden lg:block' : ''}" data-testid="roster-agent-wrap">
           <button
             type="button"
             class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
@@ -643,30 +799,52 @@
             data-testid="roster-agent"
             onclick={() => openAgent(a)}
           >
-            <!-- live like the header's: the same agent in the same state
-                 moves the same way in both. Rows scrolled away pause. -->
             <!-- Sub-agents still working after its own turn: the orbit, plus
                  a 🤖 so it reads apart from the agent's own tool call. -->
             <span class="relative flex shrink-0">
-              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status) || st.work === "subagent"} tool={st.work === "tool" || st.work === "subagent"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
-              {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -right-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
+              <RosterAvatar agent={a} {st} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} dozing={dozing(a, st, rosterNow)} />
+              <!-- The status dot replaces the hover tip; its label is read
+                   out with the row (sr-only). -->
+              <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} mark={teamMark(a, st)} />
+              {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
             </span>
-            <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
-            <span class="min-w-0 flex-1">
+            <!-- A disabled agent's name and line fade with its avatar: the
+                 only row that reads switched off (an idle one dozes). -->
+            <span class="min-w-0 flex-1" class:opacity-50={a.disabled} data-testid="roster-meta">
               <span class="flex items-baseline gap-2">
-                <span class="min-w-0 flex-1 truncate text-sm {tone.name}">
-                  {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}{#if isSharedAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="roster-shared-badge">Shared</span>{/if}
+                <!-- No pills: a remote agent gets its source icon after the
+                     name; being shared is told in the chat header. -->
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-sm {tone.name}">
+                  <span class="truncate">{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}</span>
+                  <RemoteKindIcon agent={a} />
                 </span>
-                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active)}</span>
+                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active, rosterNow)}</span>
               </span>
-              <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
+              <span class="roster-line2 mt-0.5 flex items-center gap-1.5" class:pr-6={running.length > 1}>
                 <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
-                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing}</span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
+                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<Dots /></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
                 </span>
+                <!-- A teammate's question back to its sender: the amber count (the
+                     avatar carries the "?"). -->
+                {#if a.team_asks && !a.disabled}<span class="roster-badge shrink-0 rounded-full bg-amber-500 font-bold text-[#1b1300]" aria-label="1 question" data-testid="roster-asks">1</span>{/if}
                 {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
               </span>
             </span>
           </button>
+          {#if running.length > 1}<RosterSessionsMenu sessions={running} now={rosterNow} onopen={(id) => openRowChat(a, id)} />{/if}
+          {#if last}
+            <button
+              type="button"
+              class="roster-last -mt-1 mb-1 block w-full truncate pr-2 text-left text-[11px] text-black-800 hover:underline dark:text-black-600"
+              title="Open {sessionTitle(last)}"
+              data-testid="roster-last"
+              onclick={() => {
+                seenLast = markSeen(seenLast, lastSessionKey(last));
+                openRowChat(a, last.id);
+              }}>Last: {sessionTitle(last)}</button
+            >
+          {/if}
+          </div>
         {:else}
           {@const g = e.group}
           {@const unread = g.unread && activeGroupId !== g.id}
@@ -683,7 +861,7 @@
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
                 <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
-                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active)}</span>
+                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active, rosterNow)}</span>
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
                 <span class="min-w-0 flex-1 truncate text-xs {gp.silent && gp.text ? silentPreviewClass : tone.preview}">{#if gp.silent && gp.text}{@render silentBell()}{/if}{gp.text || `${g.members.length} agents`}</span>
@@ -695,6 +873,22 @@
       {/each}
     </nav>
     <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account" data-space-account>
+      <!-- Tickets: app navigation next to Team settings, not a roster row. -->
+      {#if hasTickets}
+      <button
+        type="button"
+        class="mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium {route.tickets
+          ? 'bg-green-50 text-green-700 dark:bg-navy-600 dark:text-green-400'
+          : 'text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600'}"
+        aria-current={route.tickets ? "page" : undefined}
+        data-testid="tickets-nav"
+        onclick={() => { rosterOpen = false; navigate({ handle: null, session: null, panel: null, tickets: {} }); }}
+      >
+        <svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 6a1 1 0 011-1h10a1 1 0 011 1v1.5a1.5 1.5 0 000 3V12a1 1 0 01-1 1H3a1 1 0 01-1-1v-1.5a1.5 1.5 0 000-3V6z" stroke-linejoin="round"></path><path d="M9.5 5v1.2M9.5 7.7v1.2M9.5 10.4V12" stroke-linecap="round"></path></svg>
+        <span class="min-w-0 flex-1">Tickets</span>
+        {#if ticketProjects?.length}<span class="shrink-0 text-[11px] font-normal text-black-700" data-testid="tickets-nav-count">{projectCount(ticketProjects.length)}</span>{/if}
+      </button>
+      {/if}
       <TeamAccountMenu
         {viewerName}
         {...account}
@@ -717,6 +911,100 @@
       />
     {/key}
   </section>
+  {:else if route.tickets && loadError}
+  <!-- /team/tickets when the roster failed: no Team is known, so no board. -->
+  <section class="flex min-w-0 flex-1 items-center justify-center p-6" data-testid="tickets-roster-state">
+    <p class="text-sm text-neg-400">Couldn't load your Team: {loadError}</p>
+  </section>
+  {:else if route.tickets && (hasTickets || !loaded)}
+  <!-- Drawn before the roster is in, so the page's own reads start at
+       once; a roster with no Captain then sends the page to /team. -->
+  <section class="flex min-w-0 flex-1 flex-col">
+    {#if route.tickets.session}
+    <!-- A chat opened from the Tickets page, drawn here so Team stays put;
+         its back link returns to the ticket (or the board). -->
+    <div class="flex shrink-0 items-center gap-2 border-b border-white-300 px-2 py-1.5 dark:border-navy-600" data-testid="tickets-session-bar">
+      <button
+        type="button"
+        class="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+        aria-label="Agent list"
+        onclick={() => (rosterOpen = true)}
+      >
+        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+      </button>
+      <button
+        type="button"
+        class="inline-flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+        data-testid="tickets-session-back"
+        onclick={() => go({ tickets: ticketsBack })}
+      >
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <span class="truncate">{ticketsBack.ticket ? (ticketTitles[`${ticketsBack.project}/${ticketsBack.ticket}`] ?? ticketsBack.ticket) : "Tickets"}</span>
+      </button>
+    </div>
+    <div class="relative min-h-0 flex-1">
+      {#key route.tickets.session}
+        <DetailView {base} sessionId={route.tickets.session} agentMode={ticketSessionMode} />
+      {/key}
+    </div>
+    {:else}
+    <!-- The board has the Tickets header; a ticket's page has its own
+         "← Tickets · id · 📁 project" row instead (mockup renderHeader). -->
+    {#if !(route.tickets.project && route.tickets.ticket)}
+    <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600" data-testid="tickets-header">
+      <button
+        type="button"
+        class="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+        aria-label="Agent list"
+        onclick={() => (rosterOpen = true)}
+      >
+        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+      </button>
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white-300 text-black-800 dark:bg-navy-600 dark:text-black-600"><svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 6a1 1 0 011-1h10a1 1 0 011 1v1.5a1.5 1.5 0 000 3V12a1 1 0 01-1 1H3a1 1 0 01-1-1v-1.5a1.5 1.5 0 000-3V6z" stroke-linejoin="round"></path><path d="M9.5 5v1.2M9.5 7.7v1.2M9.5 10.4V12" stroke-linecap="round"></path></svg></span>
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-sm font-semibold text-black-900 dark:text-white-100">Tickets</h1>
+        <div class="truncate text-xs text-black-800 dark:text-black-600">{ticketLoadError ? "" : ticketsSubtitle(ticketProjects ?? [], ticketNames)}</div>
+      </div>
+      {#if ticketProjects?.length}
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+          title="Team settings › Tickets"
+          aria-label="Team settings › Tickets"
+          data-testid="tickets-settings"
+          onclick={() => openPanel({ kind: "team-settings", tab: "tickets" })}
+        >
+          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2"></circle><path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3"></path></svg>
+        </button>
+      {/if}
+    </header>
+    {:else}
+    <button
+      type="button"
+      class="lg:hidden m-2 flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
+      aria-label="Agent list"
+      onclick={() => (rosterOpen = true)}
+    >
+      <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+    </button>
+    {/if}
+    <div class="min-h-0 flex-1">
+      <TicketsPage
+        {base}
+        selected={ticketProjects}
+        loadError={ticketLoadError}
+        onRetry={() => void loadIdleAnimations()}
+        onProjects={(ps) => (ticketNames = Object.fromEntries(ps.map((p) => [p.id, p.name])))}
+        route={route.tickets}
+        onPicked={(s) => (ticketProjects = s.ticket_projects ?? [])}
+        onRoute={(t) => go({ tickets: t })}
+        onOpenSession={(id, project) => void openTicketSession(id, project)}
+        captainName={agents.find((a) => a.is_captain)?.name ?? ""}
+        onTicketTitle={(p, t, title) => { ticketTitles[`${p}/${t}`] = title; }}
+      />
+    </div>
+    {/if}
+  </section>
   {:else}
   <section class="flex min-w-0 flex-1 flex-col">
     <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600">
@@ -730,24 +1018,32 @@
       </button>
       {#if selected && !noCaptain}
         <span class="relative flex shrink-0">
-          <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status) || headerStatus?.work === "subagent"} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
-          {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -right-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
+          <AgentAvatar kind={selected.avatar?.kind} image={selected.avatar?.image} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent" || headerStatus?.work === "replying"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+          {#if headerStatus}<PresenceDot presence={headerStatus.presence} label={headerStatus.label} />{/if}
+          {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>
         <div class="min-w-0 flex-1">
-          <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
-            {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
-          </div>
-          <div class="truncate text-xs text-black-800 dark:text-black-600">
+          <AgentHeaderTitle agent={selected} />
+          <!-- No "online": the avatar's dot says it. Then @handle, where a
+               remote's turns go and who it is shared by / with. -->
+          <div class="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-black-800 dark:text-black-600" data-testid="header-line2">
             {#if remoteWaiting}
-              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span>
-            {:else if isWorking(selected.status) || headerStatus?.work === "subagent"}
-              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+              <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span><span aria-hidden="true">·</span>
+            {:else if isWorking(selected.status) || (headerStatus && busyWork(headerStatus.work))}
+              <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<Dots /></span><span aria-hidden="true">·</span>
             {:else if selected.disabled}
-              disabled
-            {:else}
-              <span class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green-500 align-middle"></span>online
+              <span>disabled</span><span aria-hidden="true">·</span>
             {/if}
-            · @{selected.handle}{route.session ? " · other chat" : ""}{#if isRemoteAgent(selected)}<span data-testid="header-remote"> · {remoteSubtitle(selected)}</span>{/if}
+            {#if headerTeammates > 0}<TeammatesChip count={headerTeammates} /><span aria-hidden="true">·</span>{/if}
+            <span class="truncate">@{selected.handle}{route.session ? " · other chat" : ""}</span>
+            {#if isRemoteAgent(selected)}
+              <span aria-hidden="true">·</span>
+              <span class="inline-flex min-w-0 items-center gap-1" data-testid="header-remote"><RemoteKindIcon agent={selected} /><span class="truncate">{remoteTarget(selected)}</span></span>
+            {/if}
+            {#if headerShare}
+              <span aria-hidden="true">·</span>
+              <AgentShareLine agent={selected} onOpenSharing={() => openPanel({ kind: "settings", tab: "sharing" })} />
+            {/if}
           </div>
         </div>
         <!-- Always-on switcher: names the conversation on screen and opens
@@ -858,6 +1154,7 @@
           tab={route.panel.tab}
           onTab={(tab) => go({ panel: { kind: "team-settings", tab } }, true)}
           onClose={() => openPanel(null)}
+          onSaved={(s) => (ticketProjects = s.ticket_projects ?? [])}
         />
       {:else if route.panel.kind === "new"}
         {#if firstAgent && newType !== "local" && !route.panel.project}
@@ -914,6 +1211,7 @@
           onPick={(id, main) => { draftFor = null; go({ session: main ? null : id, panel: null }); }}
           onNew={newChat}
           onPinned={pinnedMain}
+          activity={lastActivity}
         />
       {/if}
     </div>
@@ -928,6 +1226,8 @@
      the unread count pill (18px tall, 11px text) and the second line it
      sits on, kept at the pill's height so a row never grows with it. */
   .roster-line2 { min-height: 18px; }
+  /* The Last line starts under the row's text: row padding + avatar + gap. */
+  .roster-last { padding-left: 56px; }
   .roster-badge {
     display: grid;
     place-items: center;
@@ -941,33 +1241,6 @@
   }
   /* No count from the server (a group chat): a small dot, not an empty pill. */
   .roster-badge-dot { min-width: 8px; height: 8px; padding: 0; margin-right: 5px; }
-  .roster-tip {
-    display: none;
-    position: absolute;
-    left: 52px;
-    top: -6px;
-    z-index: 30;
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .roster-row:hover .roster-tip { display: block; }
-  /* Three dots that bounce in turn: the "typing" cue in the header and the
-     roster. Tailwind has no staggered keyframe, hence the local rule. */
-  .dots i {
-    display: inline-block;
-    width: 4px;
-    height: 4px;
-    margin-left: 2px;
-    border-radius: 9999px;
-    background: currentColor;
-    animation: agent-dot 1s infinite;
-  }
-  .dots i:nth-child(2) { animation-delay: 0.15s; }
-  .dots i:nth-child(3) { animation-delay: 0.3s; }
-  @keyframes agent-dot {
-    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-2px); }
-  }
   /* Floating drawer (mockup .drawer/.scrim): inset 8px on three sides, 20px
      corners, a short slide-in. Width and blur have no token step. */
   .agent-drawer {
@@ -1004,7 +1277,6 @@
     from { opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .dots i { animation: none; opacity: 0.7; }
     .team-app, .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
   }
 </style>

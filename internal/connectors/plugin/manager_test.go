@@ -2,16 +2,19 @@ package plugin
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 func TestPluginCommandRunsNativeWithDNSOverride(t *testing.T) {
 	t.Setenv("TERMUX_VERSION", "test")
 	m := &Manager{dnsServers: func() string { return "8.8.8.8,8.8.4.4" }}
-	cmd := m.pluginCommand(os.Args[0])
+	cmd := m.pluginCommand("playwright_browser", os.Args[0])
 
 	if strings.Contains(cmd.Path, "proot") {
 		t.Fatalf("plugin command must run natively, got %q", cmd.Path)
@@ -26,6 +29,21 @@ func TestPluginCommandRunsNativeWithDNSOverride(t *testing.T) {
 	if !found {
 		t.Fatal("plugin command did not receive WICK_DNS_SERVERS")
 	}
+}
+
+func TestPluginCommandPassesDataDir(t *testing.T) {
+	t.Setenv("WICK_PLUGINS_DIR", "")
+	t.Setenv("WICK_PLUGINS_ROOT", filepath.Join(t.TempDir(), "plugins"))
+	m := &Manager{}
+	cmd := m.pluginCommand("playwright_browser", os.Args[0])
+
+	want := wickplugin.EnvDataDir + "=" + DataDirFor("playwright_browser")
+	for _, item := range cmd.Env {
+		if item == want {
+			return
+		}
+	}
+	t.Fatalf("plugin command env lacks %q", want)
 }
 
 func TestManagerEvictsIdle(t *testing.T) {

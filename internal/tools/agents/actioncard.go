@@ -12,6 +12,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/actioncard"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -183,7 +184,7 @@ func sendPostback(ctx context.Context, sessionID, agentName, source string, req 
 		return nil, "", err
 	}
 	text := pb.PostbackText()
-	if err := globalPool.Send(store.WithPostback(ctx, pb), sessionID, agentName, source, "user", text); err != nil {
+	if err := globalPool.Send(teamlink.WithPersonMessage(store.WithPostback(ctx, pb)), sessionID, agentName, source, "user", text); err != nil {
 		return nil, "", err
 	}
 	publishPostback(globalBcast, sessionID, agentName, pb, text)

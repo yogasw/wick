@@ -72,9 +72,14 @@ type poolSteerer struct {
 	pool *agentpool.Pool
 }
 
-// SendToChild injects the human's message as a normal user turn, so the
-// sub-agent reacts to it exactly as it would to any instruction — it
-// queues behind the in-flight turn rather than interrupting it.
+// SendToChild injects a message as a normal user turn, so the sub-agent
+// reacts to it exactly as it would to any instruction — it queues behind
+// the in-flight turn rather than interrupting it.
+//
+// It carries a person's take-over and a peer's inbox alike, so it does
+// not mark the message as a person's itself: the caller's ctx says so
+// (teamlink.WithPersonMessage, set by the take-over and a person's
+// @mention), and WithoutCancel keeps that mark.
 func (s poolSteerer) SendToChild(ctx context.Context, childSessionID, agentName, message string) error {
 	if s.pool == nil {
 		return nil

@@ -21,6 +21,8 @@
 package tools
 
 import (
+	"sync"
+
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/tags"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
@@ -38,13 +40,19 @@ import (
 
 // extra holds tool instances registered by downstream projects, plus
 // the modules added by RegisterBuiltins / RegisterLabSamples. All()
-// returns this slice verbatim.
-var extra []tool.Module
+// returns a copy of this slice. mu guards it: tool plugins are added and
+// removed while wick serves requests (install, enable, disable, uninstall).
+var (
+	mu    sync.RWMutex
+	extra []tool.Module
+)
 
 // Register appends a fully-resolved Module record to the registry.
 // Called from app.RegisterTool / app.RegisterToolNoConfig; do not call
 // directly from app code.
 func Register(m tool.Module) {
+	mu.Lock()
+	defer mu.Unlock()
 	extra = append(extra, m)
 }
 
@@ -171,6 +179,8 @@ func RegisterLabSamples() {
 // main.go could legitimately re-register the same module key — neither
 // case should produce duplicate rows in tools.All().
 func registerOnce(m tool.Module) {
+	mu.Lock()
+	defer mu.Unlock()
 	for _, existing := range extra {
 		if existing.Meta.Key == m.Meta.Key {
 			return
@@ -179,9 +189,24 @@ func registerOnce(m tool.Module) {
 	extra = append(extra, m)
 }
 
-// All returns every registered tool instance in registration order.
+// All returns every registered tool instance in registration order. The
+// slice is a copy, safe to range while a plugin is loaded or unloaded.
 func All() []tool.Module {
-	return extra
+	mu.RLock()
+	defer mu.RUnlock()
+	return append([]tool.Module(nil), extra...)
+}
+
+// Has reports whether a tool is registered under key.
+func Has(key string) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, m := range extra {
+		if m.Meta.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // Unregister drops the tool registered under key, if any. Used when a
@@ -189,6 +214,8 @@ func All() []tool.Module {
 // wins and the old tool gets no routes, card or config rows. Reports
 // whether a tool was removed.
 func Unregister(key string) bool {
+	mu.Lock()
+	defer mu.Unlock()
 	for i, m := range extra {
 		if m.Meta.Key == key {
 			extra = append(extra[:i:i], extra[i+1:]...)

@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -18,10 +17,11 @@ import (
 //
 // Two deliberate choices:
 //
-//   - It reads the SAME paced cache as everything else (usage_probe.go),
-//     so opening it is free and cannot contribute to a rate limit. The
-//     reply carries the reading's age, and the popover shows it, because
-//     a number with no provenance implies a live call nobody made.
+//   - It reads the account's usage file (usageCache.peek), so opening it
+//     is free and cannot contribute to a rate limit; a probe runs only
+//     for an account with no file yet. The reply carries the reading's
+//     age, and the popover shows it, because a number with no
+//     provenance implies a live call nobody made.
 //   - It is gated on the ACCESS grant, not manage: if you are allowed to
 //     run a session on this provider, you are allowed to see how much of
 //     it is left — and to ask for a fresh reading, which the cache is
@@ -50,6 +50,10 @@ type ComposerUsageResponse struct {
 
 	Account *composerUsageAccount `json:"account,omitempty"`
 	Windows []usageWindowDTO      `json:"windows,omitempty"`
+	// SavedResets is the account's saved rate-limit resets, read in the
+	// same paced probe as Windows; absent when the type has no reader
+	// or the read failed.
+	SavedResets *savedResetsDTO `json:"saved_resets,omitempty"`
 
 	// Err is a failed probe (expired token, rate limit) — shown as text,
 	// never as an empty set of bars.
@@ -62,6 +66,10 @@ type ComposerUsageResponse struct {
 	FetchedAt string `json:"fetched_at,omitempty"`
 	AgeS      int    `json:"age_s,omitempty"`
 	NextS     int    `json:"next_s,omitempty"`
+	// LastErr is the latest probe's failure while Windows still holds an
+	// older reading (see usageView.LastErr); RateLimited marks it a 429.
+	LastErr     string `json:"last_error,omitempty"`
+	RateLimited bool   `json:"rate_limited,omitempty"`
 
 	// CanManage tells the popover whether to offer Re-check.
 	CanManage bool `json:"can_manage"`
@@ -140,11 +148,18 @@ func apiComposerUsage(c *tool.Ctx) {
 	}
 	res.Supported = true
 
-	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
-	defer cancel()
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
+	v := peekInstanceUsage(ins)
+	// Opening a panel (open=1) probes ONLY when the account has no usage
+	// file at all: nothing to show yet, so one paced probe fills it.
+	// A file that exists is served as it is, however old — refreshing it
+	// is the Re-check button's job. refreshInstanceUsage keeps the
+	// limits (one flight, the server's Retry-After, the pace gate), and
+	// polls omit open=1 so an open panel never loops.
+	if c.Query("open") == "1" && !v.Known && v.Err == nil && !v.Checking {
+		if accepted, _ := refreshInstanceUsage(ins); accepted {
+			v.Checking = true
+		}
+	}
 
 	now := time.Now()
 	res.Checking = v.Checking
@@ -161,10 +176,16 @@ func apiComposerUsage(c *tool.Ctx) {
 	case v.Err != nil:
 		res.Err = v.Err.Error()
 	case !v.Known:
-		res.Pending = true
+		// Nothing on file: Pending while a probe runs (so the picker does
+		// not seed an empty reading), otherwise "no reading yet".
+		res.Pending = v.Checking
 	default:
 		res.Windows = usageWindowDTOs(v.Windows)
+		if v.LastErr != nil {
+			res.LastErr, res.RateLimited = v.LastErr.Error(), usageRateLimited(v.LastErr)
+		}
 	}
+	res.SavedResets = savedResetsDTOOf(v.SavedResets)
 	res.Accounts, res.Rotation = composerUsageAccounts(ins, strings.TrimSpace(c.Query("model")), v)
 	c.JSON(http.StatusOK, res)
 }
@@ -310,9 +331,7 @@ func apiComposerUsageRefresh(c *tool.Ctx) {
 		c.JSON(http.StatusOK, ComposerUsageRefreshResponse{Supported: false})
 		return
 	}
-	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	})
+	accepted, wait := refreshInstanceUsage(ins)
 	res := ComposerUsageRefreshResponse{Supported: true, Accepted: accepted, Checking: accepted}
 	if !accepted {
 		res.WaitS = int(wait.Round(time.Second) / time.Second)

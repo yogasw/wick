@@ -33,18 +33,35 @@ type JobModule struct {
 
 // JobGRPCPlugin is the go-plugin descriptor for the Job service. Impl is set
 // only on the plugin side.
+//
+// HostKey (host side) is the plugin key the Host API is served for over the
+// broker; "" serves none. A job run has no person behind it, so its Host API
+// calls carry no call id and user-level ones run as the plugin's wick_pat.
 type JobGRPCPlugin struct {
 	goplugin.NetRPCUnsupportedPlugin
-	Impl pb.JobServer
+	Impl    pb.JobServer
+	HostKey string
 }
 
-func (p *JobGRPCPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Server) error {
+func (p *JobGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	pb.RegisterJobServer(s, p.Impl)
+	dialHostBroker(broker)
 	return nil
 }
 
-func (p *JobGRPCPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+func (p *JobGRPCPlugin) GRPCClient(_ context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+	serveHostBroker(broker, p.HostKey, KindJob)
 	return &jobClient{inner: pb.NewJobClient(c)}, nil
+}
+
+// JobVersionedPluginsFor is JobVersionedPlugins for the plugin key: the host
+// also serves the Host API to the process over the broker.
+func JobVersionedPluginsFor(key string) map[int]goplugin.PluginSet {
+	out := map[int]goplugin.PluginSet{}
+	for _, v := range SupportedProtoVersions() {
+		out[v] = goplugin.PluginSet{JobPluginName: &JobGRPCPlugin{HostKey: key}}
+	}
+	return out
 }
 
 // JobVersionedPlugins is the host-side plugin set for job plugins.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
@@ -164,4 +165,33 @@ type alwaysStalePool struct {
 func (a *alwaysStalePool) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	a.calls++
 	return nil, stalePlanErr()
+}
+
+// TestWrapStalePlanReachesQueries guards the wiring: gorm sessions read
+// their pool from db.Statement, so a wrapper set only on db.ConnPool is
+// never called. Transactions and db.DB() must keep working through it.
+func TestWrapStalePlanReachesQueries(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapStalePlan(db)
+	if _, ok := db.Session(&gorm.Session{}).Statement.ConnPool.(stalePlanPool); !ok {
+		t.Fatalf("session pool = %T, want stalePlanPool", db.Session(&gorm.Session{}).Statement.ConnPool)
+	}
+	if err := db.Exec("CREATE TABLE t (id INTEGER)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return tx.Exec("INSERT INTO t (id) VALUES (1)").Error
+	}); err != nil {
+		t.Fatalf("transaction through the wrapper: %v", err)
+	}
+	var n int64
+	if err := db.Raw("SELECT count(*) FROM t").Scan(&n).Error; err != nil || n != 1 {
+		t.Fatalf("count = %d, %v", n, err)
+	}
+	if sqlDB, err := db.DB(); err != nil || sqlDB == nil {
+		t.Fatalf("db.DB() = %v, %v", sqlDB, err)
+	}
 }

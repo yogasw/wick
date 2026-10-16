@@ -195,9 +195,9 @@ func WorkspaceFormatContracts() map[string]any {
 			"ops": map[string]string{
 				"workflow_canvas_view": "Read current layout: returns table of {id, label, type, x, y, edges_to} + ASCII sketch. Call this FIRST when the user asks about canvas layout or before moving nodes.",
 				"workflow_move_nodes":  "Move one or more nodes in a single call. Pass moves=[{node_id,x,y},...]. More efficient than N workflow_move_node calls; safe to mix graph nodes and trigger IDs.",
-				"workflow_auto_layout": "Auto-arrange nodes in lanes: one column per trigger (trigger at y=60 above its entry node), nodes top→bottom by DAG rank (Kahn's BFS), shared nodes in the first trigger's lane, parallel branches spread right inside the lane. sticky_note nodes are not moved — re-wrap them with workflow_move_nodes after. Pass node_ids=[] to scope; empty = all. Always publish after if the user wants the layout live.",
+				"workflow_auto_layout": "Auto-arrange nodes in lanes: one column per trigger (trigger at y=60 above its entry node), nodes top→bottom by DAG rank (Kahn's BFS), shared nodes in the first trigger's lane, parallel branches spread right inside the lane. Each sticky_note is re-wrapped around the cards it covered before, with its title band kept clear; a note that covered no card stays put. Pass node_ids=[] to scope; empty = all. Always publish after if the user wants the layout live.",
 			},
-			"workflow": "edit graph → workflow_auto_layout → workflow_move_nodes (wrap sticky_note around each block) → workflow_canvas_view (verify) → workflow_publish",
+			"workflow": "edit graph → workflow_auto_layout → workflow_move_nodes (only where a note or card still needs a hand) → workflow_canvas_view (verify) → workflow_publish",
 		},
 	}
 }

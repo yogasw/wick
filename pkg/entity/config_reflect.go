@@ -76,6 +76,7 @@ func StructToConfigs(cfg any) []Config {
 			Required:      tag["required"] == "true",
 			Description:   tag["desc"],
 			Hidden:        tag["hidden"] == "true",
+			Internal:      tag["internal"] == "true",
 			VisibleWhen:   tag["visible_when"],
 			Group:         tag["group"],
 			Mode:          normalizeMode(tag["mode"]),

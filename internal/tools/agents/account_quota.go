@@ -6,6 +6,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 )
 
 // account_quota.go exposes ONE reading to callers outside this package:
@@ -45,6 +46,9 @@ type AccountQuota struct {
 	ExpiresAt  time.Time
 
 	Windows []AccountQuotaWindow
+	// SavedResets is the account's saved rate-limit resets from the same
+	// cached reading; nil when the type has none to report.
+	SavedResets *savedresets.SavedResets
 
 	// FetchedAt is when the reading was taken — never omitted, because a
 	// cached number passed off as live is how a stale quota gets acted on.
@@ -60,6 +64,10 @@ type AccountQuota struct {
 	// Err is a failed probe (expired token, rate limit), reported as
 	// itself rather than as an empty set of windows.
 	Err string
+	// LastErr is the latest probe's failure while Windows still holds an
+	// older reading; RateLimited marks it a 429. Empty when it succeeded.
+	LastErr     string
+	RateLimited bool
 }
 
 // ProviderAccountQuota reads the cached quota for a provider key
@@ -90,11 +98,10 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 
 	ctx, cancel := context.WithTimeout(ctx, connectionsUsageTimeout)
 	defer cancel()
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
+	v := readInstanceUsage(ctx, ins)
 
 	out.Checking, out.FetchedAt, out.NextAt = v.Checking, v.FetchedAt, v.NextAt
+	out.SavedResets = v.SavedResets
 	switch {
 	case v.Err != nil:
 		out.Err = v.Err.Error()
@@ -106,6 +113,9 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 				Key: w.Key, Utilization: w.Utilization,
 				ResetsAt: w.ResetsAt, ObservedAt: w.ObservedAt,
 			})
+		}
+		if v.LastErr != nil {
+			out.LastErr, out.RateLimited = v.LastErr.Error(), usageRateLimited(v.LastErr)
 		}
 	}
 	return out, true

@@ -50,6 +50,8 @@ type PluginsHandler struct {
 	// builtin reports whether key is a built-in (non-plugin) module, which
 	// Uninstall refuses instead of answering "not installed".
 	builtin func(key string) bool
+	// loadState reports what the running process has loaded (SetLoadState).
+	loadState func(kind, key string) (state, reason string)
 }
 
 // SetUninstall wires what Uninstall needs beyond deleting files: unload
@@ -81,6 +83,16 @@ func NewPluginsHandler(db *gorm.DB) *PluginsHandler {
 		dir:      connplugin.DefaultDir(),
 		replacer: pluginreplace.New(db),
 	}
+}
+
+// SetLoadState wires what the running process has loaded: for a kind it
+// reports on, fn returns "active" (loaded), "pending" (installed, not looked
+// at yet), "error" or "idle" (not loaded; reason says why); "" for a kind it
+// does not report on. The Installed list uses it so Active means loaded, not
+// just enabled.
+func (h *PluginsHandler) SetLoadState(fn func(kind, key string) (state, reason string)) *PluginsHandler {
+	h.loadState = fn
+	return h
 }
 
 // SetReloader wires the hot-reload poller so state-changing actions reconcile
