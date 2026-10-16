@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,51 @@ func TestClaudeSavedResetsPiggybackOnUsage(t *testing.T) {
 	}
 	if _, err := savedresets.Read(string(provider.TypeClaude), []string{"CLAUDE_CONFIG_DIR=" + t.TempDir()}); err == nil {
 		t.Error("a dir never probed must report no reading")
+	}
+}
+
+// The endpoint only reports saved resets to a claude-cli User-Agent; any
+// other agent is answered "ineligible: surface".
+func TestClaudeUsageSendsCLIUserAgent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"synthetic"}}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua := r.Header.Get("User-Agent")
+		if !strings.HasPrefix(ua, "claude-cli/") || !strings.HasSuffix(ua, "(external, cli)") {
+			_, _ = w.Write([]byte(`{"five_hour":{"utilization":5},
+				"cedar_ember":{"eligible":false,"ineligible_reason":"surface","grants":[]}}`))
+			t.Errorf("User-Agent = %q, want claude-cli/<version> (external, cli)", ua)
+			return
+		}
+		_, _ = w.Write([]byte(`{"five_hour":{"utilization":5},
+			"cedar_ember":{"eligible":true,"grants":[{"id":"g","label":"Reset","resets_total":1,"resets_left":1,
+				"starts_at":"2026-10-01T00:00:00Z","ends_at":"2026-10-30T00:00:00Z","usable_now":true,
+				"use_requires_limit":false,"clears":["five_hour"],"paused":false,"percent_used":0}],"cooldown_until":null}}`))
+	}))
+	defer srv.Close()
+	old := anthropicAPIBase
+	anthropicAPIBase = srv.URL
+	defer func() { anthropicAPIBase = old }()
+
+	env := []string{"CLAUDE_CONFIG_DIR=" + dir}
+	if _, err := ReadUsage(provider.TypeClaude, env); err != nil {
+		t.Fatal(err)
+	}
+	r, err := savedresets.Read(string(provider.TypeClaude), env)
+	if err != nil || r.Available != 1 || len(r.Items) != 1 {
+		t.Fatalf("saved resets: r=%+v err=%v", r, err)
+	}
+	if r.Items[0].ExpiresAt.IsZero() || !r.Items[0].UsableNow {
+		t.Errorf("item = %+v, want ExpiresAt set and usable", r.Items[0])
+	}
+}
+
+// A paused grant still counts but cannot be used now.
+func TestParseClaudeSavedResetsPaused(t *testing.T) {
+	r := parseClaudeSavedResets([]byte(`{"eligible":true,"grants":[
+		{"id":"g","resets_total":1,"resets_left":1,"ends_at":"2026-10-30T00:00:00Z","usable_now":true,"paused":true}]}`))
+	if r == nil || r.Available != 1 || len(r.Items) != 1 || r.Items[0].UsableNow {
+		t.Fatalf("got %+v", r)
 	}
 }
 

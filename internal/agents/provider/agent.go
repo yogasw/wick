@@ -1507,6 +1507,12 @@ func (a *Agent) run(ctx context.Context) {
 			evs = []event.AgentEvent{{Type: event.Warning, ErrorMsg: err.Error(), Raw: line}}
 		}
 		for _, ev := range evs {
+			// A live rate-limit report keeps the usage card current without
+			// probing the usage endpoint. Read before any turn handling: it
+			// is about the account, whatever happens to the turn.
+			if ev.RateLimit != nil {
+				observeRateLimit(a.cfg.Instance, ev.RateLimit)
+			}
 			// Taken over by a failover: this process only waits for the
 			// kill, and its turn end must not reach anyone — the turn goes
 			// on (and ends) on the next provider.

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { healthLabel, healthBadgeClass } from "$lib/failover.js";
   import { ConfirmDialog, Modal, ProviderIcon, Select } from "@wick-fe/common-ui";
-  import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { toastOk, toastError, toastWarn } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import ManagedBinaryPanel from "$lib/components/ManagedBinaryPanel.svelte";
@@ -30,7 +30,7 @@
   import { SavedResetsChip } from "@wick-fe/common-ui";
   import { seedUsage } from "@wick-fe/common-ui/usage";
   import { apiLoginTTYUsageRefresh } from "$lib/logintty.js";
-  import { pickWindows, connectionKey, resetHint, fmtSecsShort } from "$lib/usagerings.js";
+  import { pickWindows, connectionKey, resetHint, fmtSecsShort, staleNotice } from "$lib/usagerings.js";
   import {
     ACCOUNT_ISOLATED,
     accountHint,
@@ -264,6 +264,7 @@
         }
       }
       connections = next;
+      reportRecheckOutcomes(next);
     } catch {
       connections = {};
     } finally {
@@ -280,6 +281,25 @@
      instead of silently doing nothing. */
   let rechecking = $state<Record<string, boolean>>({});
   let recheckWait = $state<Record<string, number>>({});
+  /* Cards whose accepted Re-check has not settled yet. The probe runs in
+     the background, so its outcome arrives on a later poll; a failure
+     then gets a toast instead of the click ending in silence. */
+  let recheckWatch = new Set<string>();
+
+  function reportRecheckOutcomes(rows: Record<string, ProviderConnection>): void {
+    for (const key of [...recheckWatch]) {
+      const c = rows[key];
+      if (!c) {
+        recheckWatch.delete(key);
+        continue;
+      }
+      if (c.usageChecking) continue;
+      recheckWatch.delete(key);
+      const notice = staleNotice(c.usageAgeS, c.usageNextS, c.usageLastErr ?? "", c.usageRateLimited ?? false, Date.now());
+      if (notice) toastWarn(`${c.name}: re-check did not refresh usage`, notice.text);
+      else if (c.usageErr) toastWarn(`${c.name}: re-check failed`, c.usageErr);
+    }
+  }
 
   async function recheckUsage(type: string, name: string): Promise<void> {
     const key = connectionKey(type, name);
@@ -289,6 +309,8 @@
       const r = await apiLoginTTYUsageRefresh(base, type, name);
       if (!r.accepted) {
         recheckWait = { ...recheckWait, [key]: r.waitS };
+      } else {
+        recheckWatch.add(key);
       }
       await loadConnections();
     } catch (e) {
@@ -990,11 +1012,17 @@
                       {#if busy}
                         {@render checkingLabel()}
                       {:else}
-                        <UsageCacheChip ageS={conn.usageAgeS} nextS={conn.usageNextS} fetchedAt={conn.usageFetchedAt} />
+                        <UsageCacheChip ageS={conn.usageAgeS} nextS={conn.usageNextS} fetchedAt={conn.usageFetchedAt} lastError={conn.usageLastErr ?? ""} />
                       {/if}
                       <SavedResetsChip resets={conn.savedResets} />
                       {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
                     </div>
+                    <!-- The latest probe failed, so the numbers above are
+                         the last reading that worked, not a current one. -->
+                    {@const stale = busy ? null : staleNotice(conn.usageAgeS, conn.usageNextS, conn.usageLastErr ?? "", conn.usageRateLimited ?? false, Date.now())}
+                    {#if stale}
+                      <p data-testid="usage-stale-warning" class="text-[11px] text-cau-400" title={stale.title}>{stale.text}</p>
+                    {/if}
                   {:else if busy || conn.usagePending}
                     <!-- First probe for this account is queued behind the
                          pacing gate that keeps us under the endpoint's

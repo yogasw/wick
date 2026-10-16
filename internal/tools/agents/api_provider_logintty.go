@@ -203,6 +203,12 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 			body["next_s"] = int(d.Round(time.Second) / time.Second)
 		}
 	}
+	// The latest probe failed but an older reading is served: say so,
+	// so the panel can call the numbers cached rather than current.
+	if v.LastErr != nil {
+		body["last_error"] = v.LastErr.Error()
+		body["rate_limited"] = usageRateLimited(v.LastErr)
+	}
 	switch {
 	case errors.Is(v.Err, logintty.ErrUsageUnsupported):
 		c.JSON(http.StatusOK, map[string]any{"supported": false, "windows": []logintty.UsageWindow{}})

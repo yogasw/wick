@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,6 +156,9 @@ type usageEntry struct {
 	// fromDisk marks an entry loaded from the account's usage file;
 	// diskProbed is set once its one post-restart refresh was started.
 	fromDisk, diskProbed bool
+	// persistedAt is when the entry was last handed to the usage file;
+	// observe uses it to skip rewriting a file that says the same thing.
+	persistedAt time.Time
 }
 
 // usageCache is the per-account probe cache described above.
@@ -203,6 +207,13 @@ type usageView struct {
 	// SavedResets rides along with the windows; nil = nothing to show.
 	SavedResets *savedresets.SavedResets
 	Err         error
+	// LastErr is the failure of the most recent probe when an OLDER
+	// reading is still being served in Windows; nil when the newest
+	// attempt succeeded. Err keeps its meaning (no reading, only a
+	// failure), so callers that ignore this field see what they did.
+	LastErr error
+	// Fails counts the consecutive failed probes behind LastErr.
+	Fails int
 	// Known is false while the first reading for this account is still
 	// pending — neither data nor a failure yet.
 	Known bool
@@ -292,6 +303,9 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 		// user with less than they had — and the age is on screen, so
 		// nobody is being told this number is fresh.
 		v.Windows, v.Known = e.windows, true
+		if e.err != nil && !errors.Is(e.err, logintty.ErrUsageUnsupported) {
+			v.LastErr, v.Fails = e.err, e.fails
+		}
 		return v
 	}
 	if e.err != nil {
@@ -384,6 +398,7 @@ func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error
 		c.entries[key] = e
 	}
 	e.attemptedAt = now
+	e.persistedAt = now
 	e.fromDisk = false // a real probe replaced the file's reading
 	if len(saved) > 0 {
 		e.resets = saved[0]
@@ -511,7 +526,10 @@ func entryFromDisk(d provider.UsageDisk) *usageEntry {
 		goodAt: d.ObservedAt, resets: d.SavedResets, fromDisk: true,
 		attemptedAt: d.AttemptedAt, fails: d.Fails, serverUntil: d.ServerUntil,
 	}
-	if d.ObservedAt.IsZero() && d.LastError != "" {
+	// The last failure is loaded even when a reading exists, so a
+	// restart does not pass an old reading off as the latest check.
+	// Nothing gates on e.err while goodAt is set (see retryOnNewCreds).
+	if d.LastError != "" {
 		e.err = errors.New(d.LastError)
 	}
 	for _, w := range d.Windows {
@@ -676,4 +694,14 @@ func refreshInstanceUsage(ins provider.Instance) (accepted bool, wait time.Durat
 // /usage); the handler probes once only when the account has no file.
 func peekInstanceUsage(ins provider.Instance) usageView {
 	return usageProbes.peek(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)))
+}
+
+// usageRateLimited reports whether err is the usage endpoint refusing on
+// rate-limit grounds. A failure loaded back from the usage file is only
+// its message, so the 429 status in the text counts too.
+func usageRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	return logintty.IsRateLimited(err) || strings.Contains(err.Error(), "429")
 }

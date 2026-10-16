@@ -64,6 +64,10 @@ type AccountQuota struct {
 	// Err is a failed probe (expired token, rate limit), reported as
 	// itself rather than as an empty set of windows.
 	Err string
+	// LastErr is the latest probe's failure while Windows still holds an
+	// older reading; RateLimited marks it a 429. Empty when it succeeded.
+	LastErr     string
+	RateLimited bool
 }
 
 // ProviderAccountQuota reads the cached quota for a provider key
@@ -109,6 +113,9 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 				Key: w.Key, Utilization: w.Utilization,
 				ResetsAt: w.ResetsAt, ObservedAt: w.ObservedAt,
 			})
+		}
+		if v.LastErr != nil {
+			out.LastErr, out.RateLimited = v.LastErr.Error(), usageRateLimited(v.LastErr)
 		}
 	}
 	return out, true

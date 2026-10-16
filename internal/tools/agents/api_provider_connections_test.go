@@ -425,3 +425,68 @@ func TestCollectConnectionsReportsPendingWhileProbeQueued(t *testing.T) {
 		t.Errorf("account dropped while usage was pending: %+v", c)
 	}
 }
+
+// A re-check that fails while an older reading is still on screen must
+// travel with the row: without it the card passes the old numbers off as
+// the latest check. A later good probe clears it again.
+func TestCollectConnectionsFlagsCachedReadingAfterFailedProbe(t *testing.T) {
+	f := &fakeProbe{
+		accountFor: map[string]logintty.Account{"/a": {Connected: true}},
+		usageFor:   map[string][]logintty.UsageWindow{"/a": {{Key: "seven_day", Utilization: 100}}},
+		usageErr:   map[string]error{},
+	}
+	cache, clk := clockedCache(time.Minute)
+	ins := []provider.Instance{inst(provider.TypeClaude, "one", "/a")}
+	fetch := func() ([]logintty.UsageWindow, error) {
+		return f.usage(context.Background(), provider.TypeClaude, []string{"DIR=/a"})
+	}
+	recheck := func() {
+		t.Helper()
+		clk.advance(usageManualMinInterval)
+		if accepted, _ := cache.forceRefresh("/a", fetch); !accepted {
+			t.Fatal("re-check refused")
+		}
+	}
+
+	if c := collectConnections(context.Background(), ins, f, cache)[0]; c.UsageLastErr != "" || c.UsageRateLimited || c.UsageFails != 0 {
+		t.Fatalf("fresh reading flagged as cached: %+v", c)
+	}
+
+	f.usageErr["/a"] = &logintty.RateLimitedError{Status: "429 Too Many Requests"}
+	recheck()
+	c := collectConnections(context.Background(), ins, f, cache)[0]
+	if len(c.Windows) != 1 || c.UsageErr != "" {
+		t.Fatalf("old reading not served as before: %+v", c)
+	}
+	if c.UsageLastErr == "" || !c.UsageRateLimited || c.UsageFails != 1 {
+		t.Errorf("429 after a good reading not surfaced: last_err=%q rate_limited=%v fails=%d", c.UsageLastErr, c.UsageRateLimited, c.UsageFails)
+	}
+	raw, _ := json.Marshal(c)
+	var wire map[string]any
+	_ = json.Unmarshal(raw, &wire)
+	if wire["usage_last_err"] == nil || wire["usage_rate_limited"] != true {
+		t.Errorf("wire shape missing the failure: %s", raw)
+	}
+
+	f.usageErr["/a"] = context.DeadlineExceeded
+	recheck()
+	c = collectConnections(context.Background(), ins, f, cache)[0]
+	if c.UsageLastErr == "" || c.UsageRateLimited || c.UsageFails != 2 {
+		t.Errorf("non-429 failure: last_err=%q rate_limited=%v fails=%d", c.UsageLastErr, c.UsageRateLimited, c.UsageFails)
+	}
+
+	delete(f.usageErr, "/a")
+	recheck()
+	c = collectConnections(context.Background(), ins, f, cache)[0]
+	if c.UsageLastErr != "" || c.UsageRateLimited || c.UsageFails != 0 {
+		t.Errorf("fresh reading still flagged as cached: %+v", c)
+	}
+	raw, _ = json.Marshal(c)
+	wire = map[string]any{}
+	_ = json.Unmarshal(raw, &wire)
+	for _, k := range []string{"usage_last_err", "usage_rate_limited", "usage_fails"} {
+		if _, ok := wire[k]; ok {
+			t.Errorf("%s present on a fresh reading: %s", k, raw)
+		}
+	}
+}

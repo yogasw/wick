@@ -202,6 +202,31 @@ type AgentEvent struct {
 	// leave this zero, and zero means "this frame said nothing about the
 	// window", never "the window is empty".
 	ContextUsed int
+
+	// RateLimit is the account's rate-limit windows as the CLI reported
+	// them mid-stream (claude's rate_limit_event). It rides on an Unknown
+	// event: nothing about the turn changes, only the usage cache reads
+	// it. Nil everywhere else.
+	RateLimit *RateLimitInfo
+}
+
+// RateLimitInfo is one rate-limit report: the windows it carried, keyed
+// like the usage API's ("five_hour", "seven_day", …). A window the
+// account does not have is simply absent.
+type RateLimitInfo struct {
+	// Status is the CLI's verdict for the request ("allowed", …).
+	Status  string
+	Windows map[string]RateLimitWindow
+	// ObservedAt is when wick read the report.
+	ObservedAt time.Time
+}
+
+// RateLimitWindow is one window's level. Utilization is a percent on
+// the same scale as the usage API (0-100, may exceed 100); ResetsAt is
+// zero when unreported.
+type RateLimitWindow struct {
+	Utilization float64
+	ResetsAt    time.Time
 }
 
 // QueueInfo is one remote_queue line: message ID's State (queued, sent,

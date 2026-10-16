@@ -16,8 +16,10 @@ vi.mock("$lib/managedbin.js", async (importOriginal) => ({
 vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
+  toastWarn: vi.fn(),
   toasts: { subscribe: vi.fn(() => vi.fn()) },
 }));
+import { toastWarn } from "@wick-fe/common-stores";
 
 function makeData(): ProvidersListResponse {
   return {
@@ -375,6 +377,57 @@ describe("ProvidersList connection badges", () => {
     await screen.findByText("dev@abc.com");
     await fireEvent.click(screen.getAllByTestId("usage-recheck")[0]);
     expect(await screen.findByText("wait 4m")).toBeTruthy();
+  });
+
+  // Every probe after the reading failed: the numbers are the last ones
+  // that worked, and the card must not pass them off as current.
+  const rateLimited = {
+    usageAgeS: 172800,
+    usageNextS: 600,
+    usageLastErr: "usage endpoint: 429 Too Many Requests",
+    usageRateLimited: true,
+    usageFails: 4,
+  };
+
+  it("labels a reading cached and warns when the latest check was rate-limited", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn(rateLimited)]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    const chip = screen.getByTestId("usage-cache-chip");
+    expect(chip.textContent).toContain("cached · 2d ago");
+    expect(chip.getAttribute("title")).toContain("429 Too Many Requests");
+    const warn = screen.getByTestId("usage-stale-warning");
+    expect(warn.textContent).toContain("Cached reading from 2d ago — last check rate-limited (429), retry after");
+    expect(warn.getAttribute("title")).toBe("usage endpoint: 429 Too Many Requests");
+  });
+
+  it("quotes any other failure behind a cached reading", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([
+      conn({ usageAgeS: 3600, usageLastErr: "usage endpoint: 401 Unauthorized" }),
+    ]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getByTestId("usage-stale-warning").textContent).toContain(
+      "Cached reading from 1h ago — last check failed: 401 Unauthorized.",
+    );
+  });
+
+  it("does not label a fresh reading cached", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30 })]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getByTestId("usage-cache-chip").textContent).not.toContain("cached");
+    expect(screen.queryByTestId("usage-stale-warning")).toBeNull();
+  });
+
+  it("toasts when an accepted re-check ends rate-limited", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30 })]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn(rateLimited)]);
+    await fireEvent.click(screen.getAllByTestId("usage-recheck")[0]);
+    await waitFor(() => expect(toastWarn).toHaveBeenCalled());
+    expect(vi.mocked(toastWarn).mock.calls[0][1]).toContain("last check rate-limited (429)");
   });
 
   it("shows the checking state while a probe is in flight", async () => {

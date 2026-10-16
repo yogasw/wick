@@ -161,6 +161,15 @@ type providerConnectionDTO struct {
 	// frozen on a number that is deliberately not refetched per paint.
 	UsageChecking bool   `json:"usage_checking,omitempty"`
 	UsageErr      string `json:"usage_err,omitempty"`
+	// UsageLastErr is the failure of the latest probe while Windows
+	// still holds an older reading, so the card can call that reading
+	// cached instead of current. Empty when the latest probe succeeded;
+	// UsageErr stays the "no reading at all" failure.
+	UsageLastErr string `json:"usage_last_err,omitempty"`
+	// UsageRateLimited: UsageLastErr is the endpoint answering 429.
+	UsageRateLimited bool `json:"usage_rate_limited,omitempty"`
+	// UsageFails counts the consecutive failed probes behind UsageLastErr.
+	UsageFails int `json:"usage_fails,omitempty"`
 	// UsageFetchedAt is when this reading was actually taken upstream,
 	// and UsageAgeS the same thing as seconds-ago so the card can say
 	// "cached 42s ago" without trusting client clock skew. Readings are
@@ -301,6 +310,11 @@ func applyUsageProvenance(dto *providerConnectionDTO, v usageView, now time.Time
 		if d := v.NextAt.Sub(now); d > 0 {
 			dto.UsageNextS = int(d.Round(time.Second) / time.Second)
 		}
+	}
+	if v.LastErr != nil {
+		dto.UsageLastErr = v.LastErr.Error()
+		dto.UsageRateLimited = usageRateLimited(v.LastErr)
+		dto.UsageFails = v.Fails
 	}
 }
 

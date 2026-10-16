@@ -732,3 +732,27 @@ func TestUsageCachePeekFailedOnlyFileIsNotData(t *testing.T) {
 		t.Fatalf("failed-only file: want Known with Err and no windows, got %+v", v)
 	}
 }
+
+// After a restart the failure behind an old reading comes back from the
+// usage file as text; it must still be reported, and a 429 still read as
+// a rate limit.
+func TestUsageCachePeekFileKeepsLastErrorBehindReading(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	c.load = func(k string) (provider.UsageDisk, bool) {
+		return provider.UsageDisk{
+			Key: k, ObservedAt: clk.now().Add(-48 * time.Hour), AttemptedAt: clk.now(), Fails: 3,
+			LastError: (&logintty.RateLimitedError{Status: "429 Too Many Requests"}).Error(),
+			Windows:   []provider.UsageDiskWindow{{Key: "seven_day", Utilization: 100}},
+		}, true
+	}
+	v := c.peek("k")
+	if v.Err != nil || len(v.Windows) != 1 {
+		t.Fatalf("old reading not served as data: %+v", v)
+	}
+	if v.LastErr == nil || v.Fails != 3 || !usageRateLimited(v.LastErr) {
+		t.Fatalf("last failure lost across the file: last=%v fails=%d", v.LastErr, v.Fails)
+	}
+	if usageRateLimited(context.DeadlineExceeded) || usageRateLimited(nil) {
+		t.Fatal("non-429 errors read as a rate limit")
+	}
+}

@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Button, Select, SavedResetsSection } from "@wick-fe/common-ui";
   import { seedUsage } from "@wick-fe/common-ui/usage";
-  import { toastError } from "@wick-fe/common-stores";
+  import { toastError, toastWarn } from "@wick-fe/common-stores";
   import {
     apiLoginTTYStatus,
     apiLoginTTYUsage,
@@ -23,7 +23,7 @@
   import LoginTerminalModal from "$lib/components/LoginTerminalModal.svelte";
   import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
   import AccountList from "$lib/components/AccountList.svelte";
-  import { fmtSecsShort } from "$lib/usagerings.js";
+  import { fmtSecsShort, staleNotice } from "$lib/usagerings.js";
 
   type Props = { base: string; type: string; name: string; defaultExpanded?: boolean };
   let { base, type, name, defaultExpanded = false }: Props = $props();
@@ -83,6 +83,7 @@
   function setUsage(next: typeof usage) {
     usage = next;
     shareUsage();
+    reportRecheckOutcome(next);
     if (usagePoll !== null) {
       clearTimeout(usagePoll);
       usagePoll = null;
@@ -139,6 +140,19 @@
      declines. */
   let rechecking = $state(false);
   let recheckWait = $state(0);
+  /* An accepted Re-check whose probe has not settled yet. Its outcome
+     arrives on a later poll; a failure then gets a toast so the click
+     does not end in silence. */
+  let recheckPending = false;
+
+  function reportRecheckOutcome(next: typeof usage): void {
+    if (!recheckPending || !next || next.checking || next.pending) return;
+    recheckPending = false;
+    const notice = staleNotice(next.ageS, next.nextS, next.lastError ?? "", next.rateLimited ?? false, Date.now());
+    if (notice) toastWarn("Re-check did not refresh usage", notice.text);
+    else if (next.error) toastWarn("Re-check failed", next.error);
+  }
+
 
   async function recheckUsage() {
     rechecking = true;
@@ -146,6 +160,7 @@
     try {
       const r = await apiLoginTTYUsageRefresh(base, type, name);
       if (!r.accepted) recheckWait = r.waitS;
+      else recheckPending = true;
       usagePolls = 0;
       setUsage(await apiLoginTTYUsage(base, type, name));
     } catch (e) {
@@ -156,6 +171,13 @@
   }
 
   let usageBusy = $derived(rechecking || usage?.checking === true);
+
+  /* The latest probe failed while an older reading is on screen. */
+  let stale = $derived(
+    usage && !usageBusy
+      ? staleNotice(usage.ageS, usage.nextS, usage.lastError ?? "", usage.rateLimited ?? false, Date.now())
+      : null,
+  );
 
   onMount(async () => {
     await refresh();
@@ -513,9 +535,12 @@
               {#if usageBusy}
                 <span data-testid="panel-usage-checking">Checking usage…</span>
               {:else}
-                <UsageCacheChip ageS={usage.ageS} nextS={usage.nextS} fetchedAt={usage.fetchedAt} />
+                <UsageCacheChip ageS={usage.ageS} nextS={usage.nextS} fetchedAt={usage.fetchedAt} lastError={usage.lastError ?? ""} />
               {/if}
             </p>
+            {#if stale}
+              <p data-testid="panel-usage-stale-warning" class="text-[11px] text-cau-400" title={stale.title}>{stale.text}</p>
+            {/if}
           </div>
         {:else if usage.pending || usageBusy}
           <p class="text-[11px] text-black-700 dark:text-black-600">Checking usage… (probes are paced to stay under the endpoint's rate limit)</p>

@@ -19,6 +19,14 @@ import (
 // Overridable in tests.
 var anthropicAPIBase = "https://api.anthropic.com"
 
+// claudeUsageUserAgent identifies the usage probe as the claude CLI. The
+// usage endpoint decides the client surface from the User-Agent, and only
+// answers `claude-cli/<semver> (external, cli)` with the account's saved
+// resets; any other agent gets cedar_ember back as ineligible ("surface")
+// with no grants. Pinned to a known CLI release so the probe never has to
+// spawn `claude --version`.
+const claudeUsageUserAgent = "claude-cli/2.1.301 (external, cli)"
+
 // claudeLoginCommand builds the claude argv: instance flags first,
 // /login as the positional prompt — the REPL executes it and prints
 // the OAuth link.
@@ -112,6 +120,7 @@ func readClaudeUsage(env []string) ([]UsageWindow, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("User-Agent", claudeUsageUserAgent)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)

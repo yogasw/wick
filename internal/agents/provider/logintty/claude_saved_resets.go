@@ -55,6 +55,7 @@ type claudeCedarEmber struct {
 		EndsAt           any    `json:"ends_at"`
 		UsableNow        bool   `json:"usable_now"`
 		UseRequiresLimit bool   `json:"use_requires_limit"`
+		Paused           bool   `json:"paused"`
 	} `json:"grants"`
 	CooldownUntil any `json:"cooldown_until"`
 }
@@ -88,7 +89,7 @@ func parseClaudeSavedResets(raw json.RawMessage) *savedresets.SavedResets {
 			Label:         g.Label,
 			StartsAt:      savedresets.ParseTime(g.StartsAt),
 			ExpiresAt:     savedresets.ParseTime(g.EndsAt),
-			UsableNow:     g.UsableNow,
+			UsableNow:     g.UsableNow && !g.Paused,
 			RequiresLimit: g.UseRequiresLimit,
 		})
 	}

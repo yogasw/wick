@@ -66,6 +66,10 @@ type ComposerUsageResponse struct {
 	FetchedAt string `json:"fetched_at,omitempty"`
 	AgeS      int    `json:"age_s,omitempty"`
 	NextS     int    `json:"next_s,omitempty"`
+	// LastErr is the latest probe's failure while Windows still holds an
+	// older reading (see usageView.LastErr); RateLimited marks it a 429.
+	LastErr     string `json:"last_error,omitempty"`
+	RateLimited bool   `json:"rate_limited,omitempty"`
 
 	// CanManage tells the popover whether to offer Re-check.
 	CanManage bool `json:"can_manage"`
@@ -177,6 +181,9 @@ func apiComposerUsage(c *tool.Ctx) {
 		res.Pending = v.Checking
 	default:
 		res.Windows = usageWindowDTOs(v.Windows)
+		if v.LastErr != nil {
+			res.LastErr, res.RateLimited = v.LastErr.Error(), usageRateLimited(v.LastErr)
+		}
 	}
 	res.SavedResets = savedResetsDTOOf(v.SavedResets)
 	res.Accounts, res.Rotation = composerUsageAccounts(ins, strings.TrimSpace(c.Query("model")), v)

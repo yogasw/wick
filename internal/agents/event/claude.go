@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -224,6 +225,11 @@ type claudeRaw struct {
 	// `stream_event` (only when --include-partial-messages is set)
 	// wraps an Anthropic Messages-API streaming event in .event.
 	Event *claudeStreamEvent `json:"event,omitempty"`
+
+	// `rate_limit_event` carries the account's rate-limit windows under
+	// .rate_limit_info. Kept raw so an odd field there can never fail the
+	// whole line: parseClaudeRateLimit reads it field by field.
+	RateLimitInfo json.RawMessage `json:"rate_limit_info,omitempty"`
 }
 
 // claudeStreamEvent mirrors the Anthropic Messages API streaming event
@@ -827,9 +833,67 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		}, nil
 	}
 
-	// Pass-through for anything else (rate_limit_event, status, etc.) —
-	// store them in raw.jsonl but don't drive downstream state.
+	// Pass-through for anything else (status, etc.) — store them in
+	// raw.jsonl but don't drive downstream state.
+	if raw.Type == "rate_limit_event" {
+		// Still Unknown for every consumer that drives a turn: only the
+		// RateLimit field is new, and only the usage cache reads it.
+		return AgentEvent{Type: Unknown, Raw: trimmed, RateLimit: parseClaudeRateLimit(raw.RateLimitInfo, time.Now())}, nil
+	}
 	return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+}
+
+// parseClaudeRateLimit reads a rate_limit_event's rate_limit_info. Every
+// field is optional and read on its own: a missing or malformed one is
+// skipped, never an error. utilization is a fraction (0..1, may exceed
+// 1) and becomes a percent here; resetsAt is unix seconds.
+//
+// The windows come from unifiedWindows. An event without them still
+// yields the one window rateLimitType names, when it carries a
+// utilization of its own. Nil only when info is not an object at all.
+func parseClaudeRateLimit(info json.RawMessage, now time.Time) *RateLimitInfo {
+	var fields map[string]json.RawMessage
+	if len(info) == 0 || json.Unmarshal(info, &fields) != nil || fields == nil {
+		return nil
+	}
+	out := &RateLimitInfo{ObservedAt: now, Windows: map[string]RateLimitWindow{}}
+	_ = json.Unmarshal(fields["status"], &out.Status)
+	var unified map[string]json.RawMessage
+	_ = json.Unmarshal(fields["unifiedWindows"], &unified)
+	for key, val := range unified {
+		if w, ok := parseClaudeRateLimitWindow(val); ok && key != "" {
+			out.Windows[key] = w
+		}
+	}
+	if len(out.Windows) == 0 {
+		var key string
+		_ = json.Unmarshal(fields["rateLimitType"], &key)
+		if w, ok := parseClaudeRateLimitWindow(info); ok && key != "" {
+			out.Windows[key] = w
+		}
+	}
+	return out
+}
+
+// parseClaudeRateLimitWindow reads {utilization, resetsAt}; ok is false
+// without a numeric utilization.
+func parseClaudeRateLimitWindow(raw json.RawMessage) (RateLimitWindow, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return RateLimitWindow{}, false
+	}
+	var util float64
+	if json.Unmarshal(fields["utilization"], &util) != nil {
+		return RateLimitWindow{}, false
+	}
+	// Rounded to hundredths of a percent: 0.39*100 must read 39, not
+	// 39.00000000000001.
+	w := RateLimitWindow{Utilization: math.Round(util*10000) / 100}
+	var resets float64
+	if json.Unmarshal(fields["resetsAt"], &resets) == nil && resets > 0 {
+		w.ResetsAt = time.Unix(int64(resets), 0)
+	}
+	return w, true
 }
 
 // SessionID returns the captured CLI session ID, or "" if no `system
