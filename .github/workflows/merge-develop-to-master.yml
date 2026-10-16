@@ -1,0 +1,275 @@
+name: Merge develop to master
+
+# Promotes develop to master as ONE squash commit, after an owner/admin
+# approves the run (environment release-approval). See RELEASING.md.
+#
+#   prepare  read-only: develop must not be behind master; lists the develop
+#            commits not yet on master (since the previous squash) into the
+#            job summary. Nothing to merge (identical trees) → stops here, green.
+#   promote  waits for approval, optionally bumps VERSION on develop, opens or
+#            reuses the PR develop → master, squash-merges it with the list as
+#            the commit body, and optionally opens the PR master → release.
+#
+# The squash lands on master as a push, so sync-develop.yml merges it back
+# into develop afterwards. No new secrets: ADMIN_TOKEN (repo admin, matches
+# the master/develop ruleset bypass) does every write.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Bump VERSION to this (e.g. 1.16.0) in the squash, so the next release is a core release. Empty = no bump.'
+        required: false
+        default: ''
+      open_release_pr:
+        description: 'Open the PR master → release after the merge'
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      develop_sha: ${{ steps.summary.outputs.develop_sha }}
+      has_changes: ${{ steps.summary.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Both jobs run the summary script from the commit this run was started
+      # on (github.sha), never from whatever tree a later checkout leaves.
+      - name: Pin the summary script
+        run: git show "$GITHUB_SHA:.github/scripts/develop-summary.sh" > "$RUNNER_TEMP/develop-summary.sh"
+
+      - name: Check inputs
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          RUN_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # The workflow file (and so the script below) comes from the ref the
+          # run was started on; only the two long-lived branches may drive it.
+          case "$RUN_REF" in
+            refs/heads/master|refs/heads/develop) ;;
+            *) echo "::error::Run this workflow from master or develop, not $RUN_REF"; exit 1 ;;
+          esac
+          if [ -n "$VERSION_INPUT" ]; then
+            if ! printf '%s' "$VERSION_INPUT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::version must look like 1.2.3"
+              exit 1
+            fi
+            CURRENT=$(git show origin/develop:VERSION | tr -d '[:space:]')
+            # Equal is fine: a rerun after a failed merge finds the bump that
+            # the first run already pushed, and promote skips the bump.
+            if [ "$VERSION_INPUT" = "$CURRENT" ]; then
+              echo "::notice::develop's VERSION is already $VERSION_INPUT, no bump needed"
+            elif [ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION_INPUT" | sort -V | tail -n 1)" != "$VERSION_INPUT" ]; then
+              echo "::error::version $VERSION_INPUT must not be lower than develop's VERSION $CURRENT"
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/v$VERSION_INPUT" >/dev/null; then
+              echo "::error::tag v$VERSION_INPUT already exists"
+              exit 1
+            fi
+          fi
+
+      - name: Summarize develop
+        id: summary
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/develop-summary.sh" origin/develop origin/master "$RUNNER_TEMP/body.md" | tee -a "$GITHUB_OUTPUT" > "$RUNNER_TEMP/vars"
+          . "$RUNNER_TEMP/vars"
+          {
+            echo "## Merge develop to master"
+            echo
+            echo "develop \`${develop_sha:0:8}\` · ${count} commit(s) not on master yet · last release \`${last_tag:-none}\`"
+            echo
+            if [ "$behind" -gt 0 ]; then
+              echo "> [!CAUTION]"
+              echo "> develop is $behind commit(s) behind master. Run **Sync develop** (or merge the open \"Sync master into develop\" PR) first."
+            elif [ "$has_changes" = false ]; then
+              echo "> [!NOTE]"
+              echo "> develop and master have the same tree. Nothing to merge."
+            fi
+            echo
+            cat "$RUNNER_TEMP/body.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$behind" -gt 0 ]; then
+            echo "::error::develop is $behind commit(s) behind master"
+            exit 1
+          fi
+          if [ "$has_changes" = false ]; then
+            echo "::notice::develop and master have the same tree, nothing to merge"
+          fi
+
+  promote:
+    name: Promote (approval required)
+    needs: prepare
+    if: needs.prepare.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment: release-approval
+    # Own group, not shared with sync-develop.yml or release.yml: GitHub keeps
+    # one pending run per group and cancels the older pending one, so sharing
+    # would let a promote cancel a sync (or the reverse). Nothing is lost by
+    # running them side by side: every push here is non-forced, the re-check
+    # below stops on a moved develop/master, and the merge is pinned with sha=.
+    # A second promote waiting here replaces an older pending one; that one
+    # did nothing yet and can simply be started again.
+    concurrency:
+      group: wick-promote
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+      - name: Pin the summary script
+        run: git show "$GITHUB_SHA:.github/scripts/develop-summary.sh" > "$RUNNER_TEMP/develop-summary.sh"
+
+      - name: Re-check develop after approval
+        env:
+          PREPARED_SHA: ${{ needs.prepare.outputs.develop_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force develop master
+          # What was approved is the summary of PREPARED_SHA. Anything that
+          # landed on develop while the run waited needs a fresh run.
+          if [ "$(git rev-parse origin/develop)" != "$PREPARED_SHA" ]; then
+            echo "::error::develop moved after this run was prepared; start a new run"
+            exit 1
+          fi
+          if [ "$(git rev-list --count origin/develop..origin/master)" -gt 0 ]; then
+            echo "::error::master moved while waiting; let Sync develop finish, then start a new run"
+            exit 1
+          fi
+
+      - name: Bump VERSION on develop
+        if: inputs.version != ''
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$VERSION_INPUT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          if [ "$(git show origin/develop:VERSION | tr -d '[:space:]')" = "$VERSION_INPUT" ]; then
+            echo "develop's VERSION is already $VERSION_INPUT (earlier run), not bumping again"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B develop origin/develop
+          printf '%s\n' "$VERSION_INPUT" > VERSION
+          git add VERSION
+          git commit -m "chore: bump VERSION to $VERSION_INPUT"
+          # Plain push: if develop moved since the re-check, this is rejected
+          # (never forced) and the run fails before anything touched master.
+          git push origin HEAD:develop
+          git fetch origin develop
+
+      - name: Open or reuse the PR develop → master
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/develop-summary.sh" origin/develop origin/master "$RUNNER_TEMP/body.md" > "$RUNNER_TEMP/vars"
+          . "$RUNNER_TEMP/vars"
+          if [ -n "$VERSION_INPUT" ]; then
+            TITLE="release: v$VERSION_INPUT"
+          else
+            TITLE="chore: merge develop"
+          fi
+          # --head matches the branch name only; skip fork PRs named develop.
+          NUMBER=$(gh pr list --repo "$REPO" --base master --head develop --state open \
+            --json number,isCrossRepository \
+            --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty')
+          if [ -n "$NUMBER" ]; then
+            echo "Reusing open PR #$NUMBER"
+            gh pr edit "$NUMBER" --repo "$REPO" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+          else
+            URL=$(gh pr create --repo "$REPO" --base master --head develop \
+              --title "$TITLE" --body-file "$RUNNER_TEMP/body.md")
+            NUMBER=${URL##*/}
+          fi
+          {
+            echo "number=$NUMBER"
+            echo "title=$TITLE"
+            echo "head_sha=$develop_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Squash-merge into master
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          TITLE: ${{ steps.pr.outputs.title }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # sha= pins the merge to the commit that was summarised: if develop
+          # moves, GitHub refuses instead of merging something nobody approved.
+          # 405 (not mergeable yet: checks pending, base just moved) is worth a
+          # retry; 409 (head moved) and 422 (request refused, e.g. merge method
+          # not allowed) will not change, so they stop the run at once. The PR
+          # stays open either way.
+          for i in 1 2 3 4 5 6; do
+            echo "Merge attempt $i..."
+            if OUT=$(gh api "repos/$REPO/pulls/$NUMBER/merge" --method PUT \
+                 -f merge_method=squash \
+                 -f sha="$HEAD_SHA" \
+                 -f commit_title="$TITLE (#$NUMBER)" \
+                 -F commit_message=@"$RUNNER_TEMP/body.md" 2>&1); then
+              echo "Merged PR #$NUMBER"
+              echo "Squash-merged PR #$NUMBER into master." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "$OUT"
+            case "$OUT" in
+              *"HTTP 409"*)
+                echo "::error::develop moved after this run was prepared (PR #$NUMBER head changed); start a new run"
+                exit 1 ;;
+              *"HTTP 422"*)
+                echo "::error::GitHub refused the merge of PR #$NUMBER (422), see the output above"
+                exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "::error::could not merge PR #$NUMBER; it stays open, check its status checks"
+          exit 1
+
+      - name: Open the PR master → release
+        if: inputs.open_release_pr
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          NUMBER=$(gh pr list --repo "$REPO" --base release --head master --state open \
+            --json number,isCrossRepository \
+            --jq 'map(select(.isCrossRepository | not)) | .[0].number // empty')
+          if [ -n "$NUMBER" ]; then
+            echo "PR master → release already open: #$NUMBER"
+          else
+            if [ -n "$VERSION_INPUT" ]; then
+              TITLE="release: v$VERSION_INPUT"
+            else
+              TITLE="chore: release"
+            fi
+            URL=$(gh pr create --repo "$REPO" --base release --head master \
+              --title "$TITLE" --body "Opened by the Merge develop to master workflow.")
+            NUMBER=${URL##*/}
+          fi
+          echo "Release PR: #$NUMBER" >> "$GITHUB_STEP_SUMMARY"

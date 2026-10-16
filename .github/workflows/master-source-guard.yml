@@ -1,0 +1,45 @@
+name: master-source-guard
+
+# Required status check in the master ruleset: master only takes PRs from
+# develop (Merge develop to master) and release-sync/* (release.yml). A fork
+# branch that happens to be called "develop" does not count. The
+# sync/master-into-develop-* branches from sync-develop.yml only ever target
+# develop, so they are not allowed here either.
+#
+# pull_request, never pull_request_target: the job reads nothing but the PR's
+# refs, runs no PR code and needs no token.
+
+on:
+  pull_request:
+    branches:
+      - master
+    types: [opened, synchronize, reopened, edited]
+
+permissions: {}
+
+jobs:
+  master-source-guard:
+    name: master-source-guard
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check the PR source branch
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::PRs into master must come from this repository, not a fork"
+            exit 1
+          fi
+          case "$HEAD_REF" in
+            develop|release-sync/*)
+              echo "Source branch allowed: $HEAD_REF"
+              ;;
+            *)
+              echo "::error::master only accepts PRs from develop or release-sync/*. Open this PR against develop instead."
+              exit 1
+              ;;
+          esac
