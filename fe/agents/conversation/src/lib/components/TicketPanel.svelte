@@ -8,6 +8,7 @@
        moved to a different ticket or taken off tickets entirely.
      - On nothing: offers to create a ticket from this chat, or attach it to
        an existing one. */
+  import type { Snippet } from "svelte";
   import type { Note, TicketCard, TicketField, TicketStatus } from "../types/agents.js";
   import NotesPanel from "./NotesPanel.svelte";
   import TicketFields from "./TicketFields.svelte";
@@ -55,11 +56,18 @@
     users?: Record<string, string>;
     /* Opens the ticket's own page (sessions, fields, full note list). */
     onOpenTicket?: (ticketId: string) => void;
+    /* Set when the ticket's page lives elsewhere (Team › Tickets from a
+       Team chat): a labelled button under the title opens it too, since
+       the short id alone does not say where it leads. */
+    openLabel?: string;
     /* Switches the rail to the Notes tab — passed only while that tab
        exists. With ticket mode on there is no separate Notes tab: this panel
        IS both, and a link to a tab that is not in the strip is a dead end. */
     onOpenNotes?: () => void;
     onChanged?: () => void;
+    /* "In this session": who answers here, drawn by the host (it owns the
+       turns and the Session tab this links to). Shown on a ticket only. */
+    sessionSummary?: Snippet;
   };
 
   let {
@@ -74,8 +82,10 @@
     notes,
     users,
     onOpenTicket,
+    openLabel,
     onOpenNotes,
     onChanged,
+    sessionSummary,
   }: Props = $props();
 
   /* The rail does not fetch the board, so its status choices arrive with
@@ -166,7 +176,7 @@
     busy = true;
     // Attach also detaches from the current ticket server-side, and the
     // chat's notes travel with it — so a move is one call.
-    Effect.runPromise(attachSession(base, ticketId, sessionId).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(attachSession(base, ticketId, sessionId, projectId).pipe(Effect.provide(WickClientLayer)))
       .then(() => {
         picking = false;
         options = [];
@@ -180,7 +190,7 @@
     if (!ticket) return;
     busy = true;
     Effect.runPromise(
-      detachSession(base, ticket.id, sessionId).pipe(Effect.provide(WickClientLayer)),
+      detachSession(base, ticket.id, sessionId, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => onChanged?.())
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to detach"))
@@ -229,7 +239,7 @@
     }
     savingBody = true;
     Effect.runPromise(
-      updateTicket(base, ticket.id, { body: next }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { body: next }, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => {
         editingBody = false;
@@ -244,7 +254,7 @@
   function saveField(key: string, value: string): Promise<void> {
     if (!ticket) return Promise.resolve();
     return Effect.runPromise(
-      updateTicket(base, ticket.id, { fields: { [key]: value } }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { fields: { [key]: value } }, projectId).pipe(Effect.provide(WickClientLayer)),
     ).then(() => { onChanged?.(); });
   }
 
@@ -260,7 +270,7 @@
   function runButton(b: { id: string; label: string }) {
     if (!ticket || actionBusy !== "") return;
     actionBusy = b.id;
-    Effect.runPromise(runTicketAction(base, ticket.id, b.id).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(runTicketAction(base, ticket.id, b.id, projectId).pipe(Effect.provide(WickClientLayer)))
       .then((r) => {
         if (r.ok) {
           toastOk(`${b.label}: ${r.message || `done (HTTP ${r.status})`}`);
@@ -289,7 +299,7 @@
     const t = titleDraft.trim();
     if (!ticket || t === "" || t === ticket.title) return;
     Effect.runPromise(
-      updateTicket(base, ticket.id, { title: t }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { title: t }, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => onChanged?.())
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to rename"));
@@ -298,7 +308,7 @@
   function setStatus(status: string) {
     if (!ticket) return;
     Effect.runPromise(
-      updateTicket(base, ticket.id, { status }).pipe(Effect.provide(WickClientLayer)),
+      updateTicket(base, ticket.id, { status }, projectId).pipe(Effect.provide(WickClientLayer)),
     )
       .then(() => onChanged?.())
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to update status"));
@@ -351,6 +361,10 @@
 
 <div class="flex h-full flex-col overflow-y-auto p-4">
   <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Ticket</h3>
+
+  {#if ticket && sessionSummary}
+    <div class="mt-2" data-testid="ticket-session-summary">{@render sessionSummary()}</div>
+  {/if}
 
   {#if ticket}
     <div class="mt-2 rounded-lg border border-white-300 bg-white-200 p-3 dark:border-navy-600 dark:bg-navy-800">
@@ -415,6 +429,14 @@
           title="Rename this ticket"
           class="mt-2 w-full rounded text-left text-xs font-medium text-black-900 hover:bg-white-100 dark:text-white-100 dark:hover:bg-navy-700"
         >{ticket.title}</button>
+      {/if}
+      {#if openLabel && onOpenTicket}
+        <button
+          type="button"
+          data-testid="ticket-open-team"
+          onclick={() => onOpenTicket?.(ticket.id)}
+          class="mt-2 rounded-lg border border-white-400 px-2 py-1 text-[11px] font-medium text-black-800 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600 dark:hover:text-green-400"
+        >{openLabel}</button>
       {/if}
 
 

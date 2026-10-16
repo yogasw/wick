@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/oauth"
+	"github.com/yogasw/wick/internal/tags"
 	"strings"
 	"time"
 
@@ -673,42 +674,20 @@ func (r *repo) TransferOwnerTag(ctx context.Context, resourceID, toolPath, oldOw
 		return nil
 	}
 	defer r.cache.invalidate()
-	name := "owner:" + resourceID
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var t entity.Tag
-		err := tx.Where("name = ?", name).First(&t).Error
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			if newOwner == "" {
-				// Nothing to unlink and nobody to link: the resource had no
-				// owner tag and is not getting one.
-				return nil
-			}
-			t = entity.Tag{Name: name, IsFilter: true}
-			if err := tx.Create(&t).Error; err != nil {
-				return err
-			}
-		case err != nil:
-			return err
-		}
-		if newOwner != "" {
-			if toolPath != "" {
-				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
-					Create(&entity.ToolTag{ToolPath: toolPath, TagID: t.ID}).Error; err != nil {
-					return err
-				}
-			}
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
-				Create(&entity.UserTag{UserID: newOwner, TagID: t.ID}).Error; err != nil {
-				return err
-			}
-		}
-		if oldOwner != "" {
-			if err := tx.Where("user_id = ? AND tag_id = ?", oldOwner, t.ID).
-				Delete(&entity.UserTag{}).Error; err != nil {
-				return err
-			}
-		}
+		return tags.SetOwnerTx(tx, resourceID, toolPath, oldOwner, newOwner, tags.OwnerTransfer)
+	})
+}
+
+// SetSoleOwnerTag makes newOwner the ONE holder of "owner:<resourceID>".
+// Tool-path links stay as they are. Provider instances use it. newOwner ==
+// "" leaves the resource ownerless.
+func (r *repo) SetSoleOwnerTag(ctx context.Context, resourceID, newOwner string) error {
+	if resourceID == "" {
 		return nil
+	}
+	defer r.cache.invalidate()
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return tags.SetOwnerTx(tx, resourceID, "", "", newOwner, tags.OwnerSole)
 	})
 }

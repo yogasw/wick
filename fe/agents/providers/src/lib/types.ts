@@ -29,6 +29,27 @@ export interface ProviderInstanceDTO {
   SendMode: string;
   /* IdleCompact is the enabled compact-when-idle policy; null when off. */
   IdleCompact?: IdleCompactDTO | null;
+  /* Failover summarizes the failover chain; null when never saved. */
+  Failover?: FailoverSummaryDTO | null;
+  /* Health is the account's recorded failure; null while healthy. */
+  Health?: ProviderHealthDTO | null;
+}
+
+export interface FailoverSummaryDTO {
+  Enabled: boolean;
+  /* Targets are the chain's "type/name" tags, in order. */
+  Targets: string[];
+}
+
+export interface ProviderHealthDTO {
+  /* Kind is limit, auth or unavailable. */
+  Kind: string;
+  /* RFC 3339; Until is "" when the vendor named no reset time. */
+  Since: string;
+  Until: string;
+  Reason: string;
+  /* Retrying: a broken login inside an open retry window (auth only). */
+  Retrying?: boolean;
 }
 
 export interface IdleCompactDTO {
@@ -219,6 +240,13 @@ export interface ProvidersListResponse {
      is admin-only however the access tags are set, so a non-admin gets
      the read-only page rather than buttons that come back 403. */
   IsAdmin: boolean;
+  /* CanCreate: admin or the provider_create_tag whitelist. CanHostConfig:
+     the create form may set the binary (older field). CreatePerms: the
+     owner permissions the create form follows, per field — all for an
+     admin, the defaults for a whitelisted creator. */
+  CanCreate: boolean;
+  CanHostConfig: boolean;
+  CreatePerms: OwnerPerms;
   Providers: ProviderStatusDTO[];
   Gate: GateStatusDTO;
   MCPClients: MCPStatusDTO;
@@ -259,6 +287,30 @@ export interface StorageResponse {
   provider_types: string[];
 }
 
+/* OwnerPerms maps an owner permission name (configure, binary, env, …)
+   to whether the instance's owner may do it. */
+export type OwnerPerms = Record<string, boolean>;
+
+export interface ProviderCaps {
+  Configure: boolean;
+  Models: boolean;
+  Env: boolean;
+  ExtraArgs: boolean;
+  Binary: boolean;
+  ExtraMCPServers: boolean;
+  ExternalSkills: boolean;
+  Sandbox: boolean;
+  AIRouterRawConfig: boolean;
+  BorrowLogin: boolean;
+  Rename: boolean;
+  Delete: boolean;
+  AIRouter: boolean;
+  StorageSync: boolean;
+  Rescan: boolean;
+  ViewSessions: boolean;
+  Failover: boolean;
+}
+
 export interface ProviderDetailResponse {
   /* ReadOnly: the caller may look at this instance but not edit it.
      CanManage is separate — reconnecting is not editing. SecretsHidden
@@ -267,6 +319,17 @@ export interface ProviderDetailResponse {
   ReadOnly: boolean;
   CanManage: boolean;
   SecretsHidden: boolean;
+  /* IsAdmin: admin-only parts (terminal, hooks, gate, opening a session)
+     render only for an admin. Can: what the caller may do beyond viewing —
+     everything for an admin, the ticked owner permissions for its owner. */
+  IsAdmin: boolean;
+  /* HasTerminal: the backend registered a web terminal for this type
+     (terminal.Supported); the Terminal section shows from it, admin-only. */
+  HasTerminal: boolean;
+  Can: ProviderCaps;
+  /* OwnerPerms: the instance's effective owner permissions, sent to admins
+     only (the Owner permissions card). Empty for everyone else. */
+  OwnerPerms: OwnerPerms;
   Instance: ProviderInstanceDTO;
   Path: string;
   PathFound: boolean;
@@ -329,5 +392,15 @@ export interface ProviderConnection {
   usageFetchedAt: string;
   usageAgeS: number;
   usageNextS: number;
+  /* usageLastErr is the latest probe's failure while `windows` still
+     holds an OLDER reading — the card labels those numbers cached.
+     Empty when the latest probe succeeded. usageRateLimited marks it a
+     429; usageFails counts the consecutive failures behind it. */
+  usageLastErr?: string;
+  usageRateLimited?: boolean;
+  usageFails?: number;
   windows: { key: string; utilization: number; resetsAt: string }[];
+  /* Saved rate-limit resets (shared model, see @wick-fe/common-ui);
+     null when the type reports none or the read failed. */
+  savedResets?: import("@wick-fe/common-ui/usage").SavedResets | null;
 }

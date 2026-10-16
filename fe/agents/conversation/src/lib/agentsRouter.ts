@@ -17,8 +17,17 @@ import { connTabOf, type ConnTab } from "./connectionTabs.js";
      /team/<handle>?panel=connections&conn=a2a
                                          …on that tab (slack|telegram|a2a|rest)
      /team/<handle>?panel=scheduled      Scheduled drawer
-     /team/g/<group session id>          a group chat
-     /team/g/<id>?panel=group-settings   its Settings drawer
+     /team/group/<group session id>      a group chat
+     /team/group/<id>?panel=group-settings
+                                         its Settings drawer
+     /team/tickets                       Tickets: the selected projects' board
+     /team/tickets/<project id>/<ticket id>
+                                         one ticket on it
+     /team/tickets/<project id>/<ticket id>/s/<session id>
+                                         one of that ticket's chats, opened
+                                         inside Team (a project chat too)
+     /team/tickets/<project id>/s/<session id>
+                                         a chat from the board's rail
      /team?panel=new                     the + Agent wizard
      /team?panel=new&project=<id>        the wizard converting that project
                                          ("Make this an agent…")
@@ -57,11 +66,27 @@ export type AgentsRoute = {
   /** A non-main conversation of that agent; null = its main chat. */
   session: string | null;
   panel: AgentsPanel | null;
-  /** A group chat's session id (/team/g/<id>); then handle is null. */
+  /** A group chat's session id (/team/group/<id>); then handle is null. */
   group?: string | null;
+  /** The Tickets page (/team/tickets…); then handle and group are null. No
+      project/ticket = the board, both = that ticket's page. */
+  tickets?: TicketsRoute | null;
 };
 
+/** session: a chat opened from the Tickets page, drawn in place; back goes
+    to its ticket (both ids) or to the board (project only). */
+export type TicketsRoute = { project?: string; ticket?: string; session?: string };
+
 const ROOT = "/team";
+
+/** Path words the app owns under /team, which no agent handle may take.
+    "tickets" and "group" are also reserved by the server (team.ValidateHandle). */
+export const RESERVED_HANDLES: readonly string[] = ["tickets", "group", "all", "here", "channel"];
+
+/** isReservedHandle says whether h is taken by the app or a group mention. */
+export function isReservedHandle(h: string): boolean {
+  return RESERVED_HANDLES.includes(h);
+}
 
 /** parseAgentsRoute reads one URL into a route. `base` is the tool prefix
     (data-base, e.g. "/tools/agents"). Anything it does not recognise falls
@@ -75,12 +100,28 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
   const seg = segs[0] ?? "";
   let handle: string | null = null;
   let group: string | null = null;
-  // "g" is free to reserve: a handle has 2+ characters (HANDLE_RE).
-  if (seg === "g" && segs[1]) {
+  let tickets: TicketsRoute | null = null;
+  // "group" and "tickets" are reserved handles (isReservedHandle).
+  if (seg === "group" && segs[1]) {
     try {
       group = decodeURIComponent(segs[1]);
     } catch {
       group = null;
+    }
+  } else if (seg === "tickets") {
+    // A ticket needs both ids; half of one (or a bad escape) is the board.
+    // A chat rides after "s": <project>/<ticket>/s/<id> or <project>/s/<id>.
+    tickets = {};
+    try {
+      if (segs.length === 5 && segs[3] === "s") {
+        tickets = { project: decodeURIComponent(segs[1]), ticket: decodeURIComponent(segs[2]), session: decodeURIComponent(segs[4]) };
+      } else if (segs.length === 4 && segs[2] === "s") {
+        tickets = { project: decodeURIComponent(segs[1]), session: decodeURIComponent(segs[3]) };
+      } else if (segs[1] && segs[2]) {
+        tickets = { project: decodeURIComponent(segs[1]), ticket: decodeURIComponent(segs[2]) };
+      }
+    } catch {
+      tickets = {};
     }
   } else if (seg) {
     try {
@@ -119,16 +160,23 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
       break;
   }
   const session = handle ? q.get("session") || null : null;
+  if (tickets) return { handle, session, panel, tickets };
   return group ? { handle, session, panel, group } : { handle, session, panel };
 }
 
 /** formatAgentsRoute is the inverse of parseAgentsRoute. */
 export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   let path = base + ROOT;
-  if (r.group) path += "/g/" + encodeURIComponent(r.group);
+  if (r.tickets) {
+    path += "/tickets";
+    const t = r.tickets;
+    if (t.project && (t.ticket || t.session)) path += "/" + encodeURIComponent(t.project);
+    if (t.project && t.ticket) path += "/" + encodeURIComponent(t.ticket);
+    if (t.project && t.session) path += "/s/" + encodeURIComponent(t.session);
+  } else if (r.group) path += "/group/" + encodeURIComponent(r.group);
   else if (r.handle) path += "/" + encodeURIComponent(r.handle);
   const q = new URLSearchParams();
-  if (!r.group && r.handle && r.session) q.set("session", r.session);
+  if (!r.tickets && !r.group && r.handle && r.session) q.set("session", r.session);
   if (r.panel) {
     q.set("panel", r.panel.kind);
     if (r.panel.kind === "settings" || r.panel.kind === "team-settings") q.set("tab", r.panel.tab);

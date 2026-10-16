@@ -1,16 +1,20 @@
 <script lang="ts">
-  import { onMount, onDestroy, untrack } from "svelte";
+  import { onMount, onDestroy, tick, untrack } from "svelte";
+  import type { ReplyTarget } from "../replyTo.js";
   import { attachThreadScroll, type ThreadScroll } from "../threadStick.js";
+  import { createTurnJump, type BackTarget, type TurnWindow } from "../turnJump.js";
   import { railRefreshTargets, type RefreshableRailTab } from "../railRefresh.js";
   import { get } from "svelte/store";
   import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
-  import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
-  import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
+  import { toastError, toastOk, toastWarn, pushToast, dismissToast } from "@wick-fe/common-stores";
+  import { Button, ConfirmDialog, Composer, Modal } from "@wick-fe/common-ui";
+  import { seedUsage, glanceFromWire } from "@wick-fe/common-ui/usage";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
-  import { createThreadStore, TURN_SETTLE_MS } from "../stores/thread.js";
+  import { createThreadStore, isLocalTurnId, TURN_SETTLE_MS } from "../stores/thread.js";
   import { remoteProgress } from "../remoteAgent.js";
+  import { noAccessError } from "../agentSharing.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
@@ -20,7 +24,7 @@
   import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
-  import { composerPlaceholder, hiddenTabNote, providerLocked, type AgentMode, type RailTab } from "../agentMode.js";
+  import { composerPlaceholder, hiddenTabNote, providerSwitchBody, providerSwitchWarns, type AgentMode, type RailTab } from "../agentMode.js";
   import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
@@ -48,10 +52,19 @@
     liveSubAgents,
     getMessages,
     bumpHops,
-    getTeamTasks,
   } from "../api/subagents.js";
   import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
+  import TaskTray from "./team/TaskTray.svelte";
+  import TasksPanel from "./team/TasksPanel.svelte";
+  import { viewerName } from "../viewer.js";
+  import RailTasksIcon from "./team/RailTasksIcon.svelte";
+  import RailTasksTip from "./team/RailTasksTip.svelte";
+  import { setTeamTasksCtx } from "../teamTasksContext.js";
+  import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
+  import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
+  import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
+  import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, summarizeTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -62,6 +75,7 @@
   import { listNotes } from "../api/tickets.js";
   import type { NotesResponse } from "../types/agents.js";
   import TicketPanel from "./TicketPanel.svelte";
+  import { ticketJumpFor } from "../teamTicketLinks.js";
   import NotesRail from "./NotesRail.svelte";
   import RailMore from "./RailMore.svelte";
   import { getRailPrefs, saveRailPrefs } from "../api/tickets.js";
@@ -71,6 +85,7 @@
     orderTabs,
     parseRailPrefs,
     railPrefsFromPage,
+    railTabName,
     reorderTo,
     resolveHidden,
     toggleHidden,
@@ -78,6 +93,8 @@
     fitStrip,
     RAIL_FILL,
     RAIL_TAB_FALLBACK_H,
+    RAIL_ICON_TAB_FALLBACK_H,
+    RAIL_TIP_CLASS,
     type RailPrefs,
   } from "../railPrefs.js";
   import BrowserPanel from "./BrowserPanel.svelte";
@@ -101,6 +118,9 @@
   import SessionFieldChips from "./SessionFieldChips.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
+  import { sessionAgents } from "../ticketSession.js";
+  import SessionPanel from "./SessionPanel.svelte";
+  import GroupPickerDialog from "./GroupPickerDialog.svelte";
   import { navigate as navigateAgents } from "../agentsRouter.js";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
@@ -134,6 +154,10 @@
     onRailChange?: (open: boolean) => void;
   };
 
+  /* Another person's chat of a shared agent (meta.read_only): the
+     server refuses changes, so the composer is off too. Per chat: both
+     hosts key this view on the session id, so a new chat starts at false. */
+  let readOnly = $state(false);
   let { base, sessionId, agentMode, railToggle = 0, onRailChange }: Props = $props();
   // Trace chips stat the files a tool call named; cached per session.
   const traceFiles = $derived(makeTraceFiles(base, sessionId));
@@ -159,6 +183,11 @@
     if (active === turnActive) return;
     turnActive = active;
     untrack(() => agentMode?.onTurnChange?.(active));
+  });
+  /* And how many teammates it waits on, for the host's own header. */
+  $effect(() => {
+    const n = busyTeammateCount;
+    untrack(() => agentMode?.onTeammatesBusy?.(n));
   });
   /* And the tool it is on, on every change: thinking ↔ tool. */
   let toolSent: string | undefined;
@@ -262,6 +291,133 @@
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
   let threadEl: HTMLElement | undefined = $state();
+
+  /* ── reply to a bubble ──
+     The chip above the composer. Only the turn id goes to the server, which
+     checks it and builds the stored quote; author/excerpt here are display.
+     Cleared after a successful send and whenever the chat changes. */
+  let replyTarget = $state<ReplyTarget | null>(null);
+  let composerWrapEl: HTMLElement | undefined = $state();
+  $effect(() => {
+    void sessionId;
+    replyTarget = null;
+  });
+  // A chat that turns read-only takes no reply: drop the chip, not just hide it.
+  $effect(() => {
+    if (readOnly) untrack(() => (replyTarget = null));
+  });
+  function startReply(target: ReplyTarget) {
+    if (readOnly) return;
+    replyTarget = target;
+    requestAnimationFrame(() => composerWrapEl?.querySelector<HTMLElement>("textarea, [contenteditable='true']")?.focus());
+  }
+  // Composer's bare Esc (no menu of its own open) cancels the reply.
+  function cancelReplyOnEscape(): boolean {
+    if (!replyTarget) return false;
+    replyTarget = null;
+    return true;
+  }
+  /* Scroll to the quoted turn and flash it. Not on screen: ONE `around`
+     request swaps the thread for the window around it — "detached" mode,
+     where the thread shows that window instead of the latest one, pages
+     both ways, and live events only bump the Jump to latest badge. The
+     lookup itself (single in-flight, slow toast, Back to reply) lives in
+     turnJump.ts. */
+  function findTurnEl(turnId: string): HTMLElement | null {
+    return threadEl?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(turnId)}"]`) ?? null;
+  }
+  /* Flash: an outline with an offset, so it clears the text of a turn that
+     has no bubble padding and needs no offset colour (a ring offset paints
+     a white band in dark mode). Inline because the compiled app.css carries
+     no outline-width/offset utilities; #27B199 is green-500 at 60%. */
+  function revealTurn(el: HTMLElement, instant: boolean) {
+    el.scrollIntoView({ block: "center", behavior: instant ? "auto" : "smooth" });
+    el.style.outline = "2px solid #27b19999";
+    el.style.outlineOffset = "4px";
+    setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 1600);
+  }
+  let detached = $state(false);
+  let detachedTurns = $state<ConversationTurn[]>([]);
+  let detachedHasMore = $state(false);
+  let detachedHasMoreAfter = $state(false);
+  // Turn ids already on the latest window when the view detached: anything
+  // the live stream adds past them is what the Jump to latest badge counts.
+  let detachedSeen = new Set<string>();
+  // A reply still streaming counts too: it is news the reader is missing.
+  const detachedBadge = $derived(
+    detached
+      ? turns.filter((t) => t.turn_id && !isLocalTurnId(t.turn_id) && !detachedSeen.has(t.turn_id)).length + (live ? 1 : 0)
+      : 0,
+  );
+  // Bumped whenever the shown window changes (detach, re-attach, Jump to
+  // latest): a page or lookup answer from an older generation is dropped.
+  let windowGen = 0;
+  const shownTurns = $derived(detached ? detachedTurns : turns);
+  let backTarget = $state<BackTarget | null>(null);
+  // The reply bubble has left the viewport since the jump; seeing it again
+  // means the reader went back by hand, so the chip has done its job.
+  let backLeft = false;
+  let jumpPendingId = $state<string | null>(null);
+
+  async function showDetachedWindow(win: TurnWindow) {
+    windowGen++;
+    if (!detached) detachedSeen = new Set(turns.map((t) => t.turn_id));
+    detachedTurns = win.turns;
+    detachedHasMore = win.hasMore;
+    detachedHasMoreAfter = win.hasMoreAfter;
+    detached = true;
+    scrollCtl?.hold(true);
+    // A window that already reaches the latest turn has no gap to close.
+    if (!win.hasMoreAfter) attachLatest();
+    await tick();
+  }
+  /* The detached window reached the latest turn: it becomes the thread
+     again, and live events append to it as usual. */
+  function attachLatest() {
+    const first = detachedTurns[0]?.turn_id;
+    // setHistory keeps loaded turns older than the window; only when none
+    // are kept does the window's own has_more describe the thread.
+    if (!first || turns.findIndex((t) => t.turn_id === first) <= 0) hasMoreHistory = detachedHasMore;
+    thread.setHistory(detachedTurns);
+    leaveDetached();
+    scrollCtl?.hold(false);
+    // A turn persisted after the last page was read would otherwise sit
+    // out until the next reload.
+    void loadConversation();
+  }
+  /* Drop the window. detachedHasMore/After and detachedSeen are left as
+     they are: unused while attached, and reset by the next detach. */
+  function leaveDetached() {
+    windowGen++;
+    detached = false;
+    detachedTurns = [];
+  }
+
+  const turnJump = createTurnJump({
+    findEl: findTurnEl,
+    fetchAround: async (turnId) => {
+      const res = await Effect.runPromise(
+        Effect.either(getConversation(base, sessionId, { around: turnId }).pipe(Effect.provide(WickClientLayer))),
+      );
+      if (Either.isRight(res)) return res.right;
+      if (res.left instanceof APIError && res.left.status === 404 && /turn not found/i.test(res.left.message)) return null;
+      throw res.left;
+    },
+    showWindow: showDetachedWindow,
+    reveal: revealTurn,
+    setPending: (id) => { jumpPendingId = id; },
+    setBack: (b) => { backTarget = b; backLeft = false; },
+    toastPending: (title) => pushToast({ state: "info", title, ttlMs: 0 }),
+    dismissToast,
+    toastWarn: (title) => { toastWarn(title); },
+    toastError: (title, body) => { toastError(title, body); },
+  });
+  function jumpToTurn(turnId: string, fromTurnId?: string) {
+    void turnJump.jump(turnId, fromTurnId);
+  }
+  function backToReply() {
+    if (backTarget) void turnJump.back(backTarget);
+  }
 
   /* ── context panel state ──────────────────────────────────────── */
   let cwdVal = $state("");
@@ -408,12 +564,14 @@
     }, 1500);
   }
 
-  function loadUsage(silent = false) {
+  function loadUsage(silent = false, opened = false) {
     if (!activeProvider) return;
     if (!silent) usageLoading = true;
-    run(getComposerUsage(base, activeProvider, activeModelID).pipe(Effect.provide(WickClientLayer)))
+    run(getComposerUsage(base, activeProvider, activeModelID, opened).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         usageData = normalizeComposerUsage(res);
+        // Same reading feeds the picker rings via the shared store.
+        if (activeProvider && !usageData.pending) seedUsage(normKey(activeProvider), glanceFromWire(res));
         if (usageData.checking || usageData.pending) {
           scheduleUsagePoll();
         } else {
@@ -433,7 +591,7 @@
       usageError = "No provider selected for this session.";
       return;
     }
-    loadUsage();
+    loadUsage(false, true);
   }
 
   /* Context window — read from the session's token ledger, so it costs
@@ -527,11 +685,11 @@
   function openContextPopover() {
     contextPopoverOpen = true;
     void loadContext();
-    // The one-line account quota in the context panel. A cache read on
-    // the server — opening the panel never costs an upstream request.
+    // The one-line account quota in the context panel: the usage file,
+    // plus one paced probe only when the account has no file yet.
     if (activeProvider) {
       usagePollsLeft = 20;
-      loadUsage(true);
+      loadUsage(true, true);
     }
   }
 
@@ -637,17 +795,20 @@
       : "",
     onChange: (v: string) => handleProviderChange(v),
     loadModels: loadProviderModels,
+    usageBase: base,
     showCapabilities: capsPrefs.show,
     capabilityMode: capsPrefs.mode,
   });
   /* Agent mode: the provider chip follows the agent's switch setting.
-     On, the picker works but another provider is refused once the chat
-     has turns; off, the chip only explains where to change it. */
-  let providerNotice = $state<"started" | "locked" | null>(null);
+     On, the picker works, and another provider in a chat that has turns
+     asks first (pendingProvider holds the pick); off, the chip only
+     explains where to change it. */
+  let providerNotice = $state<"locked" | null>(null);
+  let pendingProvider = $state<string | null>(null);
   const agentProviderSelect = $derived({
     ...providerSelect,
     onChange: (v: string) => {
-      if (providerLocked(turns.length > 0, activeProvider, v)) providerNotice = "started";
+      if (providerSwitchWarns(turns.length > 0, activeProvider ?? "", v)) pendingProvider = v;
       else void handleProviderChange(v);
     },
   });
@@ -678,7 +839,7 @@
   // so the confirm can explain why a "cancel" turned into "stop the agent".
   // subAgents: busy sub-agents the composer's Stop will interrupt too.
   // quick: a composer Stop — confirms with a small "Stopped" toast.
-  let confirmKill = $state<{ sid: string; queued: boolean; note?: string; subAgents?: number; quick?: boolean } | null>(null);
+  let confirmKill = $state<{ sid: string; queued: boolean; note?: string; subAgents?: number; teammates?: number; quick?: boolean } | null>(null);
   // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
@@ -1161,12 +1322,143 @@
 
   /* Team (A2A) tasks this chat sent: only an agent's chat can send any. */
   let teamTasks = $state<TeamTaskItem[]>([]);
+  /* Refetches overlap (new turn, poll, reconnect, an action): only the
+     newest one applies, and only to the chat it was made for. A team_task
+     patch bumps it too, so a list fetched before that event cannot put the
+     task back to what it was. */
+  let teamTasksSeq = 0;
+  /* Read for every chat, not only a Team agent's: an agent's project or
+     channel session sends tasks too, and its agent's "Show teammates in
+     channels" decides the hidden note on its sent replies. */
+  let teammatesShown = $state(true);
   function loadTeamTasks() {
-    if (!agentMode?.agent) return;
-    run(getTeamTasks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((t) => { teamTasks = t; })
+    const seq = ++teamTasksSeq;
+    const sid = sessionId;
+    run(getTeamTasksView(base, sid).pipe(Effect.provide(WickClientLayer)))
+      .then((v) => {
+        if (seq === teamTasksSeq && sid === sessionId) {
+          teamTasks = v.tasks;
+          teammatesShown = v.showTeammates;
+        }
+      })
       .catch(() => {});
   }
+
+  /* The thread's delegation blocks, the tray and the Tasks rail read the
+     tasks through this context. An answer or cancel refetches at once. */
+  /* The running turn's tasks show in its own block (ConversationThread),
+     so they stay out of the committed turns until it commits — the
+     commit swaps live for the turn in one update, and the block moves
+     with it instead of showing twice. Keyed by a string: live changes on
+     every streamed token, and only a change of the ids may reach
+     turnTasks (and every turn's block).
+     An agent's task that starts during the running turn is held too,
+     before its team_message result names it (heldForLiveTurn): the
+     team_task event can come first, and the block would show on the
+     previous turn for a moment. Keyed on live being there, not on live. */
+  const liveTaskKey = $derived(liveTurnTasks(live?.blocks, teamTasks).map((t) => t.task_id).join(" "));
+  const liveOn = $derived(live !== null);
+  const heldTaskKey = $derived(liveOn ? heldForLiveTurn(turns, teamTasks).join(" ") : "");
+  const turnTasks = $derived.by(() => {
+    const ids = new Set(`${liveTaskKey} ${heldTaskKey}`.split(" ").filter(Boolean));
+    return tasksByTurn(turns, ids.size ? teamTasks.filter((t) => !ids.has(t.task_id)) : teamTasks);
+  });
+  const tasksBadge = $derived(taskRailBadge(teamTasks));
+  async function answerTask(taskId: string, text: string) {
+    try {
+      await run(answerTeamTask(base, sessionId, taskId, text).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  async function messageTask(taskId: string, text: string) {
+    try {
+      await run(messageTeamTask(base, sessionId, taskId, text).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  async function cancelTask(taskId: string) {
+    try {
+      await run(cancelTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  async function summarizeTasks(group?: string) {
+    try {
+      await run(summarizeTeamTasks(base, sessionId, group).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  async function retryTask(taskId: string) {
+    try {
+      await run(retryTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  // Who a declined task can go to instead, as the server will accept it.
+  function loadReassignTargets(taskId: string) {
+    return run(getReassignTargets(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+  }
+  async function reassignTask(taskId: string, to: string) {
+    try {
+      await run(reassignTeamTask(base, sessionId, taskId, to).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  // A task's thread, read when it is opened; the open thread reads it
+  // again when the task's team_task event changes it.
+  function loadTaskThread(taskId: string) {
+    return run(getTeamTaskThread(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+  }
+  function openTaskChat(t: TeamTaskItem) {
+    navigateAgents({ handle: t.to_handle, session: t.chat_id || null, panel: null });
+  }
+  function jumpToTask(t: TeamTaskItem) {
+    document.querySelector(`[data-task-ids~="${CSS.escape(t.task_id)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  setTeamTasksCtx({
+    forTurn: (id) => turnTasks.get(id) ?? [],
+    tasks: () => teamTasks,
+    agents: () => teamAgentsByHandle,
+    captainName: () => agentMode?.agent?.name ?? "Captain",
+    // A read-only chat shows its tasks without the actions the server
+    // refuses there.
+    get answer() { return readOnly ? undefined : answerTask; },
+    get cancel() { return readOnly ? undefined : cancelTask; },
+    get message() { return readOnly ? undefined : messageTask; },
+    get summarize() { return readOnly ? undefined : summarizeTasks; },
+    openChat: openTaskChat,
+    get loadThread() { return readOnly ? undefined : loadTaskThread; },
+  });
+  /* Every change of a task this chat sent arrives as a `team_task` event
+     on the stream (patched in, see startSSE). A new turn still refetches
+     (coalesced): a team_message call is a turn's tool, and "Needs you"
+     depends on whether a turn here is running. The stream being down is
+     the only time a poll runs; a reconnect or the tab coming back does
+     one refetch. */
+  const liveIdle = $derived(live === null);
+  $effect(() => {
+    void turns.length;
+    void liveIdle;
+    void sessionId;
+    // Every chat, not only a Team agent's: a project or channel session of
+    // an agent sends tasks too (and reads its "Show teammates" setting).
+    // The cleanup drops a pending refetch when the chat changes, the
+    // next turn re-arms it, or the view is destroyed.
+    const timer = setTimeout(loadTeamTasks, 400);
+    return () => clearTimeout(timer);
+  });
+  $effect(() => {
+    const every = teamTaskPollMs(sseStatus, !!agentMode?.agent);
+    if (every === null) return;
+    const timer = setInterval(loadTeamTasks, every);
+    return () => clearInterval(timer);
+  });
 
   function loadSubAgents() {
     if (agentMode?.chatOnly) return;
@@ -1231,7 +1523,8 @@
      plain /sessions chat has no agentMode.agent and never asks. */
   let teamPeers = $state<TeamPeer[]>([]);
   $effect(() => {
-    const selfId = agentMode?.agent?.id;
+    // A ticket session lists the viewer's own agents too (T12b).
+    const selfId = agentMode?.agent?.id || (notesInfo?.ticket ? "ticket" : "");
     if (!selfId) { teamPeers = []; return; }
     let stale = false;
     runApi(listAgentRoster(base))
@@ -1242,8 +1535,24 @@
   });
 
   const teamAgentsByHandle = $derived(
-    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression }])),
+    Object.fromEntries(teamPeers.map((p) => [p.handle, { id: p.id, name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image }])),
   );
+  /* Ticket session header (T12b): agents other than the home one that
+     answered here; identity is (agent, owner). */
+  /* The home agent answers its owner only: anyone else sees whose it is. */
+  const homeOwnerLabel = $derived(
+    notesInfo?.session_owner && notesInfo.session_owner !== notesInfo.me
+      ? notesInfo.session_owner_handle
+        ? `@${notesInfo.session_owner_handle}`
+        : (notesInfo.users?.[notesInfo.session_owner] ?? "")
+      : "",
+  );
+  /* The Session tab's agents other than the home one (its badge counts
+     them) and the Ticket tab's "In this session" line. */
+  // The server's whole-history count, topped up by the turns loaded since.
+  const repliers = $derived(sessionAgents(turns, (id, handle) => teamAgentsByHandle[handle]?.id === id, notesInfo?.session_agents ?? []));
+  const homeName = $derived(agentMode?.agent?.name || "Project agent");
+  let groupPickerOpen = $state(false);
   function openTeamAgent(handle: string) {
     navigateAgents({ handle, session: null, panel: null });
   }
@@ -1256,7 +1565,11 @@
   // talks to the one that already has context; mentioning a role starts a
   // new one, so the cheaper, better-informed target is offered first.
   const mentionableAgents = $derived.by(() => {
-    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "");
+    // In someone else's ticket session a mention reaches the sender's own
+    // agents only; the owner's goes through the Team hand-off, which takes
+    // agents shared with them, as in any chat.
+    const ownOnly = !!notesInfo?.ticket && !!notesInfo.session_owner && notesInfo.session_owner !== notesInfo.me;
+    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "", ownOnly);
     if (!subAgentsAllowed) return out;
     const seen = new Set<string>(out.map((a) => a.handle));
     for (const s of subAgents) {
@@ -1367,6 +1680,14 @@
       );
   }
 
+  // Stop → also stop teammates: cancels the tasks this chat sent that are
+  // still working, then rereads them.
+  function stopWorkingTeammates() {
+    run(cancelWorkingTeamTasks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => loadTeamTasks())
+      .catch((e: unknown) => toastError(`Stop teammates: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
   function stopAllSubAgents() {
     run(interruptAllSubAgents(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then(() => loadSubAgents())
@@ -1471,25 +1792,13 @@
     activeProjectId !== null &&
       projectOptions.some((p) => p.id === activeProjectId && p.ticketEnabled),
   );
+  /* In the Team app the jump stays in Team (Team › Tickets); elsewhere it
+     opens the project's board in Agents › Projects. */
   const ticketJump = $derived.by(() => {
     if (!ticketModeOn || activeProjectId === null) return undefined;
-    const proj = encodeURIComponent(activeProjectId);
-    const tk = notesInfo?.ticket;
-    if (tk) {
-      return {
-        label: `Ticket ${tk.id}`,
-        onJump: () => {
-          window.location.href = `${base}/sessions?project=${proj}&ticket=${encodeURIComponent(tk.id)}`;
-        },
-      };
-    }
-    return {
-      label: "Ticket board",
-      onJump: () => {
-        window.location.href = `${base}/sessions?project=${proj}`;
-      },
-    };
+    return ticketJumpFor(base, activeProjectId, notesInfo?.ticket?.id, agentMode);
   });
+  const openTicketPage = (id: string) => ticketJumpFor(base, activeProjectId ?? "", id, agentMode).onJump();
 
   /* Rehydrate a question that arrived while the tab was closed; never
    * clobber an ask already shown by a live SSE event. */
@@ -1508,9 +1817,13 @@
       .catch(() => { providerOptions = []; });
   }
 
-  function loadProjectOptions() {
-    run(getProjectOptions(base).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { projectOptions = res; })
+  /* The pickers' list is the caller's own projects; the chat's project is
+     asked for by id on top, so a chat in a project reached through see-all
+     or a tag still knows its board (ticketEnabled) and shows it as the
+     current one. A project the caller cannot open stays out. */
+  function loadProjectOptions(include: string | null) {
+    run(getProjectOptions(base, include ? { include: [include] } : undefined).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { projectOptions = res.filter((p) => !p.no_access); })
       .catch(() => { projectOptions = []; });
   }
 
@@ -1562,8 +1875,41 @@
   // Send, Jump to latest, Ctrl+↓, ask_user: glide down (instant under
   // prefers-reduced-motion). The open / view-switch landing is instant.
   function scrollToBottom() {
+    if (detached || turnJump.busy()) return jumpToLatest();
     scrollCtl?.scrollToBottom({ smooth: true });
   }
+  /* Jump to latest. Detached, that means leaving the jumped-to window:
+     reload the latest one and land at its bottom. Either way the Back to
+     reply chip is done. */
+  function jumpToLatest() {
+    // A lookup still out would re-detach the view the reader just left.
+    turnJump.cancel();
+    backTarget = null;
+    if (!detached) {
+      windowGen++;
+      scrollCtl?.scrollToBottom({ smooth: true });
+      return;
+    }
+    leaveDetached();
+    void loadConversation();
+    void tick().then(() => scrollCtl?.scrollToBottom());
+  }
+
+  $effect(() => {
+    const el = threadEl;
+    if (!el) return;
+    function onScroll() {
+      if (!backTarget || !el) return;
+      const b = findTurnEl(backTarget.turnId);
+      const r = b?.getBoundingClientRect();
+      const v = el.getBoundingClientRect();
+      const inView = !!r && r.bottom > v.top && r.top < v.bottom;
+      if (!inView) backLeft = true;
+      else if (backLeft) backTarget = null;
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  });
 
   $effect(() => {
     function onKeydown(e: KeyboardEvent) {
@@ -1597,11 +1943,14 @@
     const ctl = attachThreadScroll(threadEl, {
       onJump: (show) => { showJumpBtn = show; },
       onNearTop: () => loadOlderHistory(),
+      onNearBottom: () => loadNewerHistory(),
     });
     scrollCtl = ctl;
     // The scroller is recreated whenever the conversation view is shown again
-    // (switching tabs), so land at the bottom of the new one right away.
-    ctl.scrollToBottom();
+    // (switching tabs), so land at the bottom of the new one right away —
+    // unless it shows a detached window, whose bottom is not the latest.
+    if (untrack(() => detached)) ctl.hold(true);
+    else ctl.scrollToBottom();
     return () => {
       ctl.destroy();
       if (scrollCtl === ctl) scrollCtl = null;
@@ -1758,7 +2107,9 @@
         }
       })
       .catch((e: unknown) => {
-        if (showError) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+        // A chat the caller may not open (e.g. a shared agent's chat with
+        // history off) is an expected state: the empty chat shows, no alert.
+        if (showError && !noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
       })
       .finally(() => { historyLoaded = true; });
   }
@@ -1785,28 +2136,84 @@
 
   /* Pull one older page and keep the viewport anchored on the turn the
      user was looking at (prepending grows scrollHeight above it). */
-  function loadOlderHistory() {
-    if (loadingOlder || !hasMoreHistory) return;
+  let olderInFlight: Promise<void> | null = null;
+  let olderGen = 0;
+  function loadOlderHistory(): Promise<void> {
+    // A page already on its way is awaited, not skipped: the reply jump
+    // waits on it instead of counting it as "nothing older".
+    // A page for an older window (see windowGen) is neither awaited nor a
+    // reason to wait: its answer is dropped.
+    const gen = windowGen;
+    if (olderInFlight && olderGen === gen) return olderInFlight;
+    // Detached: page back from the jumped-to window, not the latest one.
+    const inWindow = detached;
+    if ((loadingOlder && olderGen === gen) || !(inWindow ? detachedHasMore : hasMoreHistory)) return Promise.resolve();
     // Old sessions can hold turns persisted before turn_id existed — skip
     // id-less turns (they can't anchor a `before` cursor) and local ones.
-    const before = turns.find((t) => t.turn_id && !t.turn_id.startsWith("local-user-"))?.turn_id;
-    if (!before) return;
+    const before = (inWindow ? detachedTurns : turns).find((t) => t.turn_id && !isLocalTurnId(t.turn_id))?.turn_id;
+    if (!before) return Promise.resolve();
     loadingOlder = true;
+    olderGen = gen;
     const el = threadEl;
     const prevHeight = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
-    run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
+    const p: Promise<void> = run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
-        hasMoreHistory = res.hasMore;
-        thread.prependHistory(res.turns);
+        if (gen !== windowGen) return;
+        if (inWindow) {
+          detachedHasMore = res.hasMore;
+          const have = new Set(detachedTurns.map((t) => t.turn_id).filter(Boolean));
+          detachedTurns = [...res.turns.filter((t) => !t.turn_id || !have.has(t.turn_id)), ...detachedTurns];
+        } else {
+          hasMoreHistory = res.hasMore;
+          thread.prependHistory(res.turns);
+        }
         requestAnimationFrame(() => {
           if (el) {
             scrollCtl?.setTop(prevTop + (el.scrollHeight - prevHeight));
           }
         });
       })
-      .catch((e: unknown) => toastError(`History: ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => { loadingOlder = false; });
+      .catch((e: unknown) => {
+        // Same as the first load: a chat the caller may no longer open is
+        // an expected state, not an alert.
+        if (gen === windowGen && !noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+      })
+      .finally(() => {
+        if (olderInFlight === p) { loadingOlder = false; olderInFlight = null; }
+      });
+    return (olderInFlight = p);
+  }
+
+  /* Detached only: pull the next page toward the latest turn (`after`).
+     Appending below the viewport needs no anchoring. The page that
+     reaches the latest turn closes the gap and re-attaches the thread. */
+  let loadingNewer = $state(false);
+  let newerInFlight: Promise<void> | null = null;
+  let newerGen = 0;
+  function loadNewerHistory(): Promise<void> {
+    const gen = windowGen;
+    if (newerInFlight && newerGen === gen) return newerInFlight;
+    if (!detached || (loadingNewer && newerGen === gen) || !detachedHasMoreAfter) return Promise.resolve();
+    const after = [...detachedTurns].reverse().find((t) => t.turn_id && !isLocalTurnId(t.turn_id))?.turn_id;
+    if (!after) return Promise.resolve();
+    loadingNewer = true;
+    newerGen = gen;
+    const p: Promise<void> = run(getConversation(base, sessionId, { limit: HISTORY_PAGE, after }).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        if (gen !== windowGen) return;
+        const have = new Set(detachedTurns.map((t) => t.turn_id).filter(Boolean));
+        detachedTurns = [...detachedTurns, ...res.turns.filter((t) => !t.turn_id || !have.has(t.turn_id))];
+        detachedHasMoreAfter = res.hasMoreAfter;
+        if (!res.hasMoreAfter) attachLatest();
+      })
+      .catch((e: unknown) => {
+        if (gen === windowGen && !noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+      })
+      .finally(() => {
+        if (newerInFlight === p) { loadingNewer = false; newerInFlight = null; }
+      });
+    return (newerInFlight = p);
   }
 
   /* History re-read for a turn that ended without its `done` (see the
@@ -1832,7 +2239,10 @@
     stream.status.subscribe((s) => {
       // Back after a drop: sub_agent signals sent meanwhile are gone, so
       // re-read the rows once.
-      if (s === "connected" && sseStatus === "error") scheduleSubAgentReload();
+      if (isReconnect(sseStatus, s)) {
+        scheduleSubAgentReload();
+        loadTeamTasks();
+      }
       sseStatus = s;
     });
 
@@ -1842,7 +2252,8 @@
       if (ev.type === "ask_user") {
         try {
           showAsk(JSON.parse(ev.data ?? "{}"));
-          setTimeout(() => scrollToBottom(), 50);
+          // Detached, a live event only bumps the Jump to latest badge.
+          setTimeout(() => { if (!detached) scrollToBottom(); }, 50);
         } catch (_) { /* skip */ }
       } else if (ev.type === "ask_user_resolved") {
         try { hideAsk(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
@@ -1874,6 +2285,11 @@
         // A reply's trip to Slack settled (sending → sent / failed). The
         // status is stamped on the turn server-side, so reload to show it.
         void loadConversation();
+      } else if (ev.type === "group_turn") {
+        // A ticket session's mention or another person's message is
+        // answered by their own agent off this session's run (T12b): the
+        // turn is stored, so reload to show it.
+        void loadConversation();
       } else if (ev.type === "done" || ev.type === "error") {
         cancelSettleReload();
         void loadConversation();
@@ -1899,6 +2315,13 @@
         // there, so without its own event the panel would sit on a stale
         // list until something unrelated triggered a fetch.
         scheduleTodoReload();
+      } else if (ev.type === "team_task") {
+        // A task this chat sent changed state (Needs you, a reply, …).
+        const t = parseTeamTaskEvent(ev.data);
+        if (t) {
+          teamTasksSeq++;
+          teamTasks = patchTeamTask(teamTasks, t);
+        }
       } else if (ev.type === "sub_agent") {
         // A sub-agent started, stopped or finished a turn.
         scheduleSubAgentReload();
@@ -1939,7 +2362,9 @@
 
   /* ── header actions ───────────────────────────────────────────── */
   function handleKill() {
-    confirmKill = { sid: sessionId, queued: false };
+    // Sub-agents keep their own cascade (server side); only working
+    // teammates are offered here, since nothing else would stop them.
+    confirmKill = { sid: sessionId, queued: false, teammates: busyTeammateCount };
   }
 
   // Cancel one in-flight connector run behind a running tool call (the ✕ on a
@@ -1983,8 +2408,8 @@
       doKill();
       return;
     }
-    if (busySubAgentCount > 0) {
-      confirmKill = { sid: sessionId, queued: false, subAgents: busySubAgentCount, quick: true };
+    if (busySubAgentCount > 0 || busyTeammateCount > 0) {
+      confirmKill = { sid: sessionId, queued: false, subAgents: busySubAgentCount, teammates: busyTeammateCount, quick: true };
       return;
     }
     confirmKill = { sid: sessionId, queued: false, quick: true };
@@ -1996,6 +2421,7 @@
     confirmKill = null;
     if (!target) return;
     if (target.subAgents) stopAllSubAgents();
+    if (target.teammates) stopWorkingTeammates();
     const action = target.queued
       ? dequeueProcess(base, target.sid)
       : killProcess(base, target.sid);
@@ -2134,7 +2560,10 @@
   }
 
   /* ── send message ─────────────────────────────────────────────── */
-  async function handleSend(msg: { text: string; files: File[] }) {
+  /* opts.reply: only the composer's own Send answers the chip. Continue,
+     Compact and `send:` commands go out as plain messages and leave the
+     chip in place for what the person is typing. */
+  async function handleSend(msg: { text: string; files: File[] }, opts: { reply?: boolean } = {}) {
     // A /compact the provider cannot act on never becomes a message.
     // The server refuses it too, but only the composer can stop the
     // user watching a command they typed sit there doing nothing — so
@@ -2154,10 +2583,20 @@
       mime: f.type || "application/octet-stream",
       size: f.size,
     }));
-    thread.appendUserTurn(msg.text, optimisticAttachments);
+    const reply = opts.reply ? replyTarget : null;
+    const localId = thread.appendUserTurn(
+      msg.text,
+      optimisticAttachments,
+      reply ? { turn_id: reply.turnId, author: reply.author, excerpt: reply.excerpt } : undefined,
+    );
     scrollToBottom();
     try {
-      await run(sendMessage(base, sessionId, msg).pipe(Effect.provide(WickClientLayer)));
+      const res = await run(sendMessage(base, sessionId, reply ? { ...msg, reply_to: reply.turnId } : msg).pipe(Effect.provide(WickClientLayer)));
+      // The bubble takes the id the server stored it under, so it can be
+      // replied to straight away.
+      if (localId && res?.turn_id) thread.renameTurn(localId, res.turn_id);
+      // Only the reply that went out is cleared: one picked meanwhile stays.
+      if (reply && replyTarget === reply) replyTarget = null;
     } catch (e: unknown) {
       toastError(`Send: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -2278,6 +2717,8 @@
         activeProvider = res.provider || res.active_agent || null;
         activeModelID = res.model_id || "";
         activeProjectId = res.project_id || null;
+        readOnly = !!res.read_only;
+        loadProjectOptions(activeProjectId);
         // The widget CSP arrives with meta, which can land AFTER the first
         // artifacts have mounted under the blocked fallback. Artifacts
         // subscribe to this policy and rebuild their srcdoc when it changes,
@@ -2285,7 +2726,14 @@
         // real policy as soon as it is known.
         setWidgetPolicy(res.widget);
       })
-      .catch(() => { title = sessionId; });
+      .catch(() => {
+        title = sessionId;
+        // No meta, no read-only claim: the composer stays on and the
+        // server's 403 refuses a send to someone else's chat. Failing
+        // closed would lock the caller's OWN chat on a passing error.
+        readOnly = false;
+        loadProjectOptions(null);
+      });
 
     // A bookmarked sub-agent URL redirects here as
     // ?rail=subagents&sub=<childSessionId>. Honour it so the link lands on
@@ -2309,7 +2757,7 @@
     loadTicket();
     loadTodos();
     loadProviderOptions();
-    loadProjectOptions();
+    // loadProjectOptions runs once meta names the chat's project.
     loadPendingAsk();
     // The Browser rail tab only appears if there's an enabled playwright_browser
     // instance to drive. Best-effort: on any error, leave it hidden.
@@ -2334,8 +2782,10 @@
     void loadConversation();
     scheduleProcessReload();
     scheduleSubAgentReload();
+    loadTeamTasks();
   }
 
+  onDestroy(() => turnJump.dispose());
   onDestroy(() => {
     cancelSettleReload();
     scmCleanup?.();
@@ -2361,9 +2811,22 @@
 
   const railTabsAll: { id: RailTab; label: string; icon: string }[] = [
     {
+      // The Team tasks this chat sent (team_message), apart from the
+      // Sub-agents tab: these are teammates' turns, answerable from here.
+      id: "tasks",
+      label: "Tasks",
+      icon: '<rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-linejoin="round"></rect><path d="M5 8l2 2 4-4.5" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
       id: "subagents",
       label: "Sub-agents",
       icon: '<circle cx="8" cy="4" r="2.5"></circle><circle cx="3.5" cy="12" r="2"></circle><circle cx="12.5" cy="12" r="2"></circle><path d="M8 6.5v2M8 8.5H4.5a1 1 0 00-1 1v.5M8 8.5h3.5a1 1 0 011 1v.5" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
+      // Every session: where it lives, which agents answer, who wrote.
+      id: "session",
+      label: "Session",
+      icon: '<circle cx="6" cy="5.5" r="2.25"></circle><path d="M2 13c0-2.2 1.8-3.75 4-3.75S10 10.8 10 13" stroke-linecap="round"></path><circle cx="11.25" cy="6" r="1.75"></circle><path d="M11 9.4c1.7.1 3 1.4 3 3.1" stroke-linecap="round"></path>',
     },
     {
       id: "ticket",
@@ -2455,6 +2918,7 @@
         // own — the badge promotes it into the strip from there.
         (t.id !== "todos" || todosActive !== null || todosHistory.length > 0) &&
         (t.id !== "subagents" || subAgents.length > 0 || teamTasks.length > 0) &&
+        (t.id !== "tasks" || teamTasks.length > 0) &&
         // Notes need nothing but a reachable scope — and no Ticket tab to
         // have absorbed them.
         (t.id !== "notes" || (notesInfo !== null && !ticketTabShown)) &&
@@ -2463,7 +2927,9 @@
         // no board will ever show. A session already ON a ticket keeps the
         // tab whatever the setting says — tickets can be switched off after
         // the fact, and that must not strand the ones already filed.
-        (t.id !== "ticket" || ticketTabShown),
+        (t.id !== "ticket" || ticketTabShown) &&
+        // The Session tab reads the session's info off the notes reply.
+        (t.id !== "session" || notesInfo !== null),
     ),
   );
 
@@ -2585,8 +3051,11 @@
     return { update: read };
   }
   /* The "More" button sits below the tabs and is never folded, so its height
-     comes out of the budget before anything is fitted. */
-  const RAIL_MORE_H = 44;
+     comes out of the budget before anything is fitted. Shorter in icons
+     mode, where no "More" runs under the dots. */
+  /* Labels are the default: only an explicit false means icons only. */
+  const railLabels = $derived(railPrefs.labels !== false);
+  const RAIL_MORE_H = $derived(railLabels ? 44 : 37);
   const railBudget = $derived(railViewH > 0 ? railViewH * RAIL_FILL - RAIL_MORE_H : 0);
   /* What the window can hold, on top of what the user chose to fold. This is
      a display override like badge promotion: nothing is saved, so the tabs
@@ -2595,7 +3064,7 @@
     fitStrip(
       railOrdered,
       railSplit,
-      (id) => railTabH[id] ?? RAIL_TAB_FALLBACK_H,
+      (id) => railTabH[id] ?? (railLabels ? RAIL_TAB_FALLBACK_H : RAIL_ICON_TAB_FALLBACK_H),
       railBudget,
       railTab,
     ),
@@ -2622,6 +3091,7 @@
   // sub-agent row goes away.
   $effect(() => {
     if (railTab === "subagents" && subAgents.length === 0 && teamTasks.length === 0) railTab = null;
+    if (railTab === "tasks" && teamTasks.length === 0) railTab = null;
   });
 
   const sideOpen = $derived(railTab !== null);
@@ -2659,7 +3129,22 @@
     subAgents.filter((s) => isSubAgentWorking(s.status, s.lifecycle)).length,
   );
   const subAgentsBusy = $derived(busySubAgentCount > 0);
+  // Teammates this chat waits on (per handle): header chip, tray, Stop.
+  const busyTeammateCount = $derived(workingTeammates(teamTasks).length);
+  const stopPrompt = $derived(confirmKill && !confirmKill.queued ? stopDialog(confirmKill.subAgents ?? 0, confirmKill.teammates ?? 0) : null);
+  /* The tab's accessible name, and its only tooltip: the custom one in
+     icons mode, the native title in labels mode. Source carries its repo
+     here rather than in a title of its own, which stacked a second tooltip
+     on top of this one. */
+  function railName(tab: { id: RailTab; label: string }): string {
+    if (tab.id === "tasks") return railTabName(tab.label, tasksBadge.count, tasksBadge.needsInput);
+    if (tab.id === "source") return railTabName(tab.label, 0, 0, [scmSnapshotRepo]);
+    if (railBusy(tab.id)) return railTabName(tab.label, 0, 0, ["working"]);
+    return tab.label;
+  }
+
   function railBusy(id: RailTab): boolean {
+    if (id === "tasks") return tasksBadge.working;
     return id === "subagents" && subAgentsBusy;
   }
 
@@ -2678,6 +3163,8 @@
     if (id === "workspace") return workspaceCount;
     if (id === "scheduled") return scheduledCount;
     if (id === "subagents") return subAgentCount;
+    if (id === "tasks") return tasksBadge.count;
+    if (id === "session") return repliers.length;
     return 0;
   }
 </script>
@@ -2686,8 +3173,41 @@
   {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
 {/snippet}
 
-{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string })}
-  <AgentAvatar kind={a.kind} shape={a.shape} expression={a.expression} color={a.color} size={18} />
+{#snippet sessionPanel()}
+  <SessionPanel
+    info={notesInfo}
+    {homeName}
+    homeOwner={homeOwnerLabel}
+    agents={repliers}
+    onOpenTicket={openTicketPage}
+    onDiscuss={notesInfo?.ticket ? () => (groupPickerOpen = true) : undefined}
+  />
+{/snippet}
+
+{#snippet inThisSession()}
+  <!-- Ticket tab: who answers here, in one line; the full list is the
+       Session tab. -->
+  <div class="rounded-lg border border-white-300 bg-white-100 p-3 text-xs dark:border-navy-600 dark:bg-navy-700">
+    <div class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">In this session</div>
+    <div class="flex items-center gap-2">
+      <span class="flex shrink-0" aria-hidden="true">
+        {#each [homeName, ...repliers.map((r) => r.name)].slice(0, 3) as n, i (i)}
+          <span class="flex h-5 w-5 items-center justify-center rounded-full border border-white-100 text-[10px] font-semibold text-white-100 dark:border-navy-700 {i === 0 ? 'bg-green-500' : 'bg-navy-400 -ml-1.5'}">{(n.replace(/^@/, "")[0] ?? "?").toUpperCase()}</span>
+        {/each}
+      </span>
+      <div class="min-w-0">
+        <div class="truncate text-black-900 dark:text-white-100" data-testid="in-this-session-line">
+          <span class="font-semibold">{homeName}</span>{#if homeOwnerLabel}<span class="text-black-700 dark:text-black-600"> · {homeOwnerLabel}</span>{/if}{#if repliers.length}<span class="text-black-700 dark:text-black-600"> +{repliers.length} replied</span>{/if}
+        </div>
+        <button type="button" class="text-green-600 hover:underline dark:text-green-400" data-testid="open-session-info" onclick={() => (railTab = "session")}>Open session info →</button>
+      </div>
+    </div>
+    <button type="button" class="mt-2 w-full rounded-lg border border-white-300 px-3 py-1 font-medium text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-800" data-testid="session-discuss-in-group" onclick={() => (groupPickerOpen = true)}>👥 Discuss in a group</button>
+  </div>
+{/snippet}
+
+{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null })}
+  <AgentAvatar kind={a.kind} image={a.image} shape={a.shape} expression={a.expression} color={a.color} size={18} />
 {/snippet}
 
 <!-- Full-height flex row: main area + vertical rail -->
@@ -2705,12 +3225,17 @@
       lifecycle={agentLifecycle}
       {idleTimeoutMs}
       subAgentsBusy={busySubAgentCount}
+      teammatesBusy={busyTeammateCount}
       {activeView}
       {ticketJump}
       onKill={handleKill}
       onDelete={handleDelete}
       onTabChange={handleTabChange}
     />
+    {/if}
+
+    {#if groupPickerOpen && notesInfo?.ticket}
+      <GroupPickerDialog {base} ticketId={notesInfo.ticket.id} projectId={activeProjectId ?? undefined} onClose={() => (groupPickerOpen = false)} onAttached={() => { groupPickerOpen = false; toastOk("Ticket attached to the group chat"); }} />
     {/if}
 
     <!-- Zone 2: main content area — switches by activeView -->
@@ -2727,16 +3252,30 @@
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
               <span>Loading older messages…</span>
             </div>
-          {:else if hasMoreHistory}
+          {:else if detached ? detachedHasMore : hasMoreHistory}
             <div class="py-1.5 text-center">
               <button
                 type="button"
                 onclick={loadOlderHistory}
-                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-500 transition-colors"
+                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-600 transition-colors"
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          {#if loadingNewer}
+            <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
+              <span>Loading newer messages…</span>
+            </div>
+          {:else if detached && detachedHasMoreAfter}
+            <div class="py-1.5 text-center">
+              <button
+                type="button"
+                onclick={loadNewerHistory}
+                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-600 transition-colors"
+              >Load newer messages</button>
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -2757,19 +3296,44 @@
 
       <!-- Zone 4: composer with leading toolbar actions in one row -->
       <div class="relative shrink-0 px-6 bg-white-200 dark:bg-navy-800">
-        {#if showJumpBtn}
-          <button
-            type="button"
-            onclick={scrollToBottom}
-            class="absolute left-1/2 -translate-x-1/2 -top-3 z-30 inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
-            title="Scroll to latest (Ctrl+↓)"
-          >
-            <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
-              <path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-            <span>Jump to latest</span>
-            <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
-          </button>
+        {#if showJumpBtn || detached || backTarget}
+          <!-- Floating chips over the composer edge: Back to reply returns to
+               the bubble a quote jump started from; Jump to latest leaves a
+               detached window too. -->
+          <div class="absolute left-1/2 -translate-x-1/2 -top-3 z-30 flex items-center gap-2">
+            {#if backTarget}
+              <button
+                type="button"
+                data-testid="back-to-reply"
+                onclick={backToReply}
+                class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+                title="Back to the message you jumped from"
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                  <path d="M6 4 3 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H8" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <span>Back to reply</span>
+              </button>
+            {/if}
+            {#if showJumpBtn || detached}
+              <button
+                type="button"
+                data-testid="jump-latest"
+                onclick={jumpToLatest}
+                class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+                title="Scroll to latest (Ctrl+↓)"
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <span>Jump to latest</span>
+                {#if detachedBadge > 0}
+                  <span data-testid="jump-latest-badge" class="rounded-full bg-green-600 px-1.5 text-[10px] font-semibold leading-4 text-white-100">{detachedBadge}</span>
+                {/if}
+                <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
+              </button>
+            {/if}
+          </div>
         {/if}
         <div class="page-col relative pb-3 md:pb-6">
           <!-- /project picker floats above the composer. /provider now opens
@@ -2819,10 +3383,47 @@
             usageRefreshing={usageRechecking}
             usageRecheckWait={usageRecheckWait}
             onOpenUsage={openUsageFromContext}
+            loadSeries={(q) => fetchSessionContext(base, sessionId, q)}
           />
+          {#if readOnly}
+            <p class="mb-2 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" data-testid="read-only-chat">
+              Read-only — this chat belongs to someone else.
+            </p>
+          {/if}
+          {#if busyTeammateCount > 0 && !readOnly}
+            <div data-testid="teammates-tray" class="mb-2 flex items-center gap-2 rounded-xl border border-navy-600 bg-white-200 px-3 py-2 text-xs dark:bg-navy-800">
+              <span class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-navy-400 border-t-transparent animate-spin motion-reduce:animate-none" aria-hidden="true"></span>
+              <span class="text-black-800 dark:text-white-300">{waitingTrayLine(agentMode?.agent?.name || agentLabel, busyTeammateCount)}</span>
+              <span class="ml-auto text-black-700 dark:text-black-600">Stop also offers to stop them</span>
+            </div>
+          {/if}
+          {#if agentMode?.agent && !readOnly}
+            <TaskTray tasks={teamTasks} agents={teamAgentsByHandle} onAnswer={answerTask} onCancel={cancelTask} onJump={jumpToTask} />
+          {/if}
+          {#if replyTarget && !readOnly}
+            <div data-testid="reply-chip" class="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-green-500 bg-white-200 px-3 py-1.5 text-xs dark:bg-navy-800">
+              <div class="min-w-0 flex-1">
+                <div class="font-medium text-black-900 dark:text-white-100">Replying to {replyTarget.author}</div>
+                <div class="truncate text-black-700 dark:text-black-600">{replyTarget.excerpt}</div>
+              </div>
+              <button
+                type="button"
+                data-testid="reply-cancel"
+                aria-label="Cancel reply"
+                title="Cancel reply (Esc)"
+                onclick={() => (replyTarget = null)}
+                class="shrink-0 rounded p-0.5 text-black-600 hover:text-black-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:text-white-100"
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path></svg>
+              </button>
+            </div>
+          {/if}
+          <div bind:this={composerWrapEl} class="contents">
           <Composer
+            {readOnly}
             bind:this={composerRef}
-            onSend={handleSend}
+            onSend={(m) => handleSend(m, { reply: true })}
+            onEscape={cancelReplyOnEscape}
             placeholder={agentMode?.agent ? composerPlaceholder(agentMode.agent.name) : "Ask anything…   / commands · @ files"}
             notifyKey={NOTIFY_KEY}
             provider={!agentMode?.hidePickers ? providerSelect : agentMode.providerSwitch ? agentProviderSelect : undefined}
@@ -2850,6 +3451,7 @@
             onStop={handleStopFromComposer}
             toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
           />
+          </div>
         </div>
       </div>
     {:else if activeView === "approvals"}
@@ -3014,9 +3616,13 @@
           noteCount={(notesInfo?.notes ?? []).length}
           notes={notesInfo?.notes}
           users={notesInfo?.users}
-          onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
+          onOpenTicket={openTicketPage}
+          openLabel={agentMode ? "Open in Team › Tickets ↗" : undefined}
           onChanged={loadTicket}
+          sessionSummary={inThisSession}
         />
+      {:else if railTab === "session" && notesInfo}
+        {@render sessionPanel()}
       {:else if railTab === "notes" && notesInfo}
         <NotesRail
           {base}
@@ -3064,6 +3670,21 @@
           processes={liveProcesses}
           onKill={(sid) => { confirmKill = { sid, queued: false }; }}
           onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
+        />
+      {:else if railTab === "tasks"}
+        <TasksPanel
+          tasks={teamTasks}
+          agents={teamAgentsByHandle}
+          senderName={agentMode?.agent?.name ?? "Captain"}
+          userName={viewerName()}
+          onAnswer={readOnly ? undefined : answerTask}
+          onCancel={readOnly ? undefined : cancelTask}
+          onRetry={readOnly ? undefined : retryTask}
+          onReassign={readOnly ? undefined : reassignTask}
+          loadTargets={readOnly ? undefined : loadReassignTargets}
+          onJump={jumpToTask}
+          onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+          loadThread={readOnly ? undefined : loadTaskThread}
         />
       {:else if railTab === "subagents"}
         <SubAgentPanel
@@ -3193,6 +3814,7 @@
       >
         <div class="flex items-center justify-between px-4 py-3 border-b border-white-300 dark:border-navy-600 shrink-0">
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100 capitalize">{railTab}</h2>
+          {#if railTab === "tasks"}<span data-testid="tasks-sheet-count" class="ml-auto mr-2 text-[11px] text-black-700">this chat · {teamTasks.length}</span>{/if}
           <button
             type="button"
             aria-label="Close"
@@ -3219,9 +3841,13 @@
               noteCount={(notesInfo?.notes ?? []).length}
               notes={notesInfo?.notes}
               users={notesInfo?.users}
-              onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
+              onOpenTicket={openTicketPage}
+              openLabel={agentMode ? "Open in Team › Tickets ↗" : undefined}
               onChanged={loadTicket}
+              sessionSummary={inThisSession}
             />
+          {:else if railTab === "session" && notesInfo}
+            {@render sessionPanel()}
           {:else if railTab === "notes" && notesInfo}
             <NotesRail
               {base}
@@ -3269,6 +3895,22 @@
               processes={liveProcesses}
               onKill={(sid) => { confirmKill = { sid, queued: false }; }}
               onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
+            />
+          {:else if railTab === "tasks"}
+            <TasksPanel
+              tasks={teamTasks}
+              agents={teamAgentsByHandle}
+              senderName={agentMode?.agent?.name ?? "Captain"}
+              userName={viewerName()}
+              onAnswer={readOnly ? undefined : answerTask}
+              onCancel={readOnly ? undefined : cancelTask}
+              onRetry={readOnly ? undefined : retryTask}
+              onReassign={readOnly ? undefined : reassignTask}
+              loadTargets={readOnly ? undefined : loadReassignTargets}
+              onJump={jumpToTask}
+              onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+              loadThread={readOnly ? undefined : loadTaskThread}
+              header={false}
             />
           {:else if railTab === "subagents"}
             <SubAgentPanel
@@ -3392,10 +4034,12 @@
     class="fixed top-1/2 right-0 z-20 -translate-y-1/2 {railOrdered.length === 0 ? 'hidden' : 'flex'} flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
   >
     {#each railFit.shown as tab, i}
+      <!-- Icons mode drops the native title: the tooltip below shows on
+           hover AND keyboard focus, and a title on top would double it. -->
       <button
         type="button"
-        title={tab.label}
-        aria-label={tab.label}
+        title={railLabels ? railName(tab) : undefined}
+        aria-label={railName(tab)}
         draggable="true"
         data-testid={"rail-tab-" + tab.id}
         use:measureRailTab={tab.id}
@@ -3405,7 +4049,7 @@
         ondrop={(e) => { e.preventDefault(); dropRailOn(tab.id); }}
         ondragend={() => { railDragId = null; }}
         class={[
-          "group inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 transition-colors",
+          "group relative inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 transition-colors",
           // The strip no longer clips its children, so the top tab carries
           // the rounded corner itself — otherwise its hover fill squares off
           // the rail's edge.
@@ -3417,14 +4061,18 @@
             : "hover:bg-white-200 dark:hover:bg-navy-800",
         ].join(" ")}
       >
-        {#if railBusy(tab.id)}
+        {#if tab.id === "tasks" && tasksBadge.count > 0}
+          <!-- Tasks carries its own marks: green count, amber dot while a
+               task needs input, the ring while a teammate works. -->
+          <RailTasksIcon icon={tab.icon} count={tasksBadge.count} needsInput={tasksBadge.needsInput} working={tasksBadge.working} />
+        {:else if railBusy(tab.id)}
           <!-- Ring around the icon rather than a badge replacement: the
                count still matters (how many), the ring adds the part a
                number cannot carry (right now). -->
           <span class="relative inline-flex h-4 w-4 items-center justify-center">
             <span
               class="absolute inset-[-3px] rounded-full border-2 border-green-500 border-t-transparent animate-spin"
-              aria-label="Working"
+              aria-hidden="true"
             ></span>
             <svg
               viewBox="0 0 16 16"
@@ -3442,10 +4090,7 @@
             {/if}
           </span>
         {:else if tab.id === "source" && scmChangeCount > 0}
-          <span
-            class="relative {scmRepoPulse ? 'animate-pulse' : ''}"
-            title={scmSnapshotRepo ? `Source: ${scmSnapshotRepo}` : "Source"}
-          >
+          <span class="relative {scmRepoPulse ? 'animate-pulse' : ''}">
             <svg
               viewBox="0 0 16 16"
               class="h-4 w-4 text-green-500"
@@ -3471,6 +4116,7 @@
               {@html tab.icon}
             </svg>
             <span
+              data-testid={"rail-badge-" + tab.id}
               class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
             >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
           </span>
@@ -3485,14 +4131,24 @@
             {@html tab.icon}
           </svg>
         {/if}
-        <span
-          class={[
-            "text-[9px] font-medium [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide",
-            railTab === tab.id
-              ? "text-green-600 dark:text-green-400"
-              : "text-black-700 dark:text-black-600",
-          ].join(" ")}
-        >{tab.label}</span>
+        {#if railLabels}
+          <span
+            class={[
+              "text-[9px] font-medium [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide",
+              railTab === tab.id
+                ? "text-green-600 dark:text-green-400"
+                : "text-black-700 dark:text-black-600",
+            ].join(" ")}
+          >{tab.label}</span>
+        {:else}
+          <!-- Hidden from assistive tech: aria-label already names the tab.
+               Not drawn during a drag, when hover marks the drop target. -->
+          <span
+            aria-hidden="true"
+            data-testid={"rail-tip-" + tab.id}
+            class={[RAIL_TIP_CLASS, railDragId !== null ? "hidden" : ""].join(" ")}
+          >{#if tab.id === "tasks"}<RailTasksTip label={tab.label} count={tasksBadge.count} needsInput={tasksBadge.needsInput} />{:else}{railName(tab)}{/if}</span>
+        {/if}
       </button>
     {/each}
 
@@ -3512,6 +4168,7 @@
         onReorder={reorderRailTab}
         onToggleHidden={toggleRailHidden}
         dragging={railDragId !== null}
+        labels={railLabels}
         onDropHere={(id) => {
           // Dropped on More: fold that tab, leaving its position alone.
           railDragId = null;
@@ -3548,30 +4205,46 @@
 
 <ConfirmDialog
   open={providerNotice !== null}
-  title={providerNotice === "started" ? "Provider is fixed for this chat" : "Provider is set by the agent"}
-  body={providerNotice === "started"
-    ? "Provider can't be changed once a conversation has started. Start a new chat to use a different one."
-    : `This agent always uses ${effectiveProvider}. Change it in agent Settings.`}
-  confirmLabel={providerNotice === "started" ? "New chat" : "Open Settings"}
+  title="Provider is set by the agent"
+  body={`This agent always uses ${effectiveProvider}. Change it in agent Settings.`}
+  confirmLabel="Open Settings"
   cancelLabel="Close"
   onConfirm={() => {
-    const n = providerNotice;
     providerNotice = null;
-    if (n === "started") agentMode?.onNewChat?.();
-    else agentMode?.onOpenSettings?.();
+    agentMode?.onOpenSettings?.();
   }}
   onCancel={() => (providerNotice = null)}
 />
 
+<!-- Another provider in a started chat: switching is allowed, but the
+     new provider may start without this conversation, so it asks first. -->
+<Modal open={pendingProvider !== null} title="Switch provider?" onClose={() => (pendingProvider = null)} size="sm">
+  <p class="text-sm text-black-600 dark:text-black-600">{providerSwitchBody(activeProvider ?? "", pendingProvider ?? "")}</p>
+  {#snippet footer()}
+    <Button variant="secondary" onclick={() => (pendingProvider = null)}>Cancel</Button>
+    {#if agentMode?.onNewChat}
+      <Button variant="secondary" onclick={() => { pendingProvider = null; agentMode?.onNewChat?.(); }}>New chat</Button>
+    {/if}
+    <Button
+      variant="primary"
+      onclick={() => {
+        const v = pendingProvider;
+        pendingProvider = null;
+        if (v) void handleProviderChange(v);
+      }}
+    >Switch anyway</Button>
+  {/snippet}
+</Modal>
+
 <ConfirmDialog
   open={confirmKill !== null}
-  title={confirmKill?.queued ? "Cancel queued agent?" : confirmKill?.subAgents ? "Stop this agent and its sub-agents?" : "Stop this agent?"}
+  title={confirmKill?.queued ? "Cancel queued agent?" : stopPrompt ? stopPrompt.title : "Stop this agent?"}
   body={confirmKill?.queued
     ? "The queued spawn will be dropped."
-    : confirmKill?.subAgents
-      ? `${confirmKill.subAgents} ${confirmKill.subAgents === 1 ? "sub-agent is" : "sub-agents are"} still working and will be stopped too. The chat history is kept.`
+    : stopPrompt
+      ? stopPrompt.body
       : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
-  confirmLabel={confirmKill?.queued ? "Cancel spawn" : confirmKill?.subAgents ? "Stop all" : "Stop agent"}
+  confirmLabel={confirmKill?.queued ? "Cancel spawn" : stopPrompt ? stopPrompt.confirm : "Stop agent"}
   destructive={true}
   onConfirm={doKill}
   onCancel={() => { confirmKill = null; }}

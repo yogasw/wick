@@ -279,8 +279,9 @@ func jobMaxTimeoutMin(j *entity.Job) int {
 // the operator can copy a complete endpoint into the sending system.
 func (h *Handler) webhookRoutesFor(key string) []webhookRouteJSON {
 	base := strings.TrimRight(h.configs.AppURL(), "/")
-	out := make([]webhookRouteJSON, 0, len(h.webhooks))
-	for _, wr := range h.webhooks {
+	routes := h.webhooksNow()
+	out := make([]webhookRouteJSON, 0, len(routes))
+	for _, wr := range routes {
 		if wr.ToolKey != key {
 			continue
 		}

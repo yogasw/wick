@@ -23,6 +23,19 @@ message ExecuteRequest {
   // same InstanceID() and CallerUserID() the host sees. Empty from older hosts.
   string instance_id = 6;
   string caller_user_id = 7;
+  // account_id / owner_bot_id mirror the host Ctx's AccountID() (the
+  // connected account the call runs as) and OwnerBotID() (the bot that owns
+  // the calling session). Empty from older hosts.
+  string account_id = 8;
+  string owner_bot_id = 9;
+  // raw_input_json is the caller's arguments with their JSON types kept
+  // (Ctx.RawInputValue); empty when the host recorded none.
+  bytes raw_input_json = 10;
+  // health_check asks the plugin to run the module's HealthCheck hook
+  // instead of an operation. A plugin without one answers Error
+  // {code:"no_health_check"}. Only sent when the manifest says
+  // has_health_check, so older plugins never see it.
+  bool health_check = 11;
 }
 // mask / mask_ignore_case carry the values the operation passed to c.Mask /
 // c.MaskIgnoreCase. The plugin has no encryption key, so it returns them in

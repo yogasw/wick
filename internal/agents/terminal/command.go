@@ -21,25 +21,14 @@ type Command struct {
 	Args []string `json:"-"`
 }
 
-// Commands lists what a terminal may run for ins. nil = the type has no
-// web terminal.
+// Commands lists what a terminal may run for ins, from the type's
+// registered Provider. nil = the type has no web terminal.
 func Commands(ins provider.Instance) []Command {
-	switch ins.Type {
-	case provider.TypeOMP:
-		p := provider.OMPProfile(ins)
-		return []Command{
-			{Key: "tui", Label: "omp --profile " + p, Args: []string{"--profile", p}},
-			{Key: "login", Label: "omp login", Args: []string{"login"}},
-			{Key: "usage", Label: "omp usage", Args: []string{"usage"}},
-		}
-	case provider.TypeOpencode:
-		return []Command{
-			{Key: "tui", Label: "opencode"},
-			{Key: "auth-login", Label: "opencode auth login", Args: []string{"auth", "login"}},
-			{Key: "auth-list", Label: "opencode auth list", Args: []string{"auth", "list"}},
-		}
+	p, ok := lookup(ins.Type)
+	if !ok {
+		return nil
 	}
-	return nil
+	return p.Commands(ins)
 }
 
 // LookupCommand finds key in ins's allowlist.
@@ -97,13 +86,15 @@ func GottyArgs(s Spec) []string {
 // Env is the environment gotty (and so the command) runs with: the
 // scrubbed host env, then the instance's account env exactly as a login
 // or spawn gets it (OMP_PROFILE; opencode's XDG_* data/config dirs, which
-// keep the host's ~/.config/opencode MCP servers out), with the opencode
-// config overrides blanked the same way a spawn blanks them. Any GOTTY_*
-// var is dropped: gotty reads every flag from env too.
+// keep the host's ~/.config/opencode MCP servers out; for claude/codex/
+// gemini the instance's own Env, e.g. CLAUDE_CONFIG_DIR or CODEX_HOME),
+// then the type's registered Env adjustment (opencode blanks its config
+// overrides the same way a spawn does). Any GOTTY_* var is dropped:
+// gotty reads every flag from env too.
 func Env(ins provider.Instance) []string {
 	env := append(envscrub.ScrubOSEnv(), provider.OwnAccountEnv(ins)...)
-	if ins.Type == provider.TypeOpencode {
-		env = append(env, "OPENCODE_CONFIG=", "OPENCODE_CONFIG_DIR=")
+	if p, ok := lookup(ins.Type); ok && p.Env != nil {
+		env = p.Env(ins, env)
 	}
 	out := env[:0]
 	for _, kv := range env {

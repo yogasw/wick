@@ -13,22 +13,26 @@ export type TeamPeer = {
   disabled: boolean;
   /** "off" = takes no mention from another agent; hidden from `@`. */
   mention_from?: string;
-  avatar?: { kind?: string; shape?: string; color?: string; expression?: string } | null;
+  /** Set on an agent someone else shared with the viewer: left out of the
+      `@` menu in a ticket session (ownOnly), where a mention reaches the
+      sender's own agents only. */
+  shared_by?: string;
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null } | null;
 };
 
 /** teamMentionAgents lists the owner's agents an agent's chat can @-mention:
     every agent but itself, the disabled ones and the ones whose mentions
     are off (the router refuses those), with a one-line tagline from the
-    description. */
-export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: string): ComposerMentionAgent[] {
+    description. ownOnly also leaves out agents shared with the viewer. */
+export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: string, ownOnly = false): ComposerMentionAgent[] {
   return (peers ?? [])
-    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle)
+    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle && !(ownOnly && p.shared_by))
     .map((p) => ({
       handle: p.handle,
       label: p.name || p.handle,
       hint: tagline(p.description),
       group: "team" as const,
-      avatar: { kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression },
+      avatar: { kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image },
     }));
 }
 
@@ -60,7 +64,7 @@ export function teamSender(source: string | undefined, text: string): { name: st
 }
 
 /** A mention_handoff system turn's fields, as the server writes them in Extras. */
-export type Handoff = { from: string; to: string; state: string; taskId: string; contextId: string; toAgentId: string };
+export type Handoff = { from: string; to: string; state: string; taskId: string; contextId: string; toAgentId: string; origin: string };
 
 export function handoffOf(extras: Record<string, string> | null | undefined): Handoff {
   const x = extras ?? {};
@@ -71,6 +75,8 @@ export function handoffOf(extras: Record<string, string> | null | undefined): Ha
     taskId: x.task_id ?? "",
     contextId: x.context_id ?? "",
     toAgentId: x.to_agent_id ?? "",
+    /* "user" when the person sent the task with an @mention (P45). */
+    origin: x.origin ?? "",
   };
 }
 
@@ -85,8 +91,10 @@ export function handoffState(state: string): string {
       return "needs input";
     case "completed":
       return "completed";
-    case "failed":
     case "rejected":
+    case "auth-required":
+      return "declined";
+    case "failed":
       return "failed";
     case "canceled":
       return "canceled";

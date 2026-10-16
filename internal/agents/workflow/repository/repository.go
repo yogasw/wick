@@ -43,6 +43,9 @@ type Repo struct {
 	// is what tests and the CLI want — there is no signed-in human there to
 	// judge, and refusing every pinned session would break them.
 	SessionAccess func(userID, sessionID string) bool
+	// ProjectAccess reports whether a user may bind a workflow node to a
+	// project. Same shape and same nil-means-off rule as SessionAccess.
+	ProjectAccess func(userID, projectID string) bool
 }
 
 func New(db *gorm.DB) *Repo { return &Repo{db: db} }
@@ -62,6 +65,34 @@ func New(db *gorm.DB) *Repo { return &Repo{db: db} }
 func (r *Repo) WithSessionAccess(fn func(userID, sessionID string) bool) *Repo {
 	r.SessionAccess = fn
 	return r
+}
+
+// WithProjectAccess installs the gate that stops a workflow node from running
+// in a project its author cannot see. An agent or session_init node carries a
+// `workspace` (project id); the session it creates then works inside that
+// project with the workflow owner's identity, so anyone who could edit the
+// workflow could otherwise reach any project by typing its id.
+func (r *Repo) WithProjectAccess(fn func(userID, projectID string) bool) *Repo {
+	r.ProjectAccess = fn
+	return r
+}
+
+// checkProjects refuses a draft whose agent / session_init nodes name a project
+// the author may not access. Enforced at SAVE, like checkPinnedSessions, so the
+// failure lands on the person typing the id.
+func (r *Repo) checkProjects(w wf.Workflow, createdBy string) error {
+	if r.ProjectAccess == nil || createdBy == "" {
+		return nil
+	}
+	for _, n := range w.Graph.Nodes {
+		if n.Workspace == "" || (n.Type != wf.NodeAgent && n.Type != wf.NodeSessionInit) {
+			continue
+		}
+		if !r.ProjectAccess(createdBy, n.Workspace) {
+			return fmt.Errorf("node %q uses project %q, which you do not have access to", n.ID, n.Workspace)
+		}
+	}
+	return nil
 }
 
 // checkPinnedSessions refuses a draft that pins sessions its author may not
@@ -163,6 +194,9 @@ func parseOwned(row entity.Workflow, body string) (wf.Workflow, error) {
 // draft rows for this workflow. Published rows are never pruned.
 func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (uint, error) {
 	if err := r.checkPinnedSessions(w, createdBy); err != nil {
+		return 0, err
+	}
+	if err := r.checkProjects(w, createdBy); err != nil {
 		return 0, err
 	}
 	now := time.Now()

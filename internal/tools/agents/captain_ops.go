@@ -61,6 +61,11 @@ type captainListItem struct {
 }
 
 func (CaptainOps) manager(ctx context.Context, sessionID string) (entity.AgentPersona, error) {
+	// A Captain in a ticket room reaches its ticket only: creating,
+	// scheduling or reconfiguring agents would act outside it.
+	if InTicketRoom(sessionID) {
+		return entity.AgentPersona{}, team.ErrInTicketRoom
+	}
 	if globalTeam == nil {
 		return entity.AgentPersona{}, errors.New("agents app is not enabled")
 	}
@@ -150,6 +155,7 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 		if err := json.Unmarshal([]byte(in.Avatar), &av); err != nil {
 			return nil, errors.New("avatar must be a JSON object")
 		}
+		av = team.AvatarForCreate(av)
 	}
 	sys := in.SystemPrompt
 	if strings.TrimSpace(sys) == "" {

@@ -70,6 +70,44 @@ type UserMetadata struct {
 	// ticket record itself. Deleting a ticket that still holds chats always
 	// asks, however this is set: that one takes conversations with it.
 	AutoDeleteEmptyTickets string `json:"auto_delete_empty_tickets,omitempty"`
+
+	// HiddenConnectors lists connector instance IDs this user hid "for me":
+	// a personal declutter of the connector list, never an access control.
+	// Hiding changes nothing for other users or for what this user may run.
+	// Capped at MaxHiddenConnectors since the bag is read on every request.
+	// Read through IsConnectorHidden / HiddenConnectorSet.
+	HiddenConnectors []string `json:"hidden_connectors,omitempty"`
+}
+
+// MaxHiddenConnectors caps HiddenConnectors. The whole metadata bag is
+// loaded with the user on every request, so the list must stay small.
+const MaxHiddenConnectors = 200
+
+// IsConnectorHidden reports whether the user hid connector instance id.
+func (m UserMetadata) IsConnectorHidden(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, h := range m.HiddenConnectors {
+		if h == id {
+			return true
+		}
+	}
+	return false
+}
+
+// HiddenConnectorSet returns HiddenConnectors as a lookup set for callers
+// that check many rows. Nil when nothing is hidden; reading a nil map is
+// safe, so callers need no guard.
+func (m UserMetadata) HiddenConnectorSet() map[string]bool {
+	if len(m.HiddenConnectors) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(m.HiddenConnectors))
+	for _, id := range m.HiddenConnectors {
+		set[id] = true
+	}
+	return set
 }
 
 // Answers for AutoDeleteEmptyTickets. Empty means "not decided — ask".
@@ -131,15 +169,44 @@ type RailPrefs struct {
 	// what was hidden. A leftover count is migrated by the client, which
 	// reads it as "the first N stay, name the rest as hidden".
 	Hidden []string `json:"hidden"`
+
+	// Labels prints each tab's name along the strip, rotated 90 degrees.
+	// Labels are the default: unset (nil) means on, and only an explicit
+	// false leaves icons only, with the name in a tooltip. Read it through
+	// LabelsOn. Set from the profile, not by the rail itself, so a layout
+	// save from the rail carries it over untouched (see WithLayout).
+	Labels *bool `json:"labels,omitempty"`
 }
 
+// LabelsOn reports whether the rail prints tab names. Unset is on.
+func (p RailPrefs) LabelsOn() bool { return p.Labels == nil || *p.Labels }
+
+// WithLayout returns next's order and folded tabs with p's Labels. The rail
+// saves only its arrangement; the label choice belongs to the profile and
+// must survive a drag on the strip.
+func (p RailPrefs) WithLayout(next RailPrefs) RailPrefs {
+	next.Labels = p.Labels
+	return next
+}
+
+// Values the profile form posts for RailPrefs.Labels.
+const (
+	RailStyleIcons  = "icons"
+	RailStyleLabels = "labels"
+)
+
 // TicketFilter is one saved ticket-board filter: which statuses to show,
-// whose tickets ("" = everyone, "me", or a user ID), and the last view
-// mode ("list" | "card") the user picked on that project page.
+// whose tickets, and the last view mode ("list" | "card") the user picked
+// on that project page.
 type TicketFilter struct {
 	Statuses []string `json:"statuses,omitempty"`
-	Assignee string   `json:"assignee,omitempty"`
-	ViewMode string   `json:"view_mode,omitempty"`
+	// Assignee is the old single pick ("" = everyone, "me", or a user ID).
+	// Only read now: Migrated folds it into Assignees.
+	Assignee string `json:"assignee,omitempty"`
+	// Assignees are the people ticked: user IDs, "me" and "none" (no
+	// assignee). Empty = everyone.
+	Assignees []string `json:"assignees,omitempty"`
+	ViewMode  string   `json:"view_mode,omitempty"`
 	// ShowUntracked adds the board's untracked chats to what is fetched.
 	// Load-bearing, not cosmetic: without it the client never asks for that
 	// list, so a project with hundreds of loose chats costs nothing extra to
@@ -147,6 +214,22 @@ type TicketFilter struct {
 	// chats is something one opts into looking at. The zero value being
 	// "don't fetch" is why this is spelled Show rather than Hide.
 	ShowUntracked bool `json:"show_untracked,omitempty"`
+}
+
+// Migrated is f in the current shape: a filter saved before Assignees
+// existed comes back with its single Assignee as a one-entry list, so an
+// old saved "only me" keeps filtering to me. A single pick an older build
+// can read ("me" or an id, never "none") is mirrored back into Assignee,
+// so rolling back does not turn every filter saved since into "Everyone".
+func (f TicketFilter) Migrated() TicketFilter {
+	if len(f.Assignees) == 0 && f.Assignee != "" {
+		f.Assignees = []string{f.Assignee}
+	}
+	f.Assignee = ""
+	if len(f.Assignees) == 1 && f.Assignees[0] != "none" {
+		f.Assignee = f.Assignees[0]
+	}
+	return f
 }
 
 const (

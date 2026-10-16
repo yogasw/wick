@@ -149,7 +149,7 @@ func statusAccounts(ins provider.Instance) []logintty.PoolAccount {
 	}
 	v := usageProbes.get(logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, env)
-	}, logintty.CredentialsChangedAt(ins.Type, env))
+	}, logintty.CredentialsChangedAt(ins.Type, env), instanceResetsFetch(ins.Type, env))
 	if !v.Known || v.Err != nil {
 		return accts
 	}
@@ -186,10 +186,11 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
 	defer cancel()
 
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
+	v := readInstanceUsage(ctx, ins)
 	body := map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "checking": v.Checking}
+	if sr := savedResetsDTOOf(v.SavedResets); sr != nil {
+		body["saved_resets"] = sr
+	}
 	// Same provenance the list carries: this panel is looking at a
 	// SHARED, cached reading, so it says how old it is.
 	now := time.Now()
@@ -201,6 +202,12 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 		if d := v.NextAt.Sub(now); d > 0 {
 			body["next_s"] = int(d.Round(time.Second) / time.Second)
 		}
+	}
+	// The latest probe failed but an older reading is served: say so,
+	// so the panel can call the numbers cached rather than current.
+	if v.LastErr != nil {
+		body["last_error"] = v.LastErr.Error()
+		body["rate_limited"] = usageRateLimited(v.LastErr)
 	}
 	switch {
 	case errors.Is(v.Err, logintty.ErrUsageUnsupported):
@@ -250,9 +257,7 @@ func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
 		c.JSON(http.StatusOK, map[string]any{"supported": false, "accepted": false})
 		return
 	}
-	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	})
+	accepted, wait := refreshInstanceUsage(ins)
 	body := map[string]any{"supported": true, "accepted": accepted, "checking": accepted}
 	if !accepted {
 		body["wait_s"] = int(wait.Round(time.Second) / time.Second)

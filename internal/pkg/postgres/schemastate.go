@@ -60,6 +60,7 @@ var migratedModels = []any{
 	&entity.CustomConnector{},
 	&entity.CustomConnectorMCPServer{},
 	&entity.PersonalAccessToken{},
+	&entity.PluginTestRequest{},
 	&entity.PushSubscription{},
 	&entity.UserChannelIdentity{},
 	&entity.OAuthClient{},
@@ -83,6 +84,9 @@ var migratedModels = []any{
 	&entity.PluginSource{},
 	&entity.PluginAudit{},
 	&entity.PluginReplacement{},
+	// Host API: admin overlay on plugin scopes, and the call audit ring.
+	&entity.PluginHostPermission{},
+	&entity.PluginHostCall{},
 	&entity.ConnectorState{},
 	&entity.ScheduledMessage{},
 	&entity.ScheduleLease{},
@@ -104,6 +108,7 @@ var migratedModels = []any{
 	// Agents app: chat-able agents backed by a project, with a per-agent
 	// connector checklist. See internal/agents/team.
 	&entity.AgentPersona{},
+	&entity.AgentAvatarImage{},
 	// Audit trail of every access change of an agent, and the pending
 	// ones a Captain proposed and the owner has not decided yet.
 	&entity.AgentAccessHistory{},

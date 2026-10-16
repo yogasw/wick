@@ -16,7 +16,7 @@ var tagRe = regexp.MustCompile(`wick:"((?:[^"\\]|\\.)*)"`)
 // tagOptionKeys is every key parseWickTag / widgetFor actually consume. A
 // segment whose key is NOT in here is prose, not an option.
 var tagOptionKeys = map[string]bool{
-	"default": true, "desc": true, "group": true, "hidden": true, "key": true,
+	"default": true, "desc": true, "group": true, "hidden": true, "internal": true, "key": true,
 	"locked": true, "mode": true, "regen": true, "required": true, "secret": true,
 	"visible_when": true, "textarea": true, "dropdown": true, "html": true,
 	"kvlist": true, "picker": true, "email": true, "url": true, "color": true,

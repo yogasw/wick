@@ -59,7 +59,7 @@
 <div class="mx-auto flex h-full w-full max-w-2xl flex-col items-center justify-center px-6" data-draft-chat>
   <div class="mb-6 flex flex-col items-center text-center">
     {#if agent.avatar}
-      <AgentAvatar kind={agent.avatar.kind} shape={agent.avatar.shape} expression={agent.avatar.expression} color={agent.avatar.color} size={48} live />
+      <AgentAvatar kind={agent.avatar.kind} image={agent.avatar.image} shape={agent.avatar.shape} expression={agent.avatar.expression} color={agent.avatar.color} size={48} live />
     {/if}
     <h1 class="mt-3 text-xl font-semibold text-black-900 dark:text-white-100">New chat with {agent.name}</h1>
     <p class="mt-1 text-sm text-black-800 dark:text-black-600">Draft — the chat is created when you send the first message.</p>

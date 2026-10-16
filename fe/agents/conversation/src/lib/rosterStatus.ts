@@ -4,15 +4,24 @@ import { THINKING_LABEL, toolActivityLabel } from "./activityLabel.js";
 import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
 
 /* What a roster row says about an agent (mockup row() / stateOf()): the
-   red unread dot, the working line and the hover tip. Pure, so the order
+   red unread dot, the working line and the presence dot with its spoken
+   label. Pure, so the order
    the cues win in is tested rather than buried in the template. The Team
    header reads the same answer, so the two never disagree. */
 
 /** What a turn is doing: idle (no turn), thinking (a turn with no tool in
     flight), tool (waiting on a tool_use's result), waiting (a remote
-    agent: wick waits for the other side) or subagent (no turn of its own,
-    but background sub-agents it delegated to are still working). */
-export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "subagent";
+    agent: wick waits for the other side), replying (working on a Team
+    task another agent sent it, or in a chat other than its main one),
+    team (waiting on the teammates its own
+    open Team tasks went to) or subagent (no turn of its own, but
+    background sub-agents it delegated to are still working). */
+export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "replying" | "team" | "subagent";
+
+/** The status dot on the avatar: green = online (idle), a spinner =
+    working (its own turn or its sub-agents), amber = needs the owner,
+    grey = disabled. */
+export type Presence = "online" | "working" | "attention" | "disabled";
 
 export type RosterStatus = {
   /** Red dot on the avatar: something new since the chat was last open. */
@@ -21,21 +30,56 @@ export type RosterStatus = {
   attention: boolean;
   work: WorkState;
   /** Preview line while a turn runs: "thinking…", the tool's label
-      ("running Bash…"), what a remote waits on, or "🤖 <handle> bekerja…"
+      ("running Bash…"), what a remote waits on, or "🤖 <handle> working…"
       while only its sub-agents work. null = not working, show the normal
       preview. */
   typing: string | null;
-  /** Hover tip on the avatar. */
-  tip: string;
+  presence: Presence;
+  /** What the dot means in words, for screen readers (sr-only / aria):
+      there is no visible tooltip. */
+  label: string;
 };
 
 type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
-  Partial<Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working">>;
+  Partial<
+    Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working" | "team_waiting" | "replying_to" | "team_asks" | "working_sessions">
+  >;
 
 /** subagentLabel is the working line for background sub-agents: the one
     handle, or how many when there are more. */
 export function subagentLabel(handles: string[]): string {
-  return handles.length === 1 ? `🤖 ${handles[0]} bekerja…` : `🤖 ${handles.length} sub-agent bekerja…`;
+  return handles.length === 1 ? `🤖 ${handles[0]} working…` : `🤖 ${handles.length} sub-agents working…`;
+}
+
+/** busyWork: the agent reads busy with no turn of its own in its main
+    chat — its background sub-agents, the teammates its Team tasks wait
+    on, or a Team task it works on elsewhere. The avatar animates and the
+    header shows the working line for these as for its own turn. */
+export function busyWork(w: WorkState): boolean {
+  return w === "subagent" || w === "team" || w === "replying";
+}
+
+/** avatarWorking: the avatar acts working (thinking dots, or the orbit on
+    a tool) for its own turn or busyWork — a Team task or another chat it
+    works on elsewhere too, the task badge on its corner beside the orbit,
+    as the mockup. */
+export function avatarWorking(status: string, w: WorkState): boolean {
+  return isWorking(status) || busyWork(w);
+}
+
+/** replyingLabel is the working line for a chat it works on for someone:
+    "replying to Captain…", "working on your request…" for the person's
+    own, or a plain "working…" for one nobody on the Team asked for (an
+    outside caller, a channel, a schedule). */
+export function replyingLabel(to: string): string {
+  if (!to) return "working…";
+  return to === "you" ? "working on your request…" : `replying to ${to}…`;
+}
+
+/** teamWaitingLabel is the working line while open Team tasks wait on
+    teammates: the one handle, or how many when there are more. */
+export function teamWaitingLabel(handles: string[]): string {
+  return handles.length === 1 ? `waiting on @${handles[0]}…` : `waiting on ${handles.length} teammates…`;
 }
 
 /** rosterStatus reads one row. activeId is the agent whose chat is on
@@ -44,29 +88,69 @@ export function subagentLabel(handles: string[]): string {
 export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boolean } = {}): RosterStatus {
   const working = isWorking(a.status) && !a.disabled;
   const action = (a.current_action ?? "").trim();
-  // The agent's own turn outranks its sub-agents' work.
+  // A Team task it works on names who it replies to, whichever chat runs
+  // it; then the teammates its own Team tasks wait on (its turn is often
+  // just that wait); then its own turn; then its background sub-agents.
   const subs = a.disabled ? [] : (a.subagents_working ?? []).filter((h) => h.trim() !== "");
-  const work: WorkState = working ? (isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking") : subs.length > 0 ? "subagent" : "idle";
+  const team = a.disabled ? [] : (a.team_waiting ?? []).filter((h) => h.trim() !== "");
+  const replyingTo = a.disabled ? "" : (a.replying_to ?? "").trim();
+  // A chat other than the main one running a turn (a Team task, a chat
+  // the person opened) reads as replying to whoever it works for when the
+  // main chat has nothing of its own to say.
+  const elsewhere = a.disabled ? undefined : (a.working_sessions ?? [])[0];
+  const own: WorkState = working ? (isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking") : subs.length > 0 ? "subagent" : "idle";
+  // null = not replying; "" = working elsewhere for no one named.
+  const replyTo: string | null = replyingTo
+    ? replyingTo
+    : elsewhere && team.length === 0 && (own === "idle" || own === "subagent")
+      ? (elsewhere.trigger ?? "").trim()
+      : null;
+  const work: WorkState = replyTo !== null ? "replying" : team.length > 0 ? "team" : own;
   const typing =
     work === "idle"
       ? null
       : work === "waiting"
         ? `${remoteWaitTarget({ handle: a.handle ?? "", slack_remote: a.slack_remote })}…`
-        : work === "tool"
-          ? toolActivityLabel(action)
-          : work === "subagent"
-            ? subagentLabel(subs)
-            : THINKING_LABEL;
+        : work === "replying"
+          ? replyingLabel(replyTo ?? "")
+          : work === "team"
+            ? teamWaitingLabel(team)
+            : work === "tool"
+              ? toolActivityLabel(action)
+              : work === "subagent"
+                ? subagentLabel(subs)
+                : THINKING_LABEL;
   const unread = !!a.unread && !a.disabled && a.id !== opts.activeId;
-  const attention = !!a.needs_attention && !a.disabled;
-  let tip: string;
-  if (a.disabled) tip = "disabled";
-  else if (opts.hatching) tip = "just hatched";
-  else if (attention) tip = "needs your attention";
-  else if (typing !== null) tip = typing;
-  else if (unread) tip = "new message";
-  else tip = "online · idle";
-  return { unread, attention, work, typing, tip };
+  // A teammate's question back to its sender waits on someone too.
+  const attention = (!!a.needs_attention || !!a.team_asks) && !a.disabled;
+  const presence: Presence = a.disabled ? "disabled" : attention ? "attention" : work !== "idle" ? "working" : "online";
+  let label: string;
+  if (a.disabled) label = "disabled";
+  else if (opts.hatching) label = "just hatched";
+  else if (attention) label = "needs your attention";
+  else if (typing !== null) label = typing;
+  else if (unread) label = "new message";
+  else label = "online, idle";
+  return { unread, attention, work, typing, presence, label };
+}
+
+/** teamMark is the Team-task mark on a row's avatar in place of the dot:
+    the amber "?" while a teammate asks its sender, the task badge while
+    it works on a Team task — one replying_to names, or another chat an
+    agent sent it. A side chat from you, Slack or a schedule also reads
+    "replying" but is no Team task, so it gets no badge. */
+export function teamMark(
+  a: Pick<AgentItem, "disabled"> & Partial<Pick<AgentItem, "team_asks" | "replying_to" | "working_sessions">>,
+  st: Pick<RosterStatus, "attention" | "work">,
+): "asks" | "task" | null {
+  if (a.disabled) return null;
+  if (a.team_asks && st.attention) return "asks";
+  if (st.work !== "replying") return null;
+  if ((a.replying_to ?? "").trim()) return "task";
+  // trigger is "you", "" (Slack, a schedule, an outside caller) or the
+  // agent whose Team task runs in that chat.
+  const trigger = ((a.working_sessions ?? [])[0]?.trigger ?? "").trim();
+  return trigger !== "" && trigger !== "you" ? "task" : null;
 }
 
 /** withTurn is the roster after agent id's main-chat turn started or

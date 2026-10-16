@@ -1,7 +1,8 @@
 import { Effect } from "effect";
-import { apiGetE, apiPostE, apiPatchE, apiPutE, apiDeleteE, WickClientLayer, type APIError } from "@wick-fe/common-api";
+import { apiGetE, apiPostE, apiPatchE, apiPutE, apiDeleteE, WickClientLayer, runPromiseUnwrapped, type APIError } from "@wick-fe/common-api";
 import type { HttpClient } from "@effect/platform";
 import type { AgentFeatures } from "../agentMode.js";
+import { invalidateProjectOptions } from "./projectOptionsCache.js";
 
 /* The Agents app API (api_team.go). Every route is scoped to the
    caller as owner server-side, so nothing here passes a user id. */
@@ -14,6 +15,8 @@ export type AgentAvatarSpec = {
   expression?: string;
   /** Per-event pose overrides (Settings › Avatar, events.ts); absent = defaults. */
   events?: Record<string, { state?: string; expression?: string; off?: boolean }>;
+  /** kind "image": the crop of the stored picture (team.AvatarImage). */
+  image?: { v: string; aspect: number; fit: string; x: number; y: number; zoom: number; crop?: string; src?: string };
 };
 
 export type ConnectorGrant = {
@@ -23,6 +26,21 @@ export type ConnectorGrant = {
   /** "off" overrides a Platform/System tier default downwards. */
   level: "all" | "read" | "pick" | "off";
   ops: string[];
+};
+
+/** One of an agent's non-main chats as its roster row tells it. */
+export type WorkingSession = {
+  id: string;
+  label: string;
+  /** Who it works for: "you" (a chat the person opened in the app), the
+      agent whose Team task runs in it ("Captain"), or "" for anything
+      else. */
+  trigger: string;
+  /** Where a chat with no trigger came from ("Slack", "A2A", "Schedule",
+      "API", "Telegram"); absent when unknown or trigger is set. */
+  source?: string;
+  /** Turn start while running; last activity once finished. */
+  since?: string;
 };
 
 export type AgentItem = {
@@ -66,6 +84,10 @@ export type AgentItem = {
   /** Whether the chat may pick another provider/model (server applies
       the default: Captain on, others off). */
   allow_provider_switch?: boolean;
+  /** "Show teammates in channels" (default on). Older servers omit it. */
+  channel_show_teammates?: boolean;
+  /** "Hide in-between messages in channels" (default on). Older servers omit it. */
+  channel_hide_interim?: boolean;
   /** "Manage other agents" (agents.* ops), default applied: on for the
       Captain, off for the rest. Older servers omit it. */
   manage_agents?: boolean;
@@ -82,6 +104,9 @@ export type AgentItem = {
   suggested_prompts?: SuggestedPrompt[];
   main_session_id: string;
   last_active: string | null;
+  /** Newest last_active of all the agent's chats (main and side chats);
+      dozing reads it, order/time/preview stay on last_active. */
+  last_any_active?: string | null;
   last_preview: string;
   /** last_preview is a [silent] reply (marker stripped); shown dimmed. */
   last_silent?: boolean;
@@ -103,9 +128,29 @@ export type AgentItem = {
   /** Handles of the main chat's background sub-agents still queued or
       running. Independent of status: the agent's own turn may be over. */
   subagents_working?: string[];
+  /** Handles of the teammates the main chat's open Team tasks
+      (team_message / @mention) wait on. Independent of status. */
+  team_waiting?: string[];
+  /** Who the agent works on a Team task for ("Captain", "you"), in any of
+      its chats; absent when none. */
+  replying_to?: string;
+  /** The agent's other chats (not its main chat) running a turn now — a
+      Team task Captain sent, a chat the person opened — oldest turn first,
+      so a click on the row keeps opening the same one; absent when none. */
+  working_sessions?: WorkingSession[];
+  /** The newest of those chats that finished within the hour: the row's
+      subtle "Last: …" line. */
+  last_session?: WorkingSession;
+  /** The question an open Team task of the agent puts to its sender; the
+      server also sends it as attention_preview ("Asks Captain: …"). */
+  team_asks?: { to: string; question: string };
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;
+  /** How many people the owner shared this agent with by hand: the
+      header's "Shared with N". Absent (0) when not shared and on a
+      recipient's row. */
+  share_count?: number;
   /** "viewer" = another owner shared this agent with the user: chat and
       info only (agentSharing.ts); absent for the user's own agents. */
   role?: "viewer";
@@ -205,6 +250,8 @@ export type AgentWrite = Partial<{
   run_as: "caller" | "owner";
   disabled: boolean;
   allow_provider_switch: boolean;
+  channel_show_teammates: boolean;
+  channel_hide_interim: boolean;
   is_captain: boolean;
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;
@@ -276,7 +323,23 @@ export type AgentSessionItem = {
   last_active: string | null;
   agent_main: boolean;
   status: string;
+  /** Pool state of the chat's process ("working", "idle", …), "" when none. */
+  lifecycle?: string;
+  /** People who have spoken in it; >1 draws the shared marker. */
+  participants?: number;
+  /** Who the chat belongs to; mine = the caller. */
+  owner_user_id?: string;
+  owner_name?: string;
+  mine?: boolean;
+  /** The ticket a Captain chat started in Team › Tickets works on. */
+  ticket_id?: string;
+  ticket_project_id?: string;
+  ticket_project_name?: string;
 };
+
+/** GET …/sessions?scope=all: every chat of a shared agent (owner's and each
+    recipient's). shared = the drawer offers You | All. */
+export type AgentSessionsAll = { shared: boolean; sessions: AgentSessionItem[] | null };
 
 const enc = encodeURIComponent;
 
@@ -427,8 +490,12 @@ export const listAgents = (base: string) =>
 export const listAgentRoster = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents?ensure=0`);
 
+/* Agent create, edit and delete add, rename or remove the agent's own
+   project, so each drops the cached project options. */
+const dropsProjectOptions = Effect.tap(() => invalidateProjectOptions());
+
 export const createAgent = (base: string, body: AgentWrite) =>
-  apiPostE<AgentItem>(`${base}/api/team/agents`, body);
+  apiPostE<AgentItem>(`${base}/api/team/agents`, body).pipe(dropsProjectOptions);
 
 /** getAgent is one agent as the Settings drawer edits it: features
     resolved against the owner's connector catalog and old access switches
@@ -438,7 +505,7 @@ export const getAgent = (base: string, id: string) =>
   apiGetE<AgentItem>(`${base}/api/team/agents/${enc(id)}`);
 
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
-  apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
+  apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body).pipe(dropsProjectOptions);
 
 /** makeCaptain moves the Captain role to agent id (one transaction
     server-side); previous_id is the agent that held it, "" if none. */
@@ -456,7 +523,7 @@ export const getAgentSkills = (base: string, id: string) =>
 /** chats="delete" takes the agent's own project with it (chats, files,
     memory); "keep" leaves it as an ordinary project in the sidebar. */
 export const deleteAgent = (base: string, id: string, chats: "delete" | "keep") =>
-  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}?chats=${chats}`);
+  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}?chats=${chats}`).pipe(dropsProjectOptions);
 
 /** The persona half an agent reads from its project (same fields
     teamAgentToItem fills from project meta), for the Settings project
@@ -490,6 +557,11 @@ export const markAgentRead = (base: string, id: string) =>
 export const listAgentSessions = (base: string, id: string) =>
   apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);
 
+/** listAgentSessionsAll is the Chats drawer's read: the caller's chats and,
+    when the agent is shared, everyone else's it is shared with. */
+export const listAgentSessionsAll = (base: string, id: string) =>
+  apiGetE<AgentSessionsAll>(`${base}/api/team/agents/${enc(id)}/sessions?scope=all`);
+
 /** setAgentMainChat makes sessionId the agent's main chat — where @mentions,
     schedules to "Main chat" and opening the agent land. The old main stays
     as an ordinary chat. */
@@ -506,6 +578,11 @@ export type TeamSettingValues = {
   open_team: boolean;
   /** "Idle animations": idle avatars fidget now and then. */
   idle_animations: boolean;
+  /** Projects on the Team Tickets page, in the order picked. GET lists
+      only the ones the caller can open with ticket mode on; [] = none
+      picked yet. Not in TEAM_SETTING_KEYS: an array does not diff with
+      !==, so the Tickets tab saves it itself. */
+  ticket_projects?: string[];
 };
 export const TEAM_SETTING_KEYS: (keyof TeamSettingValues)[] = ["prompt", "open_team", "idle_animations"];
 
@@ -575,7 +652,9 @@ export type GroupTurn = {
   is_error?: boolean;
   sender?: { name?: string } | null;
   /** session_id: the member's backing session the turn ran in (via "group"). */
-  speaker?: { agent_id: string; handle?: string; via: string; session_id?: string } | null;
+  /** owner_id: whom the agent works for, in a ticket room (several
+      people's "captain" share one thread there). */
+  speaker?: { agent_id: string; handle?: string; via: string; session_id?: string; owner_id?: string } | null;
 };
 
 export const listGroups = (base: string) => apiGetE<{ groups: GroupItem[] | null }>(`${base}/api/team/groups`);
@@ -596,6 +675,11 @@ export const sendToGroup = (base: string, id: string, text: string) =>
 export const runApi = <T>(eff: Effect.Effect<T, APIError, HttpClient.HttpClient>): Promise<T> =>
   Effect.runPromise(eff.pipe(Effect.provide(WickClientLayer)));
 
+/** runApiRaw is runApi rejecting with the APIError itself (status + body),
+    not Effect's FiberFailure — for callers that read the error body. */
+export const runApiRaw = <T>(eff: Effect.Effect<T, APIError, HttpClient.HttpClient>): Promise<T> =>
+  runPromiseUnwrapped(eff.pipe(Effect.provide(WickClientLayer)));
+
 /** isWorking reads a session status as "the agent is busy right now". */
 export const isWorking = (status: string | undefined) => status === "running" || status === "queued";
 
@@ -609,7 +693,7 @@ export type SuggestedPrompt = { title: string; message: string };
 
 /* Connections › Slack (api_team_slack.go). Secrets never come back: the
    server answers whether each one is set, nothing more. */
-export type SlackSecretKey = "bot_token" | "app_token" | "signing_secret" | "app_config_token";
+export type SlackSecretKey = "bot_token" | "app_token" | "signing_secret" | "app_config_token" | "app_refresh_token" | "client_secret";
 export type AgentSlackStatus = {
   connected: boolean;
   online: boolean;
@@ -621,6 +705,12 @@ export type AgentSlackStatus = {
   app_id?: string;
   secrets: Partial<Record<SlackSecretKey, boolean>>;
   disabled: boolean;
+  /* Rotating = an xoxe.xapp- app token wick refreshes itself; times are RFC 3339. */
+  rotating?: boolean;
+  client_id?: string;
+  app_token_expires_at?: string;
+  last_refresh?: string;
+  last_error?: string;
 };
 export type AgentSlackConnect = Partial<{
   mode: "socket" | "http";
@@ -630,6 +720,13 @@ export type AgentSlackConnect = Partial<{
   app_config_token: string;
   app_id: string;
   dm_main_chat: boolean;
+  app_refresh_token: string;
+  client_id: string;
+  client_secret: string;
+  /* Stored secrets to drop (a blank field keeps them). */
+  clear: SlackSecretKey[];
+  /* Switch off the Channels-page instance running this bot (owner/admin). */
+  take_over: boolean;
 }>;
 export type SlackMatrixItem = { name: string; status: SlackMatrixStatus; hint?: string };
 export type SlackMatrixStatus = "ok" | "warn" | "error" | "off" | "pending";
@@ -749,8 +846,17 @@ export const compactAgentMain = (base: string, id: string) =>
 
 /* ── Sharing (chat only) ─────────────────────────────────────────────── */
 
-export type AgentShare = { user_id: string; name: string; created_at: string };
-export type AgentShares = { shares: AgentShare[]; shareable: boolean; reason: string };
+/** history_visible: "Recipients can view chat history" for this share —
+    the stored choice, else the agent type's default (history_default). */
+export type AgentShare = { user_id: string; name: string; created_at: string; history_visible?: boolean };
+/** remote_kind: "slack" | "a2a" | "plugin" for a remote agent, "" built-in. */
+export type AgentShares = {
+  shares: AgentShare[];
+  shareable: boolean;
+  reason: string;
+  history_default?: boolean;
+  remote_kind?: string;
+};
 export type ShareUser = { id: string; name: string };
 
 export const listAgentShares = (base: string, id: string) =>
@@ -758,6 +864,12 @@ export const listAgentShares = (base: string, id: string) =>
 
 export const addAgentShare = (base: string, id: string, userId: string) =>
   apiPostE<{ status: string }>(`${base}/api/team/agents/${enc(id)}/shares`, { user_id: userId });
+
+/** setShareHistory flips "Recipients can view chat history" for one share. */
+export const setShareHistory = (base: string, id: string, userId: string, visible: boolean) =>
+  apiPatchE<{ status: string; history_visible: boolean }>(`${base}/api/team/agents/${enc(id)}/shares/${enc(userId)}`, {
+    history_visible: visible,
+  });
 
 export const removeAgentShare = (base: string, id: string, userId: string) =>
   apiDeleteE<{ status: string }>(`${base}/api/team/agents/${enc(id)}/shares/${enc(userId)}`);
@@ -829,3 +941,9 @@ export const getSessionOptions = (base: string, id: string, sessionId?: string) 
     session exists. */
 export const putSessionOptions = (base: string, id: string, sessionId: string, options: Record<string, string>) =>
   apiPutE<SessionOptions>(`${base}/api/team/agents/${enc(id)}/plugin-remote/session-options?session_id=${enc(sessionId)}`, { options });
+
+/** uploadAvatarImage sends a picture (base64 in JSON, like every other
+    write) for the server to check, re-encode and store; the avatar uses
+    it once an "image" avatar is saved. */
+export const uploadAvatarImage = (base: string, id: string, data: string) =>
+  apiPostE<{ v: string; aspect: number; width: number; height: number }>(`${base}/api/team/agents/${enc(id)}/avatar/image`, { data });

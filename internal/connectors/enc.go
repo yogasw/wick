@@ -31,6 +31,9 @@ type maskerAdapter struct {
 
 	mu   sync.Mutex
 	seen []string
+	// folded are the values passed to c.MaskIgnoreCase: the sweep must
+	// match them case-insensitively too, not only exactly.
+	folded []string
 }
 
 func (m *maskerAdapter) Mask(data string, values []string, caseInsensitive bool) string {
@@ -39,6 +42,7 @@ func (m *maskerAdapter) Mask(data string, values []string, caseInsensitive bool)
 	}
 	m.add(values)
 	if caseInsensitive {
+		m.addFolded(values)
 		return m.svc.MaskIgnoreCase(data, values, m.user)
 	}
 	return m.svc.Mask(data, values, m.user)
@@ -59,22 +63,37 @@ func (m *maskerAdapter) add(values []string) {
 	}
 }
 
-// snapshot returns a deduped copy of every plaintext recorded so far.
-// Called once after ExecuteFunc returns; the order of `seen` is
-// preserved for first occurrence so identical plaintexts collapse to
-// one Mask invocation.
-func (m *maskerAdapter) snapshot() []string {
+// addFolded records values that must also be swept case-insensitively.
+func (m *maskerAdapter) addFolded(values []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, v := range values {
+		if v != "" {
+			m.folded = append(m.folded, v)
+		}
+	}
+}
+
+// snapshot returns a deduped copy of every plaintext recorded so far
+// (exact) and of the ones recorded through MaskIgnoreCase (folded).
+// Called once after ExecuteFunc returns; the order of first occurrence
+// is preserved so identical plaintexts collapse to one Mask invocation.
+func (m *maskerAdapter) snapshot() (exact, folded []string) {
 	if m == nil {
-		return nil
+		return nil, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.seen) == 0 {
+	return dedupStrings(m.seen), dedupStrings(m.folded)
+}
+
+func dedupStrings(in []string) []string {
+	if len(in) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(m.seen))
-	dedup := make(map[string]struct{}, len(m.seen))
-	for _, v := range m.seen {
+	out := make([]string, 0, len(in))
+	dedup := make(map[string]struct{}, len(in))
+	for _, v := range in {
 		if _, ok := dedup[v]; ok {
 			continue
 		}

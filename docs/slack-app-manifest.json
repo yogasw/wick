@@ -48,7 +48,7 @@
         "message.channels",
         "reaction_added",
         "reaction_removed",
-        "assistant_thread_started",
+        "app_home_opened",
         "message.groups"
       ]
     },

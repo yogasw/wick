@@ -62,6 +62,11 @@ func Module() connector.Module {
 					"Ask httpbin to return a specific HTTP status code.",
 					statusInput{}, doStatus, wickdocs.Docs{}),
 			),
+			connector.Cat("Host API", "Call back into wick (sample of the plugin Host API)",
+				connector.Op("whoami_host", "Who am I (Host API)",
+					"Ask wick which plugin this is and which Host API scopes it holds, and who is running the op (GetUser on the caller).",
+					struct{}{}, doWhoamiHost, wickdocs.Docs{}),
+			),
 		},
 	}
 }

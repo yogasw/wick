@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, APIError } from "@wick-fe/common-api";
-import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
+import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem, TeamThreadEntry } from "../types/agents.js";
 
 // liveSubAgents keeps only the sub-agents that are still working. Finished
 // ones must NOT raise the rail badge — otherwise the badge sticks at "3"
@@ -20,6 +20,90 @@ export const getTeamTasks = (base: string, id: string) =>
   apiGetE<{ tasks: TeamTaskItem[] | null }>(
     `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
   ).pipe(Effect.map((r) => r?.tasks ?? []));
+
+// getTeamTasksView is getTeamTasks plus show_teammates: whether the
+// session's agent names teammates in its channels (absent = on).
+export const getTeamTasksView = (base: string, id: string) =>
+  apiGetE<{ tasks: TeamTaskItem[] | null; show_teammates?: boolean }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
+  ).pipe(Effect.map((r) => ({ tasks: r?.tasks ?? [], showTeammates: r?.show_teammates !== false })));
+
+// getTeamTaskThread reads the messages of one task this chat sent, oldest
+// first, for the task's thread (chip section, Tasks tab).
+export const getTeamTaskThread = (base: string, id: string, taskId: string) =>
+  apiGetE<{ messages: TeamThreadEntry[] | null }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/thread`,
+  ).pipe(Effect.map((r) => r?.messages ?? []));
+
+// answerTeamTask sends the person's answer to a teammate's question
+// straight to that task; the agent that sent it is told. 409 = someone
+// answered first (the message says so).
+export const answerTeamTask = (base: string, id: string, taskId: string, text: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/answer`,
+    { text },
+  );
+
+// messageTeamTask sends the person's message on a task this chat sent,
+// from its thread (Reply in thread): a waiting question takes it as the
+// answer; any other task logs it and hands it to the teammate's chat,
+// keeping its state. 409 = the teammate has no chat for it yet.
+export const messageTeamTask = (base: string, id: string, taskId: string, text: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/message`,
+    { text },
+  );
+
+// cancelTeamTask cancels a task this chat sent (cancel_task).
+export const cancelTeamTask = (base: string, id: string, taskId: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/cancel`,
+    {},
+  );
+
+// cancelWorkingTeamTasks cancels every task this chat sent that is still
+// working (Stop → also stop teammates). A question back is left alone.
+export const cancelWorkingTeamTasks = (base: string, id: string) =>
+  apiPostE<{ canceled: number; failed: string[] }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/cancel-working`,
+    {},
+  );
+
+// summarizeTeamTasks hands the replies this chat's open batches hold to
+// its agent now ("Summarize now"), only group's batch when one is given;
+// teammates still working are not
+// canceled, their replies come as an update.
+export const summarizeTeamTasks = (base: string, id: string, group?: string) =>
+  apiPostE<{ delivered: number }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/summarize${group ? `?group=${encodeURIComponent(group)}` : ""}`,
+    {},
+  );
+
+// retryTeamTask sends a failed task this chat sent again, as a new task
+// to the same teammate. 409 = it is not failed, or was already sent again.
+export const retryTeamTask = (base: string, id: string, taskId: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/retry`,
+    {},
+  );
+
+// reassignTeamTask sends a declined (or failed) task this chat sent to
+// another teammate (to = its handle). 409 = already sent again; 404 = a
+// teammate this chat does not reach.
+export const reassignTeamTask = (base: string, id: string, taskId: string, to: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/reassign`,
+    { to },
+  );
+
+// getReassignTargets lists who a task this chat sent can be reassigned to:
+// the same roster the reassign route accepts (shared agents included),
+// without the task's own teammate; refused = its mention policy does not
+// take the sending agent.
+export const getReassignTargets = (base: string, id: string, taskId: string) =>
+  apiGetE<{ targets: { handle: string; name: string; shared?: boolean; refused?: boolean }[] | null }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/reassign-targets`,
+  ).pipe(Effect.map((r) => r?.targets ?? []));
 
 // getSubAgentPanel fetches the rail's whole payload: the agent rows plus
 // the investigation header, when this conversation has one. Separate from

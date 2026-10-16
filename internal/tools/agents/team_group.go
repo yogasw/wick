@@ -157,7 +157,7 @@ func groupItem(ctx context.Context, sess session.Session, byID map[string]teamli
 	for _, p := range members {
 		m := TeamGroupMember{ID: p.ID, Handle: p.Handle, Name: p.Name, IsCaptain: p.IsCaptain, Disabled: p.Disabled, MaxHops: teamlink.EffectiveHops(p.MaxHops)}
 		if a, err := globalTeam.Get(ctx, p.ID); err == nil {
-			m.Avatar = team.DecodeAvatar(a.Avatar)
+			m.Avatar = team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID)
 		}
 		it.Members = append(it.Members, m)
 	}
@@ -559,6 +559,7 @@ func recordGroupTurn(groupID string, t store.ConversationTurn) error {
 // creating it on first use.
 func groupBacking(c *tool.Ctx, groupID, agentID string) (string, error) {
 	owner := actorID(c)
+	defer lockBacking(groupID, owner)()
 	for _, s := range globalMgr.Registry().Sessions() {
 		if s.Meta.GroupSessionID == groupID && s.Meta.AgentID == agentID && s.Meta.UserID == owner {
 			return s.ID, nil
@@ -572,7 +573,18 @@ func groupBacking(c *tool.Ctx, groupID, agentID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return id, saveGroupMeta(id, func(m *session.Meta) { m.GroupSessionID = groupID })
+	return id, saveGroupMeta(id, func(m *session.Meta) {
+		m.GroupSessionID = groupID
+		m.TicketBacking = backsTicketPlace(groupID)
+	})
+}
+
+// backsTicketPlace reports whether a backing session under parentID is
+// made for a ticket room or an ordinary ticket session (team.TicketPlace)
+// and so carries the TicketBacking mark from its creation.
+func backsTicketPlace(parentID string) bool {
+	p, ok := globalMgr.Registry().Session(parentID)
+	return ok && team.TicketPlace(p.Meta)
 }
 
 // runBackingTurn runs one turn in a member's backing session and returns
@@ -592,8 +604,22 @@ func runBackingTurn(ctx context.Context, sessionID, prompt string) (string, erro
 /* ── the runner ──────────────────────────────────────────────────────── */
 
 // groupLocks serialises the runs of one group, so two quick messages do
-// not interleave their members' turns.
-var groupLocks sync.Map // group id → *sync.Mutex
+// not interleave their members' turns. A ticket room keys it per person
+// (groupRun.lockKey): one person's stuck run holds only their own queue.
+var groupLocks sync.Map // group id (or lockKey) → *sync.Mutex
+
+// backingLocks serialises finding-or-creating one person's backing
+// sessions in a group, so two quick sends share one backing session
+// instead of each creating its own.
+var backingLocks sync.Map // group id + "\x00" + owner → *sync.Mutex
+
+// lockBacking takes groupID's backing lock for owner; call the result to
+// release it.
+func lockBacking(groupID, owner string) func() {
+	mu, _ := backingLocks.LoadOrStore(groupID+"\x00"+owner, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
+}
 
 // groupRun plays one person's message out: its targets answer in order,
 // and members they @ answer after them, within limit. The I/O is
@@ -609,6 +635,13 @@ type groupRun struct {
 	record  func(store.ConversationTurn)
 	typing  func(p teamlink.Peer, on bool)
 	now     func() time.Time
+	// prompt builds a member's turn; nil = groupPrompt (a ticket room
+	// builds its own, per the person the member works for).
+	prompt func(self teamlink.Peer, from string, history []store.ConversationTurn) string
+	// lockKey is the lock the run holds; "" = the group's own.
+	lockKey string
+	// started, when set, is called once the run holds its lock.
+	started func()
 }
 
 type groupJob struct {
@@ -624,9 +657,20 @@ func (r *groupRun) clock() time.Time {
 }
 
 func (r *groupRun) play(ctx context.Context, groupID string, targets []teamlink.Peer) {
-	mu, _ := groupLocks.LoadOrStore(groupID, &sync.Mutex{})
+	key := groupID
+	if r.lockKey != "" {
+		key = r.lockKey
+	}
+	mu, _ := groupLocks.LoadOrStore(key, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
+	// Stopped while it waited for the lock: nothing runs.
+	if ctx.Err() != nil {
+		return
+	}
+	if r.started != nil {
+		r.started()
+	}
 
 	queue := make([]groupJob, 0, len(targets))
 	for _, t := range targets {
@@ -634,6 +678,9 @@ func (r *groupRun) play(ctx context.Context, groupID string, targets []teamlink.
 	}
 	hops := 0
 	for len(queue) > 0 {
+		if ctx.Err() != nil {
+			return
+		}
 		j := queue[0]
 		queue = queue[1:]
 		reply := r.answer(ctx, j)
@@ -666,9 +713,17 @@ func (r *groupRun) answer(ctx context.Context, j groupJob) string {
 		r.typing(j.to, true)
 		defer r.typing(j.to, false)
 	}
-	prompt := groupPrompt(r.group, r.members, j.to, j.from, r.history())
+	var prompt string
+	if r.prompt != nil {
+		prompt = r.prompt(j.to, j.from, r.history())
+	} else {
+		prompt = groupPrompt(r.group, r.members, j.to, j.from, r.history())
+	}
 	reply, err := r.turn(ctx, j.to, prompt)
 	now := r.clock()
+	if err != nil && ctx.Err() != nil {
+		return "" // stopped by its person: not an error to post
+	}
 	if err != nil {
 		t := systemTurn("", fmt.Sprintf("@%s couldn't answer: %v", j.to.Handle, err), nil, now)
 		t.IsError = true

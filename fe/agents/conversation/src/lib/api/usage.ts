@@ -1,9 +1,10 @@
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
+import { parseSavedResets, type SavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
 /* Mirrors internal/tools/agents/api_composer_usage.go — GET
    /api/composer/usage. Backs the `/usage` popover: the session provider's
-   account + rate-limit windows, read from the server's shared, paced cache
-   (so opening the popover never costs an upstream request). */
+   account + rate-limit windows, read from the account's usage file (opening
+   the popover costs an upstream request only for an account with no file). */
 export type ComposerUsageWindow = {
   key: string;
   utilization: number;
@@ -62,6 +63,8 @@ export type ComposerUsage = {
   accounts: ComposerUsageAccount[];
   /* Who picks the account on Auto: "omp" | "wick"; "" when pinned. */
   rotation: string;
+  /* Saved rate-limit resets (shared model); null = section hidden. */
+  savedResets?: SavedResets | null;
 };
 
 type WireWindow = { key?: string; utilization?: number; resets_at?: string; observed_at?: string };
@@ -87,6 +90,7 @@ type WireComposerUsage = {
     status?: string; windows?: WireWindow[] | null; error?: string; no_usage?: boolean; current?: boolean;
   }[] | null;
   rotation?: string;
+  saved_resets?: WireSavedResets | null;
 };
 
 function normalizeWindows(ws: WireWindow[] | null | undefined): ComposerUsageWindow[] {
@@ -134,6 +138,7 @@ export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
       current: a.current ?? false,
     })),
     rotation: w.rotation ?? "",
+    savedResets: parseSavedResets(w.saved_resets),
   };
 }
 
@@ -162,8 +167,10 @@ export function normalizeUsageRefresh(w: {
 }
 
 /* model is the session's model pin; the server uses it only to mark which
-   account row this session runs on. */
-export const getComposerUsage = (base: string, provider: string, model = "") =>
+   account row this session runs on. opened=true marks the read that comes
+   from opening a panel: the server then probes once if the account has no
+   usage file yet. Polls leave it off. */
+export const getComposerUsage = (base: string, provider: string, model = "", opened = false) =>
   apiGetE<WireComposerUsage>(
-    `${base}/api/composer/usage?provider=${encodeURIComponent(provider)}${model ? `&model=${encodeURIComponent(model)}` : ""}`,
+    `${base}/api/composer/usage?provider=${encodeURIComponent(provider)}${model ? `&model=${encodeURIComponent(model)}` : ""}${opened ? "&open=1" : ""}`,
   );

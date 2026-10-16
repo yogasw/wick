@@ -18,8 +18,10 @@
 package channels
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"strings"
@@ -53,6 +55,10 @@ type Registry struct {
 	channels     []Channel
 	sources      map[string]ConfigSource // by Channel.Name()
 	instanceKeys map[Channel]string
+	// retired holds the last instance removed under each key, kept only
+	// so a webhook it alone can verify is acknowledged and dropped rather
+	// than handed to another instance. Cleared when the key is re-added.
+	retired map[string]Channel
 
 	// turns tracks the per-session in-flight turn so a reply the agent opens
 	// with the [silent] marker is kept out of every channel AND out of the
@@ -65,7 +71,20 @@ type Registry struct {
 	// never becomes a push alert. Set when a turn ends silent; cleared when a
 	// non-silent turn ends.
 	silentLast map[string]bool
+
+	// turnFallback, when set, is told about the end of every turn: when
+	// it started (its first event here) and whether it gave the channels
+	// nothing (empty or silent). A line it returns for a quiet turn goes
+	// out as a Notice before the turn's terminal event, while the thread
+	// is still open. See WithTurnFallback.
+	turnFallback TurnFallback
 }
+
+// TurnFallback is told that sessionID's turn, started at start, ended;
+// quiet = it gave the channels nothing. It returns the line to post for
+// a quiet turn, or false. It runs for every turn end, so it must be cheap
+// when it has nothing to say.
+type TurnFallback func(sessionID string, start time.Time, quiet bool) (string, bool)
 
 // SilentMarker is the case-insensitive prefix an agent puts at the very start
 // of a reply to keep that reply out of every channel and push notification.
@@ -90,6 +109,7 @@ type turnState struct {
 	pending []event.AgentEvent // events held until the silent decision
 	decided bool
 	silent  bool
+	start   time.Time // the turn's first event here (turnFallback)
 }
 
 // NewRegistry returns an empty registry. Use the With* methods to attach
@@ -98,6 +118,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		sources:      map[string]ConfigSource{},
 		instanceKeys: map[Channel]string{},
+		retired:      map[string]Channel{},
 		turns:        map[string]*turnState{},
 		silentLast:   map[string]bool{},
 	}
@@ -142,6 +163,41 @@ func (r *Registry) WasLastTurnSilent(sessionID string) bool {
 // ignoring leading whitespace and case.
 func looksSilent(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimLeft(s, " \t\r\n")), SilentMarker)
+}
+
+// WithTurnFallback attaches the check run at every turn end; for a turn
+// with nothing for the channels (no text, or a [silent] reply) the line
+// fn returns is posted instead. A Team agent woken with its teammates'
+// results that writes no answer is the case it exists for: the results
+// still reach the thread.
+func (r *Registry) WithTurnFallback(fn TurnFallback) *Registry {
+	r.turnFallback = fn
+	return r
+}
+
+// turnEndNotice tells turnFallback a turn ended and, for a quiet one,
+// returns its line wrapped as the Notice to forward; ok false when none.
+func (r *Registry) turnEndNotice(sessionID string, start time.Time, quiet bool) (event.AgentEvent, bool) {
+	if r.turnFallback == nil {
+		return event.AgentEvent{}, false
+	}
+	text, ok := r.turnFallback(sessionID, start, quiet)
+	if !quiet || !ok || strings.TrimSpace(text) == "" {
+		return event.AgentEvent{}, false
+	}
+	return event.AgentEvent{Type: event.Notice, Text: text}, true
+}
+
+// withoutText is evs minus their reply text: what a quiet turn still
+// owes the channels (a compaction, a warning, a link).
+func withoutText(evs []event.AgentEvent) []event.AgentEvent {
+	var out []event.AgentEvent
+	for _, e := range evs {
+		if e.Type != event.TextDelta && e.Type != event.TextReplace {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // WithSendFunc attaches the pool dispatch closure. Called once at boot.
@@ -257,6 +313,9 @@ func (r *Registry) AddKeyed(instanceKey string, c Channel, src ConfigSource) {
 	if x, ok := c.(BackgroundRecheckSetter); ok && r.bgRecheck != nil {
 		x.SetBackgroundRecheck(r.bgRecheck)
 	}
+	// Leaving retired and joining the live list in one lock: a webhook
+	// landing in between always finds the instance in one of them.
+	delete(r.retired, instanceKey)
 	r.channels = append(r.channels, c)
 	r.instanceKeys[c] = instanceKey
 	if src != nil {
@@ -354,6 +413,7 @@ func (r *Registry) RemoveKeyed(instanceKey string) {
 	r.channels = newChannels
 	delete(r.instanceKeys, target)
 	delete(r.sources, instanceKey)
+	r.retired[instanceKey] = target
 	r.mu.Unlock()
 	target.Stop()
 }
@@ -435,18 +495,39 @@ type candidate struct {
 }
 
 // HTTPHandlers returns the webhook handlers exposed by channels that
-// implement HTTPHandlerProvider. Caller mounts them on the public mux.
+// implement HTTPHandlerProvider. Caller mounts them on the public mux —
+// once, at boot — so each mounted handler resolves the instances serving
+// its path when a request arrives, not when it was mounted: an instance
+// removed since (switched off) no longer serves, and one added since
+// (switched back on, a new token) does, without a restart.
 //
-// When several keyed instances of the same channel type expose the same
-// route (e.g. two per-user Slack bots both mounting
-// /integrations/slack/send), they are merged into one fan-in dispatcher
-// instead of the previous last-write-wins map merge — which silently
-// dropped every instance but the last. The dispatcher routes each request
-// to the instance that claims it via RequestRouter.OwnsRequest, falling
-// back to the first registered instance when none claims it.
+// Several keyed instances of the same channel type may expose the same
+// route (e.g. per-user Slack bots on /integrations/slack/events). A request
+// goes to, in order: the instance that claims it (RequestRouter); the one
+// whose secret verifies it (RequestVerifier); a catch-all instance that is
+// serving; any serving instance; the first. A request that verifies only
+// against a removed instance is acknowledged and dropped — it belongs to
+// a bot that is off, and handing it to another instance would only fail
+// its check and make the sender retry.
 func (r *Registry) HTTPHandlers() map[string]http.Handler {
+	out := map[string]http.Handler{}
+	for path, cands := range candidatesByPath(r.Channels()) {
+		if len(cands) > 1 {
+			log.Info().Str("path", path).Int("instances", len(cands)).
+				Msg("multiple channel instances on one route; mounting fan-in dispatcher")
+		}
+		p := path
+		out[p] = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			r.serveHTTP(p, w, req)
+		})
+	}
+	return out
+}
+
+// candidatesByPath groups the HTTP handlers of chs by route.
+func candidatesByPath(chs []Channel) map[string][]candidate {
 	byPath := map[string][]candidate{}
-	for _, c := range r.Channels() {
+	for _, c := range chs {
 		if h, ok := c.(MultiHTTPHandlerProvider); ok {
 			for path, hh := range h.HTTPHandlers() {
 				byPath[path] = append(byPath[path], candidate{ch: c, h: hh})
@@ -455,42 +536,108 @@ func (r *Registry) HTTPHandlers() map[string]http.Handler {
 			byPath[h.HTTPPath()] = append(byPath[h.HTTPPath()], candidate{ch: c, h: h.HTTPHandler()})
 		}
 	}
-
-	out := make(map[string]http.Handler, len(byPath))
-	for path, cands := range byPath {
-		if len(cands) == 1 {
-			out[path] = cands[0].h
-			continue
-		}
-		log.Info().Str("path", path).Int("instances", len(cands)).
-			Msg("multiple channel instances on one route; mounting fan-in dispatcher")
-		out[path] = fanInHandler(cands)
-	}
-	return out
+	return byPath
 }
 
-// fanInHandler routes a request to the first candidate whose channel
-// claims it via RequestRouter.OwnsRequest. Candidates that do not
-// implement RequestRouter (or when none claim) act as a fallback: the
-// first such candidate, else the first candidate overall, serves it.
-func fanInHandler(cands []candidate) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		for _, c := range cands {
-			if rr, ok := c.ch.(RequestRouter); ok && rr.OwnsRequest(req) {
-				c.h.ServeHTTP(w, req)
+// serveHTTP dispatches one request on path to the live instances.
+func (r *Registry) serveHTTP(path string, w http.ResponseWriter, req *http.Request) {
+	live := candidatesByPath(r.Channels())[path]
+	r.mu.Lock()
+	retiredChs := make([]Channel, 0, len(r.retired))
+	for _, c := range r.retired {
+		retiredChs = append(retiredChs, c)
+	}
+	r.mu.Unlock()
+	retired := candidatesByPath(retiredChs)[path]
+
+	var body []byte
+	serve := func(c candidate) {
+		if body != nil {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		c.h.ServeHTTP(w, req)
+	}
+	// A claim needs no body: a claimed request (e.g. /send) streams on
+	// untouched, whatever its size.
+	for _, c := range live {
+		if rr, ok := c.ch.(RequestRouter); ok && rr.OwnsRequest(req) {
+			serve(c)
+			return
+		}
+	}
+	// Only a route an instance verifies by signature (Slack events) is
+	// read here — once, bounded, and restored for the handler that serves
+	// it. Over the bound is refused, not cut short.
+	if verifiesRoute(live, path) || verifiesRoute(retired, path) {
+		b, err := io.ReadAll(io.LimitReader(req.Body, maxVerifiedBody+1))
+		if err != nil {
+			http.Error(w, "read error", http.StatusBadRequest)
+			return
+		}
+		if len(b) > maxVerifiedBody {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		body = b
+	}
+	if body != nil {
+		for _, c := range live {
+			if v, ok := c.ch.(RequestVerifier); ok && v.VerifiesRequest(req.Header, body) {
+				serve(c)
 				return
 			}
 		}
-		// No instance explicitly claimed it — fall back to the first
-		// non-RequestRouter (catch-all) instance, else the first overall.
-		for _, c := range cands {
-			if _, ok := c.ch.(RequestRouter); !ok {
-				c.h.ServeHTTP(w, req)
+		for _, c := range retired {
+			if v, ok := c.ch.(RequestVerifier); ok && v.VerifiesRequest(req.Header, body) {
+				w.Header().Set("X-Wick-Ignored", "instance removed")
+				w.WriteHeader(http.StatusOK)
 				return
 			}
 		}
-		cands[0].h.ServeHTTP(w, req)
-	})
+	}
+	if len(live) == 0 {
+		http.Error(w, "no channel instance serves this route", http.StatusServiceUnavailable)
+		return
+	}
+	// No instance claimed or verified it — fall back to the first
+	// non-RequestRouter (catch-all) instance that is serving, else any
+	// serving one, else the first.
+	for _, c := range live {
+		if _, ok := c.ch.(RequestRouter); !ok && serving(c.ch) {
+			serve(c)
+			return
+		}
+	}
+	for _, c := range live {
+		if serving(c.ch) {
+			serve(c)
+			return
+		}
+	}
+	serve(live[0])
+}
+
+// maxVerifiedBody bounds a body read for signature routing — the limit
+// the Slack events handler itself reads.
+const maxVerifiedBody = 1 << 20
+
+// verifiesRoute reports whether any candidate verifies requests on path.
+func verifiesRoute(cands []candidate, path string) bool {
+	for _, c := range cands {
+		if v, ok := c.ch.(RequestVerifier); ok && v.VerifiesRoute(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// serving reports whether ch takes webhook requests; a channel that does
+// not say is assumed to.
+func serving(ch Channel) bool {
+	if s, ok := ch.(interface{ Serving() bool }); ok {
+		return s.Serving()
+	}
+	return true
 }
 
 // StartAll starts every configured channel in its own goroutine.
@@ -561,6 +708,10 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		ts = &turnState{}
 		r.turns[sessionID] = ts
 	}
+	if ts.start.IsZero() {
+		ts.start = time.Now()
+	}
+	start := ts.start
 
 	terminal := ev.Type == event.Done || ev.Type == event.Error
 
@@ -586,6 +737,21 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 			r.finishTurnLocked(sessionID, ts)
 		}
 		r.mu.Unlock()
+		// A turn that ends here and gave the channels no text: a fallback
+		// line goes out before its terminal event. An empty turn's other
+		// held events still go (a compaction, a warning); a silent turn's
+		// stay dropped, as before.
+		if terminal {
+			quiet := silent || strings.TrimSpace(text) == ""
+			if n, ok := r.turnEndNotice(sessionID, start, quiet); ok {
+				out := []event.AgentEvent{n, ev}
+				if !silent {
+					out = append(withoutText(held[:len(held)-1]), n, ev)
+				}
+				r.forward(sessionID, out)
+				return
+			}
+		}
 		if silent {
 			return // drop the whole held batch — nothing goes to channels
 		}
@@ -599,10 +765,30 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		r.finishTurnLocked(sessionID, ts)
 	}
 	r.mu.Unlock()
+	if terminal {
+		// Decided before the end: quiet only when silent (text came).
+		if n, ok := r.turnEndNotice(sessionID, start, silent); ok {
+			r.forward(sessionID, []event.AgentEvent{n, ev})
+			return
+		}
+	}
 	if silent {
 		return
 	}
 	r.forward(sessionID, []event.AgentEvent{ev})
+}
+
+// DispatchNotice posts text to sessionID's threads as a standalone
+// notice (event.Notice), outside any turn: it is not buffered with a
+// reply, does not open the turn state the next reply is decided on, and
+// is not dropped with a silent one. For wick's own notes that can come
+// between turns (a provider failover or its return). Sub-agent sessions
+// have no thread; nothing is sent for them.
+func (r *Registry) DispatchNotice(sessionID, text string) {
+	if text == "" || agentconfig.ParentOfSubSession(sessionID) != "" {
+		return
+	}
+	r.forward(sessionID, []event.AgentEvent{{Type: event.Notice, Text: text}})
 }
 
 // finishTurnLocked records the turn's silent verdict for the idle-push check

@@ -26,6 +26,10 @@ type Message struct {
 	Text     string
 	// Edited is set for a message_changed event.
 	Edited bool
+	// EditedTS is when the message's text was last edited: edited.ts, on
+	// a read or a message_changed. Empty for a message never edited — and
+	// for an edit that does not carry it (an unfurl).
+	EditedTS string
 	// Deleted is set for a message_deleted event: TS is the deleted one.
 	Deleted bool
 	// Reactions are emoji names on the message; ReactionsKnown is set when
@@ -44,10 +48,12 @@ type API interface {
 	OpenDM(ctx context.Context, user string) (string, error)
 	// Post sends text; threadTS empty = a new message.
 	Post(ctx context.Context, channel, text, threadTS string) (string, error)
-	// Replies lists thread's messages newer than oldest.
-	Replies(ctx context.Context, channel, threadTS, oldest string) ([]Message, error)
-	// History lists channel's top-level messages newer than oldest.
-	History(ctx context.Context, channel, oldest string) ([]Message, error)
+	// Replies lists thread's messages newer than oldest and, when latest
+	// is set, older than it.
+	Replies(ctx context.Context, channel, threadTS, oldest, latest string) ([]Message, error)
+	// History lists channel's top-level messages newer than oldest and,
+	// when latest is set, older than it.
+	History(ctx context.Context, channel, oldest, latest string) ([]Message, error)
 }
 
 // BaseURL is the Slack Web API root; tests point it at a fake.
@@ -151,11 +157,14 @@ const repliesLimit = 100
 
 // wireMessage is a message as the Web API returns it.
 type wireMessage struct {
-	TS        string `json:"ts"`
-	ThreadTS  string `json:"thread_ts"`
-	User      string `json:"user"`
-	BotID     string `json:"bot_id"`
-	Text      string `json:"text"`
+	TS       string `json:"ts"`
+	ThreadTS string `json:"thread_ts"`
+	User     string `json:"user"`
+	BotID    string `json:"bot_id"`
+	Text     string `json:"text"`
+	Edited   struct {
+		TS string `json:"ts"`
+	} `json:"edited"`
 	Reactions []struct {
 		Name string `json:"name"`
 	} `json:"reactions"`
@@ -166,7 +175,7 @@ type wireMessage struct {
 }
 
 func (w wireMessage) message(channel string) Message {
-	m := Message{Channel: channel, TS: w.TS, ThreadTS: w.ThreadTS, User: w.User, BotID: w.BotID, Text: w.Text, ReactionsKnown: true}
+	m := Message{Channel: channel, TS: w.TS, ThreadTS: w.ThreadTS, User: w.User, BotID: w.BotID, Text: w.Text, EditedTS: w.Edited.TS, ReactionsKnown: true}
 	for _, r := range w.Reactions {
 		m.Reactions = append(m.Reactions, r.Name)
 	}
@@ -192,18 +201,25 @@ func (a HTTPAPI) list(ctx context.Context, method string, form url.Values, chann
 	return out, nil
 }
 
-func (a HTTPAPI) Replies(ctx context.Context, channel, threadTS, oldest string) ([]Message, error) {
+func (a HTTPAPI) Replies(ctx context.Context, channel, threadTS, oldest, latest string) ([]Message, error) {
 	form := url.Values{"channel": {channel}, "ts": {threadTS}}
-	if oldest != "" {
-		form.Set("oldest", oldest)
-	}
+	window(form, oldest, latest)
 	return a.list(ctx, "conversations.replies", form, channel)
 }
 
-func (a HTTPAPI) History(ctx context.Context, channel, oldest string) ([]Message, error) {
+func (a HTTPAPI) History(ctx context.Context, channel, oldest, latest string) ([]Message, error) {
 	form := url.Values{"channel": {channel}}
+	window(form, oldest, latest)
+	return a.list(ctx, "conversations.history", form, channel)
+}
+
+// window bounds a read to the messages between oldest and latest, both
+// left out ("" = unbounded).
+func window(form url.Values, oldest, latest string) {
 	if oldest != "" {
 		form.Set("oldest", oldest)
 	}
-	return a.list(ctx, "conversations.history", form, channel)
+	if latest != "" {
+		form.Set("latest", latest)
+	}
 }

@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { rosterStatus, withTurn, withActivity } from "../rosterStatus.js";
+import { avatarWorking, busyWork, rosterStatus, teamMark, withTurn, withActivity, type WorkState } from "../rosterStatus.js";
 import type { SessionActivity } from "../stores/sessionsStream.js";
 
 const row = (p: Record<string, unknown> = {}) => ({ id: "a1", status: "idle", disabled: false, ...p });
 
 describe("rosterStatus", () => {
   it("idle agent", () => {
-    expect(rosterStatus(row())).toEqual({ unread: false, attention: false, work: "idle", typing: null, tip: "online · idle" });
+    expect(rosterStatus(row())).toEqual({ unread: false, attention: false, work: "idle", typing: null, presence: "online", label: "online, idle" });
   });
 
   it("unread shows the dot and 'new message'", () => {
     const s = rosterStatus(row({ unread: true }));
     expect(s.unread).toBe(true);
-    expect(s.tip).toBe("new message");
+    expect(s.label).toBe("new message");
   });
 
   it("the open chat is never unread", () => {
@@ -26,14 +26,14 @@ describe("rosterStatus", () => {
     const s = rosterStatus(row({ status: "running" }));
     expect(s.work).toBe("thinking");
     expect(s.typing).toBe("thinking…");
-    expect(s.tip).toBe("thinking…");
+    expect(s.label).toBe("thinking…");
   });
 
   it("a running turn on a tool names the tool", () => {
     const s = rosterStatus(row({ status: "queued", current_action: "query_range" }));
     expect(s.work).toBe("tool");
     expect(s.typing).toBe("running query_range…");
-    expect(s.tip).toBe("running query_range…");
+    expect(s.label).toBe("running query_range…");
     expect(rosterStatus(row({ status: "running", current_action: "read_file" })).typing).toBe("reading file…");
     expect(rosterStatus(row({ status: "running", current_action: "mcp__wick__wick_search" })).typing).toBe("searching…");
   });
@@ -50,22 +50,32 @@ describe("rosterStatus", () => {
 
   it("attention beats typing and unread", () => {
     const s = rosterStatus(row({ status: "running", needs_attention: true, unread: true }));
-    expect(s.tip).toBe("needs your attention");
+    expect(s.label).toBe("needs your attention");
     expect(s.attention).toBe(true);
     expect(s.typing).toBe("thinking…");
   });
 
   it("hatching beats everything but disabled", () => {
-    expect(rosterStatus(row({ unread: true }), { hatching: true }).tip).toBe("just hatched");
+    expect(rosterStatus(row({ unread: true }), { hatching: true }).label).toBe("just hatched");
   });
 
   it("a disabled agent shows no live cue", () => {
     const s = rosterStatus(row({ disabled: true, status: "running", unread: true, needs_attention: true }), { hatching: true });
-    expect(s).toEqual({ unread: false, attention: false, work: "idle", typing: null, tip: "disabled" });
+    expect(s).toEqual({ unread: false, attention: false, work: "idle", typing: null, presence: "disabled", label: "disabled" });
+  });
+
+  it("the status dot: amber needs you, spinner working, grey disabled, green otherwise", () => {
+    expect(rosterStatus(row()).presence).toBe("online");
+    expect(rosterStatus(row({ unread: true })).presence).toBe("online");
+    expect(rosterStatus(row({ status: "running" })).presence).toBe("working");
+    expect(rosterStatus(row({ status: "running", kind: "slack-remote", handle: "h" })).presence).toBe("working");
+    expect(rosterStatus(row({ subagents_working: ["x"] })).presence).toBe("working");
+    expect(rosterStatus(row({ status: "running", needs_attention: true })).presence).toBe("attention");
+    expect(rosterStatus(row({ disabled: true, needs_attention: true, status: "running" })).presence).toBe("disabled");
   });
 
   it("rows from an older server (no P13 fields) read as idle", () => {
-    expect(rosterStatus({ id: "x", status: "idle", disabled: false }).tip).toBe("online · idle");
+    expect(rosterStatus({ id: "x", status: "idle", disabled: false }).label).toBe("online, idle");
   });
 });
 
@@ -134,12 +144,29 @@ describe("no quick poll", () => {
     const src = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
     const intervals = [...src.matchAll(/setInterval\([\s\S]*?,\s*(\w+)\s*\)/g)].map((m) => m[1]);
     // The roster refreshes on agent_changed over the sessions stream (no 30s
-    // poll since d979f8fc); the only timer left is the 1s wait clock.
-    expect(intervals.filter((ms) => ms !== "1000")).toEqual([]);
+    // poll since d979f8fc); the timers left are clocks that fetch nothing:
+    // the 1s wait clock and the roster's minute clock (stamps, dozing).
+    expect(intervals.filter((ms) => ms !== "1000" && ms !== "60_000")).toEqual([]);
     expect(src).toMatch(/setInterval\(\(\) => \(waitNow = Date\.now\(\)\), 1000\)/);
+    expect(src).toMatch(/setInterval\(\(\) => \(rosterNow = Date\.now\(\)\), 60_000\)/);
+    expect(src).toMatch(/rosterTime\(a\.last_active, rosterNow\)/);
+    expect(src).toMatch(/dozing=\{dozing\(a, st, rosterNow\)\}/);
     expect(src).not.toMatch(/agents\/live|listAgentsLive|createLivePoll/);
     // The stream itself lives in rosterLive.ts since d979f8fc.
     expect(src).toMatch(/liveRoster\(/);
+  });
+});
+
+/* P55: an idle row dozes (eyes closed, "z", full colour); only a disabled
+   agent greys out, avatar and name/line together. */
+describe("dozing is not disabled", () => {
+  it("RosterAvatar passes dozing apart from asleep, the row fades only when disabled", () => {
+    const av = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
+    expect(av).toMatch(/asleep=\{a\.disabled\} \{dozing\}/);
+    expect(av).not.toMatch(/a\.disabled \|\| dozing/);
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/data-testid="roster-meta"/);
+    expect(app).toMatch(/class:opacity-50=\{a\.disabled\} data-testid="roster-meta"/);
   });
 });
 
@@ -147,12 +174,12 @@ describe("sub-agents working after the agent's own turn", () => {
   it("one background sub-agent: working, named, with the 🤖 cue", () => {
     const s = rosterStatus(row({ subagents_working: ["wick-fixer"] }));
     expect(s.work).toBe("subagent");
-    expect(s.typing).toBe("🤖 wick-fixer bekerja…");
-    expect(s.tip).toBe("🤖 wick-fixer bekerja…");
+    expect(s.typing).toBe("🤖 wick-fixer working…");
+    expect(s.label).toBe("🤖 wick-fixer working…");
   });
 
   it("more than one is counted", () => {
-    expect(rosterStatus(row({ subagents_working: ["a", "b"] })).typing).toBe("🤖 2 sub-agent bekerja…");
+    expect(rosterStatus(row({ subagents_working: ["a", "b"] })).typing).toBe("🤖 2 sub-agents working…");
   });
 
   it("the agent's own turn outranks its sub-agents", () => {
@@ -163,10 +190,10 @@ describe("sub-agents working after the agent's own turn", () => {
   });
 
   it("attention and hatching beat it, it beats unread, disabled shows nothing", () => {
-    expect(rosterStatus(row({ needs_attention: true, subagents_working: ["x"] })).tip).toBe("needs your attention");
-    expect(rosterStatus(row({ subagents_working: ["x"] }), { hatching: true }).tip).toBe("just hatched");
+    expect(rosterStatus(row({ needs_attention: true, subagents_working: ["x"] })).label).toBe("needs your attention");
+    expect(rosterStatus(row({ subagents_working: ["x"] }), { hatching: true }).label).toBe("just hatched");
     const unread = rosterStatus(row({ unread: true, subagents_working: ["x"] }));
-    expect(unread.tip).toBe("🤖 x bekerja…");
+    expect(unread.label).toBe("🤖 x working…");
     expect(unread.unread).toBe(true);
     const off = rosterStatus(row({ disabled: true, subagents_working: ["x"] }));
     expect(off.work).toBe("idle");
@@ -187,5 +214,139 @@ describe("sub-agents working after the agent's own turn", () => {
     const ended = withTurn(agents, "a1", false);
     expect(ended[0].subagents_working).toEqual(["wick-fixer"]);
     expect(rosterStatus(ended[0]).work).toBe("subagent");
+  });
+});
+
+/* P44: the roster row says presence with a dot (label read out, no hover
+   tip), a remote with its source icon, and never "shared" — the header
+   tells that once. The old testids are gone on purpose. */
+describe("roster row and header markup", () => {
+  const src = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+  it("no hover tip and no Shared / remote pills", () => {
+    expect(src).not.toMatch(/roster-tip|roster-shared-badge|roster-remote-badge/);
+    expect(src).not.toMatch(/st\.tip|\.tip\}/);
+  });
+  it("the dot and the source icon sit on the row and the header", () => {
+    expect(src.match(/<PresenceDot /g)?.length).toBe(2);
+    expect(src.match(/<RemoteKindIcon /g)?.length).toBe(2);
+    expect(src).toMatch(/<AgentShareLine agent=\{selected\} onOpenSharing=\{\(\) => openPanel\(\{ kind: "settings", tab: "sharing" \}\)\}/);
+  });
+  it("line 2 never says shared by, and the header drops the online text", () => {
+    const preview = src.slice(src.indexOf("function rowPreview"), src.indexOf("const mutedBell"));
+    expect(preview).not.toMatch(/sharedLabel/);
+    expect(src).not.toMatch(/<\/span>online\b/);
+  });
+});
+
+describe("Team tasks (team_message / @mention)", () => {
+  it("the sender waits on its teammates: working, one handle or how many", () => {
+    const one = rosterStatus(row({ team_waiting: ["anton"] }));
+    expect(one.work).toBe("team");
+    expect(one.presence).toBe("working");
+    expect(one.typing).toBe("waiting on @anton…");
+    expect(rosterStatus(row({ team_waiting: ["a", "b", "c"] })).typing).toBe("waiting on 3 teammates…");
+  });
+
+  it("outranks its own turn and its background sub-agents, which keep their own label", () => {
+    expect(rosterStatus(row({ status: "running", current_action: "team_message", team_waiting: ["a"] })).work).toBe("team");
+    expect(rosterStatus(row({ team_waiting: ["a"], subagents_working: ["x"] })).typing).toBe("waiting on @a…");
+    expect(rosterStatus(row({ subagents_working: ["x"] })).typing).toBe("🤖 x working…");
+  });
+
+  it("the teammate working on it replies to its sender, ahead of everything else it does", () => {
+    const s = rosterStatus(row({ replying_to: "Captain" }));
+    expect(s.work).toBe("replying");
+    expect(s.presence).toBe("working");
+    expect(s.typing).toBe("replying to Captain…");
+    expect(s.label).toBe("replying to Captain…");
+    expect(rosterStatus(row({ status: "running", current_action: "Bash", replying_to: "Captain", team_waiting: ["a"] })).work).toBe("replying");
+  });
+
+  it("a chat other than the main one running reads as replying to whoever it works for", () => {
+    const ws = (trigger: string) => [{ id: "s1", label: "x", trigger }];
+    expect(rosterStatus(row({ working_sessions: ws("Captain") })).typing).toBe("replying to Captain…");
+    const own = rosterStatus(row({ working_sessions: ws("you") }));
+    expect(own.work).toBe("replying");
+    expect(own.typing).toBe("working on your request…");
+    expect(own.presence).toBe("working");
+    // The main chat's own turn and Team waits keep their line.
+    expect(rosterStatus(row({ status: "running", working_sessions: ws("you") })).work).toBe("thinking");
+    expect(rosterStatus(row({ team_waiting: ["a"], working_sessions: ws("you") })).work).toBe("team");
+    // A Team task's sender names it first; a disabled agent shows none.
+    expect(rosterStatus(row({ replying_to: "Captain", working_sessions: ws("you") })).typing).toBe("replying to Captain…");
+    expect(rosterStatus(row({ disabled: true, working_sessions: ws("you") })).work).toBe("idle");
+    // Nobody on the Team asked (an outside caller, a channel): a plain working line.
+    const outside = rosterStatus(row({ working_sessions: [{ id: "s1", label: "x", trigger: "", source: "A2A" }] }));
+    expect(outside.work).toBe("replying");
+    expect(outside.typing).toBe("working…");
+  });
+
+  it("a teammate asking its sender needs attention", () => {
+    const s = rosterStatus(row({ team_asks: { to: "Captain", question: "which deploy?" } }));
+    expect(s.attention).toBe(true);
+    expect(s.presence).toBe("attention");
+  });
+
+  it("disabled shows none of it", () => {
+    const off = rosterStatus(row({ disabled: true, team_waiting: ["a"], replying_to: "Captain", team_asks: { to: "Captain", question: "q" } }));
+    expect(off.work).toBe("idle");
+    expect(off.attention).toBe(false);
+    expect(off.typing).toBeNull();
+  });
+});
+
+describe("Team task work in the avatar and the header", () => {
+  it("busyWork covers sub-agents, Team waits and replies, not the agent's own turn", () => {
+    expect(["subagent", "team", "replying"].every((w) => busyWork(w as WorkState))).toBe(true);
+    expect(["idle", "thinking", "tool", "waiting"].some((w) => busyWork(w as WorkState))).toBe(false);
+  });
+
+  it("avatarWorking: its own turn and busyWork animate the avatar, a Team task or another chat it works on too", () => {
+    expect(avatarWorking("running", "thinking")).toBe(true);
+    expect(avatarWorking("idle", "team")).toBe(true);
+    expect(avatarWorking("idle", "subagent")).toBe(true);
+    expect(avatarWorking("idle", "replying")).toBe(true);
+    expect(avatarWorking("running", "replying")).toBe(true);
+    expect(avatarWorking("idle", "idle")).toBe(false);
+  });
+
+  it("the row avatar, the header avatar and header line 2 all read busyWork", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    const avatar = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
+    expect(avatar).toMatch(/working=\{!ring && avatarWorking\(a\.status, st\.work\)\} tool=\{st\.work === "tool" \|\| st\.work === "subagent" \|\| st\.work === "replying"\}/);
+    expect(app).toMatch(/working=\{!!headerStatus && avatarWorking\(selected\.status, headerStatus\.work\)\} tool=\{headerStatus\?\.work === "tool" \|\| headerStatus\?\.work === "subagent" \|\| headerStatus\?\.work === "replying"\}/);
+    expect(app).toMatch(/\{:else if isWorking\(selected\.status\) \|\| \(headerStatus && busyWork\(headerStatus\.work\)\)\}/);
+  });
+
+  it("the row's working line ends in the bouncing dots, and its avatar takes the Team-task mark", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/data-testid="roster-working" data-work=\{st\.work\}>\{st\.typing\.replace\(\/…\$\/, ""\)\}<Dots \/><\/span>/);
+    // The header's working line ends in the same shared dots.
+    expect(app).toMatch(/data-testid="header-typing"[^>]*>\{[^}]*\}<Dots \/><\/span>/);
+    expect(app).not.toMatch(/class="dots"|\.dots i/);
+    expect(app).toMatch(/<PresenceDot [^>]*mark=\{teamMark\(a, st\)\} \/>/);
+  });
+
+  it("teamMark: the task badge only for a Team task, never a side chat from you, Slack or a schedule", () => {
+    const mark = (p: Record<string, unknown>) => {
+      const a = row(p);
+      return teamMark(a, rosterStatus(a));
+    };
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "you" }] })).toBeNull();
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "", source: "Slack" }] })).toBeNull();
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "", source: "Schedule" }] })).toBeNull();
+    expect(mark({ working_sessions: [{ id: "s1", label: "", trigger: "Captain" }] })).toBe("task");
+    expect(mark({ replying_to: "Captain" })).toBe("task");
+    expect(mark({ replying_to: "you" })).toBe("task");
+    // Side chats read "replying" all the same: only the badge differs.
+    expect(rosterStatus(row({ working_sessions: [{ id: "s1", label: "", trigger: "you" }] })).work).toBe("replying");
+    expect(mark({ team_asks: { to: "Captain", question: "?" } })).toBe("asks");
+    expect(mark({ disabled: true, replying_to: "Captain" })).toBeNull();
+    expect(mark({})).toBeNull();
+  });
+
+  it("a teammate asking its sender gets the amber count badge on its row", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/\{#if a\.team_asks && !a\.disabled\}<span class="roster-badge[^"]*bg-amber-500[^"]*"[^>]*data-testid="roster-asks">1<\/span>\{\/if\}/);
   });
 });

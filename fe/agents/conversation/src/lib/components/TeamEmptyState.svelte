@@ -8,15 +8,19 @@
      only those sees exactly the new-user page. */
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import { REMOTE_NOT_CAPTAIN } from "../captainSettings.js";
+  import { OWNER_ACCESS_HINT } from "../captainAccess.js";
 
   type Candidate = { id: string; name: string; handle: string };
   type Props = {
     onCreate: () => void;
     onRemote: () => void;
     candidates?: Candidate[];
-    onMakeCaptain?: (c: Candidate) => void;
+    /** giveAccess: "Give it your access" — run as you, Same as me. */
+    onMakeCaptain?: (c: Candidate, giveAccess: boolean) => void;
   };
   let { onCreate, onRemote, candidates = [], onMakeCaptain }: Props = $props();
+  // Same choice as Settings › Captain › Make Captain, ticked by default.
+  let giveAccess = $state(true);
 
   const STEPS = [
     { title: "Your first agent becomes the Captain", body: "Give it any name and its own persona — the Captain is a role, not a name." },
@@ -59,9 +63,13 @@
       <div class="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm text-black-800 dark:text-black-600" data-testid="team-empty-candidates">
         <span>Or pick one of your agents as Captain:</span>
         {#each candidates as c (c.id)}
-          <button type="button" class="rounded-xl border border-white-300 bg-white-100 px-3 py-1.5 text-sm text-black-900 hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100 dark:hover:bg-navy-600" onclick={() => onMakeCaptain(c)}>🧭 {c.name} <span class="text-black-700 dark:text-black-600">@{c.handle}</span></button>
+          <button type="button" class="rounded-xl border border-white-300 bg-white-100 px-3 py-1.5 text-sm text-black-900 hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100 dark:hover:bg-navy-600" onclick={() => onMakeCaptain(c, giveAccess)}>🧭 {c.name} <span class="text-black-700 dark:text-black-600">@{c.handle}</span></button>
         {/each}
       </div>
+      <label class="mx-auto mt-2 flex max-w-md items-start gap-2 text-left text-sm text-black-900 dark:text-white-100" data-testid="team-empty-give-access">
+        <input type="checkbox" class="mt-1" bind:checked={giveAccess} />
+        <span>Give it your access<br /><span class="text-xs text-black-800 dark:text-black-600">{OWNER_ACCESS_HINT} Untick to keep its access as it is.</span></span>
+      </label>
     {/if}
     <p class="mt-3 text-xs text-black-800 dark:text-black-600">{REMOTE_NOT_CAPTAIN}</p>
   </div>

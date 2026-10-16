@@ -1,16 +1,17 @@
 <script lang="ts">
-  /* TerminalPanel — the Detail page's "Terminal" section for omp/opencode:
-     pick an allowlisted command, open it in a gotty web terminal inside a
-     modal. gotty is a wick-managed binary downloaded from this section's
-     Binary panel. Closing the modal kills the terminal. Admin-only. */
+  /* TerminalPanel — the Detail page's "Terminal" section for any
+     provider type the backend registered a web terminal for (the detail
+     payload's has_terminal): pick an allowlisted command, open it in a
+     gotty web terminal inside a modal (TerminalModal). gotty is a
+     wick-managed binary downloaded from this section's Binary panel. Closing the modal kills the terminal. Admin-only. */
   import { onMount } from "svelte";
-  import { Modal, Button } from "@wick-fe/common-ui";
+  import { Button } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import CollapsibleSection from "$lib/components/CollapsibleSection.svelte";
   import ManagedBinaryPanel from "$lib/components/ManagedBinaryPanel.svelte";
+  import TerminalModal from "$lib/components/TerminalModal.svelte";
   import type { ManagedBinary } from "$lib/managedbin.js";
   import {
-    apiTerminalClose,
     apiTerminalStart,
     apiTerminalStatus,
     type TerminalCommand,
@@ -57,11 +58,6 @@
     }
   }
 
-  function close() {
-    const s = session;
-    session = null;
-    if (s) void apiTerminalClose(base, type, name, s.id).catch(() => {});
-  }
 </script>
 
 <CollapsibleSection title="Terminal" storageKey="detail.terminal" testid="section-terminal">
@@ -90,10 +86,4 @@
   {/if}
 </CollapsibleSection>
 
-<Modal open={session !== null} title={session ? session.command : ""} size="2xl" closeOnBackdrop={false} onClose={close}>
-  {#if session}
-    <div data-testid="terminal-modal" class="h-[70vh]">
-      <iframe title="terminal" src={session.url} class="h-full w-full rounded-lg border border-white-300 dark:border-navy-600 bg-black"></iframe>
-    </div>
-  {/if}
-</Modal>
+<TerminalModal {base} {type} {name} {session} onClose={() => (session = null)} />

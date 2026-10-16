@@ -99,7 +99,9 @@ func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, i
 		if disabled[row.Key] {
 			continue
 		}
-		ops := enabledOps(mod, s.liveOpStates(ctx, row.ID, row.Key, foldOpStates(mod, opRows[row.ID])))
+		full := foldOpStates(mod, opRows[row.ID])
+		applyVisibleWhen(mod, func() map[string]string { return s.LoadConfigs(row) }, full)
+		ops := enabledOps(mod, s.liveOpStates(ctx, row.ID, row.Key, full))
 		// Live-catalog modules (custom MCP) at zero ops may simply not
 		// have synced yet — run the lazy refresh (throttled) and
 		// recount before deciding to hide the connector. Without this,

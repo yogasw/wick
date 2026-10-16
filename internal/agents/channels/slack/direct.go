@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	slackgo "github.com/slack-go/slack"
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 )
 
 // direct.go sends an unsolicited DM to one Slack user — used for account
@@ -41,6 +42,10 @@ func (s *Channel) SendDirect(ctx context.Context, externalUserID, text string) e
 	if externalUserID == "" || strings.TrimSpace(text) == "" {
 		return errors.New("slack: missing target user or text")
 	}
+
+	// System notices carry no Team roster: any raw source tag is dropped and
+	// an options line becomes plain text, so neither reaches the DM.
+	text = agentchannels.RewriteSourceTagsWith(agentchannels.RewriteOptionsLine(text), nil, escapeMrkdwn)
 
 	ch, _, _, err := api.OpenConversationContext(ctx, &slackgo.OpenConversationParameters{
 		Users:    []string{externalUserID},

@@ -4,7 +4,9 @@
      phase 1a): idle breathes and blinks, thinking wobbles, looks up and
      pulses three thought dots,
      orbit (a tool is running) wobbles with a dot circling it, alert opens wide, notify plays once when the agent finishes a turn, a
-     disabled agent sleeps and a new one hatches from an egg. The eyes
+     disabled agent sleeps (greyed), an idle one left a long while dozes
+     (eyes closed in full colour, a floating "z") and a new one hatches
+     from an egg. The eyes
      follow the pointer, hover makes it attentive and a click winks.
 
      Every avatar on the page rides one shared rAF and one pointermove
@@ -20,12 +22,14 @@
      a failed tool, a remote's wait, a finished turn — each through the
      agent's own table (`events`), the cues above when a row is off. */
   import BlobAvatar from "./BlobAvatar.svelte";
+  import ImageAvatar from "./ImageAvatar.svelte";
+  import { imageAvatarPose, isImageKind, safeImageSrc, type AvatarImageView, type ImageAvatarPose, type ImagePose } from "./image.js";
   import { isBlobKind, blobStateFor } from "./blob.js";
-  import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
+  import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, classicPoseFor, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
   import { createFidget, type FidgetPose } from "./blob/motion/fidget";
   import { idleAnimationsOn } from "./idle.js";
-  import { poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
+  import { classicPoseOf, imagePoseOf, poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
 
   type Props = {
     /** "" / absent = classic, "blob" = blob mascot (team.Avatar.kind). */
@@ -34,6 +38,10 @@
     /** Blob only: one of BLOB_EXPRESSIONS. */
     expression?: string;
     color?: string;
+    /** kind="image": the picture and its crop — the avatar object's own
+        `image` (the API adds its versioned src). Without a usable src, or
+        once it fails to load, the avatar draws as classic. */
+    image?: AvatarImageView | null;
     size?: number;
     working?: boolean;
     /** The running turn is on a tool: orbit instead of thinking. */
@@ -50,14 +58,19 @@
     event?: AvatarEvent;
     /** Greyed and eyes closed: a disabled agent. */
     asleep?: boolean;
+    /** Idle a long while (the roster's quiet rows): eyes closed and a
+        "z" marker, in full colour. asleep and any activity win. */
+    dozing?: boolean;
     /** Just created: drawn as an egg that pops into the agent. */
     hatching?: boolean;
     /** Needs the user's attention. */
     alert?: boolean;
     /** Has something new to read. */
     notify?: boolean;
-    /** Force a state (Settings preview); otherwise derived from the flags. */
-    pose?: AvatarState;
+    /** Force a state (Settings preview); otherwise derived from the flags.
+        An image pose (scan, type, …) is drawn as is by an image avatar,
+        as its look-alike by the others. */
+    pose?: AvatarState | ImagePose;
     /** Draw one still frame and never animate (cards, dense lists). */
     still?: boolean;
     /** Animate this one (roster, header, empty state, preview). A blob
@@ -74,6 +87,7 @@
     shape = "circle",
     expression,
     color = "#6366f1",
+    image,
     size = 40,
     working = false,
     tool = false,
@@ -83,6 +97,7 @@
     events,
     event,
     asleep = false,
+    dozing = false,
     hatching = false,
     alert = false,
     notify = false,
@@ -94,6 +109,9 @@
   }: Props = $props();
 
   const blob = $derived(isBlobKind(kind));
+  let failedSrc = $state("");
+  const imageSrc = $derived(isImageKind(kind) && image ? safeImageSrc(image.src) : "");
+  const pictured = $derived(!!imageSrc && imageSrc !== failedSrc);
 
   const NOTIFY_MS = 2400;
   const WINK_MS = 450;
@@ -119,22 +137,30 @@
   $effect(() => () => clearTimeout(replyTimer));
 
   const resolved = $derived(
-    resolvePose({ disabled: asleep, hatching, attention: alert, working, toolName, tool, toolError, remote, done: justReplied, notify, overrides: events }),
+    resolvePose({ disabled: asleep, hatching, attention: alert, working, toolName, tool, toolError, remote, done: justReplied, notify, dozing, overrides: events }),
   );
+  /* Dozing is a roster cue: a forced pose or event (Settings) never dozes. */
+  const dozes = $derived(!pose && !event && !!resolved.doze);
   const forced = $derived(event ? poseFor(event, events) : null);
   const current = $derived<AvatarState>(
-    pose ? normalizeState(pose) : event ? (forced ? normalizeState(forced.state) : stateFor({ working: true, tool: true })) : resolved.classic,
+    pose ? classicPoseFor(pose) : event ? (forced ? classicPoseOf(event, forced, events) : stateFor({ working: true, tool: true })) : resolved.classic,
   );
   /* The blob's motion and temporary expression; back to the agent's own
      the moment the event is over. */
   const blobPose = $derived(pose ? blobStateFor(normalizeState(pose)) : event ? (forced?.state ?? "orbit") : resolved.state);
+  /* The image avatar has a motion per pose, so it draws the row's image
+     pose (events.ts imagePoseOf), not the classic look-alike. */
+  const imagePose = $derived<ImageAvatarPose>(
+    pose ? imageAvatarPose(pose) : event ? (forced ? imagePoseOf(event, events) : "orbit") : resolved.image,
+  );
   const blobExpression = $derived(pose ? expression : event ? (forced?.expression ?? expression) : (resolved.expression ?? expression));
 
   let hover = $state(false);
   let wink = $state(false);
   let winkTimer: ReturnType<typeof setTimeout> | undefined;
   function onClick() {
-    if (current === "sleep" || current === "egg") return;
+    // A dozing agent is active: it still winks; only disabled / egg do not.
+    if ((current === "sleep" && !dozes) || current === "egg") return;
     wink = true;
     clearTimeout(winkTimer);
     winkTimer = setTimeout(() => (wink = false), WINK_MS);
@@ -152,7 +178,7 @@
   let fp = $state<FidgetPose | null>(null);
 
   $effect(() => {
-    if (reduced || blob) return;
+    if (reduced || blob || pictured) return;
     const off = subscribe((now) => {
       t = now;
       const next = live
@@ -187,8 +213,15 @@
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
-{#if blob}
-  <BlobAvatar {shape} expression={blobExpression} {color} {size} pose={blobPose} {live} {restless} {still} hatching={hatching && !reduced} {title} />
+<!-- The face, then (dozing) a floating "z z" beside it, the same for
+     every kind; on an image it sits clear of the picture, which is never
+     altered. Without dozing no wrapper is added, so every other caller's
+     layout is the same as before. -->
+{#snippet face()}
+{#if pictured && image}
+  <ImageAvatar {image} {size} {color} {title} onerror={() => (failedSrc = imageSrc)} pose={imagePose} animate={!reduced && (live || !!event || imagePose !== "idle")} />
+{:else if blob}
+  <BlobAvatar {shape} expression={blobExpression} {color} {size} pose={blobPose} {live} {restless} {still} hatching={hatching && !reduced} dozing={dozes} {title} />
 {:else}
 <!-- The click is a reaction, not an action: the row button around the
      avatar does the navigating, so there is nothing for a key to trigger. -->
@@ -200,8 +233,8 @@
   viewBox="-1.4 -1.4 2.8 2.8"
   class="agent-avatar shrink-0 overflow-visible"
   class:hatch={hatching && !reduced}
-  class:lift={hover && !reduced && current !== "sleep"}
-  style:opacity={current === "sleep" ? 0.45 : 1}
+  class:lift={hover && !reduced && (current !== "sleep" || dozes)}
+  style:opacity={current === "sleep" && !dozes ? 0.45 : 1}
   role="img"
   aria-label={title ?? "avatar"}
   data-state={current}
@@ -220,6 +253,16 @@
   {#if dot}<circle cx={dot.x.toFixed(3)} cy={dot.y.toFixed(3)} r={DOT_R} fill="#27b199" />{/if}
 </svg>
 {/if}
+{/snippet}
+
+{#if dozes}
+  <span class="doze relative inline-flex shrink-0" class:still={reduced} data-testid="avatar-doze">
+    {@render face()}
+    <span class="doze-z pointer-events-none absolute font-extrabold leading-none" class:on-image={pictured} aria-hidden="true" data-doze="zz">z<small>z</small></span>
+  </span>
+{:else}
+  {@render face()}
+{/if}
 
 <style>
   .agent-avatar {
@@ -231,6 +274,39 @@
   }
   .agent-avatar.hatch {
     animation: agent-hatch 0.6s ease-out;
+  }
+  .doze-z {
+    right: -4px;
+    top: -6px;
+    font-size: 10px;
+    color: #94a3b8;
+    animation: doze-float 2.6s ease-in-out infinite;
+  }
+  .doze-z small {
+    position: relative;
+    top: -5px;
+    margin-left: 1px;
+    font-size: 8px;
+    opacity: 0.7;
+  }
+  /* A picture fills its frame to the ring: a step further out, so the
+     "z z" never sits on it. */
+  .doze-z.on-image {
+    right: -7px;
+    top: -8px;
+  }
+  @keyframes doze-float {
+    0%, 100% { transform: translateY(0); opacity: 0.85; }
+    50% { transform: translateY(-2px); opacity: 1; }
+  }
+  /* Reduced motion / still: the "z" stays, standing still. */
+  .doze.still .doze-z {
+    animation: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .doze-z {
+      animation: none;
+    }
   }
   @keyframes agent-hatch {
     0% { transform: scale(0.4) rotate(-10deg); }

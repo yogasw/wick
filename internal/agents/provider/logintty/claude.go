@@ -19,6 +19,14 @@ import (
 // Overridable in tests.
 var anthropicAPIBase = "https://api.anthropic.com"
 
+// claudeUsageUserAgent identifies the usage probe as the claude CLI. The
+// usage endpoint decides the client surface from the User-Agent, and only
+// answers `claude-cli/<semver> (external, cli)` with the account's saved
+// resets; any other agent gets cedar_ember back as ineligible ("surface")
+// with no grants. Pinned to a known CLI release so the probe never has to
+// spawn `claude --version`.
+const claudeUsageUserAgent = "claude-cli/2.1.301 (external, cli)"
+
 // claudeLoginCommand builds the claude argv: instance flags first,
 // /login as the positional prompt — the REPL executes it and prints
 // the OAuth link.
@@ -96,18 +104,23 @@ var claudeUsageOrder = map[string]int{"five_hour": 0, "seven_day": 1, "seven_day
 
 // readClaudeUsage calls the same OAuth usage endpoint the claude CLI's
 // /usage screen reads: rolling-window utilization percentages.
+//
+// ?cedar_ember=1 makes the same answer carry the account's saved resets
+// (claude_saved_resets.go), so they cost no request of their own.
 func readClaudeUsage(env []string) ([]UsageWindow, error) {
-	token, err := claudeAccessToken(claudeConfigDir(env))
+	dir := claudeConfigDir(env)
+	token, err := claudeAccessToken(dir)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, anthropicAPIBase+"/api/oauth/usage", nil)
+	req, err := http.NewRequest(http.MethodGet, anthropicAPIBase+"/api/oauth/usage?cedar_ember=1", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("User-Agent", claudeUsageUserAgent)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -138,6 +151,7 @@ func readClaudeUsage(env []string) ([]UsageWindow, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
+	rememberClaudeSavedResets(dir, raw["cedar_ember"], time.Now())
 	var windows []UsageWindow
 	for key, val := range raw {
 		var w struct {
@@ -202,12 +216,14 @@ func claudeAccountEmail(dir string) string {
 // Email first — it survives a token refresh, so the key stays stable
 // across the day. Then a hash of the access token: an identical token
 // is literally the same upstream subject (a copied credential dir).
-// Only the hash is kept, never the token itself. Not logged in yet ->
+// Only hashes are kept, never the email or the token: the key is
+// written to health.json and the usage files. Not logged in yet ->
 // the dir, which can split but can never merge two accounts.
 func claudeUsageIdentity(env []string) string {
 	dir := claudeConfigDir(env)
 	if email := claudeAccountEmail(dir); email != "" {
-		return "claude:email:" + strings.ToLower(email)
+		sum := sha256.Sum256([]byte(strings.ToLower(email)))
+		return "claude:email:" + hex.EncodeToString(sum[:8])
 	}
 	if token, err := claudeAccessToken(dir); err == nil {
 		sum := sha256.Sum256([]byte(token))

@@ -205,3 +205,42 @@ func TestPluginsInstalledSharedKeyKinds(t *testing.T) {
 		t.Errorf("tool: %+v", tl)
 	}
 }
+
+func TestPluginStatusIsWhatTheProcessLoaded(t *testing.T) {
+	h := &PluginsHandler{}
+	if s, _ := h.status(wickplugin.KindTool, "a", true); s != pluginStatusActive {
+		t.Fatalf("no load state: %q", s)
+	}
+	h.SetLoadState(func(kind, key string) (string, string) {
+		if kind != wickplugin.KindTool {
+			return "", ""
+		}
+		switch key {
+		case "ok":
+			return "active", ""
+		case "bad":
+			return "error", "verification failed: sha"
+		case "new":
+			return "pending", ""
+		}
+		return "idle", ""
+	})
+	cases := []struct {
+		kind, key      string
+		enabled        bool
+		status, detail string
+	}{
+		{wickplugin.KindTool, "ok", true, pluginStatusActive, ""},
+		{wickplugin.KindTool, "ok", false, pluginStatusDisabled, ""},
+		{wickplugin.KindTool, "bad", true, pluginStatusError, "verification failed: sha"},
+		{wickplugin.KindTool, "new", true, pluginStatusPending, ""},
+		{wickplugin.KindTool, "idle", true, pluginStatusError, "not loaded by the running process"},
+		{wickplugin.KindConnector, "c", true, pluginStatusActive, ""},
+	}
+	for _, c := range cases {
+		s, d := h.status(c.kind, c.key, c.enabled)
+		if s != c.status || d != c.detail {
+			t.Errorf("%s/%s enabled=%v: got %q %q, want %q %q", c.kind, c.key, c.enabled, s, d, c.status, c.detail)
+		}
+	}
+}

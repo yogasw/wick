@@ -4,7 +4,7 @@
 import type { AvailablePlugin, InstalledPlugin, PluginOrigin } from "$lib/api.js";
 import type { PluginEntry } from "$lib/types.js";
 
-export type Tab = "installed" | "marketplace" | "sources" | "add";
+export type Tab = "installed" | "marketplace" | "sources" | "host" | "add";
 export type KindFilter = "all" | InstalledPlugin["kind"];
 export type OriginFilter = "all" | "official" | "source" | "upload" | "local";
 export type StatusFilter = "all" | "active" | "disabled" | "update" | "error";
@@ -12,7 +12,7 @@ export type SortKey = "name" | "kind" | "checked" | "update";
 export type MarketFilter = "all" | "not-installed" | "installed" | "update";
 export type MarketSort = "name" | "updated";
 
-export const TABS: Tab[] = ["installed", "marketplace", "sources", "add"];
+export const TABS: Tab[] = ["installed", "marketplace", "sources", "host", "add"];
 export const MARKET_FILTERS: MarketFilter[] = ["all", "not-installed", "installed", "update"];
 export const MARKET_SORTS: MarketSort[] = ["name", "updated"];
 export const KINDS: KindFilter[] = ["all", "connector", "tool", "job", "service"];
@@ -81,15 +81,20 @@ export function queryString(q: ListQuery): string {
 
 export const originGroup = (o: PluginOrigin): OriginFilter => (o === "url-zip" ? "source" : o);
 export const hasError = (p: InstalledPlugin) => !!p.last_health_at && !p.last_health_ok;
+// isActive: loaded by the running wick. Falls back to the enabled flag when
+// the server does not report a status.
+export const isActive = (p: InstalledPlugin) => (p.status ? p.status === "active" : p.enabled);
+export const loadFailed = (p: InstalledPlugin) => p.status === "error";
+export const loadPending = (p: InstalledPlugin) => p.status === "pending";
 export const canUpdate = (p: InstalledPlugin) => p.update_available && p.origin !== "upload" && p.origin !== "local";
 export const hasUpdateSource = (p: InstalledPlugin) => p.origin !== "upload" && p.origin !== "local";
 
 export function matchesStatus(p: InstalledPlugin, s: StatusFilter): boolean {
   switch (s) {
-    case "active": return p.enabled;
+    case "active": return isActive(p);
     case "disabled": return !p.enabled;
     case "update": return p.update_available;
-    case "error": return hasError(p);
+    case "error": return hasError(p) || loadFailed(p);
     default: return true;
   }
 }

@@ -97,7 +97,7 @@ GET /projects/{projectID}/tickets
 |---|---|---|
 | `rows` | `3` | Session rows per card. `0` returns counts only. |
 | `statuses` | all | Comma-separated columns to include. `?statuses=` returns none. |
-| `assignee` | everyone | A user id, or `me`. |
+| `assignee` | everyone | A user id, `me`, or `none` (unassigned) — or a comma list of them (`me,usr_a91f,none`): a ticket matches when ANY of its assignees is listed. |
 | `untracked` | `0` | `1` also returns sessions with no ticket. |
 | `untracked_limit` | — | Caps that list. |
 | `untracked_owner` | everyone | `me` limits the untracked list (and its count) to sessions the caller owns. |
@@ -227,7 +227,7 @@ curl -s "$WICK_API/tickets/T-4F2A" -H "Authorization: Bearer $WICK_TOKEN"
 | `?fields=all` | Every stored field per card, not just the ones marked *show on card*. A machine reading this board needs the keys the board does not draw — an external id, a mirror's page reference — and without them a sync cannot recognise the tickets it created and re-creates them on every run |
 | `?rows=N` | Session rows per card (`0` = counts only) |
 | `?statuses=a,b` | Only these columns |
-| `?assignee=ID` or `me` | Only this person's tickets |
+| `?assignee=ID,me,none` | Only these people's tickets (any of them); `none` = unassigned. A single value works as before |
 | `?untracked=1` | Include the untracked chat list |
 
 ## Update a ticket
@@ -708,6 +708,9 @@ itself uses:
 { "assignee": "me", "statuses": ["open", "in_progress"] }
 ```
 
+`assignee` takes the board's own comma list (`"me,usr_b22c,none"`) when the
+clicker ticked several people.
+
 and delivers a `ticket.board_action` event to the button's URL. The envelope
 carries no ticket; it carries the list:
 
@@ -721,6 +724,8 @@ carries no ticket; it carries the list:
   "actor": { "type": "user", "id": "usr_a91f", "name": "Dana Reyes", "email": "dana@abc.com" },
   "board": {
     "assignee": "me",
+    "assignee_filtered": true,
+    "assignee_ids": ["usr_a91f"],
     "assignee_id": "usr_a91f",
     "assignee_name": "Dana Reyes",
     "assignee_email": "dana@abc.com",
@@ -744,9 +749,15 @@ carries no ticket; it carries the list:
 
 Three things about `board` are worth reading closely:
 
-- **`assignee` is what was picked; `assignee_id` is who that is.** `"me"` is
+- **`assignee` is what was picked; `assignee_ids` is who that is.** `"me"` is
   resolved against the clicker before the event leaves wick, so a receiver
-  never has to guess. An empty `assignee_id` means *every* assignee.
+  never has to guess. `assignee_none` is true when unassigned tickets were
+  picked. **`assignee_filtered` says whether the list was narrowed by
+  assignee at all** — read it before anything else: `false` means every
+  ticket. `assignee_id` (with `assignee_name` / `assignee_email`) is set only
+  when exactly one person was picked, so an empty `assignee_id` means
+  *everyone* only when `assignee_filtered` is `false`; with several people or
+  `none` ticked it is empty too.
 - **`assignee_email` (and `actor.email`) is how you find that person in YOUR
   system.** A wick user id means nothing outside wick and a name is
   ambiguous; an email is the identifier both systems usually already have,

@@ -1,6 +1,9 @@
 package entity
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // TeamSettings is one user's Team settings: what applies to every agent
 // in their Team (package internal/agents/team). One row per user, made on
@@ -22,12 +25,29 @@ type TeamSettings struct {
 	// fidgets). Stored inverted so the zero value is the default (ON):
 	// gorm skips a zero field that has a column default on insert, so a
 	// false default-true column could never be saved.
-	NoIdleFidget bool      `gorm:"not null;default:false" json:"no_idle_fidget"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	NoIdleFidget bool `gorm:"not null;default:false" json:"no_idle_fidget"`
+	// TicketProjects is the projects on the owner's Team Tickets page, a
+	// JSON array of project ids in the order picked. "" = nothing picked
+	// yet (the page shows the picker). Only the owner's view: nothing is
+	// written to the projects.
+	TicketProjects string    `gorm:"type:text;not null;default:''" json:"ticket_projects"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // OpenTeam reports whether opening the Agents landing goes to Team.
 func (s TeamSettings) OpenTeam() bool { return s.TeamHome }
+
+// TicketProjectIDs decodes TicketProjects; "" or a broken value is none.
+func (s TeamSettings) TicketProjectIDs() []string {
+	if s.TicketProjects == "" {
+		return nil
+	}
+	var ids []string
+	if json.Unmarshal([]byte(s.TicketProjects), &ids) != nil {
+		return nil
+	}
+	return ids
+}
 
 // IdleAnimations reports whether idle avatars play their fidgets.
 func (s TeamSettings) IdleAnimations() bool { return !s.NoIdleFidget }

@@ -7,6 +7,10 @@ describe("system event registry", () => {
     expect(getSystemEvent("hop_limit").tone).toBe("warn");
     expect(getSystemEvent("scheduled_fired").icon).toBe("clock");
     expect(getSystemEvent("routine_fired").icon).toBe("clock");
+    // A room opening is not someone joining.
+    expect(getSystemEvent("ticket_room_opened").icon).toBe("info");
+    expect(isSystemEventKind("ticket_status")).toBe(true);
+    expect(getSystemEvent("ticket_status").icon).toBe("info");
     expect(isSystemEventKind("access_changed")).toBe(true);
     expect(isSystemEventKind("persona_changed")).toBe(true);
     expect(isSystemEventKind("access_change_declined")).toBe(true);
@@ -21,6 +25,14 @@ describe("system event registry", () => {
       { names: { captain: "Captain" } },
     );
     expect(parts).toEqual(["Captain", " → ", { handle: "anton" }, " · completed"]);
+  });
+
+  test("P45: the person's own task reads You → @B", () => {
+    const parts = systemEventParts(
+      { kind: "mention_handoff", text: "", extras: { from: "captain", to: "anton", state: "TASK_STATE_WORKING", origin: "user" } },
+      { names: { captain: "Captain" } },
+    );
+    expect(parts).toEqual(["You", " → ", { handle: "anton" }, " · working"]);
   });
 
   test("a new kind is one register call", () => {

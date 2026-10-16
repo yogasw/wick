@@ -113,6 +113,13 @@ func (s *Service) GetUserByID(ctx context.Context, id string) (*entity.User, err
 	return s.repo.GetUserByID(ctx, id)
 }
 
+// GetUsersByIDs resolves many accounts in a single query — for lists that
+// put a name on each row, where one lookup per id would cost a DB round
+// trip apiece.
+func (s *Service) GetUsersByIDs(ctx context.Context, ids []string) ([]*entity.User, error) {
+	return s.repo.GetUsersByIDs(ctx, ids)
+}
+
 // FirstAdmin returns the oldest admin user, or nil when no admin exists.
 // Stdio MCP uses this to bind its synthetic context to a real admin so
 // wick_enc_ tokens minted from MCP can be decrypted by that admin in
@@ -203,7 +210,8 @@ func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string,
 		return err
 	}
 	meta := u.Metadata
-	empty := len(f.Statuses) == 0 && f.Assignee == "" && f.ViewMode == ""
+	empty := len(f.Statuses) == 0 && f.Assignee == "" && len(f.Assignees) == 0 &&
+		f.ViewMode == "" && !f.ShowUntracked
 	if empty {
 		delete(meta.TicketFilters, projectID)
 	} else {
@@ -218,14 +226,28 @@ func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string,
 // SetRailPrefs saves the user's conversation-rail layout. Stored as given:
 // both lists are tab ids, and the client owns which ids exist — a server that
 // filtered them would drop a tab added by a newer client and silently undo
-// the layout that client had just saved.
+// the layout that client had just saved. Labels is kept as it was; the
+// profile owns it (see SetRailLabels).
 func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.RailPrefs) error {
 	u, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 	meta := u.Metadata
-	meta.Rail = p
+	meta.Rail = meta.Rail.WithLayout(p)
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// SetRailLabels saves whether the conversation rail prints tab names along
+// the strip (true) or shows icons only (false). Both are stored explicitly,
+// so the choice survives a later change of default. The layout is left alone.
+func (s *Service) SetRailLabels(ctx context.Context, userID string, on bool) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.Rail.Labels = &on
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
@@ -266,6 +288,70 @@ func (s *Service) SetAutoDeleteEmptyTickets(ctx context.Context, userID, choice 
 	meta := u.Metadata
 	meta.AutoDeleteEmptyTickets = choice
 	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// ErrHiddenLimit is returned by SetConnectorHidden when the user already
+// hides entity.MaxHiddenConnectors instances that still exist.
+var ErrHiddenLimit = errors.New("hide limit reached")
+
+// SetConnectorHidden hides (hidden=true) or unhides one connector instance
+// for this user only, and returns the hidden list as saved. Idempotent:
+// hiding an already hidden id or unhiding an unknown one just returns the
+// list. Unhide never checks the id, so a deleted instance can still be
+// cleared.
+//
+// exists, when non-nil, reports whether an instance still exists; ids it
+// rejects are pruned when a hide would hit the cap, before ErrHiddenLimit
+// is decided. It is called before the write transaction, never inside it,
+// so it may query the database freely.
+//
+// The write goes through repo.UpdateMetadata, so quick hide clicks or a
+// second tab cannot drop each other's ids.
+func (s *Service) SetConnectorHidden(ctx context.Context, userID, connectorID string, hidden bool, exists func(id string) bool) ([]string, error) {
+	if connectorID == "" {
+		return nil, errors.New("connector id is required")
+	}
+	stale := map[string]bool{}
+	if hidden && exists != nil {
+		u, err := s.repo.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		cur := u.Metadata
+		if !cur.IsConnectorHidden(connectorID) && len(cur.HiddenConnectors) >= entity.MaxHiddenConnectors {
+			for _, id := range cur.HiddenConnectors {
+				if !exists(id) {
+					stale[id] = true
+				}
+			}
+		}
+	}
+	meta, err := s.repo.UpdateMetadata(ctx, userID, func(m *entity.UserMetadata) error {
+		seen := make(map[string]bool, len(m.HiddenConnectors))
+		list := make([]string, 0, len(m.HiddenConnectors)+1)
+		for _, id := range m.HiddenConnectors {
+			if id == "" || seen[id] || stale[id] || (!hidden && id == connectorID) {
+				continue
+			}
+			seen[id] = true
+			list = append(list, id)
+		}
+		if hidden && !seen[connectorID] {
+			if len(list) >= entity.MaxHiddenConnectors {
+				return ErrHiddenLimit
+			}
+			list = append(list, connectorID)
+		}
+		if len(list) == 0 {
+			list = nil
+		}
+		m.HiddenConnectors = list
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return meta.HiddenConnectors, nil
 }
 
 // SetPinnedAgentProject sets (or clears, when projectID is empty) the
@@ -493,6 +579,25 @@ func (s *Service) CanAccessSharedResource(ctx context.Context, user *entity.User
 	filterTagIDs := s.repo.GetToolFilterTagIDs(ctx, resourcePath)
 	if len(filterTagIDs) == 0 {
 		return false // no tag share — owner/admin handled by the caller
+	}
+	return anyTagMatch(s.effectiveTagIDs(ctx, user.ID), filterTagIDs)
+}
+
+// CanAccessOpenTaggedResource answers the tag question for a resource that is
+// open to everyone until tagged — a provider instance, keyed by a tool_tags
+// path like "/providers/claude/work". Untagged = any approved user; tagged =
+// the user must carry one of the tags.
+//
+// Unlike CanAccessTool it has NO admin bypass: the caller decides whether the
+// admin role walks past tags (an admin_see_all_* knob), and a bypass hidden in
+// here would make turning that knob off do nothing.
+func (s *Service) CanAccessOpenTaggedResource(ctx context.Context, user *entity.User, resourcePath string) bool {
+	if user == nil || !user.Approved {
+		return false
+	}
+	filterTagIDs := s.repo.GetToolFilterTagIDs(ctx, resourcePath)
+	if len(filterTagIDs) == 0 {
+		return true
 	}
 	return anyTagMatch(s.effectiveTagIDs(ctx, user.ID), filterTagIDs)
 }

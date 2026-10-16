@@ -90,6 +90,7 @@ Selective client-gate review of individual `wick_manager_*` ops is a possible fu
 | `connector_list` | no | Tag-filtered list with `status` = `ready` / `needs_setup`. `description` is the module's built-in text plus the row's own [AI description](/guide/connector-module#ai-description), if set. |
 | `connector_get` | no | Meta + configs + operations. `description` includes the row's [AI description](/guide/connector-module#ai-description) the same way. |
 | `connector_set_config` | no | Update one config field. Same MCP-permissive vs UI difference. |
+| `connector_clear_config` | no | Empty one stored config value (e.g. remove a stored secret). Refuses locked, required and env-overridden fields. |
 
 ### `system_*` — process lifecycle (admin + tray-only)
 

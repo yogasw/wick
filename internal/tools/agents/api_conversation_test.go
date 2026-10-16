@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/session"
@@ -227,6 +228,81 @@ func TestPageTurns(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPageTurnsAround(t *testing.T) {
+	all := turnsWithIDs("t1", "t2", "t3", "t4", "t5", "t6", "t7")
+
+	cases := []struct {
+		name               string
+		around             string
+		span               int
+		want               []string
+		wantMore, wantNext bool
+	}{
+		{"middle target has both sides", "t4", 1, []string{"t3", "t4", "t5"}, true, true},
+		{"near start clamps older side", "t2", 2, []string{"t1", "t2", "t3", "t4"}, false, true},
+		{"latest target has no newer", "t7", 2, []string{"t5", "t6", "t7"}, true, false},
+		{"span covering all", "t4", 10, []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, more, next, found := pageTurnsAround(all, tc.around, tc.span)
+			if !found {
+				t.Fatalf("around %q not found", tc.around)
+			}
+			if g := idsOf(got); strings.Join(g, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("page = %v, want %v", g, tc.want)
+			}
+			if more != tc.wantMore || next != tc.wantNext {
+				t.Errorf("hasMore/hasMoreAfter = %v/%v, want %v/%v", more, next, tc.wantMore, tc.wantNext)
+			}
+		})
+	}
+
+	t.Run("unknown id is not found", func(t *testing.T) {
+		got, more, next, found := pageTurnsAround(all, "nope", 10)
+		if found || len(got) != 0 || more || next {
+			t.Fatalf("got %v more=%v next=%v found=%v, want nothing", idsOf(got), more, next, found)
+		}
+	})
+}
+
+func TestPageTurnsAfter(t *testing.T) {
+	all := turnsWithIDs("t1", "t2", "t3", "t4", "t5")
+
+	cases := []struct {
+		name     string
+		after    string
+		limit    int
+		want     []string
+		wantNext bool
+	}{
+		{"after walks forward one window", "t1", 2, []string{"t2", "t3"}, true},
+		{"after reaching end exhausts", "t3", 2, []string{"t4", "t5"}, false},
+		{"after last turn returns empty", "t5", 2, []string{}, false},
+		{"after without limit returns all newer", "t2", 0, []string{"t3", "t4", "t5"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, next, found := pageTurnsAfter(all, tc.after, tc.limit)
+			if !found {
+				t.Fatalf("after %q not found", tc.after)
+			}
+			if g := idsOf(got); strings.Join(g, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("page = %v, want %v", g, tc.want)
+			}
+			if next != tc.wantNext {
+				t.Errorf("hasMoreAfter = %v, want %v", next, tc.wantNext)
+			}
+		})
+	}
+
+	t.Run("unknown id is not found", func(t *testing.T) {
+		if got, _, found := pageTurnsAfter(all, "nope", 2); found || len(got) != 0 {
+			t.Fatalf("got %v found=%v, want nothing", idsOf(got), found)
+		}
+	})
 }
 
 func TestBackfillTurnIDs(t *testing.T) {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import TraceNote from "./TraceNote.svelte";
   import { onMount } from "svelte";
-  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
+  import type { ConversationTurn, LiveTurn, TeamTaskItem, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import type { TraceFiles } from "../api/files.js";
   import { renderLive } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
@@ -17,6 +17,13 @@
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
+  import { foldTeamResults, interimGuards, interimNote, isInterimText } from "../teamResults.js";
+  import DelegationBlock from "./team/DelegationBlock.svelte";
+  import TeamTraceRows from "./team/TeamTraceRows.svelte";
+  import { liveBlockTasks } from "../teamTrace.js";
+  import { viewerName } from "../viewer.js";
+  import { getTeamTasksCtx } from "../teamTasksContext.js";
+  import { isTeamMessageTool, liveTurnStatus, liveTurnTasks, turnSpan } from "../delegations.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -47,8 +54,11 @@
     /** Set in the Team app: the empty thread introduces the agent and its
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
+    /** The chat's agent has "Show teammates in channels" off: sent replies
+        carry "teammates hidden in …". */
+    teammatesHidden?: boolean;
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
-    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+    teamAgents?: Record<string, { id?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     /** History has not arrived yet: a loading state, not "no messages". */
     loading?: boolean;
     onOpenAgent?: (handle: string) => void;
@@ -58,9 +68,16 @@
     /** "Cek ulang" of a Slack remote turn (see ThreadMessage). */
     onRemoteRecheck?: () => Promise<import("../api/team.js").RemoteRecheck>;
     onRemoteQueueCancel?: (queueId: string) => Promise<void>;
+    /** Continue on a recovered last turn (see ThreadMessage). */
+    onContinue?: () => void;
+    /** Reply on a bubble and the jump from a quote (see ThreadMessage). */
+    onReply?: (target: import("../replyTo.js").ReplyTarget) => void;
+    onJumpToTurn?: (turnId: string, fromTurnId?: string) => void;
+    /** The reply bubble whose quote lookup is in flight (spinner on it). */
+    jumpPendingId?: string | null;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teammatesHidden = false, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPendingId = null }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -121,7 +138,38 @@
 
      Deliberately narrow. A user message in between means the agent was
      answering something new, and both turns stay. */
-  const shownTurns = $derived(withRemoteLinks(
+
+  // Same merge as ThreadMessage's persisted-turn trace: a long-running
+  // live turn calling todo repeatedly shows one checklist with current
+  // progress instead of a stacked card per call.
+  const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
+  /* The running turn's delegation block, the same one a committed turn
+     shows (ThreadMessage): its chips tick from the team_task stream while
+     the turn still runs. DetailView keeps these tasks off the committed
+     turns until this one commits, so the block hands over, never doubles.
+     Its team_message ToolCards leave the live trace as they do there. */
+  const teamCtx = getTeamTasksCtx();
+  // Keyed by the ids (and states), so a streamed token does not hand the
+  // block a new array.
+  const liveTaskKey = $derived(
+    teamCtx?.tasks && live ? JSON.stringify(liveTurnTasks(live.blocks, teamCtx.tasks())) : "[]",
+  );
+  const liveTasks = $derived(JSON.parse(liveTaskKey) as TeamTaskItem[]);
+  /* One UI per delegation (T16 S9): the tasks a Delegated block shows —
+     on a committed turn or the running one. The prompts that carried
+     their replies to the agent and their hand-off pills leave the thread
+     (foldTeamResults); a late reply's prompt stays as one line. */
+  const blockTaskIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (!teamCtx) return ids;
+    for (const t of turns) {
+      if (t.role === "assistant") for (const k of teamCtx.forTurn(t.turn_id)) ids.add(k.task_id);
+    }
+    for (const k of liveTasks) ids.add(k.task_id);
+    return ids;
+  });
+  const teamNames = $derived(teamCtx ? Object.fromEntries(Object.entries(teamCtx.agents()).map(([h, a]) => [h, a.name])) : {});
+  const shownTurns = $derived(foldTeamResults(withRemoteLinks(
     foldSystemEvents(
       foldReplaced(turns).filter((t, i, all) => {
         if (!t.interrupted || t.role !== "assistant") return true;
@@ -129,15 +177,62 @@
         return !next || next.role !== "assistant";
       }),
     ),
-  ));
+  ), blockTaskIds, teamNames));
+
+  /* P60 S2 guard 2: whether a later answer of the chat's agent follows
+     each turn. A turn that only delegated keeps its in-between text in its
+     trace while a teammate works or once one exists (isInterimText). Not
+     an answer: another in-between text, or a reply to a teammate. A turn
+     from history without its events counts as in-between when it
+     delegated and passes the guards, so a doubtful case shows the text. */
+  const laterAnswerAt = $derived.by(() => {
+    const out: boolean[] = new Array(shownTurns.length);
+    let seen = !!live?.text && !liveInterim;
+    for (let i = shownTurns.length - 1; i >= 0; i--) {
+      out[i] = seen;
+      const t = shownTurns[i];
+      if (t.role !== "assistant" || !(t.text ?? "").trim() || t.speaker?.via === "mention") continue;
+      const src = (t.source ?? "").trim().toLowerCase();
+      if (src === "subagent" || src === "team") continue;
+      const tasks = teamCtx ? teamCtx.forTurn(t.turn_id) : [];
+      const between = tasks.length > 0 &&
+        ((t.events ?? []).length > 0 ? isInterimText(t, tasks, out[i]) : interimGuards(t.text ?? "", tasks, out[i]));
+      if (!between) seen = true;
+    }
+    return out;
+  });
 
   const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
-
-  // Same merge as ThreadMessage's persisted-turn trace: a long-running
-  // live turn calling todo repeatedly shows one checklist with current
-  // progress instead of a stacked card per call.
-  const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
+  /* grouped §3 live asst-meta over the block: "Captain · 10:02 · split
+     the question into 4 tasks — summary comes when they're back", from
+     the task count alone; gone once every task has settled. */
+  const liveStatus = $derived(teamCtx ? liveTurnStatus(liveTasks, teamCtx.agents()) : null);
+  // The clock is the first task's start, not the turn's: the line
+  // reports the moment it delegated.
+  const liveStatusTime = $derived(liveStatus ? turnSpan(liveTasks) : "");
+  /* The live trace keeps each team_message card, with a row per teammate
+     read from the live task list (T16 S6), as the stored trace will once
+     the turn commits. */
   const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  /* The same rule on the running turn, on its text as it stands: a text
+     that grows past a guard shows at once, and the committed turn decides
+     the same way, so nothing flickers back. */
+  const liveInterim = $derived(
+    !!teamCtx && !!live?.text && liveTasks.length > 0 &&
+      isInterimText(
+        { role: "assistant", text: live.text, events: live.blocks.flatMap((b) => (b.kind === "tool" ? [{ type: "tool_use", tool_name: b.toolName }] : [])) },
+        liveTasks,
+        false,
+      ),
+  );
+  /* Live text never lands in live.blocks (the thread store keeps it in
+     live.text), so the note is the whole text today; interimNote keeps it
+     right if a text segment ever does. */
+  const liveInterimText = $derived(
+    liveInterim && live ? interimNote(live.text, live.blocks.flatMap((b) => (b.kind === "text" ? [b.text] : []))) : "",
+  );
+  const liveSteps = $derived(liveNonTodoBlocks.length + (liveInterimText ? 1 : 0));
+  const liveTaskById = $derived(new Map((teamCtx?.tasks?.() ?? []).map((t) => [t.task_id, t])));
   /* The working indicator is on from a turn's start to its end: while
      typing is up (hide debounced) or the live turn has not been committed.
      A todo card carries the activity instead when there is one. */
@@ -214,14 +309,14 @@
     <!-- The avatar fills the wait with random fidgets (restless). -->
     <div class="flex flex-col items-center justify-center py-16 text-center gap-3" data-testid="thread-loading" aria-busy="true">
       {#if agent}
-        <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live restless />
+        <AgentAvatar kind={agent.kind} image={agent.image} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live restless />
         <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
       {/if}
       <p class="text-sm text-black-700 dark:text-black-600">Loading messages…</p>
     </div>
   {:else if isEmpty && agent}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
-      <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
+      <AgentAvatar kind={agent.kind} image={agent.image} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
       <div class="flex flex-col gap-1">
         <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
         {#if agent.tagline}
@@ -247,7 +342,18 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} />
+    <!-- data-turn-id is the anchor a reply's quote jumps to. -->
+    <div data-turn-id={turn.turn_id} class="min-w-0 rounded-xl transition-shadow">
+      {#if turn.team_update}
+        <!-- A late teammate reply re-woke the agent: the reply is in the
+             block above, the answer below is the update. -->
+        <div data-testid="team-update-label" class="flex w-fit items-center gap-2 rounded-xl border border-white-300 bg-white-100 px-3 py-[5px] text-[11px] text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">
+          <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
+        </div>
+      {:else}
+      <ThreadMessage {turn} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} />
+      {/if}
+    </div>
   {/each}
 
   {#if live && turns.length === 0}
@@ -284,7 +390,7 @@
                    a tool runs), is the typing indicator in the Team app. A compaction keeps the amber
                    spinner: that wait is not the agent answering. -->
               {#if agent && !compacting}
-                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} toolName={typing.toolName} events={agent.avatarEvents} />
+                <AgentAvatar kind={agent.kind} image={agent.image} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} toolName={typing.toolName} events={agent.avatarEvents} />
               {:else}
               <svg
                 class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
@@ -314,7 +420,10 @@
             currentActivity={activityText}
           />
         {/if}
-        {#if live && live.blocks.length > 0}
+        <!-- Counts what the trace shows: a team_message call the block
+             stands for is not a step here, and a trace with nothing left
+             has no toggle. -->
+        {#if live && liveNonTodoBlocks.length > 0}
           <button
             type="button"
             data-live-trace-toggle
@@ -326,7 +435,7 @@
             </svg>
             <span>{liveTraceOpen ? "hide trace" : "show trace"}</span>
             {#if !liveTraceOpen}
-              <span class="text-black-500 dark:text-black-600">· {live.blocks.length} step{live.blocks.length === 1 ? "" : "s"}</span>
+              <span class="text-black-500 dark:text-black-600">· {liveSteps} step{liveSteps === 1 ? "" : "s"}</span>
             {/if}
             <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 transition-transform {liveTraceOpen ? 'rotate-90' : ''}" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
               <path d="M4.5 3l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -337,14 +446,44 @@
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
                   <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} {traceFiles} />
+                  {#if teamCtx && isTeamMessageTool((block as Extract<ThreadBlock, { kind: "tool" }>).toolName)}
+                    {@const rows = liveBlockTasks(block, liveTaskById)}
+                    {#if rows.length > 0}
+                      <TeamTraceRows tasks={rows} captainName={teamCtx.captainName()} live={Object.fromEntries(liveTaskById)} onOpen={teamCtx.openChat} />
+                    {/if}
+                  {/if}
                 {:else if block.kind === "thinking" || block.kind === "text"}
                   <TraceNote kind={block.kind} text={(block as Extract<ThreadBlock, { kind: "thinking" | "text" }>).text} />
                 {/if}
               {/each}
+              {#if liveInterimText}
+                <TraceNote kind="text" text={liveInterimText} />
+              {/if}
             </div>
           {/if}
         {/if}
-        {#if live?.text}
+        {#if liveStatus}
+          <div data-testid="live-asst-meta" class="flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
+            <!-- The name is in the text: the avatar is decoration. -->
+            <span class="inline-flex shrink-0" aria-hidden="true"><AgentAvatar kind={agent?.kind} image={agent?.image} shape={agent?.shape} expression={agent?.expression} color={agent?.color} size={18} live working={true} /></span>
+            <span class="min-w-0 truncate">{agent?.name || "Assistant"}{liveStatusTime ? " · " + liveStatusTime : ""} · {liveStatus}</span>
+          </div>
+        {/if}
+        {#if liveTasks.length > 0 && teamCtx}
+          <DelegationBlock
+            tasks={liveTasks}
+            agents={teamCtx.agents()}
+            captainName={teamCtx.captainName()}
+            userName={viewerName()}
+            onAnswer={teamCtx.answer}
+            onCancel={teamCtx.cancel}
+            onMessage={teamCtx.message}
+            onOpenChat={teamCtx.openChat}
+            loadThread={teamCtx.loadThread}
+            onSummarize={teamCtx.summarize}
+          />
+        {/if}
+        {#if live?.text && !liveInterim}
           <!-- renderLive owns innerHTML (no {@html}) so streaming tokens don't
                wipe already-rendered diagrams — prevents text↔image flicker. -->
           <div use:renderLive={live.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm"></div>

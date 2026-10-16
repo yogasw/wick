@@ -127,6 +127,9 @@ func (c *Canvas) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, err
 		if positions == nil {
 			positions = map[string]any{}
 		}
+		for k, v := range fitNotes(w, positions, newPos) {
+			newPos[k] = v
+		}
 		for k, v := range newPos {
 			positions[k] = v
 		}
@@ -159,10 +162,9 @@ func (c *Canvas) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, err
 // as the editor draws them (cardWidth), so a node with many ports never
 // overlaps its neighbour. A node's fallback path counts as an edge here.
 //
-// sticky_note nodes are never moved: they are annotations the author
-// placed around a block by hand, and guessing their new box from the
-// block's new layout is worse than leaving them for the author/AI to
-// re-wrap with workflow_move_nodes.
+// sticky_note nodes are not placed here: AutoLayout re-wraps each note
+// around the cards it covered before the layout (fitNotes), and a note
+// that covered none stays where the author put it.
 //
 // When restrict is non-empty only those node IDs are repositioned and
 // trigger placement is skipped.
@@ -454,6 +456,204 @@ func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[strin
 		}
 	}
 	return out
+}
+
+// Sticky note geometry, mirroring the editor (StickyNote.svelte): the
+// default box, and the title drawn at 3%/2% of the board in 13px text
+// with a 1.4 line height.
+const (
+	noteDefaultW  = 240 // STICKY_NOTE_W
+	noteDefaultH  = 160 // STICKY_NOTE_H
+	layoutCardH   = 90  // card height the editor assumes (NODE_H)
+	notePad       = 30  // room left around the wrapped cards
+	noteTitleGap  = 24  // between the title's last line and the first card
+	noteLineH     = 19  // a paragraph line of the title
+	noteHeadLineH = 24  // a markdown heading line of the title
+	noteCharW     = 7   // average glyph width, a little generous
+)
+
+// notePos is a canvas position read back from _canvas.positions.
+func notePos(positions map[string]any, id string) (x, y int, ok bool) {
+	p, ok := positions[id].(map[string]any)
+	if !ok {
+		return 0, 0, false
+	}
+	num := func(v any) (int, bool) {
+		switch n := v.(type) {
+		case float64:
+			return int(n), true
+		case int:
+			return n, true
+		}
+		return 0, false
+	}
+	x, okX := num(p["x"])
+	y, okY := num(p["y"])
+	return x, y, okX && okY
+}
+
+// noteTitleHeight is how far down a note of the given size its title
+// (content) reaches, plus the gap before the first card: what a card
+// must stay below so it never covers the title.
+func noteTitleHeight(content string, width, height int) int {
+	perLine := max(10, (width*94/100-8)/noteCharW)
+	h := height*2/100 + 4
+	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lineH, chars := noteLineH, len([]rune(line))
+		if strings.HasPrefix(line, "#") {
+			lineH = noteHeadLineH
+			chars = len([]rune(strings.TrimLeft(line, "# "))) * 6 / 5
+		}
+		h += lineH * ((chars + perLine - 1) / perLine)
+	}
+	return h + noteTitleGap
+}
+
+// fitNotes re-wraps every sticky note around the cards (graph nodes and
+// triggers) whose top-left sat inside it before the layout, so a note
+// follows its block instead of being left behind, and keeps its title
+// band clear: the note's top sits a full title height above the highest
+// card. The padding the author left on each side is kept (at least
+// notePad), so texts cards in an empty column stay clear of the cards;
+// the note never gets narrower. It updates the notes' Width/Height in w
+// and returns their new positions. A note none of whose cards moved, or
+// that covered none, is left alone.
+func fitNotes(w *workflow.Workflow, old map[string]any, moved map[string]map[string]any) map[string]map[string]any {
+	type box struct{ x, y, w, h int }
+	widths := cardWidths(w)
+	cards := map[string]box{} // before the layout
+	addCard := func(id string, cw int) {
+		if x, y, ok := notePos(old, id); ok {
+			cards[id] = box{x, y, cw, layoutCardH}
+		}
+	}
+	for _, n := range w.Graph.Nodes {
+		if !n.Type.IsAnnotation() {
+			addCard(n.ID, widths[n.ID])
+		}
+	}
+	for _, t := range w.Triggers {
+		if t.ID != "" {
+			addCard(t.ID, layoutCardW)
+		}
+	}
+	after := func(id string) box {
+		b := cards[id]
+		if p, ok := moved[id]; ok {
+			b.x, b.y = p["x"].(int), p["y"].(int)
+		}
+		return b
+	}
+
+	out := map[string]map[string]any{}
+	for i := range w.Graph.Nodes {
+		n := &w.Graph.Nodes[i]
+		if !n.Type.IsAnnotation() {
+			continue
+		}
+		nx, ny, ok := notePos(old, n.ID)
+		if !ok {
+			continue
+		}
+		nw, nh := n.Width, n.Height
+		if nw <= 0 {
+			nw = noteDefaultW
+		}
+		if nh <= 0 {
+			nh = noteDefaultH
+		}
+		var members []string
+		anyMoved := false
+		for id, b := range cards {
+			if b.x >= nx && b.x < nx+nw && b.y >= ny && b.y < ny+nh {
+				members = append(members, id)
+				if _, m := moved[id]; m {
+					anyMoved = true
+				}
+			}
+		}
+		if !anyMoved {
+			continue
+		}
+		bounds := func(get func(string) box) (minX, minY, maxX, maxY int) {
+			minX, minY, maxX, maxY = math.MaxInt, math.MaxInt, math.MinInt, math.MinInt
+			for _, id := range members {
+				b := get(id)
+				minX, minY = min(minX, b.x), min(minY, b.y)
+				maxX, maxY = max(maxX, b.x+b.w), max(maxY, b.y+b.h)
+			}
+			return
+		}
+		oMinX, _, oMaxX, oMaxY := bounds(func(id string) box { return cards[id] })
+		minX, minY, maxX, maxY := bounds(after)
+		padL := max(notePad, oMinX-nx)
+		padR := max(notePad, nx+nw-oMaxX)
+		padB := max(notePad, ny+nh-oMaxY)
+		width := max(nw, padL+(maxX-minX)+padR)
+		// The title band depends on the height (its top margin is 2% of
+		// it): settle it in two passes.
+		top := noteTitleHeight(n.Content, width, nh)
+		height := top + (maxY - minY) + padB
+		top = noteTitleHeight(n.Content, width, height)
+		height = top + (maxY - minY) + padB
+		n.Width, n.Height = width, height
+		out[n.ID] = map[string]any{"x": minX - padL, "y": minY - top}
+	}
+	return out
+}
+
+// defaultNodePosition is where a node added without a position goes,
+// instead of the canvas origin where it would sit on whatever is there
+// (the first lane's trigger, a note's title): a sticky note to the right
+// of everything, any other node one row under the lowest card.
+func defaultNodePosition(w *workflow.Workflow, n workflow.Node) map[string]any {
+	var positions map[string]any
+	if w.Canvas != nil {
+		positions, _ = w.Canvas["positions"].(map[string]any)
+	}
+	widths := cardWidths(w)
+	lowX, lowY, right, found := 0, math.MinInt, math.MinInt, false
+	consider := func(id string, cw int, note bool) {
+		x, y, ok := notePos(positions, id)
+		if !ok {
+			return
+		}
+		found = true
+		right = max(right, x+cw)
+		if !note && y > lowY {
+			lowX, lowY = x, y
+		}
+	}
+	for _, m := range w.Graph.Nodes {
+		if m.ID == n.ID {
+			continue
+		}
+		if m.Type.IsAnnotation() {
+			cw := m.Width
+			if cw <= 0 {
+				cw = noteDefaultW
+			}
+			consider(m.ID, cw, true)
+			continue
+		}
+		consider(m.ID, widths[m.ID], false)
+	}
+	for _, t := range w.Triggers {
+		consider(t.ID, layoutCardW, false)
+	}
+	switch {
+	case !found:
+		return map[string]any{"x": layoutXOrigin, "y": layoutYOrigin}
+	case n.Type.IsAnnotation():
+		return map[string]any{"x": right + layoutLaneGap, "y": layoutYOrigin}
+	case lowY == math.MinInt:
+		return map[string]any{"x": right + layoutLaneGap, "y": layoutYOrigin + layoutYGap}
+	}
+	return map[string]any{"x": lowX, "y": lowY + layoutYGap}
 }
 
 // errorPortKey marks the on_failure=fallback path in layout edges; the
@@ -860,7 +1060,19 @@ func addNode(w *workflow.Workflow, n workflow.Node) error {
 			return fmt.Errorf("node %q already exists", n.ID)
 		}
 	}
+	pos := defaultNodePosition(w, n)
 	w.Graph.Nodes = append(w.Graph.Nodes, n)
+	if w.Canvas == nil {
+		w.Canvas = map[string]any{}
+	}
+	positions, _ := w.Canvas["positions"].(map[string]any)
+	if positions == nil {
+		positions = map[string]any{}
+	}
+	if _, ok := positions[n.ID]; !ok {
+		positions[n.ID] = pos
+	}
+	w.Canvas["positions"] = positions
 	return nil
 }
 

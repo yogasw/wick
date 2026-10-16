@@ -14,6 +14,7 @@ import {
   gazeTarget,
   normalizeShape,
   normalizeState,
+  classicPoseFor,
   radiusAt,
   stateFor,
   orbitDot,
@@ -36,6 +37,35 @@ describe("normalize", () => {
     expect(normalizeState("comet")).toBe("idle");
     expect(normalizeState("orbit")).toBe("orbit");
     expect(normalizeState("alert")).toBe("alert");
+  });
+});
+
+describe("classicPoseFor", () => {
+  test("classic states pass through", () => {
+    for (const s of AVATAR_STATES) expect(classicPoseFor(s)).toBe(s);
+  });
+
+  test("every blob-only state maps to a classic one", () => {
+    expect(classicPoseFor("wide")).toBe("orbit");
+    expect(classicPoseFor("swirl")).toBe("thinking");
+    expect(classicPoseFor("play")).toBe("orbit");
+    expect(classicPoseFor("comet")).toBe("orbit");
+    expect(classicPoseFor("exclaim")).toBe("alert");
+    expect(classicPoseFor("wink")).toBe("notify");
+    expect(classicPoseFor("burst")).toBe("notify");
+  });
+
+  test("the mockup's event poses map too", () => {
+    for (const s of ["scan", "type", "send", "wait"]) expect(classicPoseFor(s)).toBe("orbit");
+    expect(classicPoseFor("fail")).toBe("alert");
+    expect(classicPoseFor("squeeze")).toBe("thinking");
+    expect(classicPoseFor("working")).toBe("thinking");
+    expect(classicPoseFor("disabled")).toBe("sleep");
+    expect(classicPoseFor("hatching")).toBe("egg");
+  });
+
+  test("anything else is idle", () => {
+    for (const s of ["frobnicate", "", null, undefined, "constructor", "toString"]) expect(classicPoseFor(s)).toBe("idle");
   });
 });
 

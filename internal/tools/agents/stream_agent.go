@@ -144,6 +144,18 @@ func TeamSubagentsChanged(parentSessionID string) {
 	publishAgentSignal(globalBcast, agentSignal{AgentID: agentID}, agentAudience(context.Background(), agentID))
 }
 
+// TeamTaskChanged signals the rosters a Team task's change moves: the
+// sending agent's, whose main chat lists the teammate working while the
+// task is open (teamLive.addTeamTasks), and the teammate's, which reads
+// working while it answers in a chat of its own. Like the sub-agents, no
+// activity event of the sender's main chat would say so.
+func TeamTaskChanged(fromSessionID, toAgentID string) {
+	TeamSubagentsChanged(fromSessionID)
+	if toAgentID != "" {
+		publishAgentSignal(globalBcast, agentSignal{AgentID: toAgentID}, agentAudience(context.Background(), toAgentID))
+	}
+}
+
 // publishGroupChanged signals the group's owner — the only person whose
 // roster lists it (apiTeamGroupList).
 func publishGroupChanged(groupID, ownerID string) {

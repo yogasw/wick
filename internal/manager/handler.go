@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -15,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -33,6 +35,10 @@ type Handler struct {
 	// tool's settings page so an operator can see what answers without a
 	// login without having to read the module source.
 	webhooks []tool.WebhookRoute
+	// toolsFn / webhooksFn, when set, are read per request (see
+	// SetToolsSource / SetWebhookRoutesSource).
+	toolsFn    func() []tool.Tool
+	webhooksFn func() []tool.WebhookRoute
 	// custom is the custom-connector service (nil until SetCustomConnectors
 	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
 	custom *customconn.Service
@@ -65,6 +71,11 @@ func (h *Handler) RegisterConfigDecorator(toolKey string, fn func([]entity.Confi
 }
 
 func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, usersSvc *login.Service, tools []tool.Tool) *Handler {
+	if configsSvc != nil {
+		pkgentity.DefaultGroupsCollapsed = func() bool {
+			return !strings.EqualFold(strings.TrimSpace(configsSvc.Get(configs.KeyConfigGroupsCollapsed)), "false")
+		}
+	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		log.Warn().Err(err).Msg("manager oauth: failed to generate secret; using fallback")
@@ -295,8 +306,37 @@ func (h *Handler) regenerateToolConfig(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "regenerate is only available on app-level variables", http.StatusBadRequest)
 }
 
+// SetToolsSource makes the handler read its tool list from fn on every use
+// instead of the slice given to NewHandler, so a tool plugin loaded or
+// unloaded while wick runs is found (or not) without a restart.
+func (h *Handler) SetToolsSource(fn func() []tool.Tool) *Handler {
+	h.toolsFn = fn
+	return h
+}
+
+// SetWebhookRoutesSource adds fn's routes (tool plugins, which come and go
+// at runtime) to the boot-time ones given to WithWebhookRoutes.
+func (h *Handler) SetWebhookRoutesSource(fn func() []tool.WebhookRoute) *Handler {
+	h.webhooksFn = fn
+	return h
+}
+
+func (h *Handler) toolsNow() []tool.Tool {
+	if h.toolsFn != nil {
+		return h.toolsFn()
+	}
+	return h.tools
+}
+
+func (h *Handler) webhooksNow() []tool.WebhookRoute {
+	if h.webhooksFn == nil {
+		return h.webhooks
+	}
+	return append(append([]tool.WebhookRoute(nil), h.webhooks...), h.webhooksFn()...)
+}
+
 func (h *Handler) findTool(key string) (tool.Tool, bool) {
-	for _, t := range h.tools {
+	for _, t := range h.toolsNow() {
 		if t.Key == key {
 			return t, true
 		}

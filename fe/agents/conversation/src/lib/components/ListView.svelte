@@ -75,11 +75,13 @@
   onMount(() => {
     loadSessions();
     if (projectId) {
-      const projectEffect = getProjectOptions(base).pipe(Effect.provide(WickClientLayer));
+      // Asked for by id: the picker list is only the caller's own projects,
+      // and a page reached through see-all or a tag must still resolve.
+      const projectEffect = getProjectOptions(base, { include: [projectId] }).pipe(Effect.provide(WickClientLayer));
       const providerEffect = getProviderOptions(base).pipe(Effect.provide(WickClientLayer));
       Effect.runPromise(Effect.all([projectEffect, providerEffect]))
         .then(([projects, provs]) => {
-          project = projects.find((p) => p.id === projectId) ?? null;
+          project = projects.find((p) => p.id === projectId && !p.no_access) ?? null;
           providers = provs;
         })
         .catch((err: unknown) => {

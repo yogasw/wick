@@ -89,13 +89,7 @@ func cliModelsStore(ins Instance, key string, e cliModelsEntry) {
 	if err != nil {
 		return
 	}
-	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	writeFileAtomic(path, b)
 }
 
 // cliModelsDrop forgets the entry in memory and on disk. Callers hold

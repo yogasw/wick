@@ -26,8 +26,8 @@ export const TYPE_INFO: Record<string, TypeInfo> = {
   claude: { label: "Claude Code", desc: "Anthropic claude CLI" },
   codex: { label: "Codex", desc: "OpenAI codex CLI" },
   gemini: { label: "Gemini CLI", desc: "Google gemini CLI", badge: "experimental" },
-  omp: { label: "oh-my-pi (omp)", desc: "Login ChatGPT atau Claude · 1 profile per instance" },
-  opencode: { label: "opencode", desc: "Data dir sendiri per instance · Claude subscription tidak didukung" },
+  omp: { label: "oh-my-pi (omp)", desc: "Sign in with ChatGPT or Claude · 1 profile per instance" },
+  opencode: { label: "opencode", desc: "Own data dir per instance · Claude subscription not supported" },
   wick: { label: "Wick", desc: "Built-in engine" },
 };
 

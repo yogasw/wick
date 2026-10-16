@@ -1040,3 +1040,15 @@ describe("thread store — postback", () => {
   });
 
 });
+
+describe("thread store — connector_run while idle", () => {
+  test("a connector_run with no turn in flight does not open a live turn", () => {
+    const s = createThreadStore();
+    const run = (running: boolean) =>
+      ({ type: "connector_run", data: JSON.stringify({ run_id: "r1", connector_id: "c1", running }) }) as AgentEvent;
+    s.handleEvent(run(true));
+    s.handleEvent(run(false));
+    expect(get(s.live)).toBeNull();
+    expect(get(s.typing).active).toBe(false);
+  });
+});

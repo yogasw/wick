@@ -66,7 +66,30 @@ type User struct {
 	// visibility check cannot express: that check is per-tool, and a
 	// tool that everyone may READ often still has writes worth gating.
 	Tags []string `json:"tags,omitempty"`
+	// Source names the credential WebhookCtx.TokenUser authenticated:
+	// TokenSourcePAT, TokenSourceSSO or TokenSourceSystem. Empty for a
+	// session user. A tool reads it when the rules differ per credential —
+	// e.g. a PAT pasted into a script may edit, an SSO call from an MCP
+	// connector may only read.
+	Source string `json:"source,omitempty"`
 }
+
+// Credential kinds a token user can come from (User.Source).
+const (
+	// TokenSourcePAT: a wick Personal Access Token in Authorization: Bearer.
+	TokenSourcePAT = "pat"
+	// TokenSourceSSO: wick's own SSO JWT in X-Wick-User, minted for a
+	// person by a custom MCP connector whose server is this wick.
+	TokenSourceSSO = "sso"
+	// TokenSourceSystem: the same JWT minted for wick itself (subject
+	// SystemUserID) — tools/list at boot or reload, no person behind it.
+	TokenSourceSystem = "system"
+)
+
+// SystemUserID is the subject wick mints SSO tokens with when no person is
+// behind the call (listing an MCP server's tools at boot or reload). A tool
+// sees it as User.ID with Source TokenSourceSystem.
+const SystemUserID = "system:wick"
 
 // HasTag reports whether the user carries a tag, matched
 // case-insensitively so a config saying "support" finds a tag named
@@ -115,6 +138,19 @@ var tokenResolver TokenResolver
 
 // SetTokenResolver installs the PAT resolver.
 func SetTokenResolver(fn TokenResolver) { tokenResolver = fn }
+
+// HeaderTokenResolver authenticates a webhook request by a credential that
+// is NOT a bearer PAT — on wick, the SSO JWT a custom MCP connector sends
+// in X-Wick-User; inside a tool plugin, the identity the host verified and
+// injected. toolBase is the mount path of the tool serving the request
+// ("/tools/{key}"): wick's JWT is only valid for the tool it was minted
+// for. Installed by wick at boot, like TokenResolver.
+type HeaderTokenResolver func(r *http.Request, toolBase string) (User, bool)
+
+var headerTokenResolver HeaderTokenResolver
+
+// SetHeaderTokenResolver installs the non-bearer resolver.
+func SetHeaderTokenResolver(fn HeaderTokenResolver) { headerTokenResolver = fn }
 
 // ResolveToken authenticates a wick Personal Access Token. ok is false for
 // an unknown, revoked, or expired token, and whenever no resolver is

@@ -52,6 +52,11 @@ describe("normalizeProviderDetail - snake_case wire mapping", () => {
     expect(r.HookEnabled["pre_tool_use"]).toBe(false);
   });
 
+  it("maps has_terminal, absent = false", () => {
+    expect(normalizeProviderDetail({ ...makeWireDetail(), has_terminal: true }).HasTerminal).toBe(true);
+    expect(normalizeProviderDetail(makeWireDetail()).HasTerminal).toBe(false);
+  });
+
   it("maps config_fields snake_case to PascalCase", () => {
     const r = normalizeProviderDetail(makeWireDetail());
     expect(r.ConfigFields.length).toBe(3);

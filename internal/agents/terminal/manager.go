@@ -1,10 +1,12 @@
-// Package terminal runs a web terminal (gotty) for one omp/opencode
-// instance: an admin picks a command from a fixed allowlist, wick starts
-// gotty on 127.0.0.1 with a random port, a random credential and
-// --once, and the browser reaches it only through wick's own reverse
-// proxy (Session.ServeHTTP) — behind the wick login and the provider
-// admin guard. The credential never leaves the server: the proxy adds it
-// upstream and blanks it in what the browser receives.
+// Package terminal runs a web terminal (gotty) for one CLI provider
+// instance of any type registered with Register (omp, opencode, claude,
+// codex, gemini each in their own provider_<type>.go): an admin picks a
+// command from a fixed allowlist, wick starts gotty on 127.0.0.1 with a
+// random port, a random credential and --once, and the browser reaches
+// it only through wick's own reverse proxy (Session.ServeHTTP) — behind
+// the wick login and the provider admin guard. The credential never
+// leaves the server: the proxy adds it upstream and blanks it in what
+// the browser receives.
 //
 // A session ends when the websocket closes, when it idles past
 // IdleTimeout, when gotty exits on its own (nobody connected within its

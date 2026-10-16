@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { healthLabel, healthBadgeClass } from "$lib/failover.js";
   import { ConfirmDialog, Modal, ProviderIcon, Select } from "@wick-fe/common-ui";
-  import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { toastOk, toastError, toastWarn } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import ManagedBinaryPanel from "$lib/components/ManagedBinaryPanel.svelte";
@@ -26,8 +27,10 @@
   import type { ProvidersListResponse, ProviderStatusDTO, ProviderConnection } from "$lib/types.js";
   import UsageRings from "$lib/components/UsageRings.svelte";
   import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
+  import { SavedResetsChip } from "@wick-fe/common-ui";
+  import { seedUsage } from "@wick-fe/common-ui/usage";
   import { apiLoginTTYUsageRefresh } from "$lib/logintty.js";
-  import { pickWindows, connectionKey, resetHint, fmtSecsShort } from "$lib/usagerings.js";
+  import { pickWindows, connectionKey, resetHint, fmtSecsShort, staleNotice } from "$lib/usagerings.js";
   import {
     ACCOUNT_ISOLATED,
     accountHint,
@@ -174,6 +177,19 @@
      API enforces all of it — this only stops us rendering buttons that
      would come back 403. */
   let isAdmin = $derived(data?.IsAdmin ?? false);
+  /* A non-admin on the provider_create_tag whitelist may add instances;
+     the host fields of the form show only when they may set them. */
+  let canCreate = $derived(isAdmin || (data?.CanCreate ?? false));
+  /* Per field, the create form follows the owner permissions a new
+     instance starts with (CreatePerms); an admin may set all of them. */
+  function createMay(perm: string): boolean {
+    return isAdmin || (data?.CreatePerms?.[perm] ?? false);
+  }
+  let createBinary = $derived(createMay("binary"));
+  let createArgs = $derived(createMay("extra_args"));
+  let createEnv = $derived(createMay("env"));
+  let createRawConfig = $derived(createMay("airouter_raw_config"));
+  let hostCfg = $derived(createBinary || createArgs || createEnv);
 
   /* canManage answers the per-instance question the API will ask again:
      may this caller reconnect it and force a usage re-check? Admins
@@ -234,8 +250,21 @@
       const next: Record<string, ProviderConnection> = {};
       for (const c of rows) {
         next[connectionKey(c.type, c.name)] = c;
+        /* Share this reading with the other usage surfaces (composer
+           picker, /usage popover) so they never refetch what is on screen. */
+        if (c.usageSupported && !c.usagePending) {
+          seedUsage(`${c.type}/${c.name}`, {
+            supported: true,
+            checked: true,
+            windows: c.windows,
+            savedResets: c.savedResets ?? null,
+            error: c.usageErr,
+            fetchedAt: c.usageFetchedAt,
+          });
+        }
       }
       connections = next;
+      reportRecheckOutcomes(next);
     } catch {
       connections = {};
     } finally {
@@ -252,6 +281,25 @@
      instead of silently doing nothing. */
   let rechecking = $state<Record<string, boolean>>({});
   let recheckWait = $state<Record<string, number>>({});
+  /* Cards whose accepted Re-check has not settled yet. The probe runs in
+     the background, so its outcome arrives on a later poll; a failure
+     then gets a toast instead of the click ending in silence. */
+  let recheckWatch = new Set<string>();
+
+  function reportRecheckOutcomes(rows: Record<string, ProviderConnection>): void {
+    for (const key of [...recheckWatch]) {
+      const c = rows[key];
+      if (!c) {
+        recheckWatch.delete(key);
+        continue;
+      }
+      if (c.usageChecking) continue;
+      recheckWatch.delete(key);
+      const notice = staleNotice(c.usageAgeS, c.usageNextS, c.usageLastErr ?? "", c.usageRateLimited ?? false, Date.now());
+      if (notice) toastWarn(`${c.name}: re-check did not refresh usage`, notice.text);
+      else if (c.usageErr) toastWarn(`${c.name}: re-check failed`, c.usageErr);
+    }
+  }
 
   async function recheckUsage(type: string, name: string): Promise<void> {
     const key = connectionKey(type, name);
@@ -261,6 +309,8 @@
       const r = await apiLoginTTYUsageRefresh(base, type, name);
       if (!r.accepted) {
         recheckWait = { ...recheckWait, [key]: r.waitS };
+      } else {
+        recheckWatch.add(key);
       }
       await loadConnections();
     } catch (e) {
@@ -633,6 +683,8 @@
         disabled={busy["rescan-all"]}
         class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
       >{busy["rescan-all"] ? "Rescanning…" : "Rescan all"}</button>
+      {/if}
+      {#if canCreate}
       <button
         type="button"
         onclick={openAdd}
@@ -785,6 +837,26 @@
                     {/if}
                   </div>
                 </div>
+                <!-- Failover chain + account health ride on their own wrapping
+                     line: a chain of three tags would push the actions away. -->
+                {#if (p.Instance.Failover?.Enabled && p.Instance.Failover.Targets.length > 0) || healthLabel(p.Instance.Health)}
+                  <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                    {#if p.Instance.Failover?.Enabled && p.Instance.Failover.Targets.length > 0}
+                      <span
+                        data-testid="card-failover"
+                        title="Auto failover: on a limit, auth or availability error the session moves to these providers, in order."
+                        class="break-all rounded px-1.5 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                      >Failover → {p.Instance.Failover.Targets.join(", ")}</span>
+                    {/if}
+                    {#if healthLabel(p.Instance.Health)}
+                      <span
+                        data-testid="card-health"
+                        title={p.Instance.Health?.Reason ?? ""}
+                        class="whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium {healthBadgeClass(p.Instance.Health)}"
+                      >{healthLabel(p.Instance.Health)}</span>
+                    {/if}
+                  </div>
+                {/if}
                 {#if ACCOUNT_ISOLATED.has(p.Instance.Type)}
                   <!-- Several omp/opencode instances differ only by account,
                        so the account is part of the card's identity. -->
@@ -940,10 +1012,17 @@
                       {#if busy}
                         {@render checkingLabel()}
                       {:else}
-                        <UsageCacheChip ageS={conn.usageAgeS} nextS={conn.usageNextS} fetchedAt={conn.usageFetchedAt} />
+                        <UsageCacheChip ageS={conn.usageAgeS} nextS={conn.usageNextS} fetchedAt={conn.usageFetchedAt} lastError={conn.usageLastErr ?? ""} />
                       {/if}
+                      <SavedResetsChip resets={conn.savedResets} />
                       {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
                     </div>
+                    <!-- The latest probe failed, so the numbers above are
+                         the last reading that worked, not a current one. -->
+                    {@const stale = busy ? null : staleNotice(conn.usageAgeS, conn.usageNextS, conn.usageLastErr ?? "", conn.usageRateLimited ?? false, Date.now())}
+                    {#if stale}
+                      <p data-testid="usage-stale-warning" class="text-[11px] text-cau-400" title={stale.title}>{stale.text}</p>
+                    {/if}
                   {:else if busy || conn.usagePending}
                     <!-- First probe for this account is queued behind the
                          pacing gate that keeps us under the endpoint's
@@ -1261,6 +1340,8 @@
             <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Letters, digits and '_' only. Spaces auto-convert to '_'.</p>
           {/if}
         </div>
+        {#if hostCfg}
+        {#if createBinary}
         {#if formIsolated && managedTypes.includes(formType)}
           <div class="space-y-2" data-testid="add-binary-source">
             <label for="add-binary-source" class="block text-xs font-medium text-black-800 dark:text-black-600">Binary</label>
@@ -1284,14 +1365,24 @@
             <input id="add-provider-binary" type="text" bind:value={formBinary} placeholder="leave empty to use PATH lookup" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
           </div>
         {/if}
+        {:else}
+          <p class="text-[11px] text-black-700 dark:text-black-600">The binary is set by an admin. The instance uses the default binary.</p>
+        {/if}
+        {#if createArgs}
         <div>
           <label for="add-provider-args" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Extra args (space separated)</label>
           <input id="add-provider-args" type="text" bind:value={formExtraArgs} class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
         </div>
+        {/if}
+        {#if createEnv}
         <div>
           <label for="add-provider-env" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Env (one KEY=VALUE per line)</label>
           <textarea id="add-provider-env" bind:value={formEnv} rows="3" placeholder="ANTHROPIC_API_KEY=sk-..." class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"></textarea>
         </div>
+        {/if}
+        {:else}
+          <p class="text-[11px] text-black-700 dark:text-black-600">Binary, extra args and env are set by an admin. The instance uses the default binary.</p>
+        {/if}
         <AIRouterConfig
           {base}
           type={formType}
@@ -1302,6 +1393,7 @@
           bind:apiKey={formAirouterKey}
           bind:rawConfig={formAirouterRawConfig}
           routers={airouterRouters}
+          rawConfigEditable={createRawConfig}
         />
       </form>
   {#snippet footer()}

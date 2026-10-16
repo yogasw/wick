@@ -203,6 +203,19 @@ func (e *DataTableExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 		return workflow.NodeOutput{Fields: map[string]any{"success": true, "row": row}}, nil
 
 	case workflow.NodeDataTableUpsert:
+		// Upsert matches by row id only. A node that names a `key` means
+		// "the row where these columns match", so resolve it to the newest
+		// matching row's id first; without this every run inserted a fresh
+		// row and the table grew without bound.
+		if _, hasID := row[datatable.ColID]; !hasID && len(key) > 0 {
+			found, err := e.Service.Query(n.Table, key, []workflow.DataTableOrder{{Column: datatable.ColID, Direction: "desc"}}, 1, 0)
+			if err != nil {
+				return workflow.NodeOutput{}, err
+			}
+			if len(found) > 0 {
+				row[datatable.ColID] = found[0][datatable.ColID]
+			}
+		}
 		action, err := e.Service.Upsert(n.Table, row)
 		if err != nil {
 			return workflow.NodeOutput{}, err

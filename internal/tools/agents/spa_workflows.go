@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -224,14 +225,19 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// A copy of a workflow that no longer passes the publish rules (an
+	// agent node without a project, from before that rule) is still a
+	// copy: keep it as a draft and say why it was not published, rather
+	// than failing a duplicate whose row already exists.
+	resp := map[string]any{"id": w.ID, "name": w.Name}
 	if _, err := setup.PublishAndReload(c.Context(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, w.ID, actorID(c)); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		resp["draft_only"] = true
+		resp["warning"] = err.Error()
 	}
 	if globalTagsSvc != nil {
 		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), w.ID, actorID(c))
 	}
-	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
+	c.JSON(http.StatusOK, resp)
 }
 
 // workflowsVisibleTo narrows the list to what a non-admin may see.
@@ -271,7 +277,9 @@ func spaWorkflowList(c *tool.Ctx) {
 		return
 	}
 	user := login.GetUser(c.Context())
-	if user != nil && !user.IsAdmin() {
+	// Admins list everything only while admin_see_all_workflows is on.
+	seeAll := user != nil && user.IsAdmin() && adminscope.AdminSeeAllWorkflows(globalConfigs)
+	if user != nil && !seeAll {
 		if globalTagsSvc != nil {
 			owns := func(id string) bool {
 				ok, _ := globalTagsSvc.UserOwnsResource(c.Context(), user.ID, id)

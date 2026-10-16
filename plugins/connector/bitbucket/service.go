@@ -223,7 +223,75 @@ func validateCreatePullRequest(c *connector.Ctx) (requestParams, map[string]any,
 		},
 		"close_source_branch": c.InputBool("close_source_branch"),
 	}
+	reviewers, err := parseReviewers(c.Input("reviewers"))
+	if err != nil {
+		return requestParams{}, nil, err
+	}
+	if len(reviewers) > 0 {
+		body["reviewers"] = reviewers
+	}
 	return requestParams{Method: http.MethodPost, URL: u}, body, nil
+}
+
+// parseReviewers turns "id1, {uuid2}" into Bitbucket reviewer objects. A value
+// in braces is a user uuid; anything else is an Atlassian account_id.
+// Nicknames and display names are refused: Bitbucket Cloud no longer resolves
+// them, and a silent miss would leave the PR with no reviewer at all.
+func parseReviewers(raw string) ([]map[string]any, error) {
+	var out []map[string]any
+	seen := map[string]bool{}
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' }) {
+		v := strings.TrimSpace(part)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		switch {
+		case strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}"):
+			out = append(out, map[string]any{"uuid": v})
+		case strings.ContainsAny(v, "@{}"):
+			return nil, fmt.Errorf("reviewer %q is not an account_id or {uuid}", v)
+		default:
+			out = append(out, map[string]any{"account_id": v})
+		}
+	}
+	return out, nil
+}
+
+// mergeReviewers keeps the PR's current reviewers (by uuid, which every
+// reviewer object returned by Bitbucket carries) and appends the new ones that
+// are not already there.
+func mergeReviewers(current any, add []map[string]any) []map[string]any {
+	var out []map[string]any
+	have := map[string]bool{}
+	list, _ := current.([]any)
+	for _, item := range list {
+		r, _ := item.(map[string]any)
+		if r == nil {
+			continue
+		}
+		if id, _ := r["account_id"].(string); id != "" {
+			have[id] = true
+		}
+		if uuid, _ := r["uuid"].(string); uuid != "" {
+			have[uuid] = true
+			out = append(out, map[string]any{"uuid": uuid})
+		} else if id, _ := r["account_id"].(string); id != "" {
+			out = append(out, map[string]any{"account_id": id})
+		}
+	}
+	for _, r := range add {
+		key, _ := r["account_id"].(string)
+		if key == "" {
+			key, _ = r["uuid"].(string)
+		}
+		if have[key] {
+			continue
+		}
+		have[key] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 func validateCreatePullRequestComment(c *connector.Ctx) (requestParams, map[string]any, error) {

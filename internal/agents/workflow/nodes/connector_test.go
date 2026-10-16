@@ -3,6 +3,7 @@ package nodes
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
@@ -103,5 +104,36 @@ func TestConnector_EmptyOwnerSkipsStamp(t *testing.T) {
 	}
 	if called {
 		t.Fatal("resolver should not be called for empty CreatedBy")
+	}
+}
+
+// A workflow node calls op.Execute directly, so it repeats the
+// connectors.Service.Execute VisibleWhen guard against the row's creds
+// (module defaults for unsaved fields).
+func TestConnector_VisibleWhenGuard(t *testing.T) {
+	creds := map[string]string{}
+	reg := connector.NewRegistry(func(module, row, accountID string) (map[string]string, error) {
+		return creds, nil
+	}, nil)
+	reg.Register(pkgconnector.Module{
+		Meta:    pkgconnector.Meta{Key: "stub", Name: "Stub"},
+		Configs: []entity.Config{{Key: "browser", Value: "chromium"}},
+		Operations: []pkgconnector.Category{pkgconnector.Cat("", "",
+			pkgconnector.Operation{
+				Key:         "pdf",
+				VisibleWhen: "browser:moli",
+				Execute:     func(c *pkgconnector.Ctx) (any, error) { return map[string]any{"ok": true}, nil },
+			},
+		)},
+	})
+	exec := NewConnectorExecutor(reg)
+	node := workflow.Node{ID: "call", Type: workflow.NodeConnector, Module: "stub", Op: "pdf"}
+
+	if _, err := exec.Execute(context.Background(), node, connRC("")); err == nil || !strings.Contains(err.Error(), "requires browser:moli") {
+		t.Fatalf("default chromium: want refusal, got %v", err)
+	}
+	creds["browser"] = "moli"
+	if _, err := exec.Execute(context.Background(), node, connRC("")); err != nil {
+		t.Fatalf("browser=moli: %v", err)
 	}
 }

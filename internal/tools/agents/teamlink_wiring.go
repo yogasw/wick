@@ -5,23 +5,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/remote"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -35,6 +47,73 @@ const sourceTeam = team.SourceTeam
 // deliver wakes a session with a late reply (the sub-agent delivery path).
 func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, sessionID, text string) error) *teamlink.Hub {
 	hub := teamlink.NewHub(teamDirectory{svc: svc}, poolTurns{}, teamNotifier{deliver: deliver})
+	// A question no turn of the sending chat is handling waits for the
+	// user: the thread shows it as "Needs you".
+	hub.CallerBusy = poolSessionBusy
+	// A task's every change reaches the sending chat's open viewers, so
+	// "Needs you" shows at once instead of on the next poll. The Team
+	// roster refetches too, but only when the task's state moved
+	// (rosterTaskMoved): the sender and the teammate read working while
+	// the task is open. Off the Hub's path: the audience reads the store.
+	hub.OnTaskChange = func(sessionID string, v teamlink.TaskView) {
+		publishTeamTask(globalBcast, sessionID, v)
+		if moved, first := rosterTaskMovedFirst(v); moved {
+			go TeamTaskChanged(sessionID, v.ToID)
+			// The sender's channels and sidebar row follow the teammates
+			// it waits on (working tasks).
+			if f := onTeamTaskMoved.Load(); f != nil {
+				go (*f)(sessionID, v, first)
+			}
+			go publishTeamWaiting(globalBcast, hub.LiveTasks, sessionID)
+		}
+	}
+	// A session whose agent hides teammates in channels gets prompts that
+	// ask for an answer naming none.
+	hub.HideTeammates = func(sessionID string) bool { return !teamShowsTeammatesCached(sessionID) }
+	// "Needs you" also turns on when the chat goes idle without its agent
+	// answering: once its turn ended (and the pool settled), the chat's
+	// waiting questions go out again.
+	// Fan-in (team_batch_results): the replies of the tasks one turn sent
+	// reach the sender once. Read live, so the switch needs no restart.
+	hub.BatchResults = TeamBatchResultsEnabled
+	hub.SoftTimeout = teamBatchSoftTimeout
+	if globalBcast != nil {
+		// Every turn end reaches SealTurn, so a batch waits for the turn
+		// that sent it before it delivers.
+		hub.TurnSeals = true
+		globalBcast.OnTurnEnd(func(sessionID string) {
+			// The tasks of the turn that ended form one batch; the next
+			// turn's open a new one unless they name its group.
+			hub.SealTurn(sessionID)
+			time.AfterFunc(needsYouSettle, func() { hub.RefreshNeedsYou(sessionID) })
+		})
+		// A teammate's turn on a task feeds the task's live progress line
+		// (the sentence before each tool call, or the tool's name).
+		// Only the turn a task owns at the gate counts for it.
+		hub.TurnOwner = func(sessionID string) a2a.TaskID { return teamTurnGate.Owner(sessionID) }
+		globalBcast.OnTurnActivity(func(sessionID string, ev event.AgentEvent) {
+			teamTurnActivity(hub, sessionID, ev)
+		})
+	}
+	// A task a restart left working is settled as interrupted, unless the
+	// draining previous process may still be running its turn.
+	hub.PredecessorBusy = func(chat string) bool {
+		if chat == "" {
+			_, draining := upgrade.ReadDrainState(globalLayout.BaseDir)
+			return draining
+		}
+		return upgrade.PredecessorHolds(globalLayout.BaseDir, chat)
+	}
+	// Tasks are kept on disk, so get_task, list_tasks and late replies
+	// survive a restart.
+	if globalLayout.BaseDir != "" {
+		if err := hub.Persist(globalLayout.TeamTasksDir()); err != nil {
+			log.Warn().Err(err).Msg("team: task store")
+		}
+		// Tasks adopted from disk were sent before the restart: their next
+		// change is not a "first" (no second start ping in the thread).
+		seedRosterTasks(hub.LiveTasks())
+	}
 	// A remote agent's late reply goes to the agent that asked it too. The
 	// reply to a timed-out turn is found from the conversation, so it still
 	// arrives after a restart; it is sent once (settleLateReply).
@@ -50,12 +129,273 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	return hub
 }
 
+// rosterTaskState is the state each task last signalled the roster with
+// (rosterSeen). A task dropped unfinished never settles, so entries older
+// than rosterTaskKeep are swept.
+var rosterTaskState sync.Map
+
+// rosterTaskKeep is how long an open task's entry outlives its last
+// change: the Hub drops an unfinished task after 2×TaskTTL.
+const rosterTaskKeep = 2 * teamlink.TaskTTL
+
+type rosterSeen struct {
+	state string
+	at    time.Time
+}
+
+// rosterTaskMoved reports whether v's state differs from the one last
+// signalled for it, and records it. A "Needs you" refresh repeats the
+// state and moves no roster row. Settling always signals (the teammate's
+// "Replied to …") and forgets the task.
+func rosterTaskMoved(v teamlink.TaskView) bool {
+	moved, _ := rosterTaskMovedFirst(v)
+	return moved
+}
+
+// rosterTaskMovedFirst is rosterTaskMoved plus first: the task had not
+// signalled before (it was just sent).
+func rosterTaskMovedFirst(v teamlink.TaskView) (moved, first bool) {
+	now := time.Now()
+	rosterTaskState.Range(func(k, val any) bool {
+		if now.Sub(val.(rosterSeen).at) > rosterTaskKeep {
+			rosterTaskState.Delete(k)
+		}
+		return true
+	})
+	switch v.State {
+	case "working", "input_required":
+		prev, loaded := rosterTaskState.Swap(v.TaskID, rosterSeen{state: v.State, at: now})
+		return !loaded || prev.(rosterSeen).state != v.State, !loaded
+	}
+	_, loaded := rosterTaskState.LoadAndDelete(v.TaskID)
+	return true, !loaded
+}
+
+// seedRosterTasks records the open tasks a restart adopted as already
+// signalled, in their current state, so rosterTaskMovedFirst reads a
+// change of theirs as a move, never as a just-sent task.
+func seedRosterTasks(live []teamlink.LiveTask) {
+	now := time.Now()
+	for _, t := range live {
+		state := "input_required"
+		if t.Working {
+			state = "working"
+		}
+		rosterTaskState.LoadOrStore(t.TaskID, rosterSeen{state: state, at: now})
+	}
+}
+
+// onTeamTaskMoved is told when a task's state moved (rosterTaskMovedFirst):
+// first = the task was just sent. Set by the server (SetOnTeamTaskMoved)
+// for the channels' background set; unset = nobody. Atomic: the Hub may
+// fire before the server finished wiring.
+var onTeamTaskMoved atomic.Pointer[func(sessionID string, v teamlink.TaskView, first bool)]
+
+// SetOnTeamTaskMoved installs the OnTeamTaskMoved hook.
+func SetOnTeamTaskMoved(f func(sessionID string, v teamlink.TaskView, first bool)) {
+	onTeamTaskMoved.Store(&f)
+}
+
+// onTeamVisibilityChanged is told an agent's "Show teammates in channels"
+// changed, so the channels it waits in repaint at once. Set by the server.
+var onTeamVisibilityChanged atomic.Pointer[func(agentID string)]
+
+// SetOnTeamVisibilityChanged installs the hook.
+func SetOnTeamVisibilityChanged(f func(agentID string)) {
+	onTeamVisibilityChanged.Store(&f)
+}
+
+// teamVisibilityChanged drops the cached reads and tells the server.
+func teamVisibilityChanged(agentID string) {
+	forgetShowTeammates()
+	forgetHideInterim()
+	if f := onTeamVisibilityChanged.Load(); f != nil {
+		go (*f)(agentID)
+	}
+}
+
+// TeamShowsTeammates reports whether the Team agent of sessionID shows
+// teammates in its channels (channel_show_teammates). A session of no
+// Team agent has nothing to hide: true.
+func TeamShowsTeammates(ctx context.Context, sessionID string) bool {
+	if globalTeam == nil {
+		return true
+	}
+	p := globalTeam.AgentFor(ctx, sessionID)
+	if p == nil {
+		return true
+	}
+	return team.ShowsTeammatesInChannels(p.ChannelShowTeammates)
+}
+
+// showTeammatesTTL bounds how long a read of the setting is reused: the
+// Hub asks under its lock, which must not wait on the database.
+const showTeammatesTTL = 30 * time.Second
+
+type showTeammatesSeen struct {
+	show bool
+	at   time.Time
+}
+
+// showTeammatesCache holds the last read per session.
+var showTeammatesCache sync.Map
+
+// teamShowsTeammatesCached is TeamShowsTeammates read at most once per
+// showTeammatesTTL per session.
+func teamShowsTeammatesCached(sessionID string) bool {
+	if v, ok := showTeammatesCache.Load(sessionID); ok && time.Since(v.(showTeammatesSeen).at) < showTeammatesTTL {
+		return v.(showTeammatesSeen).show
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	show := TeamShowsTeammates(ctx, sessionID)
+	storeSwitchSeen(&showTeammatesCache, sessionID, show)
+	return show
+}
+
+// storeSwitchSeen records a read and drops the entries past
+// showTeammatesTTL, so a cache keyed by session never outgrows the
+// sessions read in the last TTL. A miss is at most once per TTL per
+// session, so the sweep stays cheap.
+func storeSwitchSeen(m *sync.Map, sessionID string, v bool) {
+	now := time.Now()
+	m.Range(func(k, e any) bool {
+		if now.Sub(e.(showTeammatesSeen).at) >= showTeammatesTTL {
+			m.Delete(k)
+		}
+		return true
+	})
+	m.Store(sessionID, showTeammatesSeen{show: v, at: now})
+}
+
+// forgetShowTeammates drops the cached reads, after the setting changed.
+func forgetShowTeammates() { showTeammatesCache.Clear() }
+
+// TeamHidesInterim reports whether the Team agent of sessionID keeps its
+// in-between text out of channels (channel_hide_interim). The agent is
+// the one the session speaks as on the Team paths (teamAgentOfSession),
+// as team_message there is. A session of no Team agent never delegates
+// through team_message: false.
+func TeamHidesInterim(ctx context.Context, sessionID string) bool {
+	if globalTeam == nil {
+		return false
+	}
+	id := teamAgentOfSession(ctx, sessionID)
+	if id == "" {
+		return false
+	}
+	p, err := globalTeam.Get(ctx, id)
+	if err != nil {
+		return false
+	}
+	return team.HidesInterimInChannels(p.ChannelHideInterim)
+}
+
+// hideInterimCache holds the last read of TeamHidesInterim per session,
+// reused for showTeammatesTTL: a channel asks on every team_message call.
+var hideInterimCache sync.Map
+
+// TeamHidesInterimCached is TeamHidesInterim read at most once per
+// showTeammatesTTL per session, for the channels.
+func TeamHidesInterimCached(sessionID string) bool {
+	if v, ok := hideInterimCache.Load(sessionID); ok && time.Since(v.(showTeammatesSeen).at) < showTeammatesTTL {
+		return v.(showTeammatesSeen).show
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hide := TeamHidesInterim(ctx, sessionID)
+	storeSwitchSeen(&hideInterimCache, sessionID, hide)
+	return hide
+}
+
+// forgetHideInterim drops the cached reads, after the setting changed.
+func forgetHideInterim() { hideInterimCache.Clear() }
+
+// TeamTasksActive reports whether any of the tasks is still open in the
+// Hub (working, or asking its sender a question). No Hub: false, so the
+// channel posts the text.
+func TeamTasksActive(taskIDs []string) bool {
+	if globalTeamHub == nil {
+		return false
+	}
+	h := globalTeamHub()
+	if h == nil {
+		return false
+	}
+	for _, lt := range h.LiveTasks() {
+		if slices.Contains(taskIDs, lt.TaskID) {
+			return true
+		}
+	}
+	return false
+}
+
+// TeamHidesTeammates is the server's hidden probe for the background set.
+func TeamHidesTeammates(sessionID string) bool { return !teamShowsTeammatesCached(sessionID) }
+
 // TeamAgentOf returns the Team agent a session belongs to, "" for none.
 func TeamAgentOf(ctx context.Context, sessionID string) string {
 	if p := globalTeam.AgentFor(ctx, sessionID); p != nil {
 		return p.ID
 	}
 	return ""
+}
+
+// TeamCallerOf is the Team agent sessionID speaks as on the Team paths
+// (the team connector's caller, team_* tools): teamAgentOfSession.
+func TeamCallerOf(ctx context.Context, sessionID string) string {
+	return teamAgentOfSession(ctx, sessionID)
+}
+
+// teamAgentOfSession is the Team agent sessionID belongs to for Team
+// messaging only: TeamAgentOf, else — for a top-level session of a
+// project exactly one enabled agent points at (a Slack thread session
+// there, which the project's missing Team tag left unstamped) — that
+// agent, when the session is its owner's or is in one of the project's
+// tickets. Anyone else's session there, group backing sessions and
+// ticket rooms never get one this way. Only the Team paths read it: the
+// session's scope, spawn identity and agent (AgentFor) stay what they
+// are.
+func teamAgentOfSession(ctx context.Context, sessionID string) string {
+	if id := TeamAgentOf(ctx, sessionID); id != "" {
+		return id
+	}
+	if globalTeam == nil || globalLayout.BaseDir == "" || storage.ValidateSessionID(sessionID) != nil {
+		return ""
+	}
+	s, err := session.Load(globalLayout, sessionID)
+	if err != nil {
+		return ""
+	}
+	m := s.Meta
+	if m.ProjectID == "" || m.ParentSessionID != "" || m.GroupSessionID != "" || m.TicketRoom != nil || m.AgentGroup != nil {
+		return ""
+	}
+	rows, err := globalTeam.ListByProjects(ctx, []string{m.ProjectID})
+	if err != nil {
+		return ""
+	}
+	// ListByProjects reads ids only: the owner and switch come from Get.
+	var agent *entity.AgentPersona
+	for _, r := range rows {
+		p, err := globalTeam.Get(ctx, r.ID)
+		if err != nil || p.Disabled {
+			continue
+		}
+		if agent != nil {
+			return ""
+		}
+		agent = &p
+	}
+	if agent == nil {
+		return ""
+	}
+	if m.UserID != agent.OwnerUserID {
+		if _, ok := ticket.FindBySession(globalLayout, m.ProjectID, sessionID); !ok {
+			return ""
+		}
+	}
+	return agent.ID
 }
 
 // globalTeamHub is the server's late-bound Hub, set by SetTeamHub; nil
@@ -87,7 +427,260 @@ func sessionTeamTasks(c *tool.Ctx) {
 	if tasks == nil {
 		tasks = []teamlink.TaskView{}
 	}
-	c.JSON(http.StatusOK, map[string]any{"tasks": tasks})
+	// show_teammates: the session's agent names teammates in its channels;
+	// off = its sent replies carry "teammates hidden in …" (any view).
+	c.JSON(http.StatusOK, map[string]any{"tasks": tasks, "show_teammates": TeamShowsTeammates(c.Context(), id)})
+}
+
+// sessionTeamTaskThread handles GET /api/sessions/{id}/team-tasks/{task}/thread:
+// the messages of one task this session sent (brief, replies, answers),
+// oldest first, as the Hub logged them. Read-only; the session must be
+// the caller's, and a task of another session reads as unknown (404).
+func sessionTeamTaskThread(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	log, err := h.TaskThread(id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"messages": log})
+}
+
+// teamTaskHub resolves the session and the Hub for a write on one of its
+// team tasks (or a read of one); false when it already answered (404/503).
+func teamTaskHub(c *tool.Ctx) (string, *teamlink.Hub, bool) {
+	if notReady(c) {
+		return "", nil, false
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return "", nil, false
+	}
+	var h *teamlink.Hub
+	if globalTeamHub != nil {
+		h = globalTeamHub()
+	}
+	if h == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "team messaging is not available"})
+		return "", nil, false
+	}
+	return id, h, true
+}
+
+// teamTaskError maps a Hub error on a user's task action to a status.
+func teamTaskError(c *tool.Ctx, err error) {
+	status := http.StatusBadRequest
+	switch {
+	case errors.Is(err, teamlink.ErrUnknownTask):
+		status = http.StatusNotFound
+	case errors.Is(err, teamlink.ErrUnknownTeammate):
+		status = http.StatusNotFound
+	case errors.Is(err, teamlink.ErrAlreadyAnswered), errors.Is(err, teamlink.ErrTaskNotWaiting), errors.Is(err, teamlink.ErrTaskSettled), errors.Is(err, teamlink.ErrNoTaskChat), errors.Is(err, teamlink.ErrTaskMoved),
+		errors.Is(err, teamlink.ErrTaskNotRetryable), errors.Is(err, teamlink.ErrTaskNotReassignable), errors.Is(err, teamlink.ErrAlreadyReplaced),
+		errors.Is(err, teamlink.ErrTeammateGone), errors.Is(err, teamlink.ErrTeammateChanged):
+		status = http.StatusConflict
+	}
+	c.JSON(status, map[string]string{"error": err.Error()})
+}
+
+// sessionTeamTaskAnswer handles POST /api/sessions/{id}/team-tasks/{task}/answer
+// {text}: the person answers a teammate's question in a task this chat
+// sent, straight to that task. The first answer wins (409 after).
+func sessionTeamTaskAnswer(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "text is required"})
+		return
+	}
+	res, err := h.AnswerFromUser(c.Context(), id, c.PathValue("task"), body.Text)
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskMessage handles POST /api/sessions/{id}/team-tasks/{task}/message
+// {text}: the person writes on a task this chat sent, from its thread
+// (Reply in thread). A waiting question takes it as the answer; any other
+// task logs it and hands it to the teammate's chat, keeping its state.
+func sessionTeamTaskMessage(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "text is required"})
+		return
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Text)) > teamlink.MaxUserMessage {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": teamlink.ErrMessageTooLong.Error()})
+		return
+	}
+	res, err := h.MessageFromUser(c.Context(), id, c.PathValue("task"), body.Text)
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskCancel handles POST /api/sessions/{id}/team-tasks/{task}/cancel:
+// the person cancels a task this chat sent (cancel_task on its behalf).
+func sessionTeamTaskCancel(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	res, err := h.CancelFromUser(c.Context(), id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTasksCancelWorking handles POST
+// /api/sessions/{id}/team-tasks/cancel-working: Stop on a conversation
+// waiting on teammates, when the person also stops them. Every task the
+// session sent that is still working is canceled as the person (a
+// question back to the session is left alone); failed lists the ids that
+// could not be.
+func sessionTeamTasksCancelWorking(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	n, failed := cancelWorkingTeamTasks(c.Context(), h, id)
+	c.JSON(http.StatusOK, map[string]any{"canceled": n, "failed": failed})
+}
+
+// cancelWorkingTeamTasks cancels sessionID's working tasks.
+func cancelWorkingTeamTasks(ctx context.Context, h *teamlink.Hub, sessionID string) (int, []string) {
+	n, failed := 0, []string{}
+	for _, t := range h.SentFrom(sessionID) {
+		if t.State != "working" {
+			continue
+		}
+		if _, err := h.CancelFromUser(ctx, sessionID, t.TaskID); err != nil {
+			failed = append(failed, t.TaskID)
+			continue
+		}
+		n++
+	}
+	return n, failed
+}
+
+// sessionTeamTasksSummarize handles POST /api/sessions/{id}/team-tasks/summarize
+// ("Summarize now"): the replies the session's open batches hold (or the
+// one batch ?group= names) go to its agent now, without waiting for the teammates still working (they
+// are not canceled; their replies come as an update).
+func sessionTeamTasksSummarize(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	// ?group= scopes it to one Delegated block's batch.
+	if g := strings.TrimSpace(c.Query("group")); g != "" {
+		c.JSON(http.StatusOK, map[string]any{"delivered": h.FlushGroup(c.Context(), id, g)})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"delivered": h.FlushSession(c.Context(), id)})
+}
+
+// TeamBatchResultsEnabled reports the team_batch_results switch. Absent
+// row = ON (DefaultGeneralConfig); off = every teammate reply wakes the
+// sender on its own, as before batches.
+func TeamBatchResultsEnabled() bool {
+	if globalConfigs == nil {
+		return true
+	}
+	v := globalConfigs.GetOwned("agents", "team_batch_results")
+	return v == "" || v == "true"
+}
+
+// teamBatchSoftTimeout is the optional soft timeout of a batch
+// (team_batch_soft_timeout_minutes); 0 = none, the default.
+func teamBatchSoftTimeout() time.Duration {
+	if globalConfigs == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(globalConfigs.GetOwned("agents", "team_batch_soft_timeout_minutes")))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Minute
+}
+
+// sessionTeamTaskRetry handles POST /api/sessions/{id}/team-tasks/{task}/retry:
+// the person sends a failed task this chat sent again, as a new task to
+// the same teammate (409 for any other state, or once already sent again).
+func sessionTeamTaskRetry(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	res, err := h.RetryFromUser(c.Context(), id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskReassign handles POST /api/sessions/{id}/team-tasks/{task}/reassign
+// {to}: the person sends a declined or failed task this chat sent to
+// another teammate this chat reaches (400 without one or for the same
+// teammate, 404 for a handle it does not reach).
+func sessionTeamTaskReassign(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		To string `json:"to"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&body); err != nil || teamlink.NormalizeHandle(body.To) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "to is required"})
+		return
+	}
+	res, err := h.ReassignFromUser(c.Context(), id, c.PathValue("task"), body.To)
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskReassignTargets handles GET /api/sessions/{id}/team-tasks/{task}/reassign-targets:
+// the teammates the Reassign menu offers for one task this chat sent —
+// the same roster the reassign route checks, the task's own teammate left
+// out, each marked when its mention policy refuses the sending agent.
+func sessionTeamTaskReassignTargets(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	targets, err := h.ReassignTargets(c.Context(), id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"targets": targets})
 }
 
 type teamDirectory struct{ svc *team.Service }
@@ -158,7 +751,7 @@ func (d teamDirectory) Get(ctx context.Context, agentID string) (teamlink.Peer, 
 type poolTurns struct{}
 
 func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (string, string, error) {
-	s, err := mainChatOf(agent)
+	s, err := mainChatOf(ctx, agent)
 	if err != nil {
 		return "", "", err
 	}
@@ -166,34 +759,216 @@ func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (s
 }
 
 // mainChatOf is the agent's main chat, or the error a turn reports
-// when it has none yet.
-func mainChatOf(agent teamlink.Peer) (session.Session, error) {
+// when it has none yet. A person the agent is shared with who never
+// opened it gets their main chat opened here (openMainChatFor).
+func mainChatOf(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
 	s, ok := mainSessionOf(chatUserOf(agent), agent.ID)
 	if !ok {
 		if agent.ChatUser != "" {
-			return s, fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
+			return openMainChatFor(ctx, agent)
 		}
 		return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
 	}
 	return s, nil
 }
 
-// RunIn is Run in sessionID (teamlink.ChatOpener).
+// mainChatLocks serialises opening a person's main chat with an agent
+// (key mainChatKey), so tasks arriving together open one chat.
+var mainChatLocks sync.Map
+
+func mainChatKey(userID, agentID string) string { return userID + "\x00" + agentID }
+
+// lockMainChat takes userID's lock for opening their main chat with
+// agentID and returns its unlock.
+func lockMainChat(userID, agentID string) func() {
+	mu, _ := mainChatLocks.LoadOrStore(mainChatKey(userID, agentID), &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
+}
+
+// accountInactive reports whether uid's account is gone or not approved.
+// With no auth service wired there is no account to read: not inactive.
+func accountInactive(ctx context.Context, uid string) bool {
+	u, err := lookupWorkflowOwner(ctx, uid)
+	if err != nil {
+		return globalAuth != nil
+	}
+	return u == nil || !u.Approved
+}
+
+// openMainChatFor opens agent.ChatUser's main chat with agent as opening
+// it from the Team roster does (createAgentChat), for a person who may
+// chat with it (agentChatMember) and never has: a Team task to it needs a
+// chat to run in. Anyone else gets the error they always got.
+func openMainChatFor(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
+	noChat := fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
+	if globalTeam == nil || globalMgr == nil {
+		return session.Session{}, noChat
+	}
+	p, err := globalTeam.Get(ctx, agent.ID)
+	if err == nil && agent.ChatUser == p.OwnerUserID {
+		// The owner's main chat is theirs to open, as without a ChatUser.
+		return session.Session{}, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+	}
+	if err != nil || !agentChatMember(ctx, p, agent.ChatUser) || accountInactive(ctx, agent.ChatUser) {
+		return session.Session{}, noChat
+	}
+	defer lockMainChat(agent.ChatUser, agent.ID)()
+	// Another task may have opened it while this one waited.
+	if s, ok := mainSessionOf(agent.ChatUser, agent.ID); ok {
+		return s, nil
+	}
+	id, err := createAgentChat(ctx, agent.ChatUser, p, true, uuid.New().String(), session.OriginUI, agentChatSetup{
+		target: func(projectID string) (string, string) { return userSessionTarget(ctx, agent.ChatUser, projectID) },
+	})
+	if err != nil {
+		return session.Session{}, fmt.Errorf("@%s: open your chat with it: %w", agent.Handle, err)
+	}
+	s, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		return session.Session{}, noChat
+	}
+	return s, nil
+}
+
+// needsYouSettle is how long after a turn's Done the pool is read for
+// "Needs you": the next queued message, if any, has started by then.
+const needsYouSettle = 1500 * time.Millisecond
+
+// teamTurnGate lines up the team tasks each session answers, so a turn
+// is known to be a task's and cancel_task stops only that one.
+var teamTurnGate = teamlink.NewTurnGate(poolSessionBusy)
+
+// poolSessionBusy reports whether sessionID runs a turn, is being spawned,
+// holds messages for its next turn or waits for a pool slot: anything a
+// team task's message would land behind.
+func poolSessionBusy(sessionID string) bool {
+	if globalPool == nil {
+		return false
+	}
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.SessionID == sessionID && (e.Lifecycle == "working" || e.Lifecycle == "spawning" || e.Queued > 0) {
+			return true
+		}
+	}
+	for _, q := range globalPool.QueueSnapshot() {
+		if q.SessionID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// RunIn is Run in sessionID (teamlink.ChatOpener). A team task's turn
+// waits until the session runs nothing else, so the turn it starts is
+// its own (teamTurnGate).
 func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text string) (string, string, error) {
+	// globalPool.Send creates any session it does not find: a chat that
+	// is gone (deleted after CanTarget, or never existed) must fail, not
+	// come back as a new empty one.
+	if !globalPool.SessionExists(sessionID) {
+		return sessionID, "", errChatNotFound(sessionID)
+	}
+	release, err := teamTurnGate.Acquire(ctx, sessionID, teamlink.TaskIDFrom(ctx))
+	if err != nil {
+		return sessionID, "", err
+	}
+	defer release()
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
 	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(sessionID)
 	defer unsub()
+	start := time.Now()
 	// WithoutCancel: the turn must outlive the call that carried it.
 	if err := globalPool.Send(context.WithoutCancel(ctx), sessionID, "", sourceTeam, "user", text); err != nil {
 		return sessionID, "", err
 	}
-	text, failed := collectTurnErr(ctx, ch)
+	text, failed := collectTurnErr(ctx, ch, agent.Remote)
+	// The task's turn is over: let go of the session now, not after the
+	// reply is read, so a cancel arriving later never takes the next turn
+	// (someone else's) for the task's.
+	release()
 	// A remote that timed out is not an empty answer: the asker learns the
 	// reply will follow (settleLateReply forwards it when it does).
 	if waited, ok := remote.IsTimeout(failed); ok && strings.TrimSpace(text) == "" {
 		text = remote.PendingNotice(agent.Handle, waited)
 	}
+	if agent.Remote {
+		if end := remoteTurnEnd(a2aremote.LoadState(globalLayout.SessionDir(sessionID)), start, text, failed); end != nil {
+			return sessionID, "", end
+		}
+	}
 	return sessionID, text, nil
+}
+
+// remoteTurnEnd is how a remote agent's turn ends a team task when that
+// is not plainly completed. An A2A remote that asks a question keeps its
+// task open: the asker sees input_required and answers with the same
+// task_id. One whose task this turn ended failed, rejected, canceled or
+// auth_required ends the team task in that state with the remote's
+// message; any other error of the turn ends it failed. A timeout is not
+// an end: its reply follows (settleLateReply).
+func remoteTurnEnd(st a2aremote.State, start time.Time, text, failed string) *teamlink.TurnEnd {
+	if _, timedOut := remote.IsTimeout(failed); timedOut {
+		failed = ""
+	}
+	// The state is the session's: only one this turn saved speaks for it,
+	// or an earlier turn's question or end would come back.
+	fresh := !st.UpdatedAt.Before(start)
+	if fresh && st.InputRequired {
+		return &teamlink.TurnEnd{State: a2a.TaskStateInputRequired, Text: text}
+	}
+	failed = a2aremote.CleanReason(failed)
+	if state, ok := st.EndedState(); ok && fresh {
+		reason := st.Reason
+		if reason == "" {
+			reason = failed
+		}
+		return &teamlink.TurnEnd{State: state, Text: reason}
+	}
+	if failed != "" {
+		return &teamlink.TurnEnd{State: a2a.TaskStateFailed, Text: failed}
+	}
+	return nil
+}
+
+// StopTask cancels task id in sessionID (teamlink.TaskStopper): the
+// session's turn is stopped only when it is that task's; a task still
+// waiting for its turn just leaves the line.
+//
+// The pool stops a session, not a turn: when a message a person sent
+// reached the session while the task's turn ran the turn is left running
+// (TaskStopShared) rather than cutting that message off with it. The gate
+// sees every message (NoteSessionMessage, the pool's OnSend) and knows a
+// person's by its ctx (teamlink.WithPersonMessage, set where one enters).
+// The gate alone decides, the same for every provider: an appending one
+// (claude) writes the message straight into the running turn, a queuing
+// one (codex, omp, opencode: RespawnQueue) holds it, and either way only a
+// person's message spares the turn. A queued message nobody typed (a
+// sub-agent's result, a teammate's reply) is stopped with the turn, as on
+// claude. The kill runs with the session's new messages held back by the
+// gate.
+func (poolTurns) StopTask(_ context.Context, _ teamlink.Peer, sessionID string, id a2a.TaskID, by string) (teamlink.TaskStop, error) {
+	return teamTurnGate.StopWith(sessionID, id, func() (teamlink.TaskStop, error) {
+		if globalPool == nil {
+			return teamlink.TaskStopRunning, nil
+		}
+		return teamlink.TaskStopRunning, globalPool.KillBy(sessionID, "", by, "team task canceled")
+	})
+}
+
+// NoteSessionMessage is the pool's OnSend: it tells the team task gate a
+// message is on its way into sessionID, so a cancel never stops the turn
+// a person's message reached (TurnGate.NoteMessage). It blocks while a
+// task's turn is being stopped in that session.
+func NoteSessionMessage(ctx context.Context, sessionID, role string) (func(delivered bool), error) {
+	// A person writing in the chat opens the fan-in barrier: what the
+	// session's teammates replied so far is delivered now.
+	if role == "user" && teamlink.IsPersonMessage(ctx) && globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			go h.FlushSession(context.Background(), sessionID)
+		}
+	}
+	return teamTurnGate.NoteMessage(ctx, sessionID, role)
 }
 
 // NewChat opens a chat of agent beside its main one, set up like it —
@@ -201,7 +976,7 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 // (teamlink.ChatOpener). A remote agent's chat keeps its own remote
 // state, so a Slack remote starts a new thread there.
 func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, error) {
-	main, err := mainChatOf(agent)
+	main, err := mainChatOf(ctx, agent)
 	if err != nil {
 		return "", err
 	}
@@ -240,12 +1015,263 @@ func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, erro
 	return id, nil
 }
 
+// LinkedChat is the chat of agent paired with callerSession
+// (teamlink.ChatLinker): one of agent's chats for its chat user whose
+// LinkedFromSession is callerSession, else the chat callerSession was
+// itself opened for when that is one of agent's — a reply back to the
+// asker lands in the conversation that asked.
+func (poolTurns) LinkedChat(_ context.Context, agent teamlink.Peer, callerSession string) string {
+	if callerSession == "" {
+		return ""
+	}
+	chats := agentSessions(chatUserOf(agent), agent.ID)
+	for _, s := range chats {
+		if s.Meta.LinkedFromSession == callerSession {
+			return s.ID
+		}
+	}
+	if caller, ok := globalMgr.Registry().Session(callerSession); ok && caller.Meta.LinkedFromSession != "" {
+		for _, s := range chats {
+			if s.ID == caller.Meta.LinkedFromSession {
+				return s.ID
+			}
+		}
+	}
+	return ""
+}
+
+// Link pairs chat with callerSession on chat's meta, so it survives a
+// restart, after unpairing any other chat of agent paired with it
+// (teamlink.ChatLinker).
+func (poolTurns) Link(_ context.Context, agent teamlink.Peer, chat, callerSession string) error {
+	for _, s := range agentSessions(chatUserOf(agent), agent.ID) {
+		want := s.ID == chat
+		if want == (s.Meta.LinkedFromSession == callerSession) {
+			continue
+		}
+		// Re-read from disk: the registry copy can lag a write the chat's
+		// own turn just made (title, pending input), which a save of it
+		// would undo.
+		fresh, err := session.Load(globalLayout, s.ID)
+		if err != nil {
+			return err
+		}
+		if want {
+			fresh.Meta.LinkedFromSession = callerSession
+		} else {
+			fresh.Meta.LinkedFromSession = ""
+		}
+		if err := session.SaveMeta(globalLayout, s.ID, fresh.Meta); err != nil {
+			return err
+		}
+		_ = globalMgr.RefreshSession(s.ID)
+	}
+	return nil
+}
+
+// errChatNotFound is CanTarget's answer for a chat= that names no
+// session: a message never opens one.
+func errChatNotFound(id string) error {
+	return fmt.Errorf("session %s not found — pass a session_id that exists", id)
+}
+
+// errNotTicketOwner refuses a chat= naming a Slack thread session of the
+// asking chat's ticket that is not the ticket's owner_session: a Team turn
+// there is posted in that thread, which may be the one the client reads.
+func errNotTicketOwner(chat, ticketID string) error {
+	return fmt.Errorf("%w: session %s is a Slack thread of ticket %s but not its %s — through a ticket only the owner session can be messaged", teamlink.ErrUnknownChat, chat, ticketID, ticket.OwnerSessionField)
+}
+
+// CanTarget admits chat — a session that is not one of agent's own chats
+// — as a message's chat= (teamlink.SessionTargeter): it must exist, be a
+// top-level session that is no group backing or ticket room, belong to
+// agent (teamAgentOfSession), and be agent's chat user's, or in the same
+// ticket of chat's project as callerSession (ticket = true). Through the
+// ticket a Slack thread session is admitted only as the ticket's
+// owner_session, never by falling back to the chat user path.
+func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSession, chat string) (bool, error) {
+	if storage.ValidateSessionID(chat) != nil {
+		return false, errChatNotFound(chat)
+	}
+	s, err := session.Load(globalLayout, chat)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, errChatNotFound(chat)
+		}
+		return false, teamlink.ErrUnknownChat
+	}
+	m := s.Meta
+	if m.ParentSessionID != "" || m.GroupSessionID != "" || m.TicketRoom != nil || m.AgentGroup != nil || teamAgentOfSession(ctx, chat) != agent.ID {
+		return false, teamlink.ErrUnknownChat
+	}
+	if callerSession != "" && m.ProjectID != "" {
+		if tk, ok := ticket.FindBySession(globalLayout, m.ProjectID, chat); ok {
+			if mine, ok := ticket.FindBySession(globalLayout, m.ProjectID, callerSession); ok && mine.ID == tk.ID {
+				if isSlackThreadSession(m) && strings.TrimSpace(tk.Fields[ticket.OwnerSessionField]) != chat {
+					return false, errNotTicketOwner(chat, tk.ID)
+				}
+				return true, nil
+			}
+		}
+	}
+	if m.UserID != "" && m.UserID == chatUserOf(agent) {
+		return false, nil
+	}
+	return false, teamlink.ErrUnknownChat
+}
+
+// isSlackThreadSession is whether a turn in the session m describes is
+// posted in a Slack thread.
+func isSlackThreadSession(m session.Meta) bool {
+	return m.Origin == session.OriginSlack || (m.ChannelRef != nil && m.ChannelRef.Channel == "slack")
+}
+
+// SessionLabel names sessionID to an agent a message from it reaches
+// (teamlink.SessionLabeler): its id, plus its Slack thread when the
+// session answers in one.
+func (poolTurns) SessionLabel(_ context.Context, sessionID string) string {
+	label := "session " + sessionID
+	if globalMgr == nil {
+		return label
+	}
+	if s, ok := globalMgr.Registry().Session(sessionID); ok {
+		if r := s.Meta.ChannelRef; r != nil && r.Channel == "slack" {
+			if link := slackThreadLink(slackremote.State{Channel: r.ChatID, ThreadTS: r.ThreadID}); link != "" {
+				label += ", Slack thread " + link
+			}
+		}
+	}
+	return label
+}
+
+// Chats is agent's chats for its chat user, newest first
+// (teamlink.ChatLister): only that user's own sessions, so another
+// person's chat with a shared agent never shows, whatever the share's
+// history toggle says. A Slack remote's chat carries its thread link.
+func (poolTurns) Chats(_ context.Context, agent teamlink.Peer) []teamlink.ChatInfo {
+	user := chatUserOf(agent)
+	var out []teamlink.ChatInfo
+	for _, s := range agentSessions(user, agent.ID) {
+		c := teamlink.ChatInfo{
+			SessionID: s.ID, Title: s.Meta.Label, LastActive: s.Meta.LastActive, Main: s.Meta.AgentMain,
+			UserID: s.Meta.UserID, LinkedFrom: s.Meta.LinkedFromSession,
+		}
+		if agent.Remote {
+			c.SlackThread = slackThreadLink(slackremote.LoadState(globalLayout.SessionDir(s.ID)))
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// PairedWith is every Team chat paired with callerSession, in one pass
+// over the registry (teamlink.PairedLister): a spawn's "This session"
+// block and list_agents cost one scan, not one per teammate.
+func (poolTurns) PairedWith(_ context.Context, callerSession string) []teamlink.ChatInfo {
+	if callerSession == "" {
+		return nil
+	}
+	var out []teamlink.ChatInfo
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.LinkedFromSession != callerSession || s.Meta.AgentID == "" || s.Meta.GroupSessionID != "" {
+			continue
+		}
+		out = append(out, teamlink.ChatInfo{
+			SessionID: s.ID, Title: s.Meta.Label, LastActive: s.Meta.LastActive, Main: s.Meta.AgentMain,
+			UserID: s.Meta.UserID, LinkedFrom: s.Meta.LinkedFromSession, AgentID: s.Meta.AgentID,
+			// Only paired chats get here, so the state read stays rare; a
+			// chat that is not a Slack remote has no state file.
+			SlackThread: slackThreadLink(slackremote.LoadState(globalLayout.SessionDir(s.ID))),
+		})
+	}
+	return out
+}
+
+// slackThreadLink is a link to st's Slack thread, "" for none. The
+// slack.com/archives form redirects to the workspace, so no API call.
+func slackThreadLink(st slackremote.State) string {
+	if st.Channel == "" || st.ThreadTS == "" {
+		return ""
+	}
+	return "https://slack.com/archives/" + st.Channel + "/p" + strings.ReplaceAll(st.ThreadTS, ".", "")
+}
+
+// TeamLinkedChats is, for the Team agent session sessionID belongs to, the
+// chat paired with it at each teammate the session's person can reach
+// (teamlink.Hub.LinkedChats); nil outside the Team or with none.
+func TeamLinkedChats(ctx context.Context, sessionID string) []teamlink.TeamChat {
+	if globalTeamHub == nil || globalTeam == nil || sessionID == "" {
+		return nil
+	}
+	h := globalTeamHub()
+	id := teamAgentOfSession(ctx, sessionID)
+	if h == nil || id == "" {
+		return nil
+	}
+	out, _ := h.LinkedChats(ctx, id, sessionID, sessionUserOf(sessionID))
+	return out
+}
+
+// TeamLinkedChatsPrompt is TeamLinkedChats as "This session" lines, ""
+// for none.
+func TeamLinkedChatsPrompt(sessionID string) string {
+	return teamlink.FormatLinkedChats(TeamLinkedChats(context.Background(), sessionID))
+}
+
+// SessionUserOf is the wick user of sessionID, "" when unknown.
+func SessionUserOf(sessionID string) string { return sessionUserOf(sessionID) }
+
 // MainSession is the session a turn of agent runs in (SessionLocator).
 func (poolTurns) MainSession(_ context.Context, agent teamlink.Peer) string {
 	if s, ok := mainSessionOf(chatUserOf(agent), agent.ID); ok {
 		return s.ID
 	}
 	return ""
+}
+
+// Held reports whether a person took sessionID over (teamlink.HoldChecker):
+// its Meta.TeamHold, from the registry, else from disk.
+func (poolTurns) Held(_ context.Context, sessionID string) bool {
+	if globalMgr != nil {
+		if s, ok := globalMgr.Registry().Session(sessionID); ok {
+			return s.Meta.TeamHold
+		}
+	}
+	if globalLayout.BaseDir == "" || storage.ValidateSessionID(sessionID) != nil {
+		return false
+	}
+	s, err := session.Load(globalLayout, sessionID)
+	return err == nil && s.Meta.TeamHold
+}
+
+// SetTeamHold switches sessionID's take over (Meta.TeamHold) on or off,
+// for the team connector's takeover op. Re-read from disk so the save
+// does not undo a write the session's own turn just made.
+func SetTeamHold(_ context.Context, sessionID string, on bool) error {
+	if globalLayout.BaseDir == "" {
+		return errors.New("sessions are not configured on this server")
+	}
+	if storage.ValidateSessionID(sessionID) != nil {
+		return errChatNotFound(sessionID)
+	}
+	fresh, err := session.Load(globalLayout, sessionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errChatNotFound(sessionID)
+		}
+		return err
+	}
+	if fresh.Meta.TeamHold == on {
+		return nil
+	}
+	fresh.Meta.TeamHold = on
+	if err := session.SaveMeta(globalLayout, sessionID, fresh.Meta); err != nil {
+		return err
+	}
+	if globalMgr != nil {
+		_ = globalMgr.RefreshSession(sessionID)
+	}
+	return nil
 }
 
 // chatUserOf is whose main chat with agent a turn runs in: a share
@@ -259,34 +1285,38 @@ func chatUserOf(agent teamlink.Peer) string {
 
 // collectTurn joins the text of one turn, up to its Done.
 func collectTurn(ctx context.Context, ch <-chan delegation.StreamEvent) string {
-	text, _ := collectTurnErr(ctx, ch)
+	text, _ := collectTurnErr(ctx, ch, false)
 	return text
 }
 
-// collectTurnErr is collectTurn plus the error of a remote turn that
-// timed out, which ends the turn too.
-func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent) (string, string) {
+// collectTurnErr is collectTurn plus the turn's error. With remoteTurn
+// (any remote agent: A2A, Slack, plugin) the first error ends the turn,
+// since the remote runner sends nothing after it; a remote timeout does
+// so in any session. Any other error is returned with the text at Done.
+func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remoteTurn bool) (string, string) {
 	var b strings.Builder
+	failed := ""
 	for {
 		select {
 		case <-ctx.Done():
-			return b.String(), ""
+			return b.String(), failed
 		case ev, ok := <-ch:
 			if !ok {
-				return b.String(), ""
+				return b.String(), failed
 			}
 			switch ev.Type {
 			case event.Error:
-				if _, timedOut := remote.IsTimeout(ev.Text); timedOut {
+				if _, timedOut := remote.IsTimeout(ev.Text); timedOut || remoteTurn {
 					return b.String(), ev.Text
 				}
+				failed = ev.Text
 			case event.TextDelta:
 				b.WriteString(ev.Text)
 			case event.TextReplace:
 				b.Reset()
 				b.WriteString(ev.Text)
 			case event.Done:
-				return b.String(), ""
+				return b.String(), failed
 			}
 		}
 	}
@@ -301,6 +1331,18 @@ func (n teamNotifier) Deliver(ctx context.Context, sessionID, text string) error
 		return nil
 	}
 	return n.deliver(ctx, sessionID, text)
+}
+
+// SessionGone reports whether sessionID no longer exists
+// (teamlink.SessionChecker): the Hub does not wake a deleted session,
+// which the pool would create again, empty; the task store keeps the
+// result.
+func (teamNotifier) SessionGone(sessionID string) bool {
+	if globalMgr == nil {
+		return false
+	}
+	_, ok := globalMgr.Registry().Session(sessionID)
+	return !ok
 }
 
 // Audit logs one mention_handoff per side, records it in that thread as
@@ -376,7 +1418,46 @@ func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
 	if h.FromSession != "" {
 		extras["from_session"] = h.FromSession
 	}
+	// A person's own task: its late reply is never forwarded into the
+	// asking chat as a prompt (lateCaller).
+	if h.Origin != "" {
+		extras["origin"] = h.Origin
+	}
 	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), extras, now)
+}
+
+// turnProgress is the part of the Hub a turn's activity feeds.
+type turnProgress interface {
+	TurnText(sessionID, delta string)
+	TurnTool(sessionID, tool string)
+}
+
+// teamTurnActivity folds one streamed event of sessionID into the live
+// progress of the task its turn answers, if any (teamlink progress.go).
+func teamTurnActivity(hub turnProgress, sessionID string, ev event.AgentEvent) {
+	switch ev.Type {
+	case event.TextDelta:
+		hub.TurnText(sessionID, ev.Text)
+	case event.ToolUse:
+		hub.TurnTool(sessionID, team.ActionLabel(ev.ToolName, ev.ToolInput))
+	}
+}
+
+// evTeamTask is the SSE event carrying one team task this session sent,
+// as GET /api/sessions/{id}/team-tasks lists it, after it changed.
+const evTeamTask = "team_task"
+
+// publishTeamTask pushes v to sessionID's live viewers as a team_task
+// event.
+func publishTeamTask(b *Broadcaster, sessionID string, v teamlink.TaskView) {
+	if b == nil || sessionID == "" {
+		return
+	}
+	body, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	b.PublishRaw(sessionID, "", evTeamTask, string(body))
 }
 
 // publishHandoff pushes turn to sessionID's live viewers.
@@ -397,44 +1478,77 @@ func appendHandoff(layout agentconfig.Layout, sessionID string, turn store.Conve
 // without waiting.
 type TeamMentionRouter struct{ Hub func() *teamlink.Hub }
 
+// TeamHandles is every handle a mention in sessionID may reach: the
+// agent's teammates and those shared with its owner, or — in a chat
+// with an agent shared with the session's user — that user's own agents
+// and those shared with them (teamlink.Hub.MentionTargets).
 func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []string {
-	h, id := r.Hub(), TeamAgentOf(ctx, sessionID)
+	return r.TeamHandlesFor(ctx, sessionID, true)
+}
+
+// teamMentionCaller is the agent a mention line in sessionID speaks as:
+// an agent's own line speaks as the agent it messages as (team_message,
+// teamAgentOfSession); a person's line only in a session that is the
+// agent's (TeamAgentOf) — in an unstamped Slack thread of the agent's
+// project, anyone typing @handle must not set the owner's agents to work.
+func teamMentionCaller(ctx context.Context, sessionID string, human bool) string {
+	if human {
+		return TeamAgentOf(ctx, sessionID)
+	}
+	return teamAgentOfSession(ctx, sessionID)
+}
+
+// TeamHandlesFor is TeamHandles for a person's line (human) or the
+// agent's own (delegation.TeamHumanRouter).
+func (r TeamMentionRouter) TeamHandlesFor(ctx context.Context, sessionID string, human bool) []string {
+	if InTicketRoom(sessionID) {
+		return nil
+	}
+	h, id := r.Hub(), teamMentionCaller(ctx, sessionID, human)
 	if h == nil || id == "" {
 		return nil
 	}
-	peers, err := h.Reachable(ctx, id)
+	peers, err := h.MentionTargets(ctx, id, sessionUserOf(sessionID))
 	if err != nil {
 		return nil
 	}
 	out := make([]string, 0, len(peers))
-	seen := map[string]bool{}
 	for _, p := range peers {
 		out = append(out, p.Handle)
-		seen[p.Handle] = true
-	}
-	// Agents shared with the session's owner answer that person's
-	// @mention too (teamlink refuses an agent's own).
-	if sess, ok := globalMgr.Registry().Session(sessionID); ok && sess.Meta.UserID != "" {
-		if shared, err := (teamDirectory{svc: globalTeam}).SharedPeers(ctx, sess.Meta.UserID); err == nil {
-			for _, p := range shared {
-				if !seen[p.Handle] {
-					out = append(out, p.Handle)
-					seen[p.Handle] = true
-				}
-			}
-		}
 	}
 	return out
 }
 
 func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body string, human bool) error {
+	if InTicketRoom(sessionID) {
+		return team.ErrInTicketRoom
+	}
 	h := r.Hub()
 	if h == nil {
 		return nil
 	}
 	_, err := h.Send(context.WithoutCancel(ctx), teamlink.SendInput{
-		CallerSession: sessionID, CallerAgentID: TeamAgentOf(ctx, sessionID),
-		To: handle, Text: body, Wait: -1, Mention: true, Human: human,
+		CallerSession: sessionID, CallerAgentID: teamMentionCaller(ctx, sessionID, human),
+		SessionUser: sessionUserOf(sessionID),
+		To:          handle, Text: body, Wait: -1, Mention: true, Human: human,
 	})
 	return err
+}
+
+// InTicketRoom reports whether sessionID answers in a ticket room, the
+// room itself included (team.InTicketRoom): the guard for every path that
+// would set another agent to work on that session's behalf.
+func InTicketRoom(sessionID string) bool {
+	return globalLayout.BaseDir != "" && team.InTicketRoom(globalLayout, sessionID)
+}
+
+// sessionUserOf is the wick user of sessionID, "" when unknown.
+func sessionUserOf(sessionID string) string {
+	if globalMgr == nil {
+		return ""
+	}
+	if sess, ok := globalMgr.Registry().Session(sessionID); ok {
+		return sess.Meta.UserID
+	}
+	return ""
 }

@@ -2,6 +2,7 @@ package teamlink
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -40,8 +41,9 @@ func Frame(from Peer, text string) string {
 	return fmt.Sprintf("Message from %s:\n%s", from.Label(), text)
 }
 
-// Execute runs one turn of the agent's main conversation for the message —
-// or of the chat a new_chat opened for its exchange.
+// Execute runs one turn of the agent for the message, in the chat chatFor
+// picks: the one paired with the caller's conversation, or its main chat
+// where Turns cannot pair.
 func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		if ec.StoredTask == nil {
@@ -72,11 +74,23 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				e.fail(ctx, ec, yield, ErrUnknownHandle)
 				return
 			}
-			if from.OwnerID != target.OwnerID {
+			chatUser, _ := meta[metaChatUser].(string)
+			sessionUser, _ := meta[metaSessionUser].(string)
+			switch {
+			case sessionUser != "" && sessionUser != from.OwnerID:
+				// A person's mention in their chat with an agent shared
+				// with them: re-checked against that person now, whatever
+				// the metadata claims.
+				shared, ok := h.forSessionUser(ctx, sessionUser, chatUser, from, target)
+				if !ok {
+					e.fail(ctx, ec, yield, ErrNotShared)
+					return
+				}
+				target = shared
+			case from.OwnerID != target.OwnerID:
 				// Never across owners, whatever the metadata claims —
 				// except an agent still shared with the sender's owner,
 				// whose turn then runs in that owner's chat with it.
-				chatUser, _ := meta[metaChatUser].(string)
 				shared, ok := h.sharedByID(ctx, from.OwnerID, target.ID)
 				if chatUser != from.OwnerID || !ok {
 					e.fail(ctx, ec, yield, ErrNotShared)
@@ -85,21 +99,44 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				target = shared
 			}
 			// A remote agent gets the mention text alone: the frame names
-			// a local agent, which is not the remote's business.
-			if !target.Remote {
+			// a local agent, which is not the remote's business. A message
+			// from another chat of the agent itself names that chat.
+			switch {
+			case from.ID == target.ID:
+				text = h.frameSelf(ctx, from, callerSession, text)
+			case !target.Remote:
 				text = Frame(from, text)
 			}
 		}
 
 		newChat, _ := meta[metaNewChat].(bool)
-		chat, err := h.chatFor(ctx, ec.ContextID, target, newChat)
+		resume, _ := meta[metaChat].(string)
+		self := fromID != "" && from.ID == target.ID
+		chat, err := h.chatFor(ctx, ec.ContextID, callerSession, target, newChat, resume, self)
 		if err != nil {
 			e.fail(ctx, ec, yield, err)
 			return
 		}
+		// The sender's result names the chat (Result.Chat).
+		h.mu.Lock()
+		ref := h.tasks[ec.TaskID]
+		if ref == nil {
+			ref = &taskRef{touched: h.now()}
+			h.tasks[ec.TaskID] = ref
+		}
+		ref.chat, ref.chatPicked = chat, true
+		h.mu.Unlock()
 		session := chat
 		if sl, ok := h.Turns.(SessionLocator); ok && session == "" {
 			session = sl.MainSession(ctx, target)
+		}
+		// A session a person took over takes no turn another agent asks
+		// for: the handoff row still records the message, rejected. A
+		// person's own mention runs as usual.
+		if hc, ok := h.Turns.(HoldChecker); ok && session != "" && !e.userOrigin(ec) && hc.Held(ctx, session) {
+			e.audit(ctx, from, target, callerSession, session, ec, a2a.TaskStateRejected)
+			e.fail(ctx, ec, yield, ErrSessionHeld)
+			return
 		}
 		// The handoff row appears as soon as the task is picked up and is
 		// moved to its final state below (same task id, so one row).
@@ -109,38 +146,66 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			h.inflight[e.agentID] = map[a2a.TaskID]inbound{}
 		}
 		h.inflight[e.agentID][ec.TaskID] = inbound{contextID: ec.ContextID, depth: depth, session: session}
+		canceled := ref.canceled
 		h.mu.Unlock()
+		// What the task's turn does shows on the sender's task while it
+		// runs (only once the task owns the session's turn: TurnOwner).
+		h.startProgress(session, ec.TaskID)
 		var sessionID, reply string
 		var runErr error
-		if op, ok := h.Turns.(ChatOpener); ok && chat != "" {
-			sessionID, reply, runErr = op.RunIn(ctx, target, chat, text)
-		} else {
-			sessionID, reply, runErr = h.Turns.Run(ctx, target, text)
+		// The task id rides on ctx, so Turns can tell this task's turn
+		// from any other the session runs (TurnGate, TaskStopper).
+		tctx := withTaskID(ctx, ec.TaskID)
+		switch op, ok := h.Turns.(ChatOpener); {
+		case canceled:
+			// Canceled while the chat was being picked: no turn for it.
+			runErr = ErrTaskCanceled
+		case ok && chat != "":
+			sessionID, reply, runErr = op.RunIn(tctx, target, chat, text)
+		default:
+			sessionID, reply, runErr = h.Turns.Run(tctx, target, text)
 		}
+		h.stopProgress(ec.TaskID)
 		h.mu.Lock()
 		delete(h.inflight[e.agentID], ec.TaskID)
 		if len(h.inflight[e.agentID]) == 0 {
 			delete(h.inflight, e.agentID)
 		}
 		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth, at: h.now()}
-		if sessionID != "" {
-			h.answered[sessionID] = ec.TaskID
-		} else if session != "" {
-			h.answered[session] = ec.TaskID
+		answeredIn := sessionID
+		if answeredIn == "" {
+			answeredIn = session
+		}
+		// A canceled task answered nobody: later follow-ups of that
+		// session stay with whatever it answered before.
+		if ref := h.tasks[ec.TaskID]; answeredIn != "" && (ref == nil || !ref.canceled) {
+			h.answered[answeredIn] = ec.TaskID
+			if ref != nil {
+				ref.answered = answeredIn
+			}
 		}
 		h.mu.Unlock()
 
 		state := a2a.TaskStateCompleted
 		var out *a2a.Message
 		reply = strings.TrimSpace(reply)
+		var end *TurnEnd
 		switch {
+		case errors.As(runErr, &end):
+			state, reply = end.State, strings.TrimSpace(end.Text)
+			if reply == "" && state != a2a.TaskStateCompleted {
+				reply = "the teammate ended the task as " + stateName(state)
+			}
 		case runErr != nil:
 			state = a2a.TaskStateFailed
-			reply = runErr.Error()
-			out = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(reply))
+			reply = "the teammate's turn failed: " + runErr.Error()
 		case reply == SilentToken:
 			reply = ""
-		case reply != "":
+		case strings.HasPrefix(reply, InputRequiredToken):
+			state = a2a.TaskStateInputRequired
+			reply = strings.TrimSpace(strings.TrimPrefix(reply, InputRequiredToken))
+		}
+		if reply != "" {
 			out = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(reply))
 		}
 		e.audit(ctx, from, target, callerSession, sessionID, ec, state)
@@ -149,11 +214,37 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 	}
 }
 
-// fail ends the task as failed with err's text.
+// forSessionUser checks a mention user wrote in their chat with from: from
+// must still be shared with user, and target must be user's own agent (run
+// in user's chat, chatUser "") or still shared with user (chatUser = user).
+// It returns target as the turn should see it.
+func (h *Hub) forSessionUser(ctx context.Context, user, chatUser string, from, target Peer) (Peer, bool) {
+	if _, ok := h.sharedByID(ctx, user, from.ID); !ok {
+		return Peer{}, false
+	}
+	if target.OwnerID == user && chatUser == "" {
+		return target, true
+	}
+	if chatUser != user {
+		return Peer{}, false
+	}
+	return h.sharedByID(ctx, user, target.ID)
+}
+
+// fail ends a task the turn never started for. A refusal — the teammate
+// is gone, no longer shared, or the chat asked for is not the caller's —
+// ends it rejected; anything else failed. Either way err's text is the
+// reason.
 func (e *executor) fail(ctx context.Context, ec *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool, err error) {
+	state := a2a.TaskStateFailed
+	for _, refusal := range []error{ErrUnknownHandle, ErrNotShared, ErrUnknownChat, ErrNewChatUnsupported, ErrMentionsOff, ErrSessionHeld} {
+		if errors.Is(err, refusal) {
+			state = a2a.TaskStateRejected
+		}
+	}
 	msg := a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(err.Error()))
-	yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, msg), nil)
-	e.hub.finished(ctx, ec.TaskID, a2a.TaskStateFailed, err.Error())
+	yield(a2a.NewStatusUpdateEvent(ec, state, msg), nil)
+	e.hub.finished(ctx, ec.TaskID, state, err.Error())
 }
 
 // audit writes mention_handoff into both threads: once as working when
@@ -163,6 +254,9 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 		return
 	}
 	ev := Handoff{From: from.Handle, To: to.Handle, ToID: to.ID, ContextID: ec.ContextID, TaskID: string(ec.TaskID), State: state, FromSession: callerSession}
+	if e.userOrigin(ec) {
+		ev.Origin = OriginUser
+	}
 	if ev.From == "" {
 		ev.From = "user"
 	}
@@ -173,11 +267,34 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 	}
 }
 
-// Cancel marks the task canceled. The turn already queued in the pool is
-// not pulled back; it simply has nobody waiting on it.
+// userOrigin reports whether a person's @mention started the task. The
+// Hub's task is the source of truth; the message's mark covers a first
+// turn that starts before Send registered the task. Both are set by Send
+// for a person's mention only (SendInput.Human), never from model input.
+func (e *executor) userOrigin(ec *a2asrv.ExecutorContext) bool {
+	e.hub.mu.Lock()
+	ref := e.hub.tasks[ec.TaskID]
+	user := ref != nil && ref.userTask()
+	e.hub.mu.Unlock()
+	if !user && ec.Message != nil {
+		o, _ := ec.Message.Metadata[metaOrigin].(string)
+		user = o == OriginUser
+	}
+	return user
+}
+
+// Cancel marks the task canceled, with the reason Hub.CancelTask noted.
+// The turn itself is stopped by Hub.CancelTask (TaskStopper); whatever it
+// reports afterwards is dropped.
 func (e *executor) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
-		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCanceled, nil), nil)
+		var msg *a2a.Message
+		e.hub.mu.Lock()
+		if ref := e.hub.tasks[ec.TaskID]; ref != nil && ref.canceled && ref.reply != "" {
+			msg = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(ref.reply))
+		}
+		e.hub.mu.Unlock()
+		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCanceled, msg), nil)
 	}
 }
 

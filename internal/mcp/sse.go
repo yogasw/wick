@@ -446,7 +446,14 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 				if out.res != nil && out.res.ResponseJSON != "" {
 					body = out.res.ResponseJSON
 				}
+				if msg := handlers.OversizedResult(body); msg != "" {
+					body = msg
+				}
 				sseWriteToolError(sess, req, body, toolID)
+				return
+			}
+			if msg := handlers.OversizedResult(out.res.ResponseJSON); msg != "" {
+				sseWriteToolError(sess, req, msg, toolID)
 				return
 			}
 			_ = sess.writeMessage(rpcResponse{

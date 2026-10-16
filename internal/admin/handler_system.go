@@ -389,6 +389,10 @@ func (h *Handler) pendingSwap() pendingSwap {
 // force=1 additionally tells the outgoing process not to wait for its
 // in-flight work. That is a human decision, made while looking at the list
 // the page shows, so it is a separate parameter rather than a timeout.
+// swapNowGrace is how long the swap click waits for Trigger to fail fast
+// before answering "handing over" and leaving the boot to run on its own.
+const swapNowGrace = 2 * time.Second
+
 func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
 	if !upgrade.Armed() {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -406,7 +410,33 @@ func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Info().Strs("outstanding", busy).Msg("swap now: handover requested from the admin UI")
 	}
-	if err := upgrade.Trigger(); err != nil {
+	// Trigger blocks until the successor reports ready — minutes on this
+	// host. Run inline, the click itself sat in the in-flight list for that
+	// whole time, so the card said "1 request still being handled" about the
+	// very request that was doing the handing over. Errors that are known
+	// at once (one already underway, the previous generation still draining)
+	// come back within the grace window and are answered as before; anything
+	// later is the boot itself, which the page follows via /serving.
+	done := make(chan error, 1)
+	go func() {
+		err := upgrade.Trigger()
+		done <- err
+		if err != nil {
+			log.Error().Err(err).Msg("swap now: successor not started — this process keeps serving")
+			upgrade.SetAutoSwap(upgrade.AutoSwap{})
+			if forced {
+				// Same rule as a handover that never started at boot: a
+				// stale force must not ambush the next, unattended one.
+				upgrade.ClearForce()
+			}
+		}
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(swapNowGrace):
+	}
+	if err != nil {
 		// A handover already underway is not a failure of this request — and
 		// when force was asked for, the flag above is already set, so the
 		// drain will not wait even though no NEW successor could be started.

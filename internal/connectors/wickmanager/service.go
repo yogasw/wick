@@ -30,6 +30,9 @@ type Deps struct {
 	// process, populated alongside the manager.Handler in api/server.go.
 	// Used by tool_list to enumerate visible tools.
 	Tools []tool.Tool
+	// ToolsFn, when set, is read on every tool_* op instead of Tools, so a
+	// tool plugin loaded or unloaded while wick runs is seen immediately.
+	ToolsFn func() []tool.Tool
 	// AppName is the per-binary basename used to resolve userconfig
 	// paths (~/.<appName>/config.json). Filled from app.BuildAppName.
 	AppName string
@@ -219,17 +222,17 @@ func (h *handlers) jobList(c *connector.Ctx) (any, error) {
 		}
 		hasCfg := len(h.deps.Configs.ListOwned(j.Key)) > 0
 		out = append(out, map[string]any{
-			"key":          j.Key,
-			"name":         j.Name,
-			"description":  j.Description,
-			"icon":         j.Icon,
-			"schedule":     j.Schedule,
-			"enabled":      j.Enabled,
-			"last_status":  string(j.LastStatus),
-			"last_run_at":  j.LastRunAt,
-			"total_runs":   j.TotalRuns,
-			"max_runs":     j.MaxRuns,
-			"has_config":   hasCfg,
+			"key":         j.Key,
+			"name":        j.Name,
+			"description": j.Description,
+			"icon":        j.Icon,
+			"schedule":    j.Schedule,
+			"enabled":     j.Enabled,
+			"last_status": string(j.LastStatus),
+			"last_run_at": j.LastRunAt,
+			"total_runs":  j.TotalRuns,
+			"max_runs":    j.MaxRuns,
+			"has_config":  hasCfg,
 		})
 	}
 	return out, nil
@@ -472,8 +475,9 @@ func (h *handlers) toolList(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]map[string]any, 0, len(h.deps.Tools))
-	for _, t := range h.deps.Tools {
+	all := h.tools()
+	out := make([]map[string]any, 0, len(all))
+	for _, t := range all {
 		// Tool-category items only — jobs/connectors enumerate elsewhere.
 		if t.Category == "job" || t.Category == "connector" {
 			continue
@@ -573,8 +577,15 @@ func (h *handlers) toolSetConfig(c *connector.Ctx) (any, error) {
 	return map[string]any{"ok": true, "key": key, "config_key": configKey, "before": before, "after": after}, nil
 }
 
+func (h *handlers) tools() []tool.Tool {
+	if h.deps.ToolsFn != nil {
+		return h.deps.ToolsFn()
+	}
+	return h.deps.Tools
+}
+
 func (h *handlers) findTool(key string) (tool.Tool, bool) {
-	for _, t := range h.deps.Tools {
+	for _, t := range h.tools() {
 		if t.Key == key {
 			return t, true
 		}
@@ -749,6 +760,72 @@ func (h *handlers) connectorSetConfig(c *connector.Ctx) (any, error) {
 	stored := h.deps.Connectors.LoadConfigs(*row)
 	stored[configKey] = value
 	if err = h.deps.Connectors.Update(ctx, row.ID, row.Label, stored, row.Disabled); err != nil {
+		return nil, err
+	}
+	for _, r := range h.deps.Connectors.RowConfigs(*row) {
+		if r.Key == configKey {
+			after = configRowOut(r)
+			break
+		}
+	}
+	return map[string]any{"ok": true, "id": id, "config_key": configKey, "before": before, "after": after}, nil
+}
+
+// connectorClearConfig empties one stored config value. connector_set_config
+// with "" keeps a stored secret, so this is the explicit way to remove one.
+// Same gate as connectorSetConfig; locked and required rows are refused.
+func (h *handlers) connectorClearConfig(c *connector.Ctx) (any, error) {
+	start := time.Now()
+	ctx := c.Context()
+	id := c.Input("id")
+	configKey := c.Input("config_key")
+	args := map[string]string{"id": id, "config_key": configKey}
+	user, err := requireUser(ctx)
+	var before, after map[string]any
+	defer func() {
+		logOpDiff(user, "connector_clear_config", args, before, after, err, time.Since(start))
+	}()
+	if err != nil {
+		return nil, err
+	}
+	tagIDs := login.GetUserTagIDs(ctx)
+	allowed, aerr := h.deps.Connectors.IsManageableBy(ctx, id, user.ID, tagIDs, user.IsAdmin())
+	if aerr != nil {
+		err = aerr
+		return nil, err
+	}
+	if !allowed {
+		err = errAccessDenied
+		return nil, err
+	}
+	row, gerr := h.deps.Connectors.Get(ctx, id)
+	if gerr != nil {
+		err = gerr
+		return nil, err
+	}
+	var target entity.Config
+	found := false
+	for _, r := range h.deps.Connectors.RowConfigs(*row) {
+		if r.Key == configKey {
+			target = r
+			found = true
+			break
+		}
+	}
+	if !found {
+		err = fmt.Errorf("unknown config %s/%s", id, configKey)
+		return nil, err
+	}
+	if target.Locked {
+		err = errLockedRow
+		return nil, err
+	}
+	if target.Required {
+		err = errRequiredClear
+		return nil, err
+	}
+	before = configRowOut(target)
+	if err = h.deps.Connectors.ClearConfig(ctx, row.ID, configKey); err != nil {
 		return nil, err
 	}
 	for _, r := range h.deps.Connectors.RowConfigs(*row) {

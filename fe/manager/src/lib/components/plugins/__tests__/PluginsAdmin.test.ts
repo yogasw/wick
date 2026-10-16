@@ -61,6 +61,24 @@ describe("PluginsAdmin installed tab", () => {
     expect(screen.getByTestId("update-badge").textContent).toContain("v1.2.0");
   });
 
+  it("shows Error with the reason for a tool that is enabled but not loaded, and lets a tool be toggled", async () => {
+    mockAll(true);
+    vi.mocked(api.listInstalledPlugins).mockResolvedValue({
+      plugins: [plugin({ key: "bad", name: "Bad", kind: "tool", detail_path: "/tools/bad", status: "error", status_detail: "verification failed: sha mismatch" })],
+      is_admin: true, official: { url: "https://example.test/plugins.json", plugins: 0 },
+    });
+    vi.mocked(api.setPluginEnabled).mockResolvedValue(undefined as never);
+    render(PluginsAdmin);
+    const badge = await screen.findByTestId("load-error-badge");
+    expect(badge.textContent).toBe("Error");
+    expect(badge.getAttribute("title")).toBe("verification failed: sha mismatch");
+    expect(screen.getByTestId("load-error-reason").textContent).toBe("verification failed: sha mismatch");
+    expect(screen.getByTestId("installed-summary").textContent).toContain("0 active");
+    await openMenu("bad");
+    await fireEvent.click(await screen.findByText("Disable"));
+    await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith("bad", false));
+  });
+
   it("marks a sleeping service with a Sleeping badge", async () => {
     mockAll(true);
     vi.mocked(api.listServicePlugins).mockResolvedValue([

@@ -444,7 +444,7 @@ func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest
 		out := map[string]any{"session_id": sessionID, "connector_id": cid, "operation": opKey}
 		if execErr != nil {
 			out["ok"] = false
-			out["error"] = execErr.Error()
+			out["error"] = maskedExecError(res, execErr)
 		} else {
 			out["ok"] = true
 			out["response"] = json.RawMessage(res.ResponseJSON)
@@ -454,7 +454,7 @@ func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest
 	}
 
 	// Default: base module HealthCheck.
-	report, err := svc.HealthCheckSessionInstance(r.Context(), inst.BaseKey, inst.ID, inst.Config)
+	report, err := svc.HealthCheckSessionInstance(r.Context(), inst.BaseKey, inst.ID, inst.Config, user.ID)
 	if err != nil {
 		if err == connectors.ErrNoHealthCheck {
 			writeWorkspaceResult(w, req, rsp, map[string]any{
@@ -657,4 +657,14 @@ func writeWorkspaceResult(w http.ResponseWriter, req RPCRequest, rsp Responder, 
 	rsp.WriteResult(w, req.ID, ToolCallResult{
 		Content: []ToolContent{{Type: "text", Text: string(b)}},
 	})
+}
+
+// maskedExecError is the error text to show for a failed Execute: the
+// masked ErrorMessage when the run produced one, never the raw error, which
+// can still carry a value the op asked to mask.
+func maskedExecError(res *connectors.ExecuteResult, execErr error) string {
+	if res != nil && res.ErrorMessage != "" {
+		return res.ErrorMessage
+	}
+	return execErr.Error()
 }

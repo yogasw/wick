@@ -10,6 +10,7 @@ export {
   apiPost,
   apiPostSSE,
   apiDelete,
+  runPromiseUnwrapped,
 } from "./client.js";
 
 export type { ProviderListItem, ProviderModelItem } from "./providerList.js";

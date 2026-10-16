@@ -80,6 +80,18 @@ type Cmd struct {
 	Network      bool
 }
 
+// readsOnly reports whether the subcommand is status or diff: reads that
+// take only git's optional index lock, which GIT_OPTIONAL_LOCKS=0 turns off.
+func (c Cmd) readsOnly() bool {
+	for _, a := range c.UserArgs {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return a == "status" || a == "diff"
+	}
+	return false
+}
+
 // Argv assembles the final argument vector. Injected arguments come first because
 // git requires its global options before the subcommand.
 func (c Cmd) Argv() []string {
@@ -457,6 +469,13 @@ func runOnce(ctx context.Context, c Cmd, o RunOpts) (Result, error) {
 	cmd := safeexec.Command(gitPath, argv...)
 	cmd.Dir = c.RepoPath
 	cmd.Env = BuildEnv(o.Auth, o.SelfPath)
+	if c.readsOnly() {
+		// status/diff only read, but git still takes index.lock to refresh
+		// its stat cache. Killed mid-refresh (timeout, plugin restart), that
+		// lock stays behind and blocks the next commit. Optional locks off:
+		// the read never holds the index.
+		cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	setProcAttr(cmd)

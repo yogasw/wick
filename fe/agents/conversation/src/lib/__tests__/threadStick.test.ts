@@ -198,3 +198,33 @@ describe("thread bottom-pin", () => {
     expect(onNearTop).toHaveBeenCalled();
   });
 });
+
+describe("detached hold (P50)", () => {
+  test("held: reaching the bottom neither sticks nor hides Jump, and asks for the next page", async () => {
+    const s = makeScroller();
+    const onJump = vi.fn();
+    const onNearBottom = vi.fn();
+    const ctl = attachThreadScroll(s.el, { onJump, onNearBottom });
+    ctl.hold(true);
+    expect(ctl.isStuck()).toBe(false);
+    expect(onJump).toHaveBeenLastCalledWith(true);
+    await frame();
+    s.el.scrollTop = s.max();
+    s.el.dispatchEvent(new Event("scroll"));
+    expect(ctl.isStuck()).toBe(false);
+    expect(onNearBottom).toHaveBeenCalled();
+    // A newer page appended below must not drag the reader down.
+    const top = s.el.scrollTop;
+    s.resize(4000);
+    expect(s.el.scrollTop).toBe(top);
+  });
+
+  test("scrollToBottom ends the hold and sticks again", () => {
+    const s = makeScroller();
+    const ctl = attachThreadScroll(s.el);
+    ctl.hold(true);
+    ctl.scrollToBottom();
+    expect(ctl.isStuck()).toBe(true);
+    expect(s.el.scrollTop).toBe(s.max());
+  });
+});

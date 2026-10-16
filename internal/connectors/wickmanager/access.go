@@ -10,12 +10,13 @@ import (
 )
 
 var (
-	errAccessDenied         = errors.New("access denied")
-	errSystemUnavailable    = errors.New("system management unavailable in this run mode (start wick via the tray)")
-	errNotAuthenticated     = errors.New("not authenticated")
-	errLockedRow            = errors.New("config row is locked and cannot be edited")
-	errCannotRegenerate     = errors.New("config row cannot be regenerated")
-	errRequiredEmpty        = errors.New("required field cannot be empty")
+	errAccessDenied      = errors.New("access denied")
+	errSystemUnavailable = errors.New("system management unavailable in this run mode (start wick via the tray)")
+	errNotAuthenticated  = errors.New("not authenticated")
+	errLockedRow         = errors.New("config row is locked and cannot be edited")
+	errCannotRegenerate  = errors.New("config row cannot be regenerated")
+	errRequiredEmpty     = errors.New("required field cannot be empty")
+	errRequiredClear     = errors.New("required field cannot be cleared — set a new value instead")
 )
 
 // userFromCtx pulls the authenticated user off the request context.

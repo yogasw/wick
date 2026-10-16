@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
@@ -172,27 +173,62 @@ func (h *handlers) conversationRead(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 
+	res, err := ReadConversation(h.layout, sid, ConversationPage{
+		Offset: c.InputInt("offset"),
+		Limit:  c.InputInt("limit"),
+		Order:  c.Input("order"),
+		Detail: c.Input("detail"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	res["ticket_id"] = tk.ID
+	res["project_id"] = projectID
+	return res, nil
+}
+
+// ConversationPage picks one page of a conversation for ReadConversation.
+// Zero values are the op defaults: newest end, final detail, 20 messages.
+type ConversationPage struct {
+	Offset int
+	Limit  int
+	// MaxLimit caps Limit; 0 caps it at 100.
+	MaxLimit int
+	Order    string // newest | oldest
+	Detail   string // final | trace
+}
+
+// ReadConversation is ticket_conversation_read without the ticket: one
+// page of sessionID's conversation, in the same shape and with the same
+// paging. Whoever calls it has already decided the caller may read
+// sessionID — this checks nothing (team read_chat reuses it).
+func ReadConversation(layout agentconfig.Layout, sid string, p ConversationPage) (map[string]any, error) {
+	h := &handlers{layout: layout}
 	turns, err := h.readTurns(sid)
 	if err != nil {
 		return nil, fmt.Errorf("read conversation %s: %w", sid, err)
 	}
 
-	limit := c.InputInt("limit")
+	maxLimit := p.MaxLimit
+	if maxLimit <= 0 {
+		maxLimit = 100
+	}
+	limit := p.Limit
 	if limit <= 0 {
 		limit = convDefaultLimit
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > maxLimit {
+		limit = maxLimit
 	}
-	offset := c.InputInt("offset")
+	offset := p.Offset
 	if offset < 0 {
 		offset = 0
 	}
-	order := strings.TrimSpace(strings.ToLower(c.Input("order")))
+	order := strings.TrimSpace(strings.ToLower(p.Order))
 	if order != "oldest" {
 		order = "newest"
 	}
-	trace := strings.EqualFold(strings.TrimSpace(c.Input("detail")), "trace")
+	trace := strings.EqualFold(strings.TrimSpace(p.Detail), "trace")
 
 	total := len(turns)
 	start, end := pageBounds(total, offset, limit, order)
@@ -203,8 +239,6 @@ func (h *handlers) conversationRead(c *connector.Ctx) (any, error) {
 	}
 
 	res := map[string]any{
-		"ticket_id":  tk.ID,
-		"project_id": projectID,
 		"session_id": sid,
 		"detail":     map[bool]string{true: "trace", false: "final"}[trace],
 		"order":      order,
@@ -214,7 +248,7 @@ func (h *handlers) conversationRead(c *connector.Ctx) (any, error) {
 		"returned":   len(msgs),
 		"messages":   msgs,
 	}
-	if sess, err := session.Load(h.layout, sid); err == nil && sess.Meta.Label != "" {
+	if sess, err := session.Load(layout, sid); err == nil && sess.Meta.Label != "" {
 		res["title"] = sess.Meta.Label
 	}
 	// Say where the next page is rather than leaving the caller to work out

@@ -27,6 +27,7 @@ vi.mock("../../api/team.js", async (orig) => ({
     ],
   }),
   runApi: <T,>(p: Promise<T>) => p,
+  runApiRaw: <T,>(p: Promise<T>) => p,
 }));
 
 let instantNow: { enabled: boolean } & Record<string, unknown> = { enabled: false, bound_channels: [] };
@@ -61,7 +62,7 @@ describe("AgentConnections", () => {
     expect(btn.disabled).toBe(true);
     await fireEvent.input(screen.getByLabelText("Bot token (xoxb-…)"), { target: { value: "xoxb-1" } });
     expect(screen.getByTestId("token-problem").textContent).toMatch(/xapp-/);
-    await fireEvent.input(screen.getByLabelText("App token (xapp-…)"), { target: { value: "xapp-1" } });
+    await fireEvent.input(screen.getByLabelText("App token (xapp-… or xoxe.xapp-…)"), { target: { value: "xapp-1" } });
     await fireEvent.click(btn);
     await waitFor(() => expect(connectAgentSlack).toHaveBeenCalled());
     expect(connectAgentSlack.mock.calls[0][2]).toEqual({ mode: "socket", bot_token: "xoxb-1", app_token: "xapp-1" });
@@ -125,7 +126,7 @@ describe("slackConnection", () => {
   });
 
   test("a stored secret may be left blank; HTTP needs the signing secret", () => {
-    const d = { mode: "socket" as const, bot_token: "", app_token: "", signing_secret: "" };
+    const d = { mode: "socket" as const, bot_token: "", app_token: "", signing_secret: "", app_refresh_token: "", client_id: "", client_secret: "" };
     expect(tokenError(d, connected)).toBe("");
     expect(tokenError(d, disconnected)).toMatch(/xoxb-/);
     expect(tokenError({ ...d, mode: "http", bot_token: "xoxb-1" }, disconnected)).toMatch(/signing secret/);

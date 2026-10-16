@@ -12,6 +12,7 @@ type ChannelVM struct {
 	Icon        string
 	Description string
 	Configured  bool   // true when the required credential is set
+	Disabled    bool   // switched off with the instance's Enabled switch
 	HRef        string // link to config page
 }
 
@@ -30,6 +31,9 @@ type ChannelConfigVM struct {
 	ChannelSlug string
 	Rows        []entity.Config
 	ActionBase  string
+	// Convert, when set, shows the "Convert to agent" panel (Slack with a
+	// stored bot token).
+	Convert *SlackConvertVM
 	// Docs is an optional component rendered below the config table.
 	// Channels use it to surface usage notes, sample requests, or links
 	// to related pages (e.g. PAT management for REST).
@@ -63,7 +67,9 @@ templ channelCard(ch ChannelVM) {
 			<div class="min-w-0 flex-1">
 				<div class="flex items-center gap-2 mb-0.5">
 					<span class="font-semibold text-sm text-black-900 dark:text-white-100">{ ch.Name }</span>
-					if ch.Configured {
+					if ch.Configured && ch.Disabled {
+						<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-semibold text-black-700 dark:text-black-600">disabled</span>
+					} else if ch.Configured {
 						<span class="inline-flex items-center rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-semibold text-pos-400">configured</span>
 					} else {
 						<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-semibold text-black-700 dark:text-black-600">not configured</span>
@@ -91,7 +97,14 @@ templ ChannelConfigPage(vm ChannelConfigVM) {
 			</p>
 			@integrationTestPanel(vm.Base + "/channels/test/" + vm.ChannelSlug)
 			@integrationStatusPanel(vm.Base + "/channels/" + vm.ChannelSlug + "/status")
-			@managerview.ConfigsTableCollapsed(vm.Rows, vm.ActionBase)
+			if vm.Convert != nil {
+				@slackConvertPanel(*vm.Convert)
+			}
+			<!-- data-secret-clearable: the save handler takes clear=1, so the
+			     form shows a Clear button on every stored secret. -->
+			<div data-secret-clearable>
+				@managerview.ConfigsTableCollapsed(vm.Rows, vm.ActionBase)
+			</div>
 			if vm.Docs != nil {
 				<div class="mt-8">
 					@vm.Docs
@@ -446,6 +459,115 @@ templ RestDocs(vm RestDocsVM) {
 			}
 			btns.forEach(function(b){
 				b.addEventListener('click', function(){ activate(b.getAttribute('data-rest-tab')); });
+			});
+		})();
+		</script>
+	</div>
+}
+
+// SlackConvertAgent is one Team agent a Channels Slack instance can become.
+type SlackConvertAgent struct {
+	ID     string
+	Handle string
+}
+
+// SlackConvertVM drives the "Convert to agent" panel.
+type SlackConvertVM struct {
+	APIBase     string // ".../api/team/agents/" — {id}/slack/convert is appended
+	InstanceKey string
+	Agents      []SlackConvertAgent
+	// AllDisabled: the caller has agents, but every one is disabled.
+	AllDisabled bool
+}
+
+// slackConvertPanel moves this Slack bot to a Team agent: pick the agent,
+// see what keeps pointing at this instance (impact), confirm. The stored
+// tokens are copied server-side; this instance is switched off.
+templ slackConvertPanel(vm SlackConvertVM) {
+	<div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-5" data-slack-convert data-api-base={ vm.APIBase }>
+		<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Convert to agent</h3>
+		<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+			Move this Slack bot to one of your Team agents. The stored tokens are copied over (no re-paste), this instance (<span class="font-mono">{ vm.InstanceKey }</span>) is switched off, and the agent's bot comes online.
+		</p>
+		if len(vm.Agents) == 0 && vm.AllDisabled {
+			<p class="mt-3 text-xs text-black-700 dark:text-black-600">All your Team agents are disabled — enable one in Team first.</p>
+		} else if len(vm.Agents) == 0 {
+			<p class="mt-3 text-xs text-black-700 dark:text-black-600">You have no Team agent yet — create one in Team first.</p>
+		} else {
+			<div class="mt-3 flex flex-wrap items-center gap-2">
+				<select data-convert-agent class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-900 dark:text-white-100">
+					for _, a := range vm.Agents {
+						<option value={ a.ID }>{ "@" + a.Handle }</option>
+					}
+				</select>
+				<button type="button" data-convert-check class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-semibold text-white-100 hover:bg-green-600 transition-colors">Convert to agent</button>
+			</div>
+			<div data-convert-impact hidden class="mt-3 rounded-lg border border-white-300 dark:border-navy-600 p-3 text-xs text-black-800 dark:text-black-600">
+				<p class="font-medium text-black-900 dark:text-white-100">Before converting</p>
+				<ul data-convert-impact-list class="mt-1 list-disc pl-5"></ul>
+				<p data-convert-denied hidden class="mt-2 text-neg-400">This instance is running: only an owner or admin can take it over. Switch it off above first to convert it yourself.</p>
+				<div class="mt-2 flex gap-2">
+					<button type="button" data-convert-confirm class="rounded-lg bg-neg-400 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors">Confirm convert</button>
+					<button type="button" data-convert-cancel class="rounded-lg px-3 py-1.5 text-xs text-black-800 dark:text-black-600">Cancel</button>
+				</div>
+			</div>
+			<p data-convert-status class="mt-2 text-xs"></p>
+		}
+		<script>
+		(function(){
+			var root=document.currentScript.closest('[data-slack-convert]');
+			if(!root)return;
+			var base=root.getAttribute('data-api-base');
+			var sel=root.querySelector('[data-convert-agent]');
+			var impact=root.querySelector('[data-convert-impact]');
+			var list=root.querySelector('[data-convert-impact-list]');
+			var denied=root.querySelector('[data-convert-denied]');
+			var confirmBtn=root.querySelector('[data-convert-confirm]');
+			var status=root.querySelector('[data-convert-status]');
+			if(!sel)return;
+			function say(t,bad){status.textContent=t;status.style.color=bad?'#EB5757':'#288C7A';}
+			// previewed: the agent the shown impact was computed for —
+			// Confirm converts to that one, and picking another agent
+			// hides the impact until it is checked again.
+			var previewed='';
+			sel.addEventListener('change',function(){impact.hidden=true;previewed='';});
+			async function post(agentID,confirm){
+				var r=await fetch(base+encodeURIComponent(agentID)+'/slack/convert',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:confirm})});
+				var body={};try{body=await r.json();}catch(e){}
+				if(!r.ok)throw new Error(body.error||('HTTP '+r.status));
+				return body;
+			}
+			function li(t){var e=document.createElement('li');e.textContent=t;list.appendChild(e);}
+			root.querySelector('[data-convert-check]').addEventListener('click',async function(){
+				say('');list.textContent='';
+				try{
+					var d=await post(sel.value,false);
+					previewed=sel.value;
+					if(d.can_take_over){
+						if(d.replaces_bot)li('The agent is connected to '+d.replaces_bot+' now — that app is replaced.');
+						if(d.access_note)li(d.access_note);
+						(d.instant_agents||[]).forEach(function(h){li(h+' (Instant) rides this instance and stops answering.');});
+						if(d.rotating)li('This app uses a rotating app token: after converting, this instance cannot reuse it — paste fresh tokens here before switching it back on.');
+						li((d.sessions||0)+' thread session(s) under '+d.session_prefix+' stay with this instance; new threads start as the agent\'s.');
+					}
+					var refs=d.can_take_over?(d.workflow_refs||[]):[];
+					if(d.can_take_over&&!refs.length)li('No workflow trigger or node pins this instance.');
+					refs.forEach(function(w){li('Workflow '+(w.workflow_name||w.workflow_id)+': '+w.kind+' '+w.id+(w.draft?' (draft)':'')+' still pins '+d.instance_key+'.');});
+					denied.textContent=d.blocker||'This instance is running: only an owner or admin can take it over. Switch it off above first to convert it yourself.';
+					denied.hidden=!!d.can_take_over;
+					confirmBtn.hidden=!d.can_take_over;
+					impact.hidden=false;
+				}catch(e){say(e.message,true);}
+			});
+			root.querySelector('[data-convert-cancel]').addEventListener('click',function(){impact.hidden=true;});
+			confirmBtn.addEventListener('click',async function(){
+				confirmBtn.disabled=true;say('Converting…');
+				try{
+					if(!previewed)throw new Error('Check the impact for this agent first.');
+					await post(previewed,true);
+					say('Converted — the bot now answers as '+sel.options[sel.selectedIndex].text+'. Reloading…');
+					setTimeout(function(){location.reload();},1200);
+				}catch(e){say(e.message,true);confirmBtn.disabled=false;}
 			});
 		})();
 		</script>

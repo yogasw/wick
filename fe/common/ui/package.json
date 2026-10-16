@@ -9,6 +9,14 @@
     ".": {
       "svelte": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./usage": {
+      "types": "./src/usage/base/index.ts",
+      "default": "./src/usage/base/index.ts"
+    },
+    "./model-list-meta": {
+      "types": "./src/model-list-meta.ts",
+      "default": "./src/model-list-meta.ts"
     }
   },
   "dependencies": {

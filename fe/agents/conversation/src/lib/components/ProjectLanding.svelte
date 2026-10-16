@@ -1,31 +1,29 @@
 <script lang="ts">
-  import type { ProjectOption, ProviderOption, SessionListItem, ComposerCommand } from "../types/agents.js";
-  import { toastError } from "@wick-fe/common-stores";
+  import { untrack } from "svelte";
+  import type { ProjectOption, ProviderOption, SessionListItem } from "../types/agents.js";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
-  import { searchProjectMentionPaths } from "../api/files.js";
-  import { listComposerCommands } from "../api/composer.js";
   import {
-    attachSession,
-    deleteTicket,
+    boardQuery,
     getProjectTickets,
     getTicketFilter,
-    getTicketPrefs,
     saveTicketFilter,
-    saveTicketPrefs,
     type EmptiedTicket,
   } from "../api/tickets.js";
+  import { boardGen, cachedBoard, cachedFilter, rememberBoard, rememberFilter } from "../ticketBoardCache.js";
   import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
-  import { Composer } from "@wick-fe/common-ui";
-  import { NOTIFY_KEY } from "../notify-pref.js";
+  import { assigneeParam, assigneesOf } from "../ticketAssigneeFilter.js";
+  import TicketComposer from "./TicketComposer.svelte";
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
   import { mergeRail, keepPushedOff } from "../railPaging.js";
   import TicketDetail from "./TicketDetail.svelte";
+  import EmptyTicketOffer from "./EmptyTicketOffer.svelte";
+  import { hasTeam, teamTicketsHref } from "../teamTicketLinks.js";
   import { connectSessionsStream } from "../stores/sessionsStream.js";
   import OwnerTabs from "./OwnerTabs.svelte";
   import ProjectMenu from "./ProjectMenu.svelte";
+  import { nudgeTicketComposer } from "../ticketComposerNudge.js";
 
   type Props = {
     base: string;
@@ -60,107 +58,6 @@
   }: Props = $props();
 
   let search = $state("");
-  let selectedProvider = $state<string>("");
-
-  // A named instance is "type/name"; a default collapses to the bare type.
-  function providerKey(p: ProviderOption): string {
-    return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
-  }
-
-  // Resolve the project's configured default ("codex" or "codex/name") to a
-  // provider actually present in the list: exact key first, then bare type.
-  //
-  // The project's model rides along as the composer's packed
-  // "type/name::modelID" value, but ONLY on an exact instance match: the
-  // fallbacks land on a different instance, and a model id resolves against
-  // the registry of the instance it was chosen on.
-  function defaultProviderKey(): string {
-    if (providers.length === 0) return "";
-    const want = (project.defaultProvider ?? "").trim();
-    if (want) {
-      const exact = providers.find((p) => providerKey(p) === want);
-      if (exact) {
-        const key = providerKey(exact);
-        const model = (project.defaultModel ?? "").trim();
-        return model ? `${key}::${model}` : key;
-      }
-      const byType = providers.find((p) => p.type === want.split("/")[0]);
-      if (byType) return providerKey(byType);
-    }
-    return providerKey(providers[0]);
-  }
-
-  $effect(() => {
-    if (!selectedProvider && providers.length > 0) selectedProvider = defaultProviderKey();
-  });
-
-  // Live model loader — same contract as the conversation composer: split the
-  // "type/name" value and fetch that instance's current vendor models, falling
-  // back (composer-side) to the static list on error.
-  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
-    const slash = optionValue.indexOf("/");
-    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
-    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
-    return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
-  }
-
-  const providerSelect = $derived({
-    options: providers.map((p) => ({
-      label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
-      value: providerKey(p),
-      badge: p.usesAIRouter ? "AI Router" : undefined,
-      // Carry the model list so a multi-model provider (wick) shows the
-      // nested model picker here too — matching the conversation composer.
-      models: p.models,
-    })),
-    value: selectedProvider,
-    onChange: (v: string) => { selectedProvider = v; },
-    loadModels: loadProviderModels,
-  });
-
-  // Preset selector — same affordance as the new-session page, so an init
-  // from a project landing can override the preset before the session
-  // starts. "" = the default preset (or the project's configured default).
-  let presets = $state<string[]>([]);
-  let selectedPreset = $state<string>("");
-  $effect(() => {
-    Effect.runPromise(getPresetOptions(base).pipe(Effect.provide(WickClientLayer)))
-      .then((names) => { presets = names; })
-      .catch(() => { /* presets optional */ });
-  });
-  const presetSelect = $derived(
-    presets.length > 0
-      ? {
-          options: [
-            { label: "— preset (default) —", value: "" },
-            ...presets.map((n) => ({ label: n, value: n })),
-          ],
-          value: selectedPreset,
-          onChange: (v: string) => { selectedPreset = v; },
-        }
-      : undefined,
-  );
-
-  // `@` searches THIS project's folder; `/` shows skills only (pre-session).
-  function searchMentionFiles(query: string): Promise<string[]> {
-    return Effect.runPromise(searchProjectMentionPaths(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
-      .catch(() => [] as string[]);
-  }
-  let composerCommands = $state<ComposerCommand[]>([]);
-  $effect(() => {
-    const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
-    Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => {
-        // key: c.id — `value` is the skill's frontmatter name, which repeats
-        // across providers' skills dirs and would abort the keyed each block.
-        // This page is the worst case for it: with no provider selected yet
-        // providerType is "", so the server returns every provider's copy.
-        composerCommands = (res.commands ?? []).map((c) => ({
-          key: c.id, value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
-        }));
-      })
-      .catch(() => { /* commands optional */ });
-  });
 
   const chatCount = $derived(sessionTotal ?? sessions.length);
 
@@ -206,7 +103,7 @@
     return {
       rows: 3,
       statuses,
-      assignee: ticketFilter.assignee || undefined,
+      assignee: assigneeParam(assigneesOf(ticketFilter)),
       untracked: ticketFilter.show_untracked === true,
       untrackedLimit: UNTRACKED_PAGE,
       /* Your own loose chats by default — "all" is an explicit choice, and
@@ -221,8 +118,18 @@
      immediately request it again. */
   let filterLoaded = $state(false);
   $effect(() => {
+    // The filter read last time sends the board's request at once; the
+    // saved one, when it differs, sends it again.
+    const seen = cachedFilter(project.id);
+    if (seen) {
+      ticketFilter = seen;
+      filterLoaded = true;
+    }
     Effect.runPromise(getTicketFilter(base, project.id).pipe(Effect.provide(WickClientLayer)))
-      .then((f) => { ticketFilter = f ?? {}; })
+      .then((f) => {
+        ticketFilter = f ?? {};
+        rememberFilter(project.id, $state.snapshot(ticketFilter));
+      })
       .catch(() => { /* filter optional — the defaults are a fine board */ })
       .finally(() => { filterLoaded = true; });
   });
@@ -319,10 +226,27 @@
 
   function reloadBoard() {
     const key = boardRequestKey;
+    const pid = project.id;
+    const query = boardQuery(boardOptions);
+    const gen = boardGen(pid);
+    // Not drawn for this request yet: the last answer (ticketBoardCache)
+    // first, the fresh one when it comes.
+    // Untracked: the request effect calls this, and must not rerun on
+    // the board it sets.
+    untrack(() => {
+      if (!board || boardKeyLoaded !== key) {
+        const seen = cachedBoard(pid, query);
+        if (seen) {
+          board = seen;
+          boardKeyLoaded = key;
+        }
+      }
+    });
     Effect.runPromise(
-      getProjectTickets(base, project.id, boardOptions).pipe(Effect.provide(WickClientLayer)),
+      getProjectTickets(base, pid, boardOptions).pipe(Effect.provide(WickClientLayer)),
     )
       .then((b) => {
+        rememberBoard(pid, query, b, gen);
         if (key !== boardRequestKey) return; // superseded by a newer request
         // Same list, moved: a chat pushed off page one stays on the rail.
         if (board && boardKeyLoaded === key) {
@@ -415,69 +339,29 @@
   });
 
 
-  /* ── a ticket that just lost its last chat ──
-     A ticket with no sessions tracks nothing, so removal is offered. The
-     answer can be made standing ("don't ask again"), which is safe here
-     precisely because deleting an EMPTY ticket destroys no conversation —
-     unlike deleting one that still holds chats, which always asks. */
-  let emptied = $state<EmptiedTicket | null>(null);
-  let dontAskEmpty = $state(false);
-  let autoDeleteEmpty = $state<"" | "always" | "never">("");
-
+  /* With a Team, a ticket's page points at Team › Tickets, where several
+     agents can work it; without one nothing changes. Read once a ticket
+     page is open. */
+  let teamOn = $state(false);
   $effect(() => {
-    Effect.runPromise(getTicketPrefs(base).pipe(Effect.provide(WickClientLayer)))
-      .then((p) => { autoDeleteEmpty = p.auto_delete_empty ?? ""; })
-      .catch(() => { /* asking is the safe default */ });
+    if (!openTicketId || teamOn) return;
+    hasTeam(base).then((on) => { teamOn = on; });
   });
 
-  function handleEmptied(t: EmptiedTicket) {
-    if (autoDeleteEmpty === "never") return;
-    if (autoDeleteEmpty === "always") {
-      removeEmptyTicket(t.id);
-      return;
-    }
-    emptied = t;
-    dontAskEmpty = false;
-  }
+  /* A ticket that just lost its last chat: EmptyTicketOffer asks. */
+  let emptyOffer = $state<ReturnType<typeof EmptyTicketOffer> | null>(null);
+  const handleEmptied = (t: EmptiedTicket) => emptyOffer?.offer(t, project.id);
 
-  function removeEmptyTicket(ticketId: string) {
-    // "keep": an empty ticket has no chats to take with it, so this is only
-    // ever the ticket record.
-    Effect.runPromise(deleteTicket(base, ticketId, "keep").pipe(Effect.provide(WickClientLayer)))
-      .then(reloadBoard)
-      .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to delete the ticket"));
+  /* "+ New session" on a ticket's page stays on it: the composer below
+     already starts a session on the open ticket, so the button only points
+     at it (scroll, cursor, a short animation and a hint). */
+  function newSessionInTicket(_ticketId: string) {
+    nudgeTicketComposer();
   }
-
-  function answerEmptied(remove: boolean) {
-    const t = emptied;
-    emptied = null;
-    if (dontAskEmpty) {
-      const choice = remove ? "always" : "never";
-      autoDeleteEmpty = choice;
-      Effect.runPromise(
-        saveTicketPrefs(base, { auto_delete_empty: choice }).pipe(Effect.provide(WickClientLayer)),
-      ).catch(() => { /* the prompt will simply appear again */ });
-    }
-    if (remove && t) removeEmptyTicket(t.id);
-    else reloadBoard();
-  }
-
-  /* Starting a session on a ticket is a two-step: create it in this
-     project, then attach. The composer owns creation, so the ticket id is
-     stashed and applied once the new session exists. */
-  function newSessionInTicket(ticketId: string) {
-    pendingTicketId = ticketId;
-    gotoTicket(null);
-  }
-  let pendingTicketId = $state<string | null>(null);
   /* The ticket the next message lands on. SELECTING one is enough — having
      a ticket open on screen and typing into the composer above it can only
-     mean the new chat belongs to it, and requiring "+ New session" first
-     made the obvious path the one that silently did nothing. The stash
-     still exists for that button, which closes the detail on its way out.
-     Cleared explicitly, so "Start without a ticket" also drops the open
-     one rather than being undone by it on the next render. */
-  const activeTicketId = $derived(pendingTicketId ?? openTicketId);
+     mean the new chat belongs to it. "Start without a ticket" closes it. */
+  const activeTicketId = $derived(openTicketId);
   /* Resolved to its card so the composer can name it; a ticket picked
      before the board finished loading still has its id to fall back on. */
   const activeTicket = $derived(
@@ -486,23 +370,10 @@
   const activeTicketLabel = $derived(
     activeTicket ? activeTicket.title || activeTicket.id : (activeTicketId ?? ""),
   );
-  /* The placeholder sits on ONE line that cannot wrap, so a long ticket
-     title would run past the input's right edge and hide the "/ commands"
-     hint after it. The footer below carries a longer cut and the full title
-     on hover, so nothing is lost by clipping it here. */
-  const activeTicketShort = $derived(
-    activeTicketLabel.length > 32 ? activeTicketLabel.slice(0, 32).trimEnd() + "…" : activeTicketLabel,
-  );
-  /* The footer line gets the same treatment with more room: a run-on title
-     (or a pasted id) must not stretch the banner to three lines. The full
-     title sits on the hover. */
-  const activeTicketBanner = $derived(
-    activeTicketLabel.length > 60 ? activeTicketLabel.slice(0, 60).trimEnd() + "…" : activeTicketLabel,
-  );
-
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
     ticketFilter = f;
+    rememberFilter(project.id, $state.snapshot(ticketFilter));
     clearTimeout(filterSaveTimer);
     filterSaveTimer = setTimeout(() => {
       Effect.runPromise(
@@ -511,35 +382,6 @@
     }, 400);
   }
   const setViewMode = (mode: "list" | "card") => applyFilter({ ...ticketFilter, view_mode: mode });
-
-  async function handleSend({ text, files }: { text: string; files: File[] }) {
-    try {
-      const url = await createSessionInProject(
-        base,
-        text,
-        files,
-        selectedProvider,
-        project.id,
-        selectedPreset,
-      );
-      // Attach before navigating: the new session must already belong to
-      // the ticket when it opens, or its first spawn would miss the
-      // ticket pointer and its notes.
-      const ticketId = activeTicketId;
-      if (ticketId) {
-        const sessionId = url.split("/").pop()?.split("?")[0] ?? "";
-        if (sessionId) {
-          await Effect.runPromise(
-            attachSession(base, ticketId, sessionId).pipe(Effect.provide(WickClientLayer)),
-          ).catch(() => { /* the session is still usable unattached */ });
-        }
-        pendingTicketId = null;
-      }
-      window.location.href = url;
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : "Failed to create session");
-    }
-  }
 </script>
 
 <!-- The page is full-bleed, but only the board and a ticket's page USE that
@@ -606,13 +448,23 @@
     {#if ticketEnabled && openTicketId}
       <!-- The page height is locked (each panel scrolls itself), so the
            ticket's long page scrolls in its own container. -->
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="min-h-0 flex-1 overflow-y-auto pb-24">
+        {#if teamOn}
+          <div class="mb-3 flex items-center gap-3 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs dark:border-navy-600 dark:bg-navy-800" data-testid="open-in-team">
+            <span class="min-w-0 flex-1 text-black-800 dark:text-black-600">Need several agents on this ticket? That happens in Team.</span>
+            <a
+              class="shrink-0 rounded-lg bg-green-500 px-3 py-1.5 font-semibold text-white-100 hover:bg-green-600"
+              href={teamTicketsHref(base, project.id, openTicketId)}
+            >Open in Team › Tickets ↗</a>
+          </div>
+        {/if}
         <TicketDetail
           {base}
           ticketId={openTicketId}
           onBack={() => { gotoTicket(null); reloadBoard(); }}
           onOpenSession={onSelectSession}
           onNewSession={newSessionInTicket}
+          projectId={project.id}
         />
       </div>
     {:else if ticketEnabled && viewMode === "card" && boardView}
@@ -645,85 +497,23 @@
     {/if}
   </div>
 
-  <!-- The floating composer: every view's reply box, bottom-centre like a
-       helpdesk's. Starting a chat from a ticket page joins that ticket; from
-       the list or board it is a plain new session in the project. Sticky, so
-       a long page never scrolls it away. -->
-  <div class="sticky bottom-0 z-10 mx-auto w-full max-w-3xl pb-1">
-    <div class="rounded-xl border border-white-300 bg-white-100 p-3 shadow-lg dark:border-navy-600 dark:bg-navy-700">
-      <Composer
-        onSend={handleSend}
-        placeholder={activeTicketId
-          ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
-          : "Ask anything…   / commands · @ files"}
-        notifyKey={NOTIFY_KEY}
-        provider={providerSelect}
-        preset={presetSelect}
-        onSearchFiles={searchMentionFiles}
-        commands={composerCommands}
+  <!-- The floating composer: every view's reply box. Starting a chat from
+       a ticket page joins that ticket; from the list or board it is a
+       plain new session in the project. On a ticket's page it sits in the
+       main column — the same grid as TicketDetail — so it is centred on
+       the work, never under the fields rail. -->
+  <div class={ticketEnabled && openTicketId ? "mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[minmax(0,1fr)_300px]" : "contents"} data-testid="composer-column">
+    <div class="min-w-0">
+      <TicketComposer
+        {base}
+        {project}
+        {providers}
+        ticketId={activeTicketId}
+        ticketLabel={activeTicketLabel}
+        onClearTicket={() => { gotoTicket(null); }}
       />
-      <p class="mt-2 text-center text-[11px] text-black-600 dark:text-black-700">
-        {#if activeTicketId}
-          New session on <span
-            class="font-medium text-green-600 dark:text-green-400"
-            title={activeTicketLabel}
-            >{activeTicketBanner}</span
-          > — this chat joins the ticket and reads its notes.
-          <button
-            type="button"
-            onclick={() => { pendingTicketId = null; gotoTicket(null); }}
-            class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
-            >Start without a ticket</button
-          >
-        {:else}
-          New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override.
-        {/if}
-      </p>
     </div>
   </div>
 </div>
 
-<!-- The last chat left a ticket, so the ticket now tracks nothing. Offering
-     removal here (rather than doing it silently) keeps a deliberately-empty
-     ticket — one just created, not yet used — from disappearing. -->
-{#if emptied}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4">
-    <div class="w-full max-w-sm rounded-xl border border-white-300 bg-white-100 p-5 shadow-xl dark:border-navy-600 dark:bg-navy-700">
-      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
-        Delete the empty ticket?
-      </h2>
-      <p class="mt-2 text-xs leading-relaxed text-black-700 dark:text-black-600">
-        <span class="rounded bg-white-200 px-1 font-mono text-[10px] dark:bg-navy-800">{emptied.id}</span>
-        “{emptied.title}” has no chats left. Nothing else is deleted — the chat you moved is
-        safe on its new ticket.
-      </p>
-
-      <label class="mt-4 flex cursor-pointer items-start gap-2 text-xs text-black-800 dark:text-black-600">
-        <input
-          type="checkbox"
-          bind:checked={dontAskEmpty}
-          class="mt-0.5 h-3.5 w-3.5 rounded border-white-400 text-green-600 focus:ring-green-500 dark:border-navy-600"
-        />
-        <span>
-          Don’t ask again — remember my answer.
-          <span class="mt-0.5 block text-[11px] text-black-700 dark:text-black-600">
-            Only for empty tickets. Deleting a ticket that still holds chats always asks.
-          </span>
-        </span>
-      </label>
-
-      <div class="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onclick={() => answerEmptied(false)}
-          class="rounded-lg border border-white-400 px-3 py-1.5 text-xs text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
-        >Keep it</button>
-        <button
-          type="button"
-          onclick={() => answerEmptied(true)}
-          class="rounded-lg bg-neg-400 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-neg-500"
-        >Delete ticket</button>
-      </div>
-    </div>
-  </div>
-{/if}
+<EmptyTicketOffer bind:this={emptyOffer} {base} onChanged={reloadBoard} />

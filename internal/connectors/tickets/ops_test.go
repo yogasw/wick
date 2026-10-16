@@ -217,6 +217,38 @@ func TestAttachAndDetachSecondSession(t *testing.T) {
 	}
 }
 
+// A session already on another ticket is refused unless move=true, and the
+// refusal names the ticket it is on.
+func TestAttachMoveParam(t *testing.T) {
+	h, l := newTestHandlers(t)
+	mkSession(t, l, "s1", "p1")
+	a, _ := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "old work"})
+	b, _ := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "new work"})
+	mustDispatch(t, h.attach, ctxFor("s1", map[string]string{"ticket_id": a.ID}))
+
+	_, err := h.attach(ctxFor("s1", map[string]string{"ticket_id": b.ID}))
+	if !ticket.IsSessionInOtherTicket(err) || !strings.Contains(err.Error(), "old work") || !strings.Contains(err.Error(), "move=true") {
+		t.Fatalf("err = %v, want a refusal naming %q with the move hint", err, "old work")
+	}
+	if got, _ := ticket.Load(l, "p1", a.ID); len(got.Sessions) != 1 {
+		t.Fatalf("refused attach took the session off the old ticket: %v", got.Sessions)
+	}
+	if sess, _ := session.Load(l, "s1"); sess.Meta.TicketID != a.ID {
+		t.Fatalf("refused attach moved the back-pointer: %q", sess.Meta.TicketID)
+	}
+
+	got := mustDispatch(t, h.attach, ctxFor("s1", map[string]string{"ticket_id": b.ID, "move": "true"})).(ticketView)
+	if len(got.Sessions) != 1 || got.Sessions[0] != "s1" {
+		t.Fatalf("sessions on new ticket = %v, want [s1]", got.Sessions)
+	}
+	if old, _ := ticket.Load(l, "p1", a.ID); len(old.Sessions) != 0 {
+		t.Fatalf("move left the session on the old ticket: %v", old.Sessions)
+	}
+	if sess, _ := session.Load(l, "s1"); sess.Meta.TicketID != b.ID {
+		t.Fatalf("back-pointer not moved: %q", sess.Meta.TicketID)
+	}
+}
+
 func TestAttachRequiresTicketID(t *testing.T) {
 	h, l := newTestHandlers(t)
 	mkSession(t, l, "s1", "p1")

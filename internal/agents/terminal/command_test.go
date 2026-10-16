@@ -36,8 +36,64 @@ func TestCommandsAllowlist(t *testing.T) {
 			t.Errorf("%q must not be in the allowlist", bad)
 		}
 	}
-	if Commands(provider.Instance{Type: provider.TypeClaude}) != nil {
-		t.Error("claude has no web terminal")
+	if Commands(provider.Instance{Type: provider.TypeWick}) != nil {
+		t.Error("wick has no web terminal")
+	}
+}
+
+func TestCommandsCLITypes(t *testing.T) {
+	cases := []struct {
+		typ  provider.Type
+		keys []string
+		args map[string][]string
+	}{
+		{provider.TypeClaude, []string{"tui", "auth-login", "auth-status"}, map[string][]string{
+			"auth-login": {"auth", "login"}, "auth-status": {"auth", "status"}}},
+		{provider.TypeCodex, []string{"tui", "login", "login-status"}, map[string][]string{
+			"login": {"login", "--device-auth"}, "login-status": {"login", "status"}}},
+		{provider.TypeGemini, []string{"tui"}, nil},
+	}
+	for _, tc := range cases {
+		ins := provider.Instance{Type: tc.typ, Name: "x"}
+		var keys []string
+		for _, c := range Commands(ins) {
+			keys = append(keys, c.Key)
+		}
+		if !slices.Equal(keys, tc.keys) {
+			t.Errorf("%s keys = %v, want %v", tc.typ, keys, tc.keys)
+		}
+		if c, ok := LookupCommand(ins, "tui"); !ok || len(c.Args) != 0 || c.Label != string(tc.typ) {
+			t.Errorf("%s tui = %+v", tc.typ, c)
+		}
+		for k, want := range tc.args {
+			if c, ok := LookupCommand(ins, k); !ok || !slices.Equal(c.Args, want) {
+				t.Errorf("%s %s = %+v", tc.typ, k, c)
+			}
+		}
+		for _, bad := range []string{"", "bash", "login status", "../tui", "tui;id", "mcp", "exec"} {
+			if _, ok := LookupCommand(ins, bad); ok {
+				t.Errorf("%s: %q must not be in the allowlist", tc.typ, bad)
+			}
+		}
+	}
+}
+
+func TestEnvCarriesInstanceAccount(t *testing.T) {
+	t.Setenv("GOTTY_PERMIT_ARGUMENTS", "true")
+	cl := Env(provider.Instance{Type: provider.TypeClaude, Name: "work", Env: []string{"CLAUDE_CONFIG_DIR=/srv/claude-work"}})
+	if !slices.Contains(cl, "CLAUDE_CONFIG_DIR=/srv/claude-work") {
+		t.Errorf("claude env must carry the instance CLAUDE_CONFIG_DIR: %v", cl)
+	}
+	cx := Env(provider.Instance{Type: provider.TypeCodex, Name: "work", Env: []string{"CODEX_HOME=/srv/codex-work"}})
+	if !slices.Contains(cx, "CODEX_HOME=/srv/codex-work") {
+		t.Errorf("codex env must carry the instance CODEX_HOME: %v", cx)
+	}
+	for _, env := range [][]string{cl, cx} {
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "GOTTY_") || strings.HasPrefix(kv, provider.AccountBinEnvKey+"=") {
+				t.Errorf("%q must be dropped", kv)
+			}
+		}
 	}
 }
 

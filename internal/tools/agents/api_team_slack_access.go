@@ -29,16 +29,22 @@ var agentSlackSettingGroups = map[string]bool{
 }
 
 // agentSlackReadOnlyNotes covers the rest of the Channels page schema
-// (Connection, Routing): shown on the Team card read-only, after the four
-// editable groups, each with why it is not set there. Every schema field is
-// either editable or listed here — TestAgentSlackSettingsCoverSchema.
+// (Connection, Token Rotation, Routing): shown on the Team card read-only,
+// after the four editable groups, each with why it is not set there. Every
+// schema field is either editable or listed here, except `internal` rows,
+// which no page shows — TestAgentSlackSettingsCoverSchema.
 var agentSlackReadOnlyNotes = map[string]string{
+	"enabled":        "The Channels page switch. An agent's bot runs while the agent is enabled — Disconnect stops it.",
 	"mode":           "Set by the connect wizard: an agent's own app runs in socket mode.",
 	"bot_token":      "Managed with Replace tokens on this card.",
 	"app_token":      "Managed with Replace tokens on this card.",
 	"signing_secret": "HTTP mode only — not used by an agent's own app.",
-	"project_id":     "Sessions run in the agent's own project.",
-	"public_url":     "Set globally in Channels › Slack › Routing.",
+
+	"app_refresh_token": "Managed with Replace tokens on this card — needed with a rotating (xoxe.xapp-) app token.",
+	"client_id":         "Managed with Replace tokens on this card — needed with a rotating (xoxe.xapp-) app token.",
+	"client_secret":     "Managed with Replace tokens on this card — needed with a rotating (xoxe.xapp-) app token.",
+	"project_id":        "Sessions run in the agent's own project.",
+	"public_url":        "Set globally in Channels › Slack › Routing.",
 }
 
 // Owner identity, stored on the connection row when it is first resolved.
@@ -74,6 +80,9 @@ func agentSlackSettingFields(m, global map[string]string) []agentSlackField {
 	var edit, ro []agentSlackField
 	groupDesc := map[string]string{}
 	for _, r := range rows {
+		if r.Internal {
+			continue
+		}
 		title, desc, _ := strings.Cut(r.Group, "|")
 		if desc != "" && groupDesc[title] == "" {
 			groupDesc[title] = desc

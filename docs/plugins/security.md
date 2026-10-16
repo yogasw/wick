@@ -27,9 +27,45 @@ from repositories you control.
 - **Sockets.** Tool/service sockets are created `0600` in a `0700` run dir,
   so the `X-Wick-User-*` headers the host injects cannot be forged from
   another local user; browser-supplied `X-Wick-*` headers are stripped.
+- **Tool webhook identity.** `X-Wick-Token-User-*` (with
+  `X-Wick-Token-User-Source` = `pat`, `sso` or `system`) is set only after
+  the host verified the credential.
+
+  For wick's SSO JWT (`X-Wick-User`), `aud` is NOT the safeguard. Any
+  approved user who registers an `sso` connector may pick its audience, so
+  a connector pointing at an outside server with audience = wick's host
+  would make wick hand that server tokens "for wick". wick therefore:
+  - mints every token with a `wick_url` claim — the URL it is actually
+    sent to, set by wick and not editable;
+  - accepts a token only when `wick_url` is on one of wick's own hosts
+    (from server config: the base URL's host, or loopback on wick's own
+    listen port; never the request's `Host` header) and at the called
+    tool's `/tools/{key}` or a path under it. A token sent elsewhere, or minted for another
+    tool, is refused;
+  - refuses to save or mint for an `sso` connector whose audience names
+    wick while its URL is not wick;
+  - caps a token's lifetime at 15 minutes (clamped at mint, refused at
+    save, rejected at verify), since the system identity has no user to
+    revoke;
+  - verifies against a key cached in memory, so a forged header never
+    costs a database round-trip.
+
+  The subject must be an approved user, checked per request. `system:wick`
+  is passed on as the system identity, runs no Host API call as a user, and
+  must be treated as read-only by the plugin. `TokenUser()` does not return
+  it.
 - **Service tokens.** Route tokens are stored hashed and can be rotated or
   revoked; the callback token `WICK_PLUGIN_TOKEN` is scoped to the plugin's
   `CallbackScopes` and revocable.
+- **Host API.** A plugin calling back into wick is limited to the scopes
+  in its manifest's `host_scopes`; `rest.*`, `db.*`, `connectors.execute`
+  and `config.read_secret` also need an exact `host_resources` declaration
+  (no declaration, no access), and `db.*`, `rest.write` and
+  `config.read_secret` are off until an admin allows them. Calls run as the
+  triggering user or the owner of the plugin's `wick_pat` — never as a
+  synthetic admin — and are audited for 7 days. Admins block scopes or
+  single items, block all, or revoke a plugin on **Plugins → Host access**.
+  See [Host API](./host-api.md).
 - **Audit.** Every install, update, upload and source change is logged with
   actor, source, key, old → new version and `zip_sha256`.
 - **No silent updates.** `auto_update` is off unless enabled per source.

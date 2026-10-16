@@ -161,7 +161,7 @@
 
   const placeholder = `[
   {"kind": "connector", "name": "pipeline", "tool_id": "conn:<connector_id>/get_pipeline", "params": {"uuid": "{...}"}},
-  {"kind": "check", "name": "selesai?", "rules": [{"path": "state.name", "op": "equals", "value": "COMPLETED"}],
+  {"kind": "check", "name": "done?", "rules": [{"path": "state.name", "op": "equals", "value": "COMPLETED"}],
    "fail_rules": [{"path": "state.result.name", "op": "in", "value": ["FAILED", "ERROR"]}]}
 ]`;
 
@@ -330,7 +330,7 @@
                 <th class="py-1 pr-3 font-medium">Run</th>
                 <th class="py-1 pr-3 font-medium">Time</th>
                 <th class="py-1 pr-3 font-medium">Result</th>
-                <th class="py-1 pr-3 font-medium">Berhenti di</th>
+                <th class="py-1 pr-3 font-medium">Stopped at</th>
                 <th class="py-1 pr-3 font-medium">Reason</th>
                 <th class="py-1 pr-3 font-medium">Rev</th>
                 <th class="py-1 font-medium">Duration</th>

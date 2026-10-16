@@ -11,11 +11,13 @@ import {
   getTicket,
   getTicketFilter,
   listNotes,
+  saveTicketConfig,
   saveTicketFilter,
   updateNote,
   updateTicket,
 } from "../tickets.js";
 import { APIError } from "@wick-fe/common-api";
+import { cachedProjectRows } from "../projectOptionsCache.js";
 
 const mockLayer = (status: number, body: unknown) =>
   Layer.succeed(
@@ -164,6 +166,33 @@ describe("tickets api", () => {
       getTicketFilter(BASE, "p1").pipe(Effect.provide(mockLayer(200, null))),
     );
     expect(out).toEqual({});
+  });
+
+  // Switching tickets on changes ticket_enabled on the options rows, so the
+  // cached rows go with the save instead of serving the old flag for a minute.
+  test("saveTicketConfig drops the cached project options", async () => {
+    let loads = 0;
+    const load = Effect.sync(() => {
+      loads++;
+      return [];
+    });
+    await Effect.runPromise(cachedProjectRows("/opts-t15", load));
+    await Effect.runPromise(cachedProjectRows("/opts-t15", load));
+    expect(loads).toBe(1);
+    await Effect.runPromise(
+      saveTicketConfig(BASE, "p1", { enabled: true }).pipe(Effect.provide(mockLayer(200, { status: "ok" }))),
+    );
+    await Effect.runPromise(cachedProjectRows("/opts-t15", load));
+    expect(loads).toBe(2);
+  });
+
+  // A filter saved before multi-select keeps working: its one assignee
+  // comes back as the list the board now reads.
+  test("getTicketFilter migrates an old single assignee", async () => {
+    const out = await Effect.runPromise(
+      getTicketFilter(BASE, "p1").pipe(Effect.provide(mockLayer(200, { assignee: "me", view_mode: "card" }))),
+    );
+    expect(out).toEqual({ assignees: ["me"], view_mode: "card" });
   });
 });
 

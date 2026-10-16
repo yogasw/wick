@@ -46,7 +46,7 @@
         {#each agents as a (a.id)}
           <label class="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-white-200 dark:hover:bg-navy-700">
             <input type="checkbox" checked={members.includes(a.id)} onchange={() => (members = toggleMember(members, a.id))} />
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={28} asleep={a.disabled} />
+            <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={28} asleep={a.disabled} />
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-medium text-black-900 dark:text-white-100">{a.name}{#if a.is_captain}<span class="ml-1.5 text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}</span>
               <span class="block truncate text-xs text-black-800 dark:text-black-600">@{a.handle}</span>

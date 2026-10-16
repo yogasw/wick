@@ -11,6 +11,7 @@ import (
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/daemon"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/plugins/source"
 	"github.com/yogasw/wick/internal/userconfig"
@@ -143,11 +144,7 @@ default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 					fmt.Fprintf(os.Stderr, "warning: could not record origin: %v\n", err)
 				}
 			}
-			if in.Kind == wickplugin.KindConnector {
-				fmt.Println("a running wick will pick it up shortly")
-			} else {
-				fmt.Println("restart or reload wick to load it")
-			}
+			fmt.Println(installLoadHint(in.Kind, daemonRunning()))
 			return nil
 		},
 	}
@@ -253,4 +250,34 @@ func pluginDisableCmd() *cobra.Command {
 			})
 		},
 	}
+}
+
+// installLoadHint tells the operator when a freshly installed plugin takes
+// effect. A running wick picks connectors and tools up live (its plugin
+// folder watcher); when wick is not running they load on its next start.
+// Job and service plugins still load at start.
+func installLoadHint(kind string, running bool) string {
+	switch wickplugin.NormalizeKind(kind) {
+	case wickplugin.KindConnector, wickplugin.KindTool:
+		if running {
+			return "a running wick will pick it up shortly"
+		}
+		return "wick is not running; it loads on next start"
+	default:
+		return "restart or reload wick to load it"
+	}
+}
+
+// daemonRunning reports whether this app's wick daemon is up, the same way
+// `daemon status` decides (systemd unit when managed, else the PID file).
+func daemonRunning() bool {
+	if daemon.ServiceManaged(BuildAppName) {
+		return daemon.ServiceActive(BuildAppName)
+	}
+	p, err := daemon.ResolvePaths(BuildAppName)
+	if err != nil {
+		return false
+	}
+	st, err := daemon.Check(p)
+	return err == nil && st.Running
 }

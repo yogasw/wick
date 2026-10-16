@@ -33,6 +33,11 @@ describe("teamSender / handoffState", () => {
     expect(handoffState("TASK_STATE_COMPLETED")).toBe("completed");
     expect(handoffState("TASK_STATE_INPUT_REQUIRED")).toBe("needs input");
     expect(handoffState("working")).toBe("working");
+    // auth_required reads rejected on the Hub: declined, like delegations.
+    expect(handoffState("TASK_STATE_AUTH_REQUIRED")).toBe("declined");
+    expect(handoffState("TASK_STATE_REJECTED")).toBe("declined");
+    expect(handoffState("TASK_STATE_REJECTED")).toBe("declined");
+    expect(handoffState("failed")).toBe("failed");
   });
 });
 
@@ -61,5 +66,18 @@ describe("speakerVia", () => {
   test("a person's message never names a teammate", () => {
     const turns = [{ role: "user", text: "Message from Captain (@captain):\nx" }, { role: "assistant", text: "y", speaker: { via: "mention" } }];
     expect(speakerVia(turns, 1)).toBe("");
+  });
+});
+
+describe("agents shared with the viewer in the @ menu", () => {
+  const peers = [
+    { id: "a", handle: "research", name: "Research", description: "", disabled: false },
+    { id: "b", handle: "writer", name: "Writer", description: "", disabled: false, shared_by: "Hana" },
+  ];
+  test("are offered in an ordinary chat", () => {
+    expect(teamMentionAgents(peers, "").map((a) => a.handle)).toEqual(["research", "writer"]);
+  });
+  test("are left out in a ticket session (own agents only)", () => {
+    expect(teamMentionAgents(peers, "", true).map((a) => a.handle)).toEqual(["research"]);
   });
 });

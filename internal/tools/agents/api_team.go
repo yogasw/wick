@@ -101,8 +101,12 @@ type TeamAgentItem struct {
 	// too (project.ShowsInProjects).
 	ShowInProjects bool `json:"show_in_projects"`
 	// AllowProviderSwitch is the effective value (default applied).
-	AllowProviderSwitch bool                   `json:"allow_provider_switch"`
-	SuggestedPrompts    []team.SuggestedPrompt `json:"suggested_prompts"`
+	AllowProviderSwitch bool `json:"allow_provider_switch"`
+	// ChannelShowTeammates is the effective value (default on).
+	ChannelShowTeammates bool `json:"channel_show_teammates"`
+	// ChannelHideInterim is the effective value (default on).
+	ChannelHideInterim bool                   `json:"channel_hide_interim"`
+	SuggestedPrompts   []team.SuggestedPrompt `json:"suggested_prompts"`
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
@@ -110,7 +114,12 @@ type TeamAgentItem struct {
 	CaptainCan    team.CaptainCan `json:"captain_can"`
 	MainSessionID string          `json:"main_session_id"`
 	LastActive    *time.Time      `json:"last_active"`
-	LastPreview   string          `json:"last_preview"`
+	// LastAnyActive is the newest LastActive of all the agent's chats with
+	// the owner, main and side chats alike: the roster's dozing reads it,
+	// so work in a side chat keeps the agent awake. LastActive (order,
+	// time, preview) stays the main chat's.
+	LastAnyActive *time.Time `json:"last_any_active,omitempty"`
+	LastPreview   string     `json:"last_preview"`
 	// LastSilent is true when LastPreview is a [silent] reply, shown
 	// dimmed; the marker itself is stripped.
 	LastSilent bool   `json:"last_silent,omitempty"`
@@ -140,10 +149,30 @@ type TeamAgentItem struct {
 	// card can show work carrying on after the agent's own turn ended.
 	// Status is left alone: it stays the agent's own turn state.
 	SubagentsWorking []string `json:"subagents_working,omitempty"`
+	// TeamWaiting holds the handles of the teammates the main chat's open
+	// Team tasks (team_message / @mention) wait on: "waiting on N
+	// teammates". Status is left alone, as with SubagentsWorking.
+	TeamWaiting []string `json:"team_waiting,omitempty"`
+	// ReplyingTo names who the agent works on a Team task for ("replying
+	// to Captain"), in any of its chats; "" when it works on none.
+	ReplyingTo string `json:"replying_to,omitempty"`
+	// WorkingSessions are the agent's other chats (not its main chat) that
+	// run a turn now — a Team task Captain sent, a chat the person opened
+	// — oldest turn first; nil when none. LastSession is the newest of
+	// them that finished within the hour ("Last: …").
+	WorkingSessions []TeamWorkingSession `json:"working_sessions,omitempty"`
+	LastSession     *TeamWorkingSession  `json:"last_session,omitempty"`
+	// TeamAsks is the question an open Team task of the agent waits on its
+	// sender for ("Asks Captain: …"); nil when there is none.
+	TeamAsks *TeamAsk `json:"team_asks,omitempty"`
 	// SharedWith counts everything else on the same project — other
 	// agents of any owner and non-agent web/channel conversations — so
 	// the editor can warn that a persona edit changes them too.
 	SharedWith int `json:"shared_with"`
+	// ShareCount is how many people the owner shared this agent with by
+	// hand (team.Store.ShareCounts): the header's "Shared with N". 0 on a
+	// recipient's row.
+	ShareCount int `json:"share_count,omitempty"`
 	// Role is "" for the caller's own agent and RoleViewer for one another
 	// owner shared with them (chat only); SharedBy/SharedByID name that
 	// owner then.
@@ -159,6 +188,31 @@ type TeamAgentSessionItem struct {
 	LastActive *time.Time `json:"last_active"`
 	AgentMain  bool       `json:"agent_main"`
 	Status     string     `json:"status"`
+	// Lifecycle is the pool's state of the chat's process ("working",
+	// "idle", …), "" when none is alive — the badge the project list shows.
+	Lifecycle string `json:"lifecycle"`
+	// Participants counts the people who have spoken in the chat
+	// (session.Meta.PeopleCount); >1 draws the shared-people marker.
+	Participants int `json:"participants,omitempty"`
+	// OwnerUserID/OwnerName are the person the chat belongs to; Mine is
+	// true when that is the caller.
+	OwnerUserID string `json:"owner_user_id"`
+	OwnerName   string `json:"owner_name"`
+	Mine        bool   `json:"mine"`
+	// TicketID/TicketProjectID/TicketProjectName name the ticket the chat
+	// works on (a Captain chat started from Team › Tickets), "" when none:
+	// the drawer's 🎫 / 📁 chip.
+	TicketID          string `json:"ticket_id,omitempty"`
+	TicketProjectID   string `json:"ticket_project_id,omitempty"`
+	TicketProjectName string `json:"ticket_project_name,omitempty"`
+}
+
+// teamAgentSessionsAll is GET /api/team/agents/{id}/sessions?scope=all:
+// Shared says whether the drawer offers You | All (the agent is shared —
+// owner side: with anyone, recipient side: always).
+type teamAgentSessionsAll struct {
+	Shared   bool                   `json:"shared"`
+	Sessions []TeamAgentSessionItem `json:"sessions"`
 }
 
 // teamAgentConnectorItem is one row of the access checklist. Names and op
@@ -215,6 +269,8 @@ type teamAgentWriteReq struct {
 	RunAs                *string                 `json:"run_as"`
 	Disabled             *bool                   `json:"disabled"`
 	AllowProviderSwitch  *bool                   `json:"allow_provider_switch"`
+	ChannelShowTeammates *bool                   `json:"channel_show_teammates"`
+	ChannelHideInterim   *bool                   `json:"channel_hide_interim"`
 	IsCaptain            *bool                   `json:"is_captain"`
 	UseGlobalPrompt      *bool                   `json:"use_global_prompt"`
 	MentionFrom          *string                 `json:"mention_from"`
@@ -512,7 +568,12 @@ func agentSessions(ownerID, agentID string) []session.Session {
 
 // mainSessionOf returns the agent's main conversation, if it has one.
 func mainSessionOf(ownerID, agentID string) (session.Session, bool) {
-	for _, s := range agentSessions(ownerID, agentID) {
+	return mainSessionIn(agentSessions(ownerID, agentID))
+}
+
+// mainSessionIn picks the main conversation out of one agent's sessions.
+func mainSessionIn(sessions []session.Session) (session.Session, bool) {
+	for _, s := range sessions {
 		if s.Meta.AgentMain {
 			return s, true
 		}
@@ -535,6 +596,106 @@ type teamLive struct {
 	lifecycles map[string]string   // session id → pool lifecycle
 	approvals  map[string]string   // session id → tool of a pending approval
 	subagents  map[string][]string // parent session id → live background sub-agent handles
+	// Open Team tasks (team_message / @mention): the teammates each
+	// session waits on, and per teammate and viewer (viewKey) who it is
+	// replying to or what it asks its sender (addTeamTasks). Keyed by the
+	// person whose chat sent the task, so a shared agent's recipient
+	// never reads its owner's tasks, and "you" is always the viewer.
+	teamWaiting map[string][]string
+	replyingTo  map[string]string
+	teamAsks    map[string]TeamAsk
+	// teamSettled is each teammate's newest answered or declined Team
+	// task per viewer, sender already named ("Replied to Captain: …").
+	teamSettled map[string]teamSettled
+	// taskChats names, per teammate chat a working Team task runs in, who
+	// sent it ("Captain", "you"); since is when each running session's
+	// turn was first seen (noteTurns).
+	taskChats map[string]string
+	since     map[string]time.Time
+}
+
+// viewKey keys the teammate-side Team task state: the teammate and the
+// person whose chat sent the task.
+func viewKey(agentID, userID string) string { return agentID + "\x00" + userID }
+
+// teamTaskNames resolves what the roster says about a Team task's
+// sender: the sending agent's name (read once per agent) and the person
+// whose chat sent it (the viewer).
+type teamTaskNames struct {
+	name   func(agentID string) string
+	viewer func(sessionID string) string
+	names  map[string]string
+}
+
+// sender names who a task came from to its viewer: "you" for their own
+// @mention, else the sending agent ("a teammate" when it cannot be read).
+func (n *teamTaskNames) sender(origin, fromAgentID string) string {
+	if origin == teamlink.OriginUser {
+		return "you"
+	}
+	if n.names == nil {
+		n.names = map[string]string{}
+	}
+	name, ok := n.names[fromAgentID]
+	if !ok {
+		name = n.name(fromAgentID)
+		n.names[fromAgentID] = name
+	}
+	if name == "" {
+		return "a teammate"
+	}
+	return name
+}
+
+// teamSettled is a finished Team task as the teammate's row tells it.
+type teamSettled struct {
+	to       string
+	declined bool
+	summary  string
+	chat     string
+	at       time.Time
+}
+
+// settledGrace is how long after a task settled its own last write to
+// the teammate's main chat (the reply) may land without counting as the
+// chat moving on.
+const settledGrace = 2 * time.Second
+
+// newerThan reports whether t is still what main last did: settled after
+// the main chat's last activity — within settledGrace when the task ran
+// in that chat, whose reply is that activity.
+func (t teamSettled) newerThan(main session.Session) bool {
+	if t.chat == main.ID {
+		return !main.Meta.LastActive.After(t.at.Add(settledGrace))
+	}
+	return t.at.After(main.Meta.LastActive)
+}
+
+// preview is the row line: "Replied to Captain: …" or "Declined
+// Captain's task — …".
+func (t teamSettled) preview() string {
+	if t.declined {
+		owner := t.to + "'s"
+		if t.to == "you" {
+			owner = "your"
+		}
+		if t.summary == "" {
+			return "Declined " + owner + " task"
+		}
+		return "Declined " + owner + " task — " + t.summary
+	}
+	// The person's own task: they have the reply in their chat already.
+	if t.summary == "" || t.to == "you" {
+		return "Replied to " + t.to
+	}
+	return "Replied to " + t.to + ": " + t.summary
+}
+
+// TeamAsk is the question a teammate's open Team task puts to the agent
+// (or person) that sent it.
+type TeamAsk struct {
+	To       string `json:"to"`
+	Question string `json:"question"`
 }
 
 func teamLiveNow() teamLive {
@@ -547,16 +708,98 @@ func teamLiveNow() teamLive {
 			l.subagents = subs
 		}
 	}
+	// Team tasks (team_message / @mention) still open: the sender's row
+	// reads waiting on its teammates, as the Sub-agents tray does, and the
+	// teammate's reads replying to (or asking) its sender.
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			names := &teamTaskNames{name: teamAgentName, viewer: sessionUserOf}
+			l.addTeamTasks(h.LiveTasks(), names)
+			l.addSettled(h.LastSettled(), names)
+		}
+	}
 	return l
+}
+
+// teamAgentName is the roster name of agentID, "" when it cannot be read.
+func teamAgentName(agentID string) string {
+	if globalTeam == nil || agentID == "" {
+		return ""
+	}
+	p, err := globalTeam.Get(context.Background(), agentID)
+	if err != nil {
+		return ""
+	}
+	return globalTeam.MemberOf(p).Name
+}
+
+// addTeamTasks folds the open Team tasks into l: each teammate's handle
+// joins its sender session's waiting list (once), and the teammate is
+// noted, for the person whose chat sent the task, replying to the sender
+// — or, while it waits on an answer, asking it. A task whose sending
+// chat has no known person is told to nobody.
+func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
+	l.teamWaiting, l.replyingTo, l.teamAsks, l.taskChats = map[string][]string{}, map[string]string{}, map[string]TeamAsk{}, map[string]string{}
+	for _, t := range tasks {
+		if t.ToHandle != "" && !slices.Contains(l.teamWaiting[t.FromSession], t.ToHandle) {
+			l.teamWaiting[t.FromSession] = append(l.teamWaiting[t.FromSession], t.ToHandle)
+		}
+		viewer := n.viewer(t.FromSession)
+		if t.ToID == "" || viewer == "" {
+			continue
+		}
+		key := viewKey(t.ToID, viewer)
+		if t.Working {
+			if _, seen := l.replyingTo[key]; !seen {
+				l.replyingTo[key] = n.sender(t.Origin, t.FromAgentID)
+			}
+			if _, seen := l.taskChats[t.Chat]; t.Chat != "" && !seen {
+				l.taskChats[t.Chat] = n.sender(t.Origin, t.FromAgentID)
+			}
+		} else if _, seen := l.teamAsks[key]; !seen {
+			l.teamAsks[key] = TeamAsk{To: n.sender(t.Origin, t.FromAgentID), Question: t.Question}
+		}
+	}
+}
+
+// addSettled notes each teammate's newest finished Team task per person
+// whose chat sent it (tasks come newest first), sender named as
+// addTeamTasks names it.
+func (l *teamLive) addSettled(tasks []teamlink.SettledTask, n *teamTaskNames) {
+	l.teamSettled = map[string]teamSettled{}
+	for _, t := range tasks {
+		viewer := n.viewer(t.FromSession)
+		if t.ToID == "" || viewer == "" {
+			continue
+		}
+		key := viewKey(t.ToID, viewer)
+		if old, seen := l.teamSettled[key]; seen && !t.At.After(old.at) {
+			continue
+		}
+		l.teamSettled[key] = teamSettled{to: n.sender(t.Origin, t.FromAgentID), declined: t.Declined, summary: t.Summary, chat: t.Chat, at: t.At}
+	}
+}
+
+// teamWaitingOf returns the handles of the teammates sessionID's open
+// Team tasks wait on, or nil when there are none.
+func (l teamLive) teamWaitingOf(sessionID string) []string {
+	if len(l.teamWaiting[sessionID]) == 0 {
+		return nil
+	}
+	return slices.Clone(l.teamWaiting[sessionID])
 }
 
 // teamTurnsNow is teamLiveNow without the sub-agent query: the in-memory
 // pool and approval state only, for a caller that just needs a lifecycle.
 func teamTurnsNow() teamLive {
 	l := teamLive{actions: map[string]string{}, failed: map[string]bool{}, lifecycles: map[string]string{}, approvals: map[string]string{}, subagents: map[string][]string{}}
+	firstEvent := map[string]time.Time{}
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
 			l.lifecycles[e.SessionID] = e.Lifecycle
+			if len(e.InFlightEvents) > 0 {
+				firstEvent[e.SessionID] = e.InFlightEvents[0].At
+			}
 			if a := team.CurrentAction(e.InFlightEvents); a != "" {
 				l.actions[e.SessionID] = a
 			}
@@ -565,6 +808,7 @@ func teamTurnsNow() teamLive {
 			}
 		}
 	}
+	l.since = noteTurns(l.lifecycles, firstEvent, time.Now())
 	if globalApprovals != nil {
 		for _, r := range globalApprovals.PendingFor("") {
 			if _, seen := l.approvals[r.SessionID]; !seen {
@@ -682,10 +926,20 @@ func lastPreview(sessionID string) (string, bool) {
 type teamProjectUsers struct {
 	agents   map[string]int // project id → agents on it
 	sessions map[string]int // project id → non-agent top-level sessions
+	shares   map[string]int // agent id → people it is shared with by hand
 }
 
 func teamProjectUsersFor(ctx context.Context, rows []entity.AgentPersona) teamProjectUsers {
 	u := teamProjectUsers{agents: map[string]int{}, sessions: map[string]int{}}
+	agentIDs := make([]string, 0, len(rows))
+	for _, r := range rows {
+		agentIDs = append(agentIDs, r.ID)
+	}
+	if globalTeam != nil {
+		if n, err := globalTeam.ShareCounts(ctx, agentIDs); err == nil {
+			u.shares = n
+		}
+	}
 	want := map[string]bool{}
 	var ids []string
 	for _, r := range rows {
@@ -749,7 +1003,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		Name:                 p.Handle,
 		Tagline:              p.Tagline,
 		Features:             teamItemFeatures(p, reach),
-		Avatar:               team.DecodeAvatar(p.Avatar),
+		Avatar:               team.WithImageSrc(team.DecodeAvatar(p.Avatar), agentsToolBase, p.ID),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
 		AccessMode:           team.NormalizeAccessMode(p.AccessMode),
@@ -763,6 +1017,8 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
+		ChannelShowTeammates: team.ShowsTeammatesInChannels(p.ChannelShowTeammates),
+		ChannelHideInterim:   team.HidesInterimInChannels(p.ChannelHideInterim),
 		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
@@ -784,12 +1040,24 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 	it.NativeToolsEnforced = team.NativeToolsEnforced(providerTypeOf(it.Provider))
 	fillChatState(&it, p.OwnerUserID, p.ID, p.LastReadAt, live)
 	it.SharedWith = users.others(p)
+	it.ShareCount = users.shares[p.ID]
 	return it
 }
 
 // applyProjectFields writes the persona half of req into project meta.
 // Returns whether anything changed so an untouched project is not
 // rewritten (and its UpdatedAt not bumped) by an access-only PATCH.
+// requireTeamProviderChange gates the provider a team-agent write would
+// put on m: only a CHANGED provider is the caller's choice, so re-saving
+// the one already there never locks an editor out of the persona.
+func requireTeamProviderChange(c *tool.Ctx, m project.Meta, req teamAgentWriteReq) bool {
+	if req.Provider == nil {
+		return true
+	}
+	prov := strings.TrimSpace(*req.Provider)
+	return prov == m.Defaults.Provider || requireProviderKeyAccess(c, prov)
+}
+
 func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
 	changed := false
 	set := func(dst *string, v *string, trim bool) {
@@ -1079,6 +1347,11 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		if !requireUsableProject(c, pid) {
 			return
 		}
+		// Checked before the agent row exists: a refused provider must
+		// not leave a half-made agent behind.
+		if proj, ok := globalMgr.Registry().Project(pid); ok && !requireTeamProviderChange(c, proj.Meta, req) {
+			return
+		}
 		if req.Convert && !checkConvertProject(c, pid) {
 			return
 		}
@@ -1087,6 +1360,9 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		// create does not leave an orphan project behind.
 		if _, err := globalTeam.GetByHandle(c.Context(), actorID(c), handle); err == nil {
 			c.JSON(http.StatusConflict, map[string]string{"error": team.ErrHandleTaken.Error()})
+			return
+		}
+		if !requireProviderKeyAccess(c, str(req.Provider)) {
 			return
 		}
 		var err error
@@ -1118,7 +1394,9 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	}
 	av := team.DefaultAvatarFor(handle)
 	if req.Avatar != nil {
-		av = *req.Avatar
+		// A new agent has no stored picture yet: the wizard uploads it
+		// after the create and saves the image avatar then.
+		av = team.AvatarForCreate(*req.Avatar)
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid, Tagline: tagline,
@@ -1209,6 +1487,14 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if !requireAgentProjectAccess(c, p) {
 		return
 	}
+	// The provider is checked here, against the project the agent will
+	// point at, before anything below touches the persona or the project:
+	// a refused provider must leave the agent exactly as it was.
+	if p.ProjectID != "" {
+		if proj, ok := globalMgr.Registry().Project(p.ProjectID); ok && !requireTeamProviderChange(c, proj.Meta, req) {
+			return
+		}
+	}
 	if req.Handle != nil {
 		p.Handle = team.NormalizeHandle(*req.Handle)
 		if err := validateTeamHandle(c.Context(), p.Handle); err != nil {
@@ -1251,10 +1537,19 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		v := *req.AllowProviderSwitch
 		p.AllowProviderSwitch = &v
 	}
+	if req.ChannelShowTeammates != nil {
+		v := *req.ChannelShowTeammates
+		p.ChannelShowTeammates = &v
+	}
+	if req.ChannelHideInterim != nil {
+		v := *req.ChannelHideInterim
+		p.ChannelHideInterim = &v
+	}
 	if req.Features != nil {
 		p.Features = team.EncodeFeatures(*req.Features)
 	}
 	if req.Avatar != nil {
+		bindAvatarImage(c, p.ID, req.Avatar)
 		p.Avatar = team.EncodeAvatar(*req.Avatar)
 	}
 	if req.ManageAgents != nil {
@@ -1317,6 +1612,14 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	syncAgentSlack(context.Background(), p)
 	syncAgentTelegram(context.Background(), p)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
+	if req.ChannelShowTeammates != nil {
+		// Saved: the threads this agent waits in repaint with the new look.
+		teamVisibilityChanged(p.ID)
+	}
+	if req.ChannelHideInterim != nil {
+		// Saved: the channels read the new value on their next turn.
+		forgetHideInterim()
+	}
 	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
 
@@ -1464,6 +1767,10 @@ func apiTeamAgentChat(c *tool.Ctx) {
 		return
 	}
 	if !body.New {
+		// Serialised with a Team task opening the same chat
+		// (openMainChatFor), so the two open one main chat.
+		unlock := lockMainChat(actorID(c), p.ID)
+		defer unlock()
 		if s, ok := mainSessionOf(actorID(c), p.ID); ok {
 			c.JSON(http.StatusOK, map[string]string{"session_id": s.ID})
 			return
@@ -1487,6 +1794,26 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 // createTeamAgentSessionID is createTeamAgentSession under a chosen id and
 // origin — a Slack thread a schedule answers into is keyed by its thread.
 func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id string, origin session.Origin) (string, error) {
+	return createAgentChat(c.Context(), actorID(c), p, main, id, origin, agentChatSetup{
+		target: func(projectID string) (string, string) { return resolveSessionTarget(c, "", "", projectID) },
+		created: func(id, label string) {
+			extras := agentCreatedExtras(p, label, actorName(c), "", connectorLabeler(c), "chat")
+			emitSystemEvent(id, store.KindAgentCreated, agentCreatedText(label, extras["created_by"], "", extras["grants_summary"]), extras)
+		},
+	})
+}
+
+// agentChatSetup is what creating an agent chat reads off whoever asked
+// for it: the provider with neither the project nor the owner naming one,
+// and the agent_created chip of an owner's new main chat (nil: none).
+type agentChatSetup struct {
+	target  func(projectID string) (prov, modelID string)
+	created func(id, label string)
+}
+
+// createAgentChat is createTeamAgentSessionID for actor without a request:
+// a Team task opens a recipient's main chat through it too.
+func createAgentChat(ctx context.Context, actor string, p entity.AgentPersona, main bool, id string, origin session.Origin, setup agentChatSetup) (string, error) {
 	projectID := p.ProjectID
 	if projectID != "" {
 		if _, ok := globalMgr.Registry().Project(projectID); !ok {
@@ -1495,7 +1822,15 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 			projectID = ""
 		}
 	}
-	prov, modelID := resolveSessionTarget(c, "", "", projectID)
+	prov, modelID := setup.target(projectID)
+	// A share recipient's chat runs on the owner's choice, never on the
+	// recipient's own provider list (which the provider gate may narrow):
+	// with no project default, it follows the owner's main chat.
+	if actor != "" && actor != p.OwnerUserID && !projectHasProvider(projectID) {
+		if prov2, model2, ok := mainChatProvider(p.OwnerUserID, p.ID); ok {
+			prov, modelID = prov2, model2
+		}
+	}
 	if key, ok := remoteProviderKey(p); ok {
 		prov, modelID = key, ""
 	}
@@ -1511,12 +1846,12 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 			}
 		}
 	}
-	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
 		ID:        id,
 		ProjectID: projectID,
 		Origin:    origin,
 		Preset:    presetName,
-		UserID:    actorID(c),
+		UserID:    actor,
 		AgentID:   p.ID,
 		AgentMain: main,
 	}); err != nil {
@@ -1527,15 +1862,14 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 	}
 	if modelID != "" {
 		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
-			log.Ctx(c.Context()).Warn().Msgf("team agent chat set model id: %s", err.Error())
+			log.Ctx(ctx).Warn().Msgf("team agent chat set model id: %s", err.Error())
 		}
 	}
 	// A new main chat opens on the agent's arrival, so its first turn is
 	// the agent_created chip — the owner's only: it names the agent's
 	// access, which a share recipient does not see.
-	if main && p.OwnerUserID == actorID(c) {
-		extras := agentCreatedExtras(p, label, actorName(c), "", connectorLabeler(c), "chat")
-		emitSystemEvent(id, store.KindAgentCreated, agentCreatedText(label, extras["created_by"], "", extras["grants_summary"]), extras)
+	if main && p.OwnerUserID == actor && setup.created != nil {
+		setup.created(id, label)
 	}
 	// Titled after the agent so its conversations read as the agent's in
 	// the ordinary session list too. Best-effort: an untitled session is
@@ -1548,6 +1882,30 @@ func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id 
 		}
 	}
 	return id, nil
+}
+
+// projectHasProvider reports whether projectID names a default provider.
+func projectHasProvider(projectID string) bool {
+	if projectID == "" {
+		return false
+	}
+	p, err := project.Load(globalLayout, projectID)
+	return err == nil && strings.TrimSpace(p.Meta.Defaults.Provider) != ""
+}
+
+// mainChatProvider is the provider and model of ownerID's main chat with
+// agentID, false when they have none.
+func mainChatProvider(ownerID, agentID string) (string, string, bool) {
+	s, ok := mainSessionOf(ownerID, agentID)
+	if !ok {
+		return "", "", false
+	}
+	for _, a := range s.Agents {
+		if a.Name == "main" && a.Provider != "" {
+			return a.Provider, a.ModelID, true
+		}
+	}
+	return "", "", false
 }
 
 // apiTeamAgentRead handles POST /api/team/agents/{id}/read: the owner opened
@@ -1572,23 +1930,149 @@ func apiTeamAgentRead(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "ok", "last_read_at": now})
 }
 
-// apiTeamAgentSessions handles GET /api/team/agents/{id}/sessions.
+// apiTeamAgentSessions handles GET /api/team/agents/{id}/sessions: the
+// caller's own chats with the agent, newest first. With scope=all it
+// answers teamAgentSessionsAll instead — every chat of the agent that
+// belongs to someone it is shared with right now (its owner and each
+// recipient) — open to the owner and to current recipients only; anyone
+// else gets 403.
 func apiTeamAgentSessions(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	p, _, ok := loadChatTeamAgent(c)
-	if !ok {
+	uid := actorID(c)
+	if c.Query("scope") != "all" {
+		p, _, ok := loadChatTeamAgent(c)
+		if !ok {
+			return
+		}
+		live := teamTurnsNow()
+		names := shareUserNames([]string{uid})
+		out := make([]TeamAgentSessionItem, 0)
+		for _, s := range agentSessions(uid, p.ID) {
+			out = append(out, teamAgentSessionItem(s, uid, names, live))
+		}
+		c.JSON(http.StatusOK, out)
 		return
 	}
-	out := make([]TeamAgentSessionItem, 0)
-	for _, s := range agentSessions(actorID(c), p.ID) {
-		out = append(out, TeamAgentSessionItem{
-			ID: s.ID, Label: s.Meta.Label, LastActive: timePtr(s.Meta.LastActive),
-			AgentMain: s.Meta.AgentMain, Status: string(s.Meta.Status),
-		})
+	p, err := globalTeam.Get(c.Context(), c.PathValue("id"))
+	if errors.Is(err, team.ErrNotFound) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	_, recipient := sharedWithCaller(c, p)
+	if uid == "" || (uid != p.OwnerUserID && !recipient) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "this agent's chats are not shared with you"})
+		return
+	}
+	shared := recipient
+	// A recipient with chat history off sees their own chats only, with
+	// no tabs: nobody else's chat is listed, not even its title.
+	if recipient && !chatHistoryOpen(c.Context(), p, uid) {
+		shared = false
+	}
+	if !recipient && shareBlockOf(p) == "" && !p.Disabled {
+		if shared, err = globalTeam.IsShared(c.Context(), p.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	// Whose chats count: the caller's own always; anyone else's only
+	// while the agent is shared and they are one of its people.
+	member := map[string]bool{uid: true}
+	var chats []session.Session
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.AgentID != p.ID || s.Meta.GroupSessionID != "" || s.Meta.UserID == "" {
+			continue
+		}
+		// Someone else's chat is listed only when it is a web chat, the
+		// kind ownsSession opens through the share (uiAgentChat); their
+		// Slack or channel chats are neither openable nor listed.
+		if s.Meta.UserID != uid && s.Meta.Origin != session.OriginUI {
+			continue
+		}
+		if s.Meta.UserID != uid && shareCrossesProject(s, p) {
+			// Decided per chat: a ticket chat in a project the caller
+			// cannot open stays out, without hiding the person's others.
+			if shared && agentChatViewer(c.Context(), uid, s, p) {
+				member[s.Meta.UserID] = true
+				chats = append(chats, s)
+			}
+			continue
+		}
+		m, seen := member[s.Meta.UserID]
+		if !seen {
+			m = shared && agentChatViewer(c.Context(), uid, s, p)
+			member[s.Meta.UserID] = m
+		}
+		if m {
+			chats = append(chats, s)
+		}
+	}
+	sort.Slice(chats, func(i, j int) bool { return chats[i].Meta.LastActive.After(chats[j].Meta.LastActive) })
+	ids := make([]string, 0, len(member))
+	for id, m := range member {
+		if m {
+			ids = append(ids, id)
+		}
+	}
+	names := shareUserNames(ids)
+	live := teamTurnsNow()
+	out := teamAgentSessionsAll{Shared: shared, Sessions: make([]TeamAgentSessionItem, 0, len(chats))}
+	for _, s := range chats {
+		out.Sessions = append(out.Sessions, teamAgentSessionItem(s, uid, names, live))
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// teamAgentSessionItem is one row of the Chats drawer.
+func teamAgentSessionItem(s session.Session, viewer string, names map[string]string, live teamLive) TeamAgentSessionItem {
+	name := names[s.Meta.UserID]
+	if name == "" {
+		name = s.Meta.UserID
+	}
+	it := TeamAgentSessionItem{
+		ID: s.ID, Label: s.Meta.Label, LastActive: timePtr(s.Meta.LastActive),
+		AgentMain: s.Meta.AgentMain, Status: string(s.Meta.Status),
+		Lifecycle: live.lifecycles[s.ID], Participants: s.Meta.PeopleCount(),
+		OwnerUserID: s.Meta.UserID, OwnerName: name, Mine: s.Meta.UserID == viewer,
+	}
+	if s.Meta.TicketID != "" && s.Meta.ProjectID != "" {
+		it.TicketID, it.TicketProjectID, it.TicketProjectName = s.Meta.TicketID, s.Meta.ProjectID, s.Meta.ProjectID
+		if globalMgr != nil {
+			if p, ok := globalMgr.Registry().Project(s.Meta.ProjectID); ok && p.Meta.Name != "" {
+				it.TicketProjectName = p.Meta.Name
+			}
+		}
+	}
+	return it
+}
+
+// ownCaptain is uid's own Captain when they have one that can run: a
+// ticket chat started in Team › Tickets answers as it.
+func ownCaptain(ctx context.Context, uid string) (entity.AgentPersona, bool) {
+	if globalTeam == nil || uid == "" {
+		return entity.AgentPersona{}, false
+	}
+	rows, err := globalTeam.List(ctx, uid)
+	if err != nil {
+		return entity.AgentPersona{}, false
+	}
+	return captainIn(rows)
+}
+
+// captainIn is the enabled Captain among rows, if any.
+func captainIn(rows []entity.AgentPersona) (entity.AgentPersona, bool) {
+	for _, p := range rows {
+		if p.IsCaptain && !p.Disabled {
+			return p, true
+		}
+	}
+	return entity.AgentPersona{}, false
 }
 
 // teamMainMu serialises main-chat moves, so an agent never ends up with

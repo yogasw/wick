@@ -22,6 +22,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/plugin/host"
 	pb "github.com/yogasw/wick/pkg/plugin/proto"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -92,6 +93,79 @@ func UserFromHeaders(r *http.Request) (tool.User, bool) {
 	return u, true
 }
 
+// TokenUserFromHeaders reads who a webhook request authenticated as, as the
+// host verified and injected it: the owner of a wick PAT, a user behind
+// wick's SSO JWT, or wick itself (ID tool.SystemUserID). User.Source says
+// which; a host too old to send the source header only injected PAT
+// owners, so an absent source reads as tool.TokenSourcePAT. ok is false
+// when the request carried no credential the host could verify.
+func TokenUserFromHeaders(r *http.Request) (tool.User, bool) {
+	id := r.Header.Get(wickplugin.HeaderTokenUserID)
+	if id == "" {
+		return tool.User{}, false
+	}
+	u := tool.User{
+		ID:      id,
+		Name:    r.Header.Get(wickplugin.HeaderTokenUserName),
+		Email:   r.Header.Get(wickplugin.HeaderTokenUserEmail),
+		IsAdmin: r.Header.Get(wickplugin.HeaderTokenUserRole) == "admin",
+		Source:  r.Header.Get(wickplugin.HeaderTokenUserSource),
+	}
+	if u.Source == "" {
+		u.Source = tool.TokenSourcePAT
+	}
+	for _, t := range strings.Split(r.Header.Get(wickplugin.HeaderTokenUserTags), ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			u.Tags = append(u.Tags, t)
+		}
+	}
+	return u, true
+}
+
+type tokenUserKey struct{}
+
+// tokenUserFromCtx is the plugin-side tool.TokenResolver: the plugin cannot
+// verify a token itself, so WebhookCtx.TokenUser answers with what the host
+// verified for this request (wrap put it on the context).
+func tokenUserFromCtx(ctx context.Context, _ string) (tool.User, bool) {
+	u, ok := ctx.Value(tokenUserKey{}).(tool.User)
+	return u, ok
+}
+
+// tokenUserFromRequest is the plugin-side tool.HeaderTokenResolver: a call
+// with no bearer (wick's SSO JWT) still reaches WebhookCtx.TokenUser with
+// what the host verified (the host already checked the tool path).
+func tokenUserFromRequest(r *http.Request, _ string) (tool.User, bool) {
+	return tokenUserFromCtx(r.Context(), "")
+}
+
+// installResolvers points pkg/tool's identity hooks at the host-injected
+// headers. Plugin process ONLY: these resolvers trust X-Wick-* request
+// headers, which is safe solely behind wick's proxy (it strips every
+// client-sent X-Wick-* header first). Never call ServeTool/Handler inside
+// the wick process — a built-in tool would then believe forged headers.
+func installResolvers() {
+	tool.SetUserResolver(UserFromHeaders)
+	tool.SetTokenResolver(tokenUserFromCtx)
+	tool.SetHeaderTokenResolver(tokenUserFromRequest)
+}
+
+// wrap carries the host-verified token owner and the Host API call id of a
+// request on its context.
+func wrap(next http.Handler) http.Handler {
+	return host.CallIDHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := TokenUserFromHeaders(r); ok {
+			r = r.WithContext(context.WithValue(r.Context(), tokenUserKey{}, u))
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// Host returns wick's Host API for this tool plugin (see wickplugin.Host).
+// Pass the request context so user-level calls run for the person behind
+// the request; host.ErrHostAPIUnavailable means an older wick.
+func Host(ctx context.Context) (host.Host, error) { return wickplugin.Host(ctx) }
+
 type toolServer struct {
 	pb.UnimplementedToolServer
 	schema []byte
@@ -152,8 +226,8 @@ func Handler(mod tool.Module, cfg map[string]string) http.Handler {
 	if cfg != nil {
 		store.set(cfg)
 	}
-	tool.SetUserResolver(UserFromHeaders)
-	return r.handler()
+	installResolvers()
+	return wrap(r.handler())
 }
 
 // Manifest returns the tool half of mod's manifest (routes are registered to
@@ -193,8 +267,8 @@ func ServeTool(mod tool.Module, opts ...Option) {
 	}
 	_ = os.Chmod(sock, 0o600)
 	wickplugin.ApplyRlimits()
-	tool.SetUserResolver(UserFromHeaders)
-	srv := &http.Server{Handler: r.handler(), ReadHeaderTimeout: 10 * time.Second}
+	installResolvers()
+	srv := &http.Server{Handler: wrap(r.handler()), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	schema, _ := json.Marshal(tm)
 	goplugin.Serve(&goplugin.ServeConfig{

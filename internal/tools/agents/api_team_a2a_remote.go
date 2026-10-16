@@ -414,7 +414,7 @@ func apiTeamRemoteCreate(c *tool.Ctx) {
 	}
 	av := team.DefaultAvatarFor(handle)
 	if req.Avatar != nil {
-		av = *req.Avatar
+		av = team.AvatarForCreate(*req.Avatar)
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: owner, Handle: handle, ProjectID: pid, Kind: a2aremote.Kind, Tagline: tagline,

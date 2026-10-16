@@ -16,12 +16,17 @@ vi.mock("$lib/managedbin.js", async (importOriginal) => ({
 vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
+  toastWarn: vi.fn(),
   toasts: { subscribe: vi.fn(() => vi.fn()) },
 }));
+import { toastWarn } from "@wick-fe/common-stores";
 
 function makeData(): ProvidersListResponse {
   return {
     IsAdmin: true,
+    CanCreate: true,
+    CanHostConfig: true,
+    CreatePerms: { binary: true, extra_args: true, env: true, airouter_raw_config: true },
     Providers: [
       {
         Instance: { Type: "claude", Name: "claude", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
@@ -374,6 +379,57 @@ describe("ProvidersList connection badges", () => {
     expect(await screen.findByText("wait 4m")).toBeTruthy();
   });
 
+  // Every probe after the reading failed: the numbers are the last ones
+  // that worked, and the card must not pass them off as current.
+  const rateLimited = {
+    usageAgeS: 172800,
+    usageNextS: 600,
+    usageLastErr: "usage endpoint: 429 Too Many Requests",
+    usageRateLimited: true,
+    usageFails: 4,
+  };
+
+  it("labels a reading cached and warns when the latest check was rate-limited", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn(rateLimited)]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    const chip = screen.getByTestId("usage-cache-chip");
+    expect(chip.textContent).toContain("cached · 2d ago");
+    expect(chip.getAttribute("title")).toContain("429 Too Many Requests");
+    const warn = screen.getByTestId("usage-stale-warning");
+    expect(warn.textContent).toContain("Cached reading from 2d ago — last check rate-limited (429), retry after");
+    expect(warn.getAttribute("title")).toBe("usage endpoint: 429 Too Many Requests");
+  });
+
+  it("quotes any other failure behind a cached reading", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([
+      conn({ usageAgeS: 3600, usageLastErr: "usage endpoint: 401 Unauthorized" }),
+    ]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getByTestId("usage-stale-warning").textContent).toContain(
+      "Cached reading from 1h ago — last check failed: 401 Unauthorized.",
+    );
+  });
+
+  it("does not label a fresh reading cached", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30 })]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getByTestId("usage-cache-chip").textContent).not.toContain("cached");
+    expect(screen.queryByTestId("usage-stale-warning")).toBeNull();
+  });
+
+  it("toasts when an accepted re-check ends rate-limited", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30 })]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn(rateLimited)]);
+    await fireEvent.click(screen.getAllByTestId("usage-recheck")[0]);
+    await waitFor(() => expect(toastWarn).toHaveBeenCalled());
+    expect(vi.mocked(toastWarn).mock.calls[0][1]).toContain("last check rate-limited (429)");
+  });
+
   it("shows the checking state while a probe is in flight", async () => {
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30, usageChecking: true })]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
@@ -388,7 +444,7 @@ describe("ProvidersList connection badges", () => {
   // would let them change the host. The API refuses these anyway — this
   // is about not offering a button that lies.
   it("hides every admin control when the caller is not an admin", async () => {
-    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false, CanCreate: false });
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("claude/claude");
@@ -405,7 +461,7 @@ describe("ProvidersList connection badges", () => {
   });
 
   it("still lists the providers themselves for a non-admin", async () => {
-    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false, CanCreate: false });
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     // The point of sharing: the card and its usage are there.
@@ -440,7 +496,7 @@ describe("ProvidersList connection badges", () => {
   });
 
   it("hides per-card Rescan from a non-admin manager", async () => {
-    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false, CanCreate: false });
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("claude/claude");
@@ -623,5 +679,37 @@ describe("ProvidersList unmount", () => {
     await Promise.resolve();
     expect(spy.mock.calls.filter((c) => c[1] === 2000)).toHaveLength(0);
     spy.mockRestore();
+  });
+});
+
+describe("ProvidersList - failover badges", () => {
+  it("shows the chain when enabled and the health badge, nothing when healthy", async () => {
+    const until = new Date();
+    until.setHours(14, 30, 0, 0);
+    const data = makeData();
+    data.Providers[0].Instance.Failover = { Enabled: true, Targets: ["codex/waba", "omp/wick"] };
+    data.Providers[0].Instance.Health = { Kind: "limit", Since: "", Until: until.toISOString(), Reason: "session limit" };
+    data.Providers[1].Instance.Failover = { Enabled: false, Targets: ["claude/claude"] };
+    data.Providers[1].Instance.Health = null;
+    vi.mocked(api.apiGetProviders).mockResolvedValue(data);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    const fo = await screen.findAllByTestId("card-failover");
+    expect(fo).toHaveLength(1);
+    expect(fo[0].textContent).toBe("Failover → codex/waba, omp/wick");
+    const hb = screen.getAllByTestId("card-health");
+    expect(hb).toHaveLength(1);
+    expect(hb[0].textContent).toBe("Limited until 14:30");
+    expect(hb[0].className).toContain("amber");
+  });
+
+  it("labels auth and outage failures", async () => {
+    const data = makeData();
+    data.Providers[0].Instance.Health = { Kind: "auth", Since: "", Until: "", Reason: "" };
+    data.Providers[1].Instance.Health = { Kind: "unavailable", Since: "", Until: "", Reason: "" };
+    vi.mocked(api.apiGetProviders).mockResolvedValue(data);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    const hb = await screen.findAllByTestId("card-health");
+    expect(hb.map((b) => b.textContent)).toEqual(["Auth failed", "Unavailable"]);
+    expect(hb.every((b) => b.className.includes("red"))).toBe(true);
   });
 });

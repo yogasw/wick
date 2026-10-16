@@ -1,8 +1,9 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import Composer from "../Composer.svelte";
 import { optionModelsWithMeta } from "../model-list-meta.js";
+import { seedUsage, resetUsageStore } from "../usage/base/index.js";
 
 describe("Composer — send + attachments", () => {
   test("clicking Send with text calls onSend and clears the textarea", async () => {
@@ -32,6 +33,19 @@ describe("Composer — send + attachments", () => {
     expect(btn.disabled).toBe(true);
     await fireEvent.input(screen.getByRole("textbox"), { target: { value: "hi" } });
     expect(btn.disabled).toBe(false);
+  });
+
+  test("readOnly locks the textarea and Send", () => {
+    render(Composer, { props: { onSend: vi.fn(), readOnly: true } });
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /send/i }) as HTMLButtonElement).disabled).toBe(true);
+    const toolbar = screen.getByTestId("composer-toolbar") as HTMLElement & { inert?: boolean };
+    expect(toolbar.inert === true || toolbar.hasAttribute("inert")).toBe(true);
+  });
+
+  test("disabled keeps the textarea typeable", () => {
+    render(Composer, { props: { onSend: vi.fn(), disabled: true } });
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(false);
   });
 
   test("attaching a file shows it and includes it on send", async () => {
@@ -740,6 +754,22 @@ describe("Composer — @ mention groups", () => {
     expect(textarea.value.startsWith("@anton")).toBe(true);
   });
 
+  test("someone else's agent is listed greyed and never inserted", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        mentionAgents: [{ handle: "hana/captain", label: "Captain · @hana", hint: "only takes instructions from @hana", group: "others" as const }],
+      },
+    });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@" } });
+    const row = screen.getByText("Captain · @hana").closest("button")!;
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("In this room · others")).toBeDefined();
+    await fireEvent.mouseDown(row);
+    expect(textarea.value).toBe("@");
+  });
+
   test("a files-only menu keeps no section title", async () => {
     render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
     await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@" } });
@@ -874,5 +904,102 @@ describe("Composer — Send or Stop while running", () => {
     await hold(btn);
     expect(screen.queryByRole("menu")).toBeNull();
     expect(onSend).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Composer — usage rings for single-instance provider types", () => {
+  const glance = {
+    supported: true,
+    checked: true,
+    windows: [
+      { key: "five_hour", utilization: 40, resetsAt: "" },
+      { key: "seven_day", utilization: 10, resetsAt: "" },
+    ],
+    savedResets: null,
+    error: "",
+    fetchedAt: "",
+  };
+  const models = [
+    { id: "m-a", label: "Model A", default: true },
+    { id: "m-b", label: "Model B", default: false },
+  ];
+  beforeEach(() => {
+    resetUsageStore();
+    for (const k of ["claude/a", "claude/b", "codex/codex"]) seedUsage(k, glance);
+  });
+
+  test("a single-instance type shows its rings in the model drill header", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: {
+          options: [{ label: "codex", value: "codex/codex", models }],
+          value: "codex/codex",
+          onChange: vi.fn(),
+          usageBase: "",
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    expect(screen.getByText(/Use codex/)).toBeDefined();
+    expect(screen.getAllByTestId("usage-mini-rings")).toHaveLength(1);
+  });
+
+  test("a multi-instance type keeps rings on its instance rows, not in the drill", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: {
+          options: [
+            { label: "claude · a", value: "claude/a", models },
+            { label: "claude · b", value: "claude/b", models },
+          ],
+          value: "claude/a",
+          onChange: vi.fn(),
+          usageBase: "",
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    expect(screen.getByText(/Use claude · a/)).toBeDefined();
+    expect(screen.queryAllByTestId("usage-mini-rings")).toHaveLength(0);
+    // Back to the type list, then into the instance list: one ring per instance.
+    await fireEvent.click(screen.getByRole("button", { name: "Back to providers" }));
+    await fireEvent.click(screen.getByText("claude"));
+    expect(screen.getByText("claude · b")).toBeDefined();
+    expect(screen.getAllByTestId("usage-mini-rings")).toHaveLength(2);
+  });
+
+  test("the type list shows rings on single-instance rows only", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: {
+          options: [
+            { label: "claude · a", value: "claude/a" },
+            { label: "claude · b", value: "claude/b" },
+            { label: "codex", value: "codex/codex" },
+          ],
+          value: "claude/a",
+          onChange: vi.fn(),
+          usageBase: "",
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    expect(screen.getByText("codex")).toBeDefined();
+    expect(screen.getAllByTestId("usage-mini-rings")).toHaveLength(1);
+  });
+
+  test("no usageBase, no rings anywhere", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: { options: [{ label: "codex", value: "codex/codex", models }], value: "codex/codex", onChange: vi.fn() },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    expect(screen.getByText(/Use codex/)).toBeDefined();
+    expect(screen.queryAllByTestId("usage-mini-rings")).toHaveLength(0);
   });
 });

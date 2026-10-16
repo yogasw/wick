@@ -186,6 +186,26 @@ describe("OperationsTable", () => {
     expect(screen.getByText(/missing scope/)).toBeTruthy();
   });
 
+  it("flags an op hidden by config with its predicate and keeps it out of the count", async () => {
+    vi.mocked(api.toggleConnectorOperation).mockResolvedValue(false);
+    renderTable([
+      op({ key: "a", name: "A" }),
+      op({ key: "b", name: "B" }),
+      op({ key: "c", name: "C" }),
+      op({ key: "pdf", name: "PDF", visible_when: "browser:chromium|moli", hidden_by_config: true }),
+    ]);
+    expect(screen.getByText("3")).toBeTruthy();
+    expect(screen.getByText("Hidden: requires browser:chromium|moli")).toBeTruthy();
+    expect(screen.getByText("PDF").closest("tr")?.className).toContain("opacity-60");
+    expect(screen.getByText("A").closest("tr")?.className).not.toContain("opacity-60");
+    /* The admin toggle stays live: the choice must survive a config change. */
+    const sw = screen.getByLabelText("Enable PDF") as HTMLButtonElement;
+    expect(sw.disabled).toBe(false);
+    await fireEvent.click(sw);
+    await Promise.resolve();
+    expect(api.toggleConnectorOperation).toHaveBeenCalledWith("slack", "row-a", "pdf", false);
+  });
+
   it("renders the empty state when there are no operations", () => {
     renderTable([]);
     expect(screen.getByText("This connector exposes no operations.")).toBeTruthy();

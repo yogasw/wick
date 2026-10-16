@@ -57,3 +57,38 @@ func TestPromptFor(t *testing.T) {
 		t.Errorf("ordinary session got %q", got)
 	}
 }
+
+func TestSourceNames(t *testing.T) {
+	ctx := context.Background()
+	layout := config.NewLayout(t.TempDir())
+	svc := NewService(testDB(t), layout)
+	if _, err := project.Create(layout, project.CreateOptions{ID: "p-alpha", Name: "Alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	capt := &entity.AgentPersona{OwnerUserID: "u1", Handle: "captain", IsCaptain: true, AllowedConnectors: "[]"}
+	alpha := &entity.AgentPersona{OwnerUserID: "u1", Handle: "Alpha", ProjectID: "p-alpha", AllowedConnectors: "[]"}
+	other := &entity.AgentPersona{OwnerUserID: "u2", Handle: "stranger", AllowedConnectors: "[]"}
+	for _, p := range []*entity.AgentPersona{capt, alpha, other} {
+		if err := svc.Create(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range []session.CreateOptions{{ID: "s-cap", AgentID: capt.ID}, {ID: "s-plain"}} {
+		if _, err := session.Create(ctx, layout, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := svc.SourceNames(ctx, "s-cap")
+	if got["alpha"] != "Alpha" {
+		t.Errorf("teammate missing or unnamed: %v", got)
+	}
+	if _, ok := got["captain"]; ok {
+		t.Errorf("own handle listed: %v", got)
+	}
+	if _, ok := got["stranger"]; ok {
+		t.Errorf("another owner's agent listed: %v", got)
+	}
+	if got := svc.SourceNames(ctx, "s-plain"); got != nil {
+		t.Errorf("ordinary session got %v", got)
+	}
+}

@@ -49,3 +49,16 @@ func TestDataDirFromExe(t *testing.T) {
 		})
 	}
 }
+
+func TestDataDirEnvOverride(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "plugins", "playwright_browser")
+	t.Setenv(EnvDataDir, want)
+	if got := DataDir("playwright_browser"); got != want {
+		t.Fatalf("DataDir with %s set = %q, want %q", EnvDataDir, got, want)
+	}
+
+	t.Setenv(EnvDataDir, "")
+	if got := DataDir("playwright_browser"); got == want {
+		t.Fatalf("DataDir with %s empty still returned the override %q", EnvDataDir, got)
+	}
+}

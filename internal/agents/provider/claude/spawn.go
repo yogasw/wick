@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -212,10 +213,30 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// claude demands a valid uuid and exits otherwise. Sub-agent ids are
 	// the live case: they carry ancestry as "<parent>--sub-<seg>", so
 	// those sessions keep claude's own minted id, captured as before.
+	//
+	// An empty ResumeID does not prove the name is unused: instances
+	// sharing one config dir all name the conversation the same, so a
+	// switch back to an instance that lost track of the id would hand
+	// claude a name it already holds. The transcript on disk is the
+	// authority — when it exists, resume it instead of naming it again.
+	// The env is built here, not after argv, so the config dir is read
+	// from exactly what the subprocess will see.
+	env := append(spawnEnv(envscrub.ScrubOSEnv(), opt), routerContrib.Env...)
 	switch {
 	case opt.ResumeID != "":
 		args = append(args, "--resume", opt.ResumeID)
 	case isUUID(opt.SessionID):
+		if opt.Workspace != "" {
+			home, _ := os.UserHomeDir()
+			if cfg := claudeConfigDirFromEnv(env, home); transcriptExists(cfg, opt.Workspace, opt.SessionID) {
+				log.Info().
+					Str("session", opt.SessionID).
+					Str("config_dir", cfg).
+					Msg("agents.spawn: transcript already on disk, resuming instead of --session-id")
+				args = append(args, "--resume", opt.SessionID)
+				break
+			}
+		}
 		args = append(args, "--session-id", opt.SessionID)
 	}
 
@@ -227,7 +248,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(spawnEnv(envscrub.ScrubOSEnv(), opt), routerContrib.Env...)
+	cmd.Env = env
 	hideConsole(cmd)
 	// Own process group: teardown must reach the descendants this CLI
 	// spawns (MCP servers, tool subprocesses), not just the leader.
@@ -300,6 +321,36 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		env: addedEnv, scopeUnit: scopeUnit,
 		realBin: bin, realArgv: args,
 	}, nil
+}
+
+// claudeConfigDirFromEnv is the config dir a claude started with env uses:
+// the last CLAUDE_CONFIG_DIR entry (exec takes the last), else
+// $HOME/.claude. An empty value counts as unset, as it does for claude.
+func claudeConfigDirFromEnv(env []string, home string) string {
+	dir := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+			dir = v
+		}
+	}
+	if dir != "" {
+		return dir
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".claude")
+}
+
+// transcriptExists reports whether claude already holds a conversation
+// named id for workspace under configDir — the file whose presence makes
+// claude refuse that id as a new --session-id.
+func transcriptExists(configDir, workspace, id string) bool {
+	if configDir == "" || workspace == "" || id == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(configDir, "projects", EncodeWorkspace(workspace), id+".jsonl"))
+	return err == nil
 }
 
 // spawnEnv assembles the subprocess environment from base (typically

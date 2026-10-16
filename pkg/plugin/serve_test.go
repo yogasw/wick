@@ -15,3 +15,14 @@ func TestDumpManifestIsModuleJSON(t *testing.T) {
 		t.Fatalf("dump-manifest drift")
 	}
 }
+
+func TestDumpManifestRejectsInvalidVisibleWhen(t *testing.T) {
+	mod := sampleModule()
+	mod.Operations[0].Ops[0].VisibleWhen = "missing:x"
+	if _, err := DumpManifest(mod); err == nil {
+		t.Fatal("want error for visible_when on unknown field")
+	}
+	if _, err := BuildSelfManifest(mod, ""); err == nil {
+		t.Fatal("BuildSelfManifest must reject it too")
+	}
+}

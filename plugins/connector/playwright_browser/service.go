@@ -54,6 +54,25 @@ func parseGetContent(c *connector.Ctx) (getContentInput, error) {
 	}, nil
 }
 
+func parseGetMarkdown(c *connector.Ctx) (getMarkdownInput, error) {
+	if !isMoliEngine(c.Cfg("browser")) {
+		return getMarkdownInput{}, fmt.Errorf("get_markdown needs browser=moli: it runs `moli fetch`, which the %q engine does not have; use get_content instead", c.Cfg("browser"))
+	}
+	url, err := requireURL(c)
+	if err != nil {
+		return getMarkdownInput{}, err
+	}
+	format := strings.TrimSpace(c.Input("format"))
+	switch format {
+	case "":
+		format = "markdown"
+	case "markdown", "semantic_tree_text":
+	default:
+		return getMarkdownInput{}, fmt.Errorf("format must be markdown or semantic_tree_text, got %q", format)
+	}
+	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector"))}, nil
+}
+
 func parsePDF(c *connector.Ctx) (pdfInput, error) {
 	url, err := requireURL(c)
 	if err != nil {
@@ -263,8 +282,12 @@ func browserType(pw *playwright.Playwright, cfg string) (playwright.BrowserType,
 		// CloakBrowser (free or pro) is patched Chromium — drive it via the
 		// Chromium BrowserType with a custom ExecutablePath (set in launchOptions).
 		return pw.Chromium, nil
+	case moliEngine:
+		// Moli speaks CDP, so Playwright attaches to it as Chromium
+		// (ConnectOverCDP). It is never Launch()ed — see startMoli.
+		return pw.Chromium, nil
 	default:
-		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, cloakbrowser, or cloakbrowser-pro", cfg)
+		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, cloakbrowser, cloakbrowser-pro, or moli", cfg)
 	}
 }
 
@@ -341,11 +364,7 @@ func contextOptions(pw *playwright.Playwright, c *connector.Ctx) (playwright.Bro
 		if !ok {
 			return opts, fmt.Errorf("unknown device %q: see the Playwright device registry (e.g. \"iPhone 15\", \"Pixel 7\")", dev)
 		}
-		opts.UserAgent = playwright.String(desc.UserAgent)
-		opts.Viewport = desc.Viewport
-		opts.DeviceScaleFactor = playwright.Float(desc.DeviceScaleFactor)
-		opts.IsMobile = playwright.Bool(desc.IsMobile)
-		opts.HasTouch = playwright.Bool(desc.HasTouch)
+		applyDevice(&opts, desc, c.Cfg("browser"))
 	} else if isCloakEngine(c.Cfg("browser")) {
 		// CloakBrowser viewport handling mirrors the wrapper's
 		// _resolve_context_viewport (browser.py):
@@ -385,6 +404,19 @@ func contextOptions(pw *playwright.Playwright, c *connector.Ctx) (playwright.Bro
 		opts.StorageStatePath = playwright.String(ss)
 	}
 	return opts, nil
+}
+
+// applyDevice copies a device descriptor onto the context options. Moli
+// rejects Emulation.setDeviceMetricsOverride with mobile=true, which would fail
+// every page, so for it IsMobile is left unset and the rest still applies.
+func applyDevice(opts *playwright.BrowserNewContextOptions, desc *playwright.DeviceDescriptor, engine string) {
+	opts.UserAgent = playwright.String(desc.UserAgent)
+	opts.Viewport = desc.Viewport
+	opts.DeviceScaleFactor = playwright.Float(desc.DeviceScaleFactor)
+	if !isMoliEngine(engine) {
+		opts.IsMobile = playwright.Bool(desc.IsMobile)
+	}
+	opts.HasTouch = playwright.Bool(desc.HasTouch)
 }
 
 // headless resolves the headless config, defaulting to true when unset (the

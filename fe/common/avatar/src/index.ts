@@ -5,6 +5,8 @@
 export { default as AgentAvatar } from "./AgentAvatar.svelte";
 export { default as BlobAvatar } from "./BlobAvatar.svelte";
 export { default as BlobAvatarPicker } from "./BlobAvatarPicker.svelte";
+export { default as ImageAvatar } from "./ImageAvatar.svelte";
+export * from "./image.js";
 export {
   AVATAR_KIND_BLOB, isBlobKind, BLOB_SHAPES, BLOB_EXPRESSIONS, BLOB_COLORS, BLOB_GAZE_MIN,
   normalizeBlobShape, normalizeBlobExpression, switchAvatarKind, type AvatarSpec, blobStateFor, randomBlob, blobColor,
@@ -18,7 +20,7 @@ export {
   type Fidget, type FidgetEnv, type FidgetPose,
 } from "./blob/motion/fidget";
 export {
-  AVATAR_EVENTS, AVATAR_EVENT_LABELS, DEFAULT_EVENT_POSES, isAvatarEvent, toolEvent, toolWords, eventOf, poseFor,
+  AVATAR_EVENTS, AVATAR_EVENT_LABELS, DEFAULT_EVENT_POSES, isAvatarEvent, toolEvent, toolWords, eventOf, poseFor, classicPoseOf, CLASSIC_EVENT_POSES, IMAGE_EVENT_POSES, imagePoseOf,
   fallbackState, resolvePose, cleanOverrides, type AvatarEvent, type EventPose, type EventOverride, type EventOverrides, type PoseInput, type ResolvedPose,
 } from "./events.js";
 export { STATES as BLOB_STATES } from "./blob/core/types";
