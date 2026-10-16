@@ -19,8 +19,9 @@ func TestSwitchNoticeFollowsHistoryCarrier(t *testing.T) {
 	saveSeed(t, Instance{Type: TypeOMP, Name: "yoga"})
 	saveSeed(t, Instance{Type: TypeOpencode, Name: "a"})
 	saveSeed(t, Instance{Type: TypeOpencode, Name: "b"})
-	saveSeed(t, Instance{Type: TypeClaude, Name: "claude"})
-	saveSeed(t, Instance{Type: TypeClaude, Name: "work"})
+	// Separate config dirs: instances sharing one also share ids.
+	saveSeed(t, Instance{Type: TypeClaude, Name: "claude", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/claude"}})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "work", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/work"}})
 	layout := config.NewLayout(t.TempDir())
 
 	var asked []string

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -209,8 +210,9 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 	// pick up its own past turns or start cold.
 	targetHasHistory := false
 	// sameScope reports whether the switch stays where the outgoing resume
-	// id is readable — the same instance, or another instance of a type
-	// whose HistoryCarrier can carry it — so the conversation carries over.
+	// id is readable — the same instance, another instance of a type
+	// whose HistoryCarrier can carry it, or another instance sharing its
+	// conversation store — so the conversation carries over.
 	sameScope := false
 	// carry is the target type's answer for a same-type switch: whether
 	// (and how) the conversation reaches the target instance.
@@ -249,7 +251,10 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 				// A type with no HistoryCarrier (claude, codex) gives each
 				// instance its own config dir and transcripts: an id is only
 				// resumable on the instance that minted it, so a move between
-				// two of its instances is a move between scopes.
+				// two of its instances is a move between scopes. Instances
+				// that share one config dir are the exception: instanceResumeID
+				// resolves the shared id, and resuming the outgoing one keeps
+				// the switch in scope (below).
 				instanceBound := !hasHistoryCarrier(toIns.Type)
 				sameScope = fromScope == toScope && (sameInstance || !instanceBound)
 				if a.CLISessionID != "" {
@@ -270,6 +275,12 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 					resumeID = a.CLISessionID
 				case instanceBound:
 					resumeID = instanceResumeID(loaded.Agents[i].ProviderSessions, newKey, instances)
+					// The outgoing id, on an instance that provably shares the
+					// outgoing one's store, is the very conversation just left:
+					// one transcript, so the switch stays in scope.
+					if resumeID != "" && resumeID == a.CLISessionID && fromScope == toScope && sharesStore(instances, fromKey, newKey) {
+						sameScope = true
+					}
 				default:
 					resumeID = session.ResumeIDForScope(loaded.Agents[i].ProviderSessions, toScope)
 				}
@@ -807,17 +818,22 @@ func hasHistoryCarrier(t Type) bool {
 // written before ids were kept per instance has only the type key; that
 // id is taken only while no instance of the type has its own key yet and
 // the type has a single instance, so it cannot be another one's.
+//
+// Failing both, an id another instance recorded is still key's when the
+// two provably share one conversation store (sharedStoreResumeID): the
+// CLI resumes it from the same files, and leaving it unclaimed makes the
+// next spawn try to name a conversation that already exists.
 func instanceResumeID(m map[string]string, key string, instances []Instance) string {
 	if id := m[key]; id != "" {
 		return id
 	}
 	scope := session.ProviderScope(key)
 	if m[scope] == "" {
-		return ""
+		return sharedStoreResumeID(m, key, instances)
 	}
 	for k, v := range m {
 		if v != "" && k != scope && session.ProviderScope(k) == scope {
-			return ""
+			return sharedStoreResumeID(m, key, instances)
 		}
 	}
 	n := 0
@@ -827,9 +843,105 @@ func instanceResumeID(m map[string]string, key string, instances []Instance) str
 		}
 	}
 	if n != 1 {
-		return ""
+		return sharedStoreResumeID(m, key, instances)
 	}
 	return m[scope]
+}
+
+// storeDirEnvKey is the env key that relocates a type's conversation
+// store, for the types whose instances may share one. Only claude is
+// listed: every claude instance names its conversation with the wick
+// session id, so a shared store means one conversation under one id.
+var storeDirEnvKey = map[Type]string{
+	TypeClaude: "CLAUDE_CONFIG_DIR",
+}
+
+// sharedStoreResumeID is the id another instance of key's type recorded,
+// when that instance provably uses key's own store: both leave the store
+// env unset, or set it to the same cleaned path. The bare type key has no
+// known owner, so it counts only when every instance of the type shares
+// key's store. Conflicting candidates, or an owner that is no longer
+// configured, prove nothing and yield "" — the spawner's on-disk check is
+// what still keeps a fresh name from colliding.
+func sharedStoreResumeID(m map[string]string, key string, instances []Instance) string {
+	target, ok := configuredInstance(instances, key)
+	if !ok {
+		return ""
+	}
+	envKey := storeDirEnvKey[target.Type]
+	if envKey == "" {
+		return ""
+	}
+	dir := storeDir(target, envKey)
+	scope := string(target.Type)
+	found := ""
+	for k, v := range m {
+		if v == "" || k == key || session.ProviderScope(k) != scope {
+			continue
+		}
+		if k == scope {
+			if !allShareStore(instances, target.Type, envKey, dir) {
+				continue
+			}
+		} else if owner, ok := configuredInstance(instances, k); !ok || storeDir(owner, envKey) != dir {
+			continue
+		}
+		if found != "" && found != v {
+			return ""
+		}
+		found = v
+	}
+	return found
+}
+
+// sharesStore reports whether the configured instances a and b provably
+// use one conversation store (same store env value, or both unset).
+func sharesStore(instances []Instance, a, b string) bool {
+	x, ok := configuredInstance(instances, a)
+	if !ok {
+		return false
+	}
+	y, ok := configuredInstance(instances, b)
+	if !ok || x.Type != y.Type {
+		return false
+	}
+	envKey := storeDirEnvKey[x.Type]
+	return envKey != "" && storeDir(x, envKey) == storeDir(y, envKey)
+}
+
+// configuredInstance is key's instance, only when it is configured.
+func configuredInstance(instances []Instance, key string) (Instance, bool) {
+	for _, ins := range instances {
+		if string(ins.Type)+"/"+ins.Name == key {
+			return ins, true
+		}
+	}
+	return Instance{}, false
+}
+
+// storeDir is ins's store env value (last entry wins, as exec takes the
+// last), cleaned; "" = unset, the CLI's default.
+func storeDir(ins Instance, envKey string) string {
+	dir := ""
+	for _, kv := range ins.Env {
+		if v, ok := strings.CutPrefix(kv, envKey+"="); ok {
+			dir = v
+		}
+	}
+	if dir == "" {
+		return ""
+	}
+	return filepath.Clean(dir)
+}
+
+// allShareStore reports whether every configured instance of t uses dir.
+func allShareStore(instances []Instance, t Type, envKey, dir string) bool {
+	for _, ins := range instances {
+		if ins.Type == t && storeDir(ins, envKey) != dir {
+			return false
+		}
+	}
+	return true
 }
 
 // carriesOver is the registered carrier's answer for a same-type switch

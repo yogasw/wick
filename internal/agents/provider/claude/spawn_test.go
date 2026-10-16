@@ -2,12 +2,15 @@ package claude
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // TestClaudeSpawnThinkingTokensInjectsEnv asserts the claude spawn env
@@ -230,5 +233,88 @@ func TestSpawnerArgv(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSpawnerSessionIDTranscriptOnDisk pins the guard against re-naming a
+// conversation claude already holds: instances sharing a config dir all
+// name it with the wick session id, so a spawn that lost its ResumeID must
+// resume the transcript on disk instead of passing --session-id (which
+// claude rejects as "already in use").
+func TestSpawnerSessionIDTranscriptOnDisk(t *testing.T) {
+	const sid = "39141fdf-48df-4fd1-93d3-76256f29dad5"
+	cases := []struct {
+		name       string
+		transcript bool
+		resumeID   string
+		wantTail   []string
+		wantNoFlag string
+	}{
+		{"transcript on disk resumes it", true, "", []string{"--resume", sid}, "--session-id"},
+		{"no transcript names the session", false, "", []string{"--session-id", sid}, "--resume"},
+		{"recorded resume id is kept", true, "sess-abc", []string{"--resume", "sess-abc"}, "--session-id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := t.TempDir()
+			ws := t.TempDir()
+			if tc.transcript {
+				dir := filepath.Join(cfg, "projects", EncodeWorkspace(ws))
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// A real binary, so Spawn gets as far as exec and argv can be
+			// read; `true` ignores the flags and exits.
+			bin, lerr := safeexec.LookPath("true")
+			if lerr != nil {
+				t.Skip("no `true` binary on PATH")
+			}
+			p, err := Spawner{Binary: bin}.Spawn(ctx, provider.SpawnOptions{
+				Workspace: ws,
+				SessionID: sid,
+				ResumeID:  tc.resumeID,
+				ExtraEnv:  []string{"CLAUDE_CONFIG_DIR=" + cfg},
+			})
+			if err == nil {
+				_ = p.Kill()
+			}
+			if p == nil {
+				t.Skip("could not inspect argv — Spawn failed before exec.Cmd was wired")
+			}
+			// The session flag is appended last; everything before it is
+			// covered by TestSpawnerArgv.
+			got := p.Argv()
+			if len(got) < 2 || !reflect.DeepEqual(got[len(got)-2:], tc.wantTail) {
+				t.Errorf("Argv tail\n  got:  %v\n  want: %v", got, tc.wantTail)
+			}
+			if slices.Contains(got, tc.wantNoFlag) {
+				t.Errorf("argv must NOT contain %q, got %v", tc.wantNoFlag, got)
+			}
+		})
+	}
+}
+
+func TestClaudeConfigDirFromEnv(t *testing.T) {
+	home := filepath.Join("/", "home", "u")
+	cases := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"unset falls back to home", []string{"PATH=/bin"}, filepath.Join(home, ".claude")},
+		{"set wins", []string{"CLAUDE_CONFIG_DIR=/cfg/a"}, "/cfg/a"},
+		{"last entry wins", []string{"CLAUDE_CONFIG_DIR=/cfg/a", "CLAUDE_CONFIG_DIR=/cfg/b"}, "/cfg/b"},
+		{"empty value counts as unset", []string{"CLAUDE_CONFIG_DIR=/cfg/a", "CLAUDE_CONFIG_DIR="}, filepath.Join(home, ".claude")},
+	}
+	for _, tc := range cases {
+		if got := claudeConfigDirFromEnv(tc.env, home); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

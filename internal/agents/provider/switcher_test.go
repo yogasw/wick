@@ -204,8 +204,9 @@ func readConv(t *testing.T, path string) []store.ConversationTurn {
 // a conversation still on disk.
 func TestSwitchResumeScope(t *testing.T) {
 	isolateConfig(t)
-	saveSeed(t, Instance{Type: TypeClaude, Name: "claude"})
-	saveSeed(t, Instance{Type: TypeClaude, Name: "work"})
+	// Separate config dirs: instances sharing one also share ids.
+	saveSeed(t, Instance{Type: TypeClaude, Name: "claude", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/claude"}})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "work", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/work"}})
 	saveSeed(t, Instance{Type: TypeCodex, Name: "codex"})
 	saveSeed(t, Instance{Type: TypeWick, Name: "wick"})
 	layout := config.NewLayout(t.TempDir())
@@ -318,9 +319,11 @@ func TestSwitchResumeScope(t *testing.T) {
 // only an id it minted, and one it never ran starts without --resume.
 func TestSwitchResumeIDPerInstance(t *testing.T) {
 	isolateConfig(t)
-	saveSeed(t, Instance{Type: TypeClaude, Name: "soluchat"})
-	saveSeed(t, Instance{Type: TypeClaude, Name: "support_ent"})
-	saveSeed(t, Instance{Type: TypeClaude, Name: "spare"})
+	// Each instance keeps its own config dir: instances sharing one also
+	// share ids (see TestInstanceResumeIDSharedStore).
+	saveSeed(t, Instance{Type: TypeClaude, Name: "soluchat", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/soluchat"}})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "support_ent", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/support_ent"}})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "spare", Env: []string{"CLAUDE_CONFIG_DIR=/cfg/spare"}})
 	saveSeed(t, Instance{Type: TypeWick, Name: "wick"})
 	layout := config.NewLayout(t.TempDir())
 	const sid = "s-per-inst"
@@ -373,6 +376,80 @@ func TestSwitchResumeIDPerInstance(t *testing.T) {
 				if err := session.SetCLISessionID(layout, st.sid, "main", st.ran); err != nil {
 					t.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// TestInstanceResumeIDSharedStore pins the switch back to an instance
+// that never recorded its own key: when the instance that did provably
+// shares its config dir, the id is the same conversation and must be
+// resumed, not left for the next spawn to re-name. Anything unproven
+// stays "".
+func TestInstanceResumeIDSharedStore(t *testing.T) {
+	ins := func(name string, env ...string) Instance {
+		return Instance{Type: TypeClaude, Name: name, Env: env}
+	}
+	failedOver := map[string]string{"claude": "X", "claude/claude_waba": "X"}
+	cases := []struct {
+		name      string
+		m         map[string]string
+		instances []Instance
+		want      string
+	}{
+		{
+			"both default config dir resumes the shared id",
+			failedOver,
+			[]Instance{ins("enginer"), ins("claude_waba")},
+			"X",
+		},
+		{
+			"same config dir after Clean resumes the shared id",
+			failedOver,
+			[]Instance{ins("enginer", "CLAUDE_CONFIG_DIR=/cfg/a/"), ins("claude_waba", "CLAUDE_CONFIG_DIR=/cfg/./a")},
+			"X",
+		},
+		{
+			"different config dirs start fresh",
+			failedOver,
+			[]Instance{ins("enginer", "CLAUDE_CONFIG_DIR=/cfg/a"), ins("claude_waba", "CLAUDE_CONFIG_DIR=/cfg/b")},
+			"",
+		},
+		{
+			"one set, one default starts fresh",
+			failedOver,
+			[]Instance{ins("enginer"), ins("claude_waba", "CLAUDE_CONFIG_DIR=/cfg/b")},
+			"",
+		},
+		{
+			"bare key alone counts only when every instance shares the dir",
+			map[string]string{"claude": "X"},
+			[]Instance{ins("enginer"), ins("claude_waba"), ins("spare", "CLAUDE_CONFIG_DIR=/cfg/c")},
+			"",
+		},
+		{
+			"bare key alone with every instance sharing resumes it",
+			map[string]string{"claude": "X"},
+			[]Instance{ins("enginer"), ins("claude_waba"), ins("spare")},
+			"X",
+		},
+		{
+			"owner no longer configured proves nothing",
+			map[string]string{"claude/gone": "X"},
+			[]Instance{ins("enginer"), ins("claude_waba")},
+			"",
+		},
+		{
+			"conflicting shared ids start fresh",
+			map[string]string{"claude/claude_waba": "X", "claude/spare": "Y"},
+			[]Instance{ins("enginer"), ins("claude_waba"), ins("spare")},
+			"",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := instanceResumeID(tc.m, "claude/enginer", tc.instances); got != tc.want {
+				t.Errorf("instanceResumeID = %q, want %q", got, tc.want)
 			}
 		})
 	}

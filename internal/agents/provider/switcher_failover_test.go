@@ -327,3 +327,73 @@ func TestFailoverReplyUsesChannelLabels(t *testing.T) {
 		t.Fatalf("failover reply = %q", replies[0])
 	}
 }
+
+// TestSwitchSharedStoreCarriesHistory pins a move between two claude
+// instances sharing one config dir: the target resumes the very transcript
+// the outgoing one wrote, so it is the same conversation — the note says
+// so, and a failover continue does not paste the user's message into a
+// transcript that already holds it. Separate config dirs keep the
+// cross-instance behavior.
+func TestSwitchSharedStoreCarriesHistory(t *testing.T) {
+	snap := TurnSnapshot{UserMsg: "please deploy", Text: "half", Produced: true}
+	continueFor := func(res SwitchResult) string {
+		return ContinueMessage(ContinueInputFrom(res, event.ErrLimit, time.Time{}, snap))
+	}
+	cases := []struct {
+		name     string
+		wabaEnv  []string
+		enginEnv []string
+		carries  bool
+		wantID   string
+		note     string
+	}{
+		{"shared default config dir", nil, nil, true, "X", "continuing the same conversation — claude/enginer resumes this session's transcript"},
+		{"same config dir after Clean", []string{"CLAUDE_CONFIG_DIR=/cfg/a/"}, []string{"CLAUDE_CONFIG_DIR=/cfg/./a"}, true, "X", "continuing the same conversation"},
+		{"separate config dirs", []string{"CLAUDE_CONFIG_DIR=/cfg/a"}, []string{"CLAUDE_CONFIG_DIR=/cfg/b"}, false, "", "won't see earlier turns"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, failover := range []bool{false, true} {
+				isolateConfig(t)
+				saveSeed(t, Instance{Type: TypeClaude, Name: "claude_waba", Env: tc.wabaEnv})
+				saveSeed(t, Instance{Type: TypeClaude, Name: "enginer", Env: tc.enginEnv})
+				layout := config.NewLayout(t.TempDir())
+				const id = "s-shared"
+				seedSession(t, layout, id, "main", "claude/claude_waba")
+				if err := session.SetCLISessionID(layout, id, "main", "X"); err != nil {
+					t.Fatal(err)
+				}
+				opts := SwitchOptions{}
+				if failover {
+					opts = SwitchOptions{Failover: true, MsgKey: "m", ContinueFor: continueFor}
+				}
+				res, err := ApplySwitch(layout, id, "main", "claude/enginer", opts)
+				if err != nil {
+					t.Fatalf("failover=%v: switch: %v", failover, err)
+				}
+				if res.HistoryCarries != tc.carries {
+					t.Errorf("failover=%v: HistoryCarries = %v, want %v", failover, res.HistoryCarries, tc.carries)
+				}
+				if got := agentState(t, layout, id).CLISessionID; got != tc.wantID {
+					t.Errorf("failover=%v: CLISessionID = %q, want %q", failover, got, tc.wantID)
+				}
+				turns := readConv(t, layout.SessionConversation(id))
+				note := turns[len(turns)-1].Extras["note"]
+				if !strings.Contains(note, tc.note) || strings.Contains(note, "own earlier turns") {
+					t.Errorf("failover=%v: note = %q, want it to contain %q", failover, note, tc.note)
+				}
+				if !failover {
+					continue
+				}
+				// The user's message is re-sent only when the target cannot
+				// read the transcript that already holds it.
+				if pasted := strings.Contains(res.Continue, "please deploy"); pasted == tc.carries {
+					t.Errorf("continue pastes the user message = %v, want %v:\n%s", pasted, !tc.carries, res.Continue)
+				}
+				if tc.carries && (!strings.Contains(res.Continue, "same conversation") || strings.Contains(res.Continue, "did not carry over")) {
+					t.Errorf("continue does not say the conversation carried:\n%s", res.Continue)
+				}
+			}
+		})
+	}
+}
