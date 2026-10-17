@@ -387,7 +387,7 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	}
 	it.MainSessionID = s.ID
 	it.WorkingSessions, it.LastSession = workingSessionsOf(sessions, s.ID, live, time.Now())
-	it.SubagentsWorking = live.subagentsOf(s.ID)
+	it.SubagentsWorking = live.subagentsIn(sessions, s.ID)
 	it.TeamWaiting = live.teamWaitingOf(s.ID)
 	it.ReplyingTo = live.replyingTo[viewKey(agentID, userID)]
 	if ask, ok := live.teamAsks[viewKey(agentID, userID)]; ok {

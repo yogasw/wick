@@ -147,8 +147,9 @@ type TeamAgentItem struct {
 	// AttentionPreview is the short line of what NeedsAttention waits on
 	// ("Butuh input: …", "Bash — butuh approval"); also LastPreview then.
 	AttentionPreview string `json:"attention_preview,omitempty"`
-	// SubagentsWorking holds the handles of the background sub-agents the
-	// main session delegated to that are still queued or running, so the
+	// SubagentsWorking holds the handles of the background sub-agents any
+	// of the viewer's chats with the agent (main or side) delegated to
+	// that are still queued or running, so the
 	// card can show work carrying on after the agent's own turn ended.
 	// Status is left alone: it stays the agent's own turn state.
 	SubagentsWorking []string `json:"subagents_working,omitempty"`
@@ -830,6 +831,24 @@ func (l teamLive) subagentsOf(sessionID string) []string {
 		return nil
 	}
 	return slices.Clone(l.subagents[sessionID])
+}
+
+// subagentsIn is subagentsOf over every one of the agent's chats in
+// sessions, main chat first then in sessions' order, each handle once:
+// a sub-agent delegated from a side chat animates the avatar too.
+func (l teamLive) subagentsIn(sessions []session.Session, mainID string) []string {
+	out := l.subagentsOf(mainID)
+	for _, s := range sessions {
+		if s.ID == mainID {
+			continue
+		}
+		for _, h := range l.subagents[s.ID] {
+			if !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
 }
 
 // attention returns the roster preview of what sessionID waits on a

@@ -242,3 +242,35 @@ func TestSideChatAgent(t *testing.T) {
 		t.Fatal("agent_id JSON")
 	}
 }
+
+// A sub-agent delegated from a side chat shows on the row as well as the
+// main chat's, each handle once, the main chat's first.
+func TestRosterSubagentsFromSideChat(t *testing.T) {
+	owner, p, helperMain, _ := receiverWorld(t)
+	side := teamNewChat(t, owner, p.ID)
+	l := teamTurnsNow()
+	l.subagents = map[string][]string{side: {"wick-dev"}}
+	var it TeamAgentItem
+	fillChatState(&it, owner.ID, p.ID, nil, l)
+	if !slices.Equal(it.SubagentsWorking, []string{"wick-dev"}) {
+		t.Fatalf("side chat sub-agent: %v", it.SubagentsWorking)
+	}
+	b, _ := json.Marshal(it)
+	if !strings.Contains(string(b), `"subagents_working":["wick-dev"]`) {
+		t.Fatalf("wire: %s", b)
+	}
+
+	l.subagents[helperMain] = []string{"reviewer", "wick-dev"}
+	it = TeamAgentItem{}
+	fillChatState(&it, owner.ID, p.ID, nil, l)
+	if !slices.Equal(it.SubagentsWorking, []string{"reviewer", "wick-dev"}) {
+		t.Fatalf("union: %v", it.SubagentsWorking)
+	}
+
+	// Another person's row never shows the owner's chats' sub-agents.
+	it = TeamAgentItem{}
+	fillChatState(&it, "bob", p.ID, nil, l)
+	if it.SubagentsWorking != nil {
+		t.Fatalf("bob: %v", it.SubagentsWorking)
+	}
+}
