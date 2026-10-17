@@ -7,7 +7,7 @@ import type { SessionActivity } from "./stores/sessionsStream.js";
    "Last: …" line of the newest that finished. Pure, so the order and
    when each cue shows are tested rather than buried in the template. */
 
-type Row = Pick<AgentItem, "disabled"> & Partial<Pick<AgentItem, "working_sessions" | "last_session" | "subagents_session" | "subagents_active" | "last_active">>;
+type Row = Pick<AgentItem, "disabled"> & Partial<Pick<AgentItem, "working_sessions" | "last_session" | "subagents_session" | "subagents_active" | "last_active" | "replying_session">>;
 
 /** runningSessions is the row's running non-main chats, oldest turn
     first as the server sends them; none for a disabled agent. */
@@ -20,8 +20,12 @@ export function runningSessions(a: Row): WorkingSession[] {
     else, while only sub-agents work (work "subagent"), the side chat they
     run from, or null for the pinned main chat. */
 export function rowTarget(a: Row, work?: string): string | null {
-  return runningSessions(a)[0]?.id ?? subagentsChat(a, work) ?? null;
+  return runningSessions(a)[0]?.id ?? replyingChat(a, work) ?? subagentsChat(a, work) ?? null;
 }
+
+/* While the row reads "replying to …", the Team task's chat, even before
+   its turn shows as running (queued, starting, between two turns). */
+const replyingChat = (a: Row, work?: string) => (work === "replying" && !a.disabled && a.replying_session) || undefined;
 
 const subagentsChat = (a: Row, work?: string) => (work === "subagent" && !a.disabled && a.subagents_session) || undefined;
 

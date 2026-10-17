@@ -134,6 +134,9 @@ export type AgentItem = {
   /** The side chat those sub-agents run from (most recently active when
       several); absent when the main chat has some working. */
   subagents_session?: string;
+  /** The chat the Team task behind replying_to runs in; absent when it is
+      the main chat or not one the viewer can open. */
+  replying_session?: string;
   /** That chat's last activity. */
   subagents_active?: string | null;
   /** Handles of the teammates the main chat's open Team tasks

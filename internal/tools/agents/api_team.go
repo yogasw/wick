@@ -166,6 +166,9 @@ type TeamAgentItem struct {
 	// ReplyingTo names who the agent works on a Team task for ("replying
 	// to Captain"), in any of its chats; "" when it works on none.
 	ReplyingTo string `json:"replying_to,omitempty"`
+	// ReplyingSession is the chat that Team task runs in ("" = its main
+	// chat or unknown): a click on a "replying to …" row opens it.
+	ReplyingSession string `json:"replying_session,omitempty"`
 	// WorkingSessions are the agent's other chats (not its main chat) that
 	// run a turn now — a Team task Captain sent, a chat the person opened
 	// — oldest turn first; nil when none. LastSession is the newest of
@@ -614,7 +617,11 @@ type teamLive struct {
 	// never reads its owner's tasks, and "you" is always the viewer.
 	teamWaiting map[string][]string
 	replyingTo  map[string]string
-	teamAsks    map[string]TeamAsk
+	// replyingChat is the teammate chat that replyingTo's task runs in
+	// (same key), so the row opens it even before its turn is seen
+	// running (queued, starting, between two turns of the task).
+	replyingChat map[string]string
+	teamAsks     map[string]TeamAsk
 	// teamSettled is each teammate's newest answered or declined Team
 	// task per viewer, sender already named ("Replied to Captain: …").
 	teamSettled map[string]teamSettled
@@ -751,6 +758,7 @@ func teamAgentName(agentID string) string {
 // chat has no known person is told to nobody.
 func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
 	l.teamWaiting, l.replyingTo, l.teamAsks, l.taskChats = map[string][]string{}, map[string]string{}, map[string]TeamAsk{}, map[string]string{}
+	l.replyingChat = map[string]string{}
 	for _, t := range tasks {
 		if t.ToHandle != "" && !slices.Contains(l.teamWaiting[t.FromSession], t.ToHandle) {
 			l.teamWaiting[t.FromSession] = append(l.teamWaiting[t.FromSession], t.ToHandle)
@@ -763,6 +771,7 @@ func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
 		if t.Working {
 			if _, seen := l.replyingTo[key]; !seen {
 				l.replyingTo[key] = n.sender(t.Origin, t.FromAgentID)
+				l.replyingChat[key] = t.Chat
 			}
 			if _, seen := l.taskChats[t.Chat]; t.Chat != "" && !seen {
 				l.taskChats[t.Chat] = n.sender(t.Origin, t.FromAgentID)
