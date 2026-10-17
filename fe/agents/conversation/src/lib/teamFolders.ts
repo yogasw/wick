@@ -176,9 +176,18 @@ function own(s: TeamFolders, agentIds: string[], id: string): TeamFolders {
   return f ? { ...s, folders: [...s.folders, { ...f }] } : s;
 }
 
-export function setCollapsed(s: TeamFolders, agentIds: string[], id: string, collapsed: boolean): TeamFolders {
-  const o = own(s, agentIds, id);
-  return { ...o, folders: o.folders.map((f) => (f.id === id ? { ...f, collapsed } : f)) };
+/* A folder is folded until the viewer opens it in this page session: the
+   open set lives in memory only, so a reload, a live refetch or an agent
+   starting work never unfolds one (the saved collapsed flag is ignored).
+   A search shows every folder's matches. */
+export function folderOpen(open: ReadonlySet<string>, id: string, searching: boolean): boolean {
+  return searching || open.has(id);
+}
+
+export function toggleOpen(open: ReadonlySet<string>, id: string): Set<string> {
+  const next = new Set(open);
+  if (!next.delete(id)) next.add(id);
+  return next;
 }
 
 /** renameError is why a folder can't take a name ("" = it can): empty,

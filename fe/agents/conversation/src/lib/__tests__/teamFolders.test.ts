@@ -1,10 +1,13 @@
 import { describe, test, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   agentTier,
   byTier,
   canUnfile,
   createFolder,
   deleteFolder,
+  folderOpen,
   folderView,
   foldersOf,
   groupTier,
@@ -20,8 +23,8 @@ import {
   resolveFolders,
   ROSTER_MOTION_MS,
   rosterMotionMs,
-  setCollapsed,
   teamList,
+  toggleOpen,
   whoLine,
 } from "../teamFolders.js";
 import type { RosterEntry } from "../rosterList.js";
@@ -125,9 +128,21 @@ describe("materialize", () => {
     expect(canUnfile(state({ place: { x: "f1" } }), "x")).toBe(true);
     expect(canUnfile(s, "y")).toBe(true);
   });
-  test("collapsing an inherited folder keeps the fold", () => {
-    const s = setCollapsed(state({ inherited: { x: "Ops" } }), ["x"], `${INHERITED_PREFIX}ops`, true);
-    expect(materialize(s, ["x"], ids()).folders).toEqual([{ id: "new1", name: "Ops", collapsed: true }]);
+  test("folders start folded, whatever the saved flag says, and open only on a toggle", () => {
+    const none = new Set<string>();
+    expect(folderOpen(none, "f1", false)).toBe(false);
+    expect(folderOpen(none, "f1", true)).toBe(true);
+    const opened = toggleOpen(none, "f1");
+    expect(folderOpen(opened, "f1", false)).toBe(true);
+    expect(folderOpen(opened, "f2", false)).toBe(false);
+    expect(none.size).toBe(0);
+    expect(folderOpen(toggleOpen(opened, "f1"), "f1", false)).toBe(false);
+  });
+  test("AgentsApp keeps the open set in memory and never reads the saved flag", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/let openFolders = \$state<ReadonlySet<string>>\(new Set\(\)\)/);
+    expect(app).toMatch(/\{@const open = folderOpen\(openFolders, f\.id, searching\)\}/);
+    expect(app).not.toMatch(/\.collapsed\b|setCollapsed/);
   });
 });
 

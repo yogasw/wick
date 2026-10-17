@@ -25,6 +25,7 @@
   import RosterSessionsMenu from "./lib/components/team/RosterSessionsMenu.svelte";
   import { runningSessions, rowActive, rowTarget, lastSession, lastSessionKey, loadSeen, markSeen, sessionSignal, sessionTitle } from "./lib/rosterSessions.js";
   import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
+  import FolderTile from "./lib/components/team/FolderTile.svelte";
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
   import AgentHeaderTitle from "./lib/components/team/AgentHeaderTitle.svelte";
@@ -43,7 +44,7 @@
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, getTeamFolders, saveTeamFolders, type GroupItem, type TeamFolder, type TeamFolders } from "./lib/api/team.js";
-  import { canUnfile, createFolder, deleteFolder, foldersOf, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, parseFoldersCache, readApplies, resolveFolders, rosterMotionMs, saveApplies, setCollapsed, teamList, type FolderSync, type FolderView } from "./lib/teamFolders.js";
+  import { canUnfile, createFolder, deleteFolder, foldersOf, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, parseFoldersCache, readApplies, resolveFolders, rosterMotionMs, saveApplies, folderOpen, teamList, toggleOpen, type FolderSync, type FolderView } from "./lib/teamFolders.js";
   import { flip } from "svelte/animate";
   import { crossfade, fade, slide } from "svelte/transition";
   import GroupView from "./lib/components/GroupView.svelte";
@@ -768,8 +769,11 @@
      folders in the viewer's order; agents sort by tier in both. */
   const list = $derived(teamList(entries, resolved, statusOf, searching, rosterNow));
 
+  /* Folder ids the viewer opened in this page session. In memory only: every
+     folder is folded on load, and nothing but a click unfolds one. */
+  let openFolders = $state<ReadonlySet<string>>(new Set());
   function toggleFolder(f: TeamFolder) {
-    editFolders(setCollapsed(folders, agentIds, f.id, !f.collapsed));
+    openFolders = toggleOpen(openFolders, f.id);
   }
   function askFolderName(title: string, current: string, id: string): string | null {
     const n = window.prompt(title, current);
@@ -785,7 +789,7 @@
     const f = v.folder;
     const inherited = isInheritedFolder(f.id);
     return [
-      { label: f.collapsed ? "Expand" : "Collapse", onclick: () => toggleFolder(f) },
+      { label: openFolders.has(f.id) ? "Collapse" : "Expand", onclick: () => toggleFolder(f) },
       {
         label: "Rename",
         onclick: () => {
@@ -1076,7 +1080,7 @@
            members' faces, whose ring tells what runs inside even folded. -->
       {#each noCaptain || !foldersSettled ? [] : list.folders as v (v.folder.id)}
         {@const f = v.folder}
-        {@const open = searching || !f.collapsed}
+        {@const open = folderOpen(openFolders, f.id, searching)}
         {@const tone = rowTone(v.unread > 0)}
         <!-- Expanded, the folder row and its members share one soft card
              (style "A · Soft card"); folded, it is a plain row. -->
@@ -1105,16 +1109,10 @@
             aria-expanded={open}
             onclick={() => toggleFolder(f)}
           >
-            <span class="roster-folder-tile relative grid shrink-0 grid-cols-2 place-items-center gap-0.5 rounded-xl bg-white-300 p-1 dark:bg-navy-600 {v.busy ? `roster-folder-${v.busy}` : ''}" data-testid="roster-folder-icon" data-busy={v.busy || undefined}>
-              {#each v.agents.slice(0, 4) as m (m.id)}
-                <AgentAvatar kind={m.avatar?.kind} image={m.avatar?.image} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={13} asleep={m.disabled} />
-              {/each}
-              {#if v.busy === "thinking"}
-                <span class="roster-folder-badge bg-violet-500" data-testid="roster-folder-badge">{#if v.busyAgents.length > 1}{v.busyAgents.length}{:else}<Dots />{/if}</span>
-              {:else if v.busy === "waiting"}
-                <span class="roster-folder-badge bg-amber-500" data-testid="roster-folder-badge"><span class="roster-hourglass">⏳</span></span>
-              {/if}
-            </span>
+            <FolderTile members={v.agents.slice(0, 4).map((m) => {
+              const mst = statusOf(m);
+              return { agent: m, st: mst, open: mainChatOpen(m, selected?.id, route), dozing: dozing(m, mst, rosterNow), hatching: hatching.includes(m.id) };
+            })} />
             <span class="min-w-0 flex-1" class:opacity-60={v.sleepy && !v.busy}>
               <span class="flex items-center gap-2">
                 <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{f.name}</span>
@@ -1522,39 +1520,6 @@
     .roster-item[data-active] > .roster-kebab { opacity: 1; pointer-events: auto; }
     .roster-item[data-active] > .roster-row .roster-hide-on-menu { visibility: hidden; }
   }
-  /* A folder's icon (mockup .gi): up to four faces on a rounded tile; a
-     purple pulsing ring while a member works, amber while members only
-     wait on teammates, with the badge in the corner. */
-  .roster-folder-tile { width: 38px; height: 38px; transition: box-shadow 0.3s, background 0.3s; }
-  .roster-folder-thinking { background: rgb(139 92 246 / 0.18); box-shadow: 0 0 0 2px #8b5cf6; animation: roster-folder-ring 1.6s ease-in-out infinite; }
-  .roster-folder-waiting { background: rgb(245 158 11 / 0.16); box-shadow: 0 0 0 2px #f59e0b; }
-  .roster-folder-badge {
-    position: absolute;
-    right: -6px;
-    bottom: -6px;
-    display: grid;
-    place-items: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 4px;
-    border-radius: 9999px;
-    border: 2px solid rgb(var(--color-white-200));
-    color: #fff;
-    font-size: 10px;
-    font-weight: 800;
-    line-height: 1;
-  }
-  :global(.dark) .roster-folder-badge { border-color: rgb(var(--color-navy-700)); }
-  .roster-hourglass { display: inline-block; font-size: 9px; animation: roster-hourglass 2s infinite; }
-  @keyframes roster-folder-ring {
-    0%, 100% { box-shadow: 0 0 0 2px #8b5cf6, 0 0 0 0 rgb(139 92 246 / 0.45); }
-    50% { box-shadow: 0 0 0 2px #8b5cf6, 0 0 0 6px rgb(139 92 246 / 0); }
-  }
-  @keyframes roster-hourglass {
-    0%, 40% { transform: rotate(0); }
-    50%, 90% { transform: rotate(180deg); }
-    100% { transform: rotate(360deg); }
-  }
   /* No count from the server (a group chat): a small dot, not an empty pill. */
   .roster-badge-dot { min-width: 8px; height: 8px; padding: 0; margin-right: 5px; }
   /* Floating drawer (mockup .drawer/.scrim): inset 8px on three sides, 20px
@@ -1593,6 +1558,6 @@
     from { opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .team-app, .agent-drawer, .agent-modal, .agent-scrim, .roster-folder-thinking, .roster-hourglass { animation: none; }
+    .team-app, .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
   }
 </style>
