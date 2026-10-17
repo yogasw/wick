@@ -284,7 +284,7 @@ func (g *Guard) Tick() {
 	cfg := g.load()
 	now := g.now()
 	defer func() { g.lastTick = now }()
-	if !cfg.Enabled || cfg.Action == ActionOff || cfg.Action == "" {
+	if !cfg.Enabled {
 		g.setHold(false)
 		return
 	}
@@ -294,8 +294,15 @@ func (g *Guard) Tick() {
 	if cfg.CPUPSIMax <= 0 {
 		cfg.CPUPSIMax = defaultPSICPU
 	}
-	g.dryRun = cfg.Measure || cfg.Action == ActionLog
-	g.applyQuota(cfg)
+	// Action off still watches and still holds new spawns when the host
+	// nears a hang: holding only queues work, it stops nothing. Returning
+	// early here let every agent start into a host stalled on memory
+	// (pressure "full" ~60% for minutes), so all of them hung together.
+	off := cfg.Action == ActionOff || cfg.Action == ""
+	g.dryRun = cfg.Measure || cfg.Action == ActionLog || off
+	if !off {
+		g.applyQuota(cfg)
+	}
 
 	st, ok := g.sample(cfg, now)
 	scopes := g.host.Scopes()
