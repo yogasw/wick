@@ -3,6 +3,7 @@ package provider
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -161,6 +162,16 @@ type Agent struct {
 	// during the KillAfterIdle window.
 	activityCh chan struct{}
 
+	// lastOutput is when the process last wrote a stdout line or was last
+	// sent a message: the start of the current silence, which the
+	// mid-turn ceiling (TurnIdleTimeout) is measured from.
+	lastOutput time.Time
+	// bgPending: a turn launched a background task (run_in_background,
+	// Monitor) whose completion the CLI reports later, as a turn of its
+	// own. Until that turn ends the silence between turns is the task
+	// running, not an abandoned process.
+	bgPending bool
+
 	// unanswered holds the messages written to stdin since the last stdout
 	// line. Non-empty at an idle kill means the process took them and never
 	// said a word: the turn never started, and without handing them back
@@ -238,10 +249,17 @@ type Options struct {
 	// During the grace period, new output from the subprocess resets
 	// the cycle (grace is cancelled and IdleTimeout restarts).
 	KillAfterIdle time.Duration
-	ParserFactory func() event.Parser
-	Spawner       Spawner
-	Store         *store.Store
-	State         *state.Machine
+	// TurnIdleTimeout is the silence allowed while a turn is open (sent,
+	// not yet ended) or a background task a turn launched is pending.
+	// IdleTimeout then applies fully only between turns: a model thinking
+	// over a long context, a CLI waiting on a slow API call or a
+	// background job is silent on stdout but not stuck. 0 or anything not
+	// above IdleTimeout = IdleTimeout everywhere (legacy behaviour).
+	TurnIdleTimeout time.Duration
+	ParserFactory   func() event.Parser
+	Spawner         Spawner
+	Store           *store.Store
+	State           *state.Machine
 
 	// MemGuard is the resolved memory policy for this agent's spawns.
 	// nil = the guard is off, which is the default and what every
@@ -489,6 +507,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.running = true
 	a.done = make(chan struct{})
 	a.sliceOOMAtSpawn = a.cfg.MemGuard.SliceOOMCount()
+	// A background task dies with the process that launched it.
+	a.lastOutput, a.bgPending = time.Now(), false
 	a.mu.Unlock()
 
 	go a.run(subCtx)
@@ -612,7 +632,7 @@ func (a *Agent) wickStopCause(pid int) string {
 // on its way out.
 func (a *Agent) StopIfIdle() bool {
 	a.mu.Lock()
-	if a.turnOpen || a.turnActive || a.respawning || len(a.pendingQueue) > 0 {
+	if a.turnOpen || a.turnActive || a.respawning || len(a.pendingQueue) > 0 || a.turnWaitLocked() > 0 {
 		a.mu.Unlock()
 		return false
 	}
@@ -633,6 +653,7 @@ func (a *Agent) noteSentLocked(text string) {
 		return
 	}
 	a.lastSent, a.lastSentAt, a.turnErr, a.turnOpen = text, time.Now(), false, true
+	a.lastOutput = a.lastSentAt
 	a.turns++
 }
 
@@ -935,6 +956,8 @@ func (a *Agent) respawnWithMessage(text string) error {
 	a.running = true
 	a.done = make(chan struct{})
 	a.sliceOOMAtSpawn = a.cfg.MemGuard.SliceOOMCount()
+	// A background task dies with the process that launched it.
+	a.lastOutput, a.bgPending = time.Now(), false
 	a.mu.Unlock()
 
 	// Respawn = a brand-new subprocess from the FE's perspective; flip
@@ -1380,6 +1403,10 @@ func (a *Agent) run(ctx context.Context) {
 					idle.Reset(a.cfg.IdleTimeout)
 					continue
 				}
+				if wait := a.turnWait(); wait > 0 {
+					idle.Reset(wait)
+					continue
+				}
 				if a.cfg.KillAfterIdle <= 0 {
 					a.idleKill()
 					return
@@ -1391,6 +1418,11 @@ func (a *Agent) run(ctx context.Context) {
 					if a.procBusy() {
 						grace.Stop()
 						idle.Reset(a.cfg.IdleTimeout)
+						continue
+					}
+					if wait := a.turnWait(); wait > 0 {
+						grace.Stop()
+						idle.Reset(wait)
 						continue
 					}
 					a.idleKill()
@@ -1437,6 +1469,8 @@ func (a *Agent) run(ctx context.Context) {
 	// they do not arrive glued together. Per-run state; the loop below is
 	// the only writer.
 	var joiner textJoiner
+	// bgThisTurn: the running turn launched a background task (bgPending).
+	bgThisTurn := false
 
 	for {
 		var line string
@@ -1451,6 +1485,7 @@ func (a *Agent) run(ctx context.Context) {
 			// except what was sent while the turn producing it was already
 			// running: that waits for its own turn (see unansweredMid).
 			a.mu.Lock()
+			a.lastOutput = time.Now()
 			if keep := a.unansweredMid; keep > 0 && keep <= len(a.unanswered) {
 				a.unanswered = append([]string(nil), a.unanswered[len(a.unanswered)-keep:]...)
 			} else {
@@ -1543,6 +1578,9 @@ func (a *Agent) run(ctx context.Context) {
 
 			switch ev.Type {
 			case event.ToolUse:
+				if launchesBackground(ev) {
+					bgThisTurn = true
+				}
 				// Tool about to execute — stdout will be silent. Stop the
 				// idle timer until the result comes back.
 				if !toolInFlight {
@@ -1606,6 +1644,8 @@ func (a *Agent) run(ctx context.Context) {
 					}
 				}
 				turnText.Reset()
+				a.noteBackground(bgThisTurn)
+				bgThisTurn = false
 				a.turnEnded()
 				// Turn ended (normally or via error) — always reset
 				// toolInFlight so a crash mid-tool doesn't leave the idle
@@ -2058,6 +2098,64 @@ func (a *Agent) procBusy() bool {
 	return ok && b.Busy()
 }
 
+// turnWait is how much longer a silent stream may stay silent before the
+// idle timer kills it, beyond the IdleTimeout that already ran out: 0
+// between turns, the rest of TurnIdleTimeout while a turn is open or a
+// background task is pending. A claude turn says nothing on stdout while
+// the model thinks over a long context or a slow API call is in flight,
+// and between turns while a run_in_background job it launched runs; the
+// IdleTimeout window took those for a dead process and killed the turn.
+func (a *Agent) turnWait() time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnWaitLocked()
+}
+
+// turnWaitLocked is turnWait. Caller holds a.mu.
+func (a *Agent) turnWaitLocked() time.Duration {
+	ceiling := a.cfg.TurnIdleTimeout
+	if ceiling <= a.cfg.IdleTimeout || !(a.turnOpen || a.bgPending) {
+		return 0
+	}
+	if a.lastOutput.IsZero() {
+		return 0
+	}
+	if left := ceiling - time.Since(a.lastOutput); left > 0 {
+		return left
+	}
+	return 0
+}
+
+// noteBackground records, at a turn end, whether a background task is
+// still pending. A turn wick sent adds to what is pending; a turn the CLI
+// started on its own is the report of a finished background task, so
+// what it launched itself is all that is still pending after it.
+func (a *Agent) noteBackground(launched bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.turnOpen {
+		a.bgPending = a.bgPending || launched
+		return
+	}
+	a.bgPending = launched
+}
+
+// launchesBackground reports whether a tool call starts work that outlives
+// it: a run_in_background command or agent, or a Monitor watch. Its result
+// comes back at once and the real outcome arrives later.
+func launchesBackground(ev event.AgentEvent) bool {
+	if ev.ToolName == "Monitor" {
+		return true
+	}
+	if !strings.Contains(ev.ToolInput, "run_in_background") {
+		return false
+	}
+	var in struct {
+		RunInBackground bool `json:"run_in_background"`
+	}
+	return json.Unmarshal([]byte(ev.ToolInput), &in) == nil && in.RunInBackground
+}
+
 // idleKill ends a spawn whose stream has been silent for the idle window and
 // whose process did not say it is still working (see procBusy).
 //
@@ -2072,6 +2170,10 @@ func (a *Agent) idleKill() {
 	a.mu.Lock()
 	a.idleKilled = true
 	a.noteStopCauseLocked("idle timer")
+	window := a.cfg.IdleTimeout
+	if a.turnOpen && a.cfg.TurnIdleTimeout > window {
+		window = a.cfg.TurnIdleTimeout
+	}
 	if !a.turnOpen {
 		// Every turn that was sent has ended: the process finished what it
 		// took, mid-turn messages included (the CLI folded them into the
@@ -2083,7 +2185,7 @@ func (a *Agent) idleKill() {
 	a.mu.Unlock()
 	if a.store != nil && a.state != nil && a.state.Current() != state.Idle {
 		a.store.SetInterruptCauseIfUnset("wick",
-			fmt.Sprintf("no output for %s and the process did not report the turn as still working, so the idle timer stopped it", a.cfg.IdleTimeout))
+			fmt.Sprintf("no output for %s and the process did not report the turn as still working, so the idle timer stopped it", window))
 		_ = a.store.Flush()
 	}
 	if proc != nil {

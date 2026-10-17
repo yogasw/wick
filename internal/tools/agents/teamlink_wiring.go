@@ -1316,6 +1316,13 @@ func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remot
 				b.Reset()
 				b.WriteString(ev.Text)
 			case event.Done:
+				// The process died and is being restarted with the turn
+				// (a crash restart, an idle-kill retry): its answer is
+				// still coming on this stream.
+				if exited, restarting := delegation.ParseExitDone(ev.Raw); exited && restarting {
+					b.Reset()
+					continue
+				}
 				return b.String(), failed
 			}
 		}

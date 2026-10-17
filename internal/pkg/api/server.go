@@ -698,8 +698,17 @@ func NewServer() *Server {
 			if reason == provider.ExitError || reason == provider.ExitOOM {
 				bcastDone.Raw = delegation.ExitDoneRaw(restarting)
 			}
+			// An idle kill the pool is retrying (its messages go to the
+			// restarted process) is the same: the turn's answer is still
+			// coming. The channel copy carries the marker too, so an A2A
+			// task (a Team task) stays working instead of completing empty.
+			chanDone := doneEv
+			if reason == provider.ExitIdle && restarting {
+				bcastDone.Raw = delegation.ExitDoneRaw(true)
+				chanDone.Raw = bcastDone.Raw
+			}
 			agentsBcast.Publish(sid, name, bcastDone)
-			channelReg.DispatchAgentEvent(sid, doneEv)
+			channelReg.DispatchAgentEvent(sid, chanDone)
 			// Catches a turn whose real Done never arrived because the
 			// agent exited first. Already-flushed turns are a no-op here:
 			// the observer drops a Done with an empty buffer.
@@ -1002,7 +1011,10 @@ func NewServer() *Server {
 		},
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
 		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
-		PreemptIdle:   preemptIdle,
+		// An open turn (model thinking, slow API call, background job) is
+		// not killed on the short idle window, only after this much silence.
+		TurnIdleTimeout: agentpool.DefaultTurnIdleTimeout,
+		PreemptIdle:     preemptIdle,
 		// Per-user identity plumbing. A subprocess carries the MCP credential
 		// of whoever spawned it (baked into its argv), so the pool needs to
 		// know who each message is from to decide whether that process can be

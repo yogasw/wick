@@ -35,6 +35,20 @@ const maxRespawnAttempts = 3
 // and should get its full budget again.
 const respawnWindow = 10 * time.Minute
 
+// maxIdleRetries bounds the automatic re-deliveries of messages an idle
+// kill handed back, within respawnWindow. Two: a stall that repeats on a
+// fresh process twice is not transient, and the person is told instead.
+const maxIdleRetries = 2
+
+// idleRetryBackoff is the wait before each idle retry, by attempt. A var
+// so tests need not sleep.
+var idleRetryBackoff = []time.Duration{3 * time.Second, 30 * time.Second}
+
+// DefaultTurnIdleTimeout is the mid-turn idle ceiling wick runs with
+// (PoolConfig.TurnIdleTimeout): long enough for a model thinking over a long context or a slow
+// background job, short enough that a hung CLI still gives its slot back.
+const DefaultTurnIdleTimeout = 20 * time.Minute
+
 // crashState tracks recent unexplained deaths for one agent.
 //
 // halted latches once the budget is spent. It exists because giving up is
@@ -78,15 +92,21 @@ func ShouldRespawn(reason provider.ExitReason, attempts int) bool {
 //
 // Caller MUST hold p.mu.
 func (p *Pool) noteCrashLocked(key string, now time.Time) int {
-	if p.crashes == nil {
-		p.crashes = map[string]*crashState{}
+	return noteAttemptLocked(&p.crashes, key, now)
+}
+
+// noteAttemptLocked counts one attempt for key in m within respawnWindow
+// and returns its number (1 for the first in a window). Caller holds p.mu.
+func noteAttemptLocked(m *map[string]*crashState, key string, now time.Time) int {
+	if *m == nil {
+		*m = map[string]*crashState{}
 	}
-	st, ok := p.crashes[key]
+	st, ok := (*m)[key]
 	if !ok || now.Sub(st.first) > respawnWindow {
 		// First crash, or the old window has expired — start fresh rather
 		// than holding an hour-old failure against a healthy agent.
 		st = &crashState{first: now}
-		p.crashes[key] = st
+		(*m)[key] = st
 	}
 	st.attempts++
 	return st.attempts
