@@ -43,6 +43,7 @@
     getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
     type ComposerUsage,
   } from "../api/usage.js";
+  import { parseWaitState, waitNote, type WaitState } from "../waitState.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     getSubAgentPanel,
@@ -208,6 +209,24 @@
     progressSent = p;
     untrack(() => agentMode?.onProgress?.(p));
   });
+  /* What the running turn waits on (queue, slots, host; the stream's
+     wait_state) and when the stream last said anything, so the working
+     bubble stops saying "thinking…" over a turn that is queued or stuck.
+     After a reload the silence counts from the page open. */
+  let waitState = $state<WaitState | null>(null);
+  let lastStreamAt = $state(Date.now());
+  let waitClock = $state(Date.now());
+  let wasTyping = false;
+  $effect(() => {
+    const active = typing.active;
+    if (active && !wasTyping) lastStreamAt = Date.now();
+    wasTyping = active;
+    if (!active) return;
+    const id = setInterval(() => { waitClock = Date.now(); }, 1000);
+    return () => clearInterval(id);
+  });
+  const STREAM_OUTPUT = new Set(["text_delta", "text_snapshot", "thinking", "tool_use", "tool_result"]);
+  const turnWait = $derived(typing.active ? waitNote(waitState, waitClock - lastStreamAt) : null);
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   /* When the running turn started, for the context panel's live line. A
      turn can go minutes without saying anything, and every other figure
@@ -2250,6 +2269,9 @@
 
     stream.onEvent((ev) => {
       thread.handleEvent(ev);
+      if (ev.type === "wait_state") waitState = parseWaitState(ev.data);
+      else if (STREAM_OUTPUT.has(ev.type)) lastStreamAt = waitClock = Date.now();
+      else if (ev.type === "lifecycle" && (ev.lifecycle === "idle" || ev.lifecycle === "killed")) waitState = null;
 
       if (ev.type === "ask_user") {
         try {
@@ -3263,7 +3285,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} waitNote={detached ? null : turnWait} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
           {#if loadingNewer}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>

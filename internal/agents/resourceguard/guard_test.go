@@ -306,6 +306,9 @@ func TestActionOffStillHoldsSpawns(t *testing.T) {
 	if !g.HoldSpawns() {
 		t.Fatal("spawns not held under memory pressure with action off")
 	}
+	if st := g.Status(); !st.Hold || st.MemPressure != 60 || !strings.Contains(st.Reason, "memory pressure") {
+		t.Fatalf("status while held = %+v", st)
+	}
 	h.memFull = 0
 	ticks(g, c, 3)
 	if g.HoldSpawns() {

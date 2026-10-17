@@ -301,6 +301,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
 	r.GET("/sessions/{id}/files/mentions", sessionContextMentions)
 	r.GET("/sessions/{id}/processes", sessionProcesses)
+	r.GET("/sessions/{id}/wait", sessionWait)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
 	r.GET("/sessions/{id}/files/raw", sessionContextRaw)
@@ -3740,6 +3741,7 @@ func streamSSE(c *tool.Ctx) {
 	_ = rc.SetWriteDeadline(time.Time{})
 	ch, unsub := globalBcast.Subscribe(sessionID)
 	defer unsub()
+	startWaitPublisher()
 
 	// Start a git fs-watcher for session-scoped subscribers so the SCM
 	// rail badge gets live git_status events. Ref-counted: stops when the
@@ -3858,6 +3860,7 @@ func streamMultiSSE(c *tool.Ctx) {
 	// non-blocking on the forward so one stalled reader can never wedge the
 	// others — same contract as the Broadcaster itself.
 	merged := make(chan Event, 256)
+	startWaitPublisher()
 	for _, id := range ids {
 		ch, unsub := globalBcast.Subscribe(id)
 		defer unsub()
@@ -3945,6 +3948,12 @@ func snapshotEvents(sessionID string) []Event {
 	}
 	if globalPool == nil {
 		return out
+	}
+	// What the session waits on (queue, slots, host), so a page opened
+	// on a stuck turn says why at once instead of "thinking…"; the
+	// publisher (started by the streams) keeps it current from there.
+	if agent, ok := waitingSessions()[sessionID]; ok {
+		out = append(out, waitStateEvent(sessionID, agent))
 	}
 	for _, e := range globalPool.ActiveSnapshot() {
 		if e.SessionID != sessionID {

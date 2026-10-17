@@ -138,6 +138,12 @@ func (p *Pool) WaitOf(sessionID string) WaitState {
 	return w
 }
 
+// ProviderOf is the provider instance sessionID's agent runs on, as the
+// spawn gate resolves it ("" when the session cannot be read).
+func (p *Pool) ProviderOf(sessionID, agentName string) (pType, pName string) {
+	return p.providerForSession(sessionID, agentName)
+}
+
 // idleGiveUpReason is the plain reason an idle-killed turn ends with
 // once its retries are spent: "stopped after 2 retries: no output for
 // 20m". halted: crash recovery stopped the agent before they ran out.
