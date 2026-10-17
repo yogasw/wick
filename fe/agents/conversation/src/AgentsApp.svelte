@@ -52,6 +52,7 @@
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
+  import { groupFace } from "./lib/teamGroups.js";
   import { rosterStatus, withTurn, withActivity, busyWork, teamMark } from "./lib/rosterStatus.js";
   import { mainChatOpen } from "./lib/avatarActivity.js";
   import { liveRoster, boundedDebounce, singleFlight, ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS } from "./lib/rosterLive.js";
@@ -112,8 +113,22 @@
 
   /* Group chats: listed under the agents; the open one (/team/group/<id>)
      replaces the agent chat. */
-  let groups = $state<GroupItem[]>([]);
+  /* The last group list this tab read, so the group rows paint with the
+     agents instead of popping in after them (GROUPS_CACHE). */
+  const GROUPS_CACHE = "wick.team.groups";
+  const groupsCached = ((): GroupItem[] | null => {
+    try {
+      const g = JSON.parse(sessionStorage.getItem(GROUPS_CACHE) ?? "null");
+      return Array.isArray(g) ? (g as GroupItem[]) : null;
+    } catch {
+      return null;
+    }
+  })();
+  let groups = $state<GroupItem[]>(groupsCached ?? []);
   let groupsLoaded = $state(false);
+  /* The rows wait for the groups too (with the folders), so the first
+     paint is the whole list, not agents first and groups a moment later. */
+  const groupsSettled = $derived(groupsLoaded || groupsCached !== null);
   const activeGroupId = $derived(route.group ?? "");
   const groupSettingsOpen = $derived(route.panel?.kind === "group-settings");
   let newGroupOpen = $state(false);
@@ -124,6 +139,11 @@
   async function loadGroups() {
     try {
       groups = (await runApi(listGroups(base))).groups ?? [];
+      try {
+        sessionStorage.setItem(GROUPS_CACHE, JSON.stringify($state.snapshot(groups)));
+      } catch {
+        /* storage full or off */
+      }
     } catch {
       /* an older server has no groups */
     } finally {
@@ -207,6 +227,8 @@
   const activeSessions = new Set<string>();
   const sessionReload = boundedDebounce(() => load(), ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS);
   onDestroy(() => sessionReload.cancel());
+  const groupsReload = boundedDebounce(() => loadGroups(), ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS);
+  onDestroy(() => groupsReload.cancel());
   onMount(() =>
     liveRoster(base, {
       reload: () => {
@@ -219,6 +241,9 @@
       onReconnect: () => activeSessions.clear(),
       onActivity: (ev) => {
         lastActivity = ev;
+        // A member's turn in a group chat: re-read the groups so that
+        // row's faces start and stop with it.
+        if (groups.some((g) => g.members.some((m) => m.session_id === ev.session_id))) groupsReload.call();
         const next = withActivity(agents, ev);
         agents = next.agents;
         if (next.finished) load();
@@ -235,7 +260,9 @@
      page). */
   const noCaptain = $derived(loaded && !loadError && !captain);
   // PLAN §6: no Team, no Tickets — the entry, the board and the room.
-  const hasTickets = $derived(ticketsEntryShown({ loaded, loadError, hasCaptain: !!captain }));
+  // A cached roster already knows the Captain, so the entry paints with
+  // the rows instead of waiting for the server's read.
+  const hasTickets = $derived(ticketsEntryShown({ loaded: loaded || !!rosterCached?.agents?.length, loadError, hasCaptain: !!captain }));
   $effect(() => {
     if (route.tickets && noCaptain) navigate({ handle: null, session: null, panel: null }, { replace: true });
   });
@@ -762,6 +789,11 @@
     const a = agents.find((x) => x.id === id);
     return a ? { agent: a, st: statusOf(a) } : null;
   };
+  /* A group row's faces: still unless the member works in that group. */
+  const groupMember = (g: GroupItem) => (id: string) => {
+    const a = agents.find((x) => x.id === id);
+    return a ? groupFace(a, statusOf(a), !!g.members.find((m) => m.id === id)?.working) : null;
+  };
   /* Loose rows on top (agents in no folder, and group chats), then the
      folders in the viewer's order; agents sort by tier in both. */
   const list = $derived(teamList(entries, resolved, statusOf, searching, rosterNow));
@@ -1003,11 +1035,11 @@
       </div>
     {/if}
     <nav class="flex-1 overflow-y-auto px-1.5 pb-2" aria-label="Agent list">
-      {#if !loaded || !foldersSettled}
+      {#if !loaded || !foldersSettled || !groupsSettled}
         <!-- Skeleton rows while the roster or the folders load (a cached
              roster with cached folders shows at once instead, see
              ROSTER_CACHE and FOLDERS_CACHE). -->
-        {#if agents.length === 0 || !foldersSettled}
+        {#if agents.length === 0 || !foldersSettled || !groupsSettled}
           <div class="animate-pulse" aria-label="Loading agents" data-testid="roster-skeleton">
             {#each [62, 48, 70, 55, 40] as w}
               <div class="flex items-center gap-2.5 px-2 py-2">
@@ -1043,7 +1075,7 @@
       {:else if list.loose.length === 0 && list.folders.length === 0}
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matches.</p>
       {/if}
-      {#each noCaptain || !foldersSettled ? [] : list.loose as e (e.kind + e.id)}
+      {#each noCaptain || !foldersSettled || !groupsSettled ? [] : list.loose as e (e.kind + e.id)}
         <div animate:flip={{ duration: motionMs() }} in:rowReceive={{ key: e.kind + e.id }} out:rowSend={{ key: e.kind + e.id }}>
         {#if e.kind === "agent"}
           {@render agentRow(e.agent)}
@@ -1059,7 +1091,7 @@
           data-testid="roster-group"
           onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
         >
-          <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" live={liveMember} /></span>
+          <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" live={groupMember(g)} /></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
@@ -1076,7 +1108,7 @@
       {/each}
       <!-- Folders, in the viewer's order (drag to reorder): one row with the
            members' faces, whose ring tells what runs inside even folded. -->
-      {#each noCaptain || !foldersSettled ? [] : list.folders as v (v.folder.id)}
+      {#each noCaptain || !foldersSettled || !groupsSettled ? [] : list.folders as v (v.folder.id)}
         {@const f = v.folder}
         {@const open = folderOpen(openFolders, f.id, searching)}
         {@const tone = rowTone(v.unread > 0)}

@@ -22,7 +22,7 @@
     groupConversation, sendToGroup, markGroupRead, runApi,
     type AgentItem, type GroupItem, type GroupTurn,
   } from "../api/team.js";
-  import { backingLink, composerHint, handlesLine, mergeTurn } from "../teamGroups.js";
+  import { backingLink, composerHint, groupFace, handlesLine, mergeTurn } from "../teamGroups.js";
   import { formatAgentsRoute, navigate } from "../agentsRouter.js";
   import { connectSession } from "../stores/sse.js";
   import type { AgentEvent } from "../types/agents.js";
@@ -52,10 +52,11 @@
   let threadEl = $state<HTMLDivElement | null>(null);
 
   const hint = $derived(composerHint(group));
-  /* The header's faces animate like the members' roster rows. */
+  /* The header's faces animate while that member answers in this group
+     (the typing push), not for its work anywhere else. */
   const liveMember = (id: string) => {
     const a = agents.find((x) => x.id === id);
-    return a ? { agent: a, st: rosterStatus(a) } : null;
+    return a ? groupFace(a, rosterStatus(a), !!typing[id]) : null;
   };
   const byId = $derived(Object.fromEntries(group.members.map((m) => [m.id, m])));
   /* The @ menu offers the group's enabled members only. */

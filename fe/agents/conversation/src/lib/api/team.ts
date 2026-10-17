@@ -627,6 +627,10 @@ export type GroupMember = {
   is_captain: boolean;
   disabled: boolean;
   max_hops: number;
+  /** The member's backing chat for this group; absent until it spoke. */
+  session_id?: string;
+  /** It has a turn running in this group right now. */
+  working?: boolean;
 };
 
 export type GroupItem = {

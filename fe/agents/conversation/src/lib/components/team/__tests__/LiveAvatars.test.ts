@@ -45,8 +45,12 @@ describe("live avatars", () => {
     const acts = [...r.container.querySelectorAll<HTMLElement>("[data-testid=avatar-activity]")];
     expect(acts.map((e) => e.dataset.activity)).toEqual(["tool"]);
     expect(r.container.querySelectorAll("svg[width='17']").length).toBe(2);
-    expect(app()).toMatch(/<GroupAvatars [^>]*live=\{liveMember\}/);
+    // The sidebar row and the group header animate a face only for work
+    // in that group (groupFace), never for the member's work elsewhere.
+    expect(app()).toMatch(/<GroupAvatars [^>]*live=\{groupMember\(g\)\}/);
+    expect(app()).toMatch(/groupFace\(a, statusOf\(a\), !!g\.members\.find/);
     const gv = readFileSync(resolve(__dirname, "../../GroupView.svelte"), "utf8");
     expect(gv).toMatch(/<GroupAvatars [^>]*live=\{liveMember\}/);
+    expect(gv).toMatch(/groupFace\(a, rosterStatus\(a\), !!typing\[id\]\)/);
   });
 });
