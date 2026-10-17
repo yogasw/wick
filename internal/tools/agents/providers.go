@@ -260,6 +260,13 @@ func providerDetailPage(c *tool.Ctx) {
 	}))
 }
 
+// providerEditMu serialises the page's load-modify-save of one instance.
+// The detail page saves each field on its own (an env row on blur, the
+// simple fields on Save), often two requests at once; each read the
+// instance, changed its own field and wrote the whole instance back, so
+// the slower one restored what the faster one had just changed.
+var providerEditMu sync.Mutex
+
 // saveProviderDetail saves per-provider settings from the detail page.
 func saveProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
@@ -270,6 +277,8 @@ func saveProviderDetail(c *tool.Ctx) {
 	if !requireProviderDo(c, t, name, ownerPermConfigure) {
 		return
 	}
+	providerEditMu.Lock()
+	defer providerEditMu.Unlock()
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.Error(http.StatusNotFound, "provider not found")
@@ -381,6 +390,8 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if !(provider.IsIdleCompactKey(key) && canManageProvider(c, t, name)) && !requireProviderDo(c, t, name, providerKeyPerm(key)) {
 		return
 	}
+	providerEditMu.Lock()
+	defer providerEditMu.Unlock()
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})

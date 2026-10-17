@@ -592,6 +592,8 @@ func Save(ins Instance) error {
 	if ins.Type == TypeWick && ins.Name != string(TypeWick) {
 		return fmt.Errorf("wick is single-instance: instance name must be %q (models are added on the instance, not as new instances)", TypeWick)
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -669,6 +671,8 @@ func Rename(t Type, oldName, newName string) error {
 	if t == TypeWick {
 		return fmt.Errorf("wick is single-instance and cannot be renamed")
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -733,6 +737,8 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 	if name == "" || event == "" {
 		return errors.New("instance name and event required")
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -782,6 +788,8 @@ func Delete(t Type, name string) error {
 	if name == "" {
 		return errors.New("instance name required")
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err

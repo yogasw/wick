@@ -61,13 +61,20 @@ func loadAll() map[string]userconfig.ProviderStatus {
 	return cfg.ProviderStatuses
 }
 
-// saveOne upserts one entry. Concurrent saves serialize on cacheMu so
-// we never race on the read-modify-write of the userconfig file.
-var cacheMu sync.Mutex
+// configMu serialises every read-modify-write of the userconfig file in
+// this package. The status cache and the instance writers (Save, Rename,
+// SetHookEnabled, Delete) each load the WHOLE file and write it back: on
+// separate locks, a status write that loaded before an instance Save landed
+// wrote the old instance back — env rows saved from the provider page
+// "disappeared" a moment later, because every Save starts a background
+// rescan that ends in exactly such a status write.
+var configMu sync.Mutex
+
+// saveOne upserts one entry under configMu.
 
 func saveOne(t Type, name string, ps userconfig.ProviderStatus) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		log.Warn().Err(err).Msg("agents.cache: load for save failed")
@@ -242,8 +249,8 @@ func RescanOne(ctx context.Context, t Type, name string) Status {
 // supplying a free-form string is fine — the map accommodates any key
 // future versions decide to probe.
 func MergeHookCapability(t Type, name, event string, hc HookCapability) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		log.Warn().Err(err).Msg("agents.cache: load for merge capability failed")
