@@ -619,7 +619,7 @@ func Save(ins Instance) error {
 	if !updated {
 		*list = append(*list, toUserInstance(ins))
 	}
-	if err := userconfig.Save(AppName(), cfg); err != nil {
+	if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 		return err
 	}
 	invalidateInstanceCache()
@@ -698,7 +698,7 @@ func Rename(t Type, oldName, newName string) error {
 			}
 			// So do failover chains pointing at it, on every type.
 			renameFailoverTargets(&cfg.Providers, InstanceTag(t, oldName), InstanceTag(t, newName))
-			if err := userconfig.Save(AppName(), cfg); err != nil {
+			if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 				return err
 			}
 			invalidateInstanceCache()
@@ -719,7 +719,7 @@ func Rename(t Type, oldName, newName string) error {
 		}
 		*list = append(*list, seeded)
 		renameFailoverTargets(&cfg.Providers, InstanceTag(t, oldName), InstanceTag(t, newName))
-		if err := userconfig.Save(AppName(), cfg); err != nil {
+		if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -755,7 +755,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			(*list)[i].Hooks = map[string]userconfig.HookInstanceConfig{}
 		}
 		(*list)[i].Hooks[event] = userconfig.HookInstanceConfig{Enabled: enabled}
-		if err := userconfig.Save(AppName(), cfg); err != nil {
+		if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -772,7 +772,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			Name:  name,
 			Hooks: map[string]userconfig.HookInstanceConfig{event: {Enabled: enabled}},
 		})
-		if err := userconfig.Save(AppName(), cfg); err != nil {
+		if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -805,7 +805,7 @@ func Delete(t Type, name string) error {
 			*list = append((*list)[:i], (*list)[i+1:]...)
 			// Chains pointing at it, on every type, lose that target.
 			pruneFailoverTargets(&cfg.Providers, InstanceTag(t, name))
-			if err := userconfig.Save(AppName(), cfg); err != nil {
+			if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 				return err
 			}
 			invalidateInstanceCache()

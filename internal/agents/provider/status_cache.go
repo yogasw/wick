@@ -84,7 +84,7 @@ func saveOne(t Type, name string, ps userconfig.ProviderStatus) {
 		cfg.ProviderStatuses = map[string]userconfig.ProviderStatus{}
 	}
 	cfg.ProviderStatuses[cacheKey(t, name)] = ps
-	if err := userconfig.Save(AppName(), cfg); err != nil {
+	if err := userconfig.SaveProviderStatuses(AppName(), cfg.ProviderStatuses); err != nil {
 		log.Warn().Err(err).Str("type", string(t)).Str("name", name).Msg("agents.cache: persist failed")
 	}
 }
@@ -276,7 +276,7 @@ func MergeHookCapability(t Type, name, event string, hc HookCapability) {
 		Scope:     hc.Scope,
 	}
 	cfg.ProviderStatuses[key] = ps
-	if err := userconfig.Save(AppName(), cfg); err != nil {
+	if err := userconfig.SaveProviderStatuses(AppName(), cfg.ProviderStatuses); err != nil {
 		log.Warn().Err(err).Str("type", string(t)).Str("name", name).Msg("agents.cache: persist capability failed")
 	}
 }
