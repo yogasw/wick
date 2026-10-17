@@ -27,6 +27,7 @@
   import { connectSession } from "../stores/sse.js";
   import type { AgentEvent } from "../types/agents.js";
   import Dots from "./team/Dots.svelte";
+  import { rosterStatus } from "../rosterStatus.js";
 
   /* Fallback poll while a reply is pending AND the stream is down. */
   const DROPPED_POLL_MS = 60_000;
@@ -51,6 +52,11 @@
   let threadEl = $state<HTMLDivElement | null>(null);
 
   const hint = $derived(composerHint(group));
+  /* The header's faces animate like the members' roster rows. */
+  const liveMember = (id: string) => {
+    const a = agents.find((x) => x.id === id);
+    return a ? { agent: a, st: rosterStatus(a) } : null;
+  };
   const byId = $derived(Object.fromEntries(group.members.map((m) => [m.id, m])));
   /* The @ menu offers the group's enabled members only. */
   const mentionAgents = $derived(
@@ -169,7 +175,7 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
     {/if}
-    <GroupAvatars members={group.members} size={30} />
+    <GroupAvatars members={group.members} size={30} live={liveMember} />
     <div class="min-w-0 flex-1">
       <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">{group.name}</div>
       <div class="truncate text-xs text-black-800 dark:text-black-600">

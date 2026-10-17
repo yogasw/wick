@@ -10,7 +10,7 @@
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
-  import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
+  import { setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
   import { agentMenu, chatListed, chatNeedsAccessCheck, isSharedAgent, shareInfo, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
@@ -51,7 +51,7 @@
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
-  import { rosterStatus, withTurn, withActivity, busyWork, avatarWorking, teamMark } from "./lib/rosterStatus.js";
+  import { rosterStatus, withTurn, withActivity, busyWork, teamMark } from "./lib/rosterStatus.js";
   import { mainChatOpen } from "./lib/avatarActivity.js";
   import { liveRoster, boundedDebounce, singleFlight, ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS } from "./lib/rosterLive.js";
   import type { SessionActivity } from "./lib/stores/sessionsStream.js";
@@ -765,6 +765,11 @@
   const motionMs = () => rosterMotionMs(!!reducedMotion?.matches, searching);
   const [rowSend, rowReceive] = crossfade({ duration: () => motionMs(), fallback: (node) => fade(node, { duration: motionMs() }) });
   const statusOf = (a: AgentItem) => rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) });
+  /* A group member as its roster row: same agent, same status. */
+  const liveMember = (id: string) => {
+    const a = agents.find((x) => x.id === id);
+    return a ? { agent: a, st: statusOf(a) } : null;
+  };
   /* Loose rows on top (agents in no folder, and group chats), then the
      folders in the viewer's order; agents sort by tier in both. */
   const list = $derived(teamList(entries, resolved, statusOf, searching, rosterNow));
@@ -993,9 +998,10 @@
     {#if pins.length}
       <div class="flex justify-center gap-2 px-2 pb-3 pt-1 lg:hidden" data-testid="roster-pins">
         {#each pins as a (a.id)}
+          {@const pst = statusOf(a)}
           <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
             <span class="relative inline-flex">
-              <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} live working={isWorking(a.status)} asleep={a.disabled} />
+              <RosterAvatar agent={a} st={pst} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} dozing={dozing(a, pst, rosterNow)} size={54} />
               <!-- Same cue as the list's SHARED badge, sized for a pin. -->
               {#if isSharedAgent(a)}<span class="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white-100 bg-white-300 text-black-800 dark:border-navy-700 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="pin-shared-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></svg><span class="sr-only">{sharedLabel(a)}</span></span>{/if}
             </span>
@@ -1061,7 +1067,7 @@
           data-testid="roster-group"
           onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
         >
-          <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
+          <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" live={liveMember} /></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
@@ -1285,7 +1291,7 @@
       </button>
       {#if selected && !noCaptain}
         <span class="relative flex shrink-0">
-          <AgentAvatar kind={selected.avatar?.kind} image={selected.avatar?.image} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent" || headerStatus?.work === "replying"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+          {#if headerStatus}<RosterAvatar agent={selected} st={headerStatus} open={mainChatOpen(selected, selected.id, route)} hatching={hatching.includes(selected.id)} size={36} />{/if}
           {#if headerStatus}<PresenceDot presence={headerStatus.presence} label={headerStatus.label} />{/if}
           {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>

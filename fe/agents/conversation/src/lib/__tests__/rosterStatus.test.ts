@@ -314,7 +314,8 @@ describe("Team task work in the avatar and the header", () => {
     const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
     const avatar = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
     expect(avatar).toMatch(/working=\{!ring && avatarWorking\(a\.status, st\.work\)\} tool=\{st\.work === "tool" \|\| st\.work === "subagent" \|\| st\.work === "replying"\}/);
-    expect(app).toMatch(/working=\{!!headerStatus && avatarWorking\(selected\.status, headerStatus\.work\)\} tool=\{headerStatus\?\.work === "tool" \|\| headerStatus\?\.work === "subagent" \|\| headerStatus\?\.work === "replying"\}/);
+    // The header avatar is a RosterAvatar fed the header's status.
+    expect(app).toMatch(/<RosterAvatar agent=\{selected\} st=\{headerStatus\}/);
     expect(app).toMatch(/\{:else if isWorking\(selected\.status\) \|\| \(headerStatus && busyWork\(headerStatus\.work\)\)\}/);
   });
 
