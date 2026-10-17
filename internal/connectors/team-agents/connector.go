@@ -128,8 +128,8 @@ type personaInput struct {
 	Tagline      string `wick:"desc=New tagline, empty = unchanged."`
 	Description  string `wick:"desc=New short description, empty = unchanged."`
 	SystemPrompt string `wick:"textarea;desc=New system prompt, empty = unchanged."`
-	Avatar       string `wick:"desc=New avatar as JSON {kind,shape,color,expression}: kind \"\" (classic: shape circle|squircle|triangle|diamond) or \"blob\" (shape circle|pebble|squircle|capsule|triangle|cloud|droplet|flame|medal|acorn|jellyfish|clover; expression neutral|attentive|surprised|excited|happy|angry|sad|suspicious|curious|proud|shy|unimpressed); color a #rrggbb hex. Empty = unchanged."`
-	AvatarImage  string `wick:"desc=Path of a PNG or JPEG (max 2 MiB) inside your working folder, e.g. artifacts/avatar.png; it becomes the agent's picture avatar. Empty = unchanged."`
+	Avatar       string `wick:"desc=New avatar as JSON {kind,shape,color,expression}: kind \"\" (classic: shape circle|squircle|triangle|diamond) or \"blob\" (shape circle|pebble|squircle|capsule|triangle|cloud|droplet|flame|medal|acorn|jellyfish|clover, expression neutral|attentive|surprised|excited|happy|angry|sad|suspicious|curious|proud|shy|unimpressed), color a #rrggbb hex. Empty = unchanged."`
+	AvatarImage  string `wick:"desc=Path of a PNG or JPEG (max 2 MiB) inside your working folder, e.g. artifacts/avatar.png, it becomes the agent's picture avatar. Empty = unchanged."`
 }
 
 type accessInput struct {
