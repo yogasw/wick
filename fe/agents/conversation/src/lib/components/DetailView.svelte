@@ -3053,8 +3053,8 @@
   /* The "More" button sits below the tabs and is never folded, so its height
      comes out of the budget before anything is fitted. Shorter in icons
      mode, where no "More" runs under the dots. */
-  /* Labels are the default: only an explicit false means icons only. */
-  const railLabels = $derived(railPrefs.labels !== false);
+  /* Icons only is the default: only an explicit true prints the labels. */
+  const railLabels = $derived(railPrefs.labels === true);
   const RAIL_MORE_H = $derived(railLabels ? 44 : 37);
   const railBudget = $derived(railViewH > 0 ? railViewH * RAIL_FILL - RAIL_MORE_H : 0);
   /* What the window can hold, on top of what the user chose to fold. This is

@@ -61,12 +61,12 @@ func TestSetRailPrefsKeepsLabels(t *testing.T) {
 		t.Fatalf("labels on after a layout save, want it kept off")
 	}
 
-	// A user who never chose stays on the default (labels on).
+	// A user who never chose stays on the default (icons only).
 	s3, id3 := newRailUser(t, nil)
-	if err := s3.SetRailPrefs(context.Background(), id3, entity.RailPrefs{Order: []string{"files"}, Labels: boolp(false)}); err != nil {
+	if err := s3.SetRailPrefs(context.Background(), id3, entity.RailPrefs{Order: []string{"files"}, Labels: boolp(true)}); err != nil {
 		t.Fatalf("SetRailPrefs: %v", err)
 	}
-	if got := railOf(t, s3, id3); got.Labels != nil || !got.LabelsOn() {
+	if got := railOf(t, s3, id3); got.Labels != nil || got.LabelsOn() {
 		t.Fatalf("Labels = %v after a layout save, want it left unset", got.Labels)
 	}
 }

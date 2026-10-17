@@ -1037,7 +1037,7 @@ describe("DetailView — reply chip", () => {
   });
 });
 
-/* P40: the strip prints the labels unless the profile turned them off. The
+/* P40: the strip is icons only unless the profile turned the labels on. The
    choice arrives inlined on #app, like the rest of the rail layout. */
 describe("DetailView — rail label style (P40)", () => {
   const app = () => {
@@ -1063,9 +1063,7 @@ describe("DetailView — rail label style (P40)", () => {
   const label = (container: HTMLElement) =>
     container.querySelector('[data-testid="rail-tab-files"] [class*="writing-mode"]');
 
-  test("labels off: icons only, the name in an accessible tooltip", () => {
-    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
-    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+  const expectIcons = (container: HTMLElement) => {
     const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
     expect(btn.getAttribute("aria-label")).toBe("Files");
     // No native title on top of the custom tooltip, or hover shows two.
@@ -1084,6 +1082,11 @@ describe("DetailView — rail label style (P40)", () => {
     // No element inside any tab carries a title either (Source used to).
     const strip = btn.parentElement!;
     expect(strip.querySelectorAll("[data-testid^='rail-tab-'] [title]").length).toBe(0);
+  };
+
+  test("labels off: icons only, the name in an accessible tooltip", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
+    expectIcons(render(DetailView, { props: DEFAULT_PROPS }).container);
   });
 
   const expectLabels = (container: HTMLElement) => {
@@ -1099,13 +1102,13 @@ describe("DetailView — rail label style (P40)", () => {
     expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
   });
 
-  test("unset (saved layout without a choice): labels on", () => {
+  test("unset (saved layout without a choice): icons only", () => {
     app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null });
-    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+    expectIcons(render(DetailView, { props: DEFAULT_PROPS }).container);
   });
 
-  test("nothing inlined: labels on", () => {
-    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+  test("nothing inlined: icons only", () => {
+    expectIcons(render(DetailView, { props: DEFAULT_PROPS }).container);
   });
 });
 
