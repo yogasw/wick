@@ -397,6 +397,8 @@ type Hub struct {
 	progressHub
 	// batchHub holds the fan-in batches and the delivery outbox (batch.go).
 	batchHub
+	// waitHub reads what a working task's teammate waits on (wait.go).
+	waitHub
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -1049,6 +1051,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if out != nil {
 		out.GroupID = group
 		out.Note = groupNote + out.Note
+		h.noteWait(out)
 	}
 	return out, err
 }
@@ -1536,6 +1539,7 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 			out.ReplyText = messageText(t.Status.Message)
 		}
 	}
+	h.noteWait(out)
 	return out, nil
 }
 
@@ -1874,6 +1878,16 @@ type TaskView struct {
 	ReplacedHow      string `json:"replaced_how,omitempty"`
 	ReplacedToHandle string `json:"replaced_to_handle,omitempty"`
 	ReplacedToName   string `json:"replaced_to_name,omitempty"`
+	// RestartAttempt/RestartMax: the teammate is being restarted after an
+	// idle kill (retry 1 of 2) and QueuePos: it waits for a free slot (1 =
+	// next). The task stays working; WaitNote says it in one line. Read
+	// live from the pool (wait.go), never stored.
+	RestartAttempt int    `json:"restart_attempt,omitempty"`
+	RestartMax     int    `json:"restart_max,omitempty"`
+	QueuePos       int    `json:"queue_pos,omitempty"`
+	WaitNote       string `json:"wait_note,omitempty"`
+	// to is the teammate, for fillWait.
+	to Peer
 }
 
 // SentFrom lists the tasks sessionID sent, newest first: those in memory
@@ -1896,6 +1910,16 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	ids := h.sessionFilesLocked(sessionID, names, listed)
 	h.mu.Unlock()
 	recs := readRecords(dir, ids)
+	out := h.sentFromLocked(sessionID, recs, busy)
+	for i := range out {
+		h.fillWait(&out[i])
+	}
+	return out
+}
+
+// sentFromLocked is SentFrom's listing under h.mu, waits left to the
+// caller (WaitOf reads the pool).
+func (h *Hub) sentFromLocked(sessionID string, recs map[a2a.TaskID]taskRecord, busy bool) []TaskView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, rec := range recs {
@@ -2070,6 +2094,7 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 		}
 	}
 	v.ChatID = ref.chat
+	v.to = ref.to
 	v.Interrupted = ref.interrupted
 	v.Undelivered = ref.undelivered
 	v.Origin = ref.origin

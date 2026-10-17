@@ -168,7 +168,7 @@ export const PROGRESS_MAX = 140;
     "" for any task that is not working or says nothing yet. */
 export function taskProgress(t: TeamTaskItem): string {
   if (taskStatus(t) !== "working") return "";
-  const line = (t.progress ?? "").replace(/\s+/g, " ").trim();
+  const line = (t.progress ?? "").replace(/\s+/g, " ").trim() || (taskWait(t)?.detail ?? "");
   const chars = Array.from(line);
   return chars.length > PROGRESS_MAX ? chars.slice(0, PROGRESS_MAX - 1).join("") + "…" : line;
 }
@@ -209,7 +209,28 @@ export const INTERRUPTED_LABEL = "Interrupted by a restart";
 
 /** statusLabel for one task: an interrupted one says so. */
 export function taskLabel(t: TeamTaskItem, senderName: string): string {
-  return t.interrupted ? INTERRUPTED_LABEL.toLowerCase() : statusLabel(taskStatus(t), senderName);
+  if (t.interrupted) return INTERRUPTED_LABEL.toLowerCase();
+  return taskWait(t)?.label ?? statusLabel(taskStatus(t), senderName);
+}
+
+/** What a working task waits on besides its teammate's own turn: the
+    pool restarting the teammate after an idle kill, or a free slot. The
+    label replaces "working" (amber), the detail is the server's plain
+    line, kept whole for the tooltip so a hang can still be traced. null
+    when the task is not working or waits on nothing. */
+export type TaskWait = { kind: "restarting" | "queued"; label: string; detail: string };
+
+export function taskWait(t: TeamTaskItem): TaskWait | null {
+  if (taskStatus(t) !== "working") return null;
+  if ((t.restart_attempt ?? 0) > 0) {
+    const label = `restarting · retry ${t.restart_attempt}/${t.restart_max || t.restart_attempt}`;
+    return { kind: "restarting", label, detail: t.wait_note || label };
+  }
+  if ((t.queue_pos ?? 0) > 0) {
+    const label = `queued · #${t.queue_pos}`;
+    return { kind: "queued", label, detail: t.wait_note || label };
+  }
+  return null;
 }
 
 /** The chip's status word: like taskLabel, but a question waiting for

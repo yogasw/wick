@@ -666,6 +666,10 @@ func NewServer() *Server {
 		SpawnLogger: agentsSpawnLogger,
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
+			// Output from a restarted agent ends its "Restarting" state.
+			if agentsPool != nil && ev.Type != agentevent.Done && ev.Type != agentevent.Error {
+				agentsPool.NoteOutput(sid)
+			}
 			// Name passed through so a sub-agent's relayed progress is labelled
 			// with the agent that produced it rather than its session seed.
 			channelReg.DispatchAgentEventFrom(sid, name, ev)
@@ -706,6 +710,15 @@ func NewServer() *Server {
 			if reason == provider.ExitIdle && restarting {
 				bcastDone.Raw = delegation.ExitDoneRaw(true)
 				chanDone.Raw = bcastDone.Raw
+			}
+			// An idle kill whose retries are spent ends the turn with a
+			// plain reason, so the waiting side fails saying why instead
+			// of closing on an empty answer.
+			if reason == provider.ExitIdle && !restarting {
+				if why := agentsPool.TakeGiveUp(sid); why != "" {
+					bcastDone.Raw = delegation.ExitDoneRawGaveUp(why)
+					chanDone.Raw = bcastDone.Raw
+				}
 			}
 			agentsBcast.Publish(sid, name, bcastDone)
 			channelReg.DispatchAgentEvent(sid, chanDone)
@@ -2032,6 +2045,8 @@ func NewServer() *Server {
 			teamHub = agentstool.NewTeamLinkHub(teamSvc, func(ctx context.Context, sessionID, text string) error {
 				return d.DeliverToSession(ctx, sessionID, "", text)
 			})
+			// A teammate restarting or queued shows on its task's card.
+			agentsPool.SetOnWaitChange(teamHub.RefreshWaiting)
 		})
 		return teamHub
 	}

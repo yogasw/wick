@@ -288,6 +288,7 @@ func (h *Hub) publishProgress(id a2a.TaskID) bool {
 	}
 	busy := h.CallerBusy != nil && h.CallerBusy(session)
 	v.NeedsYou = needsYou(v, userAnswer, busy)
+	h.fillWait(&v)
 	h.OnTaskChange(session, v)
 	return true
 }

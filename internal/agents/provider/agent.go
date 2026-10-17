@@ -2174,6 +2174,23 @@ func (a *Agent) idleKill() {
 	if a.turnOpen && a.cfg.TurnIdleTimeout > window {
 		window = a.cfg.TurnIdleTimeout
 	}
+	// One structured line per idle kill, so a hang can be traced later:
+	// how long it was silent, which window applied, and whether a turn or
+	// a background task was still open.
+	var silent time.Duration
+	if !a.lastOutput.IsZero() {
+		silent = time.Since(a.lastOutput).Round(time.Second)
+	}
+	log.Warn().
+		Str("component", "agent").
+		Str("session", a.cfg.SessionID).
+		Str("cause", "idle timer").
+		Dur("silent_for", silent).
+		Dur("timeout", window).
+		Bool("turn_open", a.turnOpen).
+		Bool("background_pending", a.bgPending).
+		Int("unanswered", len(a.unanswered)).
+		Msg("agent.idle: no output within the idle window; stopping the process")
 	if !a.turnOpen {
 		// Every turn that was sent has ended: the process finished what it
 		// took, mid-turn messages included (the CLI folded them into the

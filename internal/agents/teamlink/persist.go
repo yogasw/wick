@@ -320,6 +320,7 @@ func (h *Hub) persist(id a2a.TaskID) {
 		// CallerBusy reads the pool, so it runs outside h.mu.
 		busy := h.CallerBusy != nil && h.CallerBusy(session)
 		view.NeedsYou = needsYou(*view, userAnswer, busy)
+		h.fillWait(view)
 		h.OnTaskChange(session, *view)
 	}
 }

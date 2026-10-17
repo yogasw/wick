@@ -18,7 +18,7 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { allSettled, blockHead, canSummarize, summarizeGroup, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, settledParts, statusParts, taskDuration, taskProgress, taskQuickReplies, taskStatus, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, canSummarize, summarizeGroup, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, settledParts, statusParts, taskDuration, taskProgress, taskQuickReplies, taskStatus, taskWait, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
   import { questionHtml } from "../../questionText.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
@@ -284,6 +284,7 @@
     <div class="flex flex-wrap gap-1.5 px-3 pb-2.5">
       {#each tasks as t (t.task_id)}
         {@const s = taskStatus(t)}
+        {@const wait = taskWait(t)}
         {@const open = chipOpen(t)}
         {@const el = chipElapsed(t, now, "duration")}
         <span class="inline-flex items-center gap-1">
@@ -292,6 +293,8 @@
             bind:this={chipEls[t.task_id]}
             data-testid="delegation-chip"
             data-status={s}
+            data-wait={wait?.kind}
+            title={wait?.detail}
             data-open={open}
             aria-expanded={open}
             data-origin={t.origin ?? "agent"}
@@ -308,11 +311,11 @@
             {#if isUserTask(t)}<span data-testid="user-task-marker" class="rounded bg-link-400/10 px-1 text-[10px] font-medium text-link-400">{USER_TASK_MARKER}</span>{/if}
             <span class="font-semibold text-black-900 dark:text-white-100">{nameOf(t)}</span>
             {#if s === "working"}
-              <TeamIcon name="spin" size={10} spin class="text-green-600 dark:text-green-400" />
+              <TeamIcon name="spin" size={10} spin class={wait ? "text-amber-500" : "text-green-600 dark:text-green-400"} />
             {:else if s === "replied"}
               <TeamIcon name="check" size={10} class="text-green-600 dark:text-green-400" />
             {/if}
-            <span data-testid="chip-status" class={"text-[10.5px] " + LABEL_TONE[s]}>{chipLabel(t, captainName)}{s === "answering" ? "…" : ""}</span>
+            <span data-testid="chip-status" class={"text-[10.5px] " + (wait ? "text-amber-600 dark:text-amber-400" : LABEL_TONE[s])}>{chipLabel(t, captainName)}{s === "answering" ? "…" : ""}</span>
             {#if el}<span data-testid="chip-elapsed" class="font-mono text-[10px] text-black-700">{el}</span>{/if}
             {#if s !== "needs_you"}
               <TeamIcon name="chevron" size={10} class={"text-black-700 " + (open ? "" : "-rotate-90")} />

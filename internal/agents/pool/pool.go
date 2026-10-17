@@ -96,6 +96,9 @@ type Pool struct {
 	// idleRetries counts, per agent, the automatic re-deliveries of
 	// messages an idle kill handed back (retryUnanswered).
 	idleRetries map[string]*crashState
+	// waitStates says what a session waits on (restart, queue) for the
+	// cards of whoever waits on it; see waitstate.go.
+	waitStates
 	// ghostWarned remembers which active entries HandoverBlockers already
 	// logged (and reaped) as ghosts, so a drain polling every few hundred
 	// milliseconds says it once per entry. Lazily created; guarded by mu.
@@ -1176,6 +1179,9 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 		p.queue = append(p.queue, queueEntry{sessionID, agentName, time.Now()})
 	}
 	p.mu.Unlock()
+	if !already {
+		p.waitChanged()
+	}
 	if p.cfg.PreemptIdle {
 		p.preemptIdleSlot()
 	}
@@ -1881,6 +1887,7 @@ func (p *Pool) tryGrantQueue() {
 	p.spawningKeys[key] = struct{}{}
 	p.wg.Add(1)
 	p.mu.Unlock()
+	p.waitChanged()
 	// Background spawn — don't block whoever fired the exit hook.
 	go func() {
 		defer p.wg.Done()
@@ -2947,6 +2954,16 @@ func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReaso
 		if p.retryUnanswered(sessionID, agentName, len(unanswered)) {
 			return true
 		}
+		why := p.idleGiveUp(sessionID, agentName)
+		log.Warn().
+			Str("component", "pool").
+			Str("session", sessionID).
+			Str("agent", agentName).
+			Int("retries", maxIdleRetries).
+			Int("messages", len(unanswered)).
+			Str("reason", why).
+			Msg("pool.exit: idle-killed again; automatic retries spent, messages wait for the next wake")
+		p.markGaveUp(sessionID, why)
 		p.noticeNotify(sessionID, agentName, unansweredNotice(len(unanswered)), errUnansweredRequeued)
 	}
 	// After the slot is released, decide whether this death deserves a
@@ -3158,9 +3175,12 @@ func (p *Pool) retryUnanswered(sessionID, agentName string, n int) bool {
 		Str("session", sessionID).
 		Str("agent", agentName).
 		Int("attempt", attempt).
+		Int("max_attempts", maxIdleRetries).
+		Int("messages", n).
 		Dur("delay", delay).
 		Msg("pool.exit: idle-killed before answering; retrying automatically")
 	msg := idleRetryNotice(n, attempt)
+	p.markRestarting(sessionID, attempt)
 	time.AfterFunc(delay, func() {
 		select {
 		case <-p.stopCh:
@@ -3178,6 +3198,17 @@ func (p *Pool) retryUnanswered(sessionID, agentName string, n int) bool {
 		p.notifySession(sessionID, agentName, msg)
 	})
 	return true
+}
+
+// idleGiveUp is why the idle retries of an agent stopped, for
+// TakeGiveUp: its process was idle-killed mid-turn, so the window was
+// the mid-turn one.
+func (p *Pool) idleGiveUp(sessionID, agentName string) string {
+	p.mu.Lock()
+	st, ok := p.crashes[sessionKey(sessionID, agentName)]
+	halted := ok && st.halted
+	p.mu.Unlock()
+	return idleGiveUpReason(maxIdleRetries, max(p.cfg.IdleTimeout, p.cfg.TurnIdleTimeout), halted)
 }
 
 // idleRetryNotice heads the retry turn: the person sees why the agent

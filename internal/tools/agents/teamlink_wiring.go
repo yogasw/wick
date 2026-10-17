@@ -50,6 +50,10 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// A question no turn of the sending chat is handling waits for the
 	// user: the thread shows it as "Needs you".
 	hub.CallerBusy = poolSessionBusy
+	// A working task's teammate being restarted after an idle kill, or
+	// waiting for a free slot, reads "Restarting · retry 1/2" / "Queued ·
+	// #2" on its card instead of a silent spinner.
+	hub.WaitOf = poolTargetWait
 	// A task's every change reaches the sending chat's open viewers, so
 	// "Needs you" shows at once instead of on the next poll. The Team
 	// roster refetches too, but only when the task's state moved
@@ -859,6 +863,22 @@ func poolSessionBusy(sessionID string) bool {
 	return false
 }
 
+// poolTargetWait is teamlink.Hub.WaitOf over the pool: what the
+// teammate's chat ("" = its main chat) waits on.
+func poolTargetWait(to teamlink.Peer, chat string) teamlink.TargetWait {
+	if globalPool == nil {
+		return teamlink.TargetWait{}
+	}
+	if chat == "" {
+		chat = poolTurns{}.MainSession(context.Background(), to)
+	}
+	if chat == "" {
+		return teamlink.TargetWait{}
+	}
+	w := globalPool.WaitOf(chat)
+	return teamlink.TargetWait{RestartAttempt: w.RestartAttempt, RestartMax: w.RestartMax, QueuePos: w.QueuePos}
+}
+
 // RunIn is Run in sessionID (teamlink.ChatOpener). A team task's turn
 // waits until the session runs nothing else, so the turn it starts is
 // its own (teamTurnGate).
@@ -1322,6 +1342,10 @@ func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remot
 				if exited, restarting := delegation.ParseExitDone(ev.Raw); exited && restarting {
 					b.Reset()
 					continue
+				}
+				// Its retries are spent: the task fails with the reason.
+				if why := delegation.ExitDoneReason(ev.Raw); why != "" {
+					return b.String(), "Agent " + why
 				}
 				return b.String(), failed
 			}

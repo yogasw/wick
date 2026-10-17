@@ -20,3 +20,16 @@ func TestExitRestarting(t *testing.T) {
 		}
 	}
 }
+
+// The Done of an exit whose retries are spent carries its reason, so the
+// task fails saying why; any other raw has none.
+func TestExitGaveUp(t *testing.T) {
+	if got := exitGaveUp(`{"type":"wick_process_exit","restarting":false,"reason":"stopped after 2 retries: no output for 20m"}`); got != "stopped after 2 retries: no output for 20m" {
+		t.Errorf("got %q", got)
+	}
+	for _, raw := range []string{`{"type":"wick_process_exit","restarting":true}`, `{"type":"result","reason":"x"}`, ``} {
+		if got := exitGaveUp(raw); got != "" {
+			t.Errorf("%q: got %q", raw, got)
+		}
+	}
+}

@@ -197,6 +197,13 @@ func (r *PoolRunner) PartialText(sessionID, agentName string) string {
 	return r.Pool.PartialText(sessionID, agentName)
 }
 
+// WaitNote is what sessionID waits on besides its own turn, one line
+// ("" = nothing): the pool restarting it after an idle kill, or a free
+// slot (waitNoter).
+func (r *PoolRunner) WaitNote(sessionID string) string {
+	return r.Pool.WaitOf(sessionID).Note()
+}
+
 // childTitleRunes caps a generated child title. Long enough to identify
 // the task in the rail, short enough not to wrap.
 const childTitleRunes = 60
