@@ -956,8 +956,10 @@
       title="Open {sessionTitle(last)}"
       data-testid="roster-last"
       onclick={() => {
-        seenLast = markSeen(seenLast, lastSessionKey(last));
-        openRowChat(a, last.id);
+        // Read the chat first: marking it seen re-derives `last` to null.
+        const { id, key } = { id: last.id, key: lastSessionKey(last) };
+        openRowChat(a, id);
+        seenLast = markSeen(seenLast, key);
       }}>Last: {sessionTitle(last)}</button
     >
   {/if}
