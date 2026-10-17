@@ -1643,9 +1643,11 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 
 	// Persona text goes to the project (after any project switch above,
 	// so it lands in the project the agent now points at).
+	oldProv, followDefault := "", false
 	if p.ProjectID != "" {
 		if proj, ok := globalMgr.Registry().Project(p.ProjectID); ok {
 			meta := proj.Meta
+			oldProv, followDefault = meta.Defaults.Provider, req.Provider != nil || req.Model != nil
 			if applyProjectFields(&meta, req) {
 				if _, err := globalMgr.UpdateProject(c.Context(), p.ProjectID, meta); err != nil {
 					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1659,6 +1661,11 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if err := globalTeam.Update(c.Context(), &p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
+	}
+	// After the save, so the agent's allow_provider_switch is the one
+	// just stored: its existing chats follow a changed default.
+	if followDefault {
+		followAgentDefault(c.Context(), p, oldProv)
 	}
 	if promote {
 		if _, err := globalTeam.MakeCaptain(c.Context(), p.OwnerUserID, p.ID); err != nil {

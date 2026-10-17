@@ -480,6 +480,10 @@ type runEntry struct {
 	// global one. Set at spawn time from the session's agents.json.
 	provType string
 	provName string
+	// pinnedModel is the model pin agents.json named at spawn, as stored
+	// (before a foreign pin is dropped): maybeFollowDefault compares it
+	// with agents.json to spot a process left on an older pin.
+	pinnedModel string
 	// callerUserID is the wick user whose message caused this subprocess to
 	// spawn. Its MCP credential is minted for that human, and the credential
 	// is baked into the spawn argv — so it cannot change while the process
@@ -955,11 +959,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		entry = nil
 	}
 
-	// A session on a failover stand-in goes back to its home (or up the
-	// home's chain) before a new message, when that is usable again.
+	// A session whose agent's default moved follows it, and one on a
+	// failover stand-in goes back to its home (or up the home's chain),
+	// before a new message, when that is usable again.
 	// Re-read either way: a concurrent send may have switched, stopped or
 	// spawned meanwhile, and a stale entry would write into a dead process.
 	if role == "user" {
+		p.maybeFollowDefault(ctx, sessionID, agentName)
 		p.maybeReturnHome(sessionID, agentName)
 		p.mu.Lock()
 		entry, alive = p.active[key]
@@ -1388,6 +1394,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	maxTurns := 0
 	thinkingTokens := ""
 	modelID := ""
+	pinnedModel := ""
 	pType := ""
 	pName := ""
 	for _, a := range sess.Agents {
@@ -1396,6 +1403,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 			maxTurns = a.MaxTurns
 			thinkingTokens = a.ThinkingTokens
 			modelID = a.ModelID
+			pinnedModel = a.ModelID
 			// A pin only means anything on the instance it was chosen on.
 			// wick's ids are opaque ("m_…", or "<entry>@<vendorModel>") and a
 			// CLI given one dies on `--model m_…`. This happens when a pin
@@ -1463,15 +1471,16 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	// Wire OnExit so the pool reclaims the slot.
 	key := sessionKey(sessionID, agentName)
 	entry := &runEntry{
-		agent:    a,
-		state:    st,
-		store:    sto,
-		sessID:   sessionID,
-		agentNm:  agentName,
-		cwd:      cwd,
-		ctx:      ctx,
-		provType: pType,
-		provName: pName,
+		agent:       a,
+		state:       st,
+		store:       sto,
+		sessID:      sessionID,
+		agentNm:     agentName,
+		cwd:         cwd,
+		ctx:         ctx,
+		provType:    pType,
+		provName:    pName,
+		pinnedModel: pinnedModel,
 		// Remember who this process speaks for, and with which credential,
 		// so a later message from a DIFFERENT user can be detected (the MCP
 		// identity is fixed in the argv) and so the credential dies with the

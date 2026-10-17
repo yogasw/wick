@@ -282,12 +282,17 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		}
 		prov = &k
 	}
+	// Chats of the agent moved onto its default (followAgentDefault):
+	// counted whenever a provider or model was named, changed or not, so
+	// a re-save also puts chats left on an older default right.
+	switched := -1
 	if p.ProjectID != "" && (in.Name != nil || in.Description != nil || in.SystemPrompt != nil || prov != nil || in.Model != nil) {
 		proj, ok := globalMgr.Registry().Project(p.ProjectID)
 		if !ok {
 			return nil, errors.New("the agent's project is gone; its persona cannot be edited")
 		}
 		meta := proj.Meta
+		oldProv := meta.Defaults.Provider
 		set := func(dst *string, v *string, what string) {
 			if v != nil && *dst != *v {
 				*dst = *v
@@ -318,9 +323,16 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		if _, err := globalMgr.UpdateProject(ctx, p.ProjectID, meta); err != nil {
 			return nil, err
 		}
+		if prov != nil || in.Model != nil {
+			switched = followAgentDefault(ctx, p, oldProv)
+		}
 	}
 	if len(changed) == 0 {
-		return map[string]any{"status": "unchanged"}, nil
+		out := map[string]any{"status": "unchanged"}
+		if switched >= 0 {
+			out["sessions_switched"] = switched
+		}
+		return out, nil
 	}
 	by := "@" + mgr.Handle
 	text := fmt.Sprintf("Persona of @%s changed: %s · by %s", p.Handle, strings.Join(changed, ", "), by)
@@ -328,7 +340,11 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
 		emitSystemEvent(s.ID, store.KindPersonaChanged, text, extras)
 	}
-	return map[string]any{"status": "updated", "changed": changed}, nil
+	out := map[string]any{"status": "updated", "changed": changed}
+	if switched >= 0 {
+		out["sessions_switched"] = switched
+	}
+	return out, nil
 }
 
 // captainProviderKey checks a provider the Captain names for an agent:

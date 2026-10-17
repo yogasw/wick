@@ -112,6 +112,14 @@ type SwitchResult struct {
 // why. The agents tool wires it: it knows the session's agent and owner.
 var SwitchGuard func(ctx context.Context, sessionID, tag string) error
 
+// AgentDefault, when set, names the provider ("type/name") and model pin
+// sessionID must run on because its agent fixes them — a Team agent whose
+// Settings keep the provider. ok false = the session picks its own. The
+// pool follows it at a turn boundary (maybeFollowDefault), so a changed
+// default reaches sessions created before the change. The agents tool
+// wires it, as it does SwitchGuard.
+var AgentDefault func(ctx context.Context, sessionID string) (tag, modelID string, ok bool)
+
 // CheckSwitch runs SwitchGuard; nil when none is wired.
 func CheckSwitch(ctx context.Context, sessionID, tag string) error {
 	if SwitchGuard == nil {
