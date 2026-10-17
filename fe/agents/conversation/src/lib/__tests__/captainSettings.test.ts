@@ -42,8 +42,12 @@ describe("captainBlock", () => {
 
 describe("captainPolicyOf", () => {
   it("reads missing or unknown modes as off", () => {
-    expect(captainPolicyOf(undefined)).toEqual({ auto_approve: "off" });
-    expect(captainPolicyOf({ auto_approve: "bogus" as never })).toEqual({ auto_approve: "off" });
+    expect(captainPolicyOf(undefined)).toEqual({ auto_approve: "off", no_folders: false });
+    expect(captainPolicyOf({ auto_approve: "bogus" as never })).toEqual({ auto_approve: "off", no_folders: false });
+  });
+  it("keeps folder organizing on unless switched off", () => {
+    expect(captainPolicyOf({ auto_approve: "all" }).no_folders).toBe(false);
+    expect(captainPolicyOf({ auto_approve: "off", no_folders: true })).toEqual({ auto_approve: "off", no_folders: true });
   });
   it("keeps created and all", () => {
     expect(captainPolicyOf({ auto_approve: "created" }).auto_approve).toBe("created");

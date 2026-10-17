@@ -18,11 +18,12 @@ export const CAPTAIN_CAN_OPTIONS: { key: keyof CaptainCan; label: string; hint: 
   { key: "routines", label: "Manage routines", hint: "Scheduled messages of this agent." },
 ];
 
-/** captainPolicyOf is the Captain's stored auto-approve rule; anything
-    unknown (or an older server) reads as off. */
+/** captainPolicyOf is the Captain's stored policy: the auto-approve rule
+    (anything unknown, or an older server, reads as off) and whether it may
+    organize the Team-sidebar folders (on unless switched off). */
 export function captainPolicyOf(v: Partial<CaptainPolicy> | null | undefined): CaptainPolicy {
   const m = v?.auto_approve;
-  return { auto_approve: m === "created" || m === "all" ? m : "off" };
+  return { auto_approve: m === "created" || m === "all" ? m : "off", no_folders: !!v?.no_folders };
 }
 
 export const AUTO_APPROVE_OPTIONS: { value: AutoApprove; label: string; hint: string }[] = [
@@ -33,6 +34,9 @@ export const AUTO_APPROVE_OPTIONS: { value: AutoApprove; label: string; hint: st
 
 export const AUTO_APPROVE_NOTE =
   "Auto-approved changes still never exceed your own access, and each one is listed in the agent's Access history and announced in its chat.";
+
+export const FOLDERS_NOTE =
+  "Lets the Captain create folders in your Team list and move agents between them. Your own moves always win.";
 
 export const CAPTAIN_ACCESS_NOTE =
   "Access never changes without you: the Captain can only propose it, you accept or decline on a card, and it can never exceed your own access.";

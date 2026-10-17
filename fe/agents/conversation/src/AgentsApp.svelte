@@ -42,7 +42,8 @@
   import { makeCaptainWithAccess } from "./lib/captainAccess.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
-  import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
+  import { listGroups, getTeamSettings, getTeamFolders, saveTeamFolders, type GroupItem, type TeamFolder, type TeamFolders } from "./lib/api/team.js";
+  import { canUnfile, createFolder, deleteFolder, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, resolveFolders, setCollapsed, teamList, type FolderView } from "./lib/teamFolders.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
@@ -152,6 +153,7 @@
       agents = r.agents ?? [];
       captainId = r.captain_id ?? "";
       loadError = "";
+      void loadFolders();
       try {
         sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
       } catch {
@@ -655,6 +657,139 @@
       : undefined,
   });
 
+  /* Team-sidebar folders (teamFolders.ts): the viewer's own, read again
+     with every roster read so a change the Captain made shows up. An edit
+     applies at once and is saved FOLDER_SAVE_MS later, one PUT a burst; a
+     read or a save answer that predates the newest edit is dropped. */
+  const FOLDER_SAVE_MS = 300;
+  const NO_FOLDERS: TeamFolders = { folders: [], place: {}, inherited: {} };
+  let folderState = $state<TeamFolders | null>(null);
+  let folderSeq = 0;
+  let folderSaving = false;
+  let folderTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(() => clearTimeout(folderTimer));
+  const folderOf = (r: TeamFolders): TeamFolders => ({ folders: r.folders ?? [], place: r.place ?? {}, inherited: r.inherited ?? {} });
+  async function loadFolders() {
+    if (folderTimer || folderSaving) return;
+    const seq = folderSeq;
+    try {
+      const r = await runApi(getTeamFolders(base));
+      if (seq === folderSeq && !folderTimer && !folderSaving) folderState = folderOf(r);
+    } catch {
+      /* an older server has no folders: everything stays loose */
+    }
+  }
+  function editFolders(next: TeamFolders) {
+    folderState = next;
+    folderSeq++;
+    clearTimeout(folderTimer);
+    folderTimer = setTimeout(saveFolders, FOLDER_SAVE_MS);
+  }
+  async function saveFolders() {
+    folderTimer = undefined;
+    if (!folderState) return;
+    const seq = folderSeq;
+    folderSaving = true;
+    try {
+      const r = await runApi(saveTeamFolders(base, materialize($state.snapshot(folderState), agentIds)));
+      if (seq === folderSeq) folderState = folderOf(r);
+    } catch (e) {
+      toastError(`Save folders: ${e instanceof Error ? e.message : String(e)}`);
+      folderSaving = false;
+      await loadFolders();
+    } finally {
+      folderSaving = false;
+    }
+  }
+  const agentIds = $derived(agents.map((a) => a.id));
+  const folders = $derived(folderState ?? NO_FOLDERS);
+  const resolved = $derived(resolveFolders(folderState, agentIds));
+  const searching = $derived(!!query.trim());
+  const statusOf = (a: AgentItem) => rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) });
+  /* Loose rows on top (agents in no folder, and group chats), then the
+     folders in the viewer's order; agents sort by tier in both. */
+  const list = $derived(teamList(entries, resolved, statusOf, searching, rosterNow));
+
+  function toggleFolder(f: TeamFolder) {
+    editFolders(setCollapsed(folders, agentIds, f.id, !f.collapsed));
+  }
+  function askFolderName(title: string, current: string, id: string): string | null {
+    const n = window.prompt(title, current);
+    if (n === null) return null;
+    const err = renameError(folders, agentIds, id, n);
+    if (err) {
+      toastError(err);
+      return null;
+    }
+    return n.trim();
+  }
+  function folderMenu(v: FolderView) {
+    const f = v.folder;
+    const inherited = isInheritedFolder(f.id);
+    return [
+      { label: f.collapsed ? "Expand" : "Collapse", onclick: () => toggleFolder(f) },
+      {
+        label: "Rename",
+        onclick: () => {
+          const n = askFolderName("Rename folder", f.name, f.id);
+          if (n && n !== f.name) editFolders(renameFolder(folders, agentIds, f.id, n));
+        },
+      },
+      {
+        label: "Delete folder",
+        danger: true,
+        divider: true,
+        disabled: inherited,
+        hint: inherited ? "Shared agents follow their owner's folder." : "Its agents move out of it.",
+        onclick: () => editFolders(deleteFolder(folders, f.id)),
+      },
+    ];
+  }
+  function agentFolderMenu(a: AgentItem) {
+    const cur = resolved.placeOf[a.id] ?? "";
+    const pick = (id: string, label: string) => ({
+      label: cur === id ? `✓ ${label}` : label,
+      disabled: cur === id,
+      onclick: () => editFolders(moveAgent(folders, agentIds, a.id, id)),
+    });
+    const unfile = canUnfile(folderState, a.id);
+    return [
+      {
+        label: "Move to folder",
+        submenu: [
+          ...resolved.folders.map((f) => pick(f.id, f.name)),
+          { ...pick("", "No folder"), disabled: cur === "" || !unfile, hint: unfile ? undefined : "Shared: it follows its owner's folder." },
+          {
+            label: "New folder…",
+            divider: true,
+            onclick: () => {
+              const n = askFolderName("New folder", "", "");
+              if (!n) return;
+              const made = createFolder(folders, n);
+              editFolders(moveAgent(made.state, agentIds, a.id, made.id));
+            },
+          },
+        ],
+      },
+    ];
+  }
+  /* Drag a folder row to reorder folders; dropAt draws the 2px line
+     above or below the row under the pointer. */
+  let dragFolder = $state("");
+  let dropAt = $state<{ id: string; after: boolean } | null>(null);
+  function folderDragOver(e: DragEvent, id: string) {
+    if (!dragFolder || dragFolder === id) return;
+    e.preventDefault();
+    const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    dropAt = { id, after: e.clientY > b.top + b.height / 2 };
+  }
+  function folderDrop(e: DragEvent, id: string) {
+    e.preventDefault();
+    if (dragFolder && dropAt?.id === id) editFolders(reorderFolder(folders, agentIds, dragFolder, id, dropAt.after));
+    dragFolder = "";
+    dropAt = null;
+  }
+
   function rowPreview(a: AgentItem): { text: string; silent: boolean } {
     if (a.disabled) return { text: "Disabled", silent: false };
     if (a.attention_preview) return { text: a.attention_preview, silent: false };
@@ -668,6 +803,75 @@
   const mutedBell = "M8.7 3.7A6 6 0 0 1 18 8.5c0 3 .5 4.4 1.3 5.6M17 17H4c1.5-1.5 3-3 3-8.5";
 
 </script>
+
+{#snippet agentRow(a: AgentItem)}
+  {@const active = !route.group && selected?.id === a.id}
+  {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
+  {@const tone = rowTone(st.unread, st.attention)}
+  {@const pv = rowPreview(a)}
+  {@const running = runningSessions(a)}
+  {@const last = lastSession(a, seenLast, route.session)}
+  <!-- The row, plus beside it (a button holds no other button) the
+       count of chats running elsewhere and the Last line. -->
+  <div class="roster-item relative {pinIds.has(a.id) ? 'hidden lg:block' : ''}" data-active={active || undefined} data-testid="roster-agent-wrap">
+  <button
+    type="button"
+    class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
+      ? 'bg-white-300 dark:bg-navy-600'
+      : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
+    aria-current={active ? "page" : undefined}
+    data-testid="roster-agent"
+    onclick={() => openAgent(a)}
+  >
+    <!-- Sub-agents still working after its own turn: the orbit, plus
+         a 🤖 so it reads apart from the agent's own tool call. -->
+    <span class="relative flex shrink-0">
+      <RosterAvatar agent={a} {st} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} dozing={dozing(a, st, rosterNow)} />
+      <!-- The status dot replaces the hover tip; its label is read
+           out with the row (sr-only). -->
+      <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} mark={teamMark(a, st)} />
+      {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
+    </span>
+    <!-- A disabled agent's name and line fade with its avatar: the
+         only row that reads switched off (an idle one dozes). -->
+    <span class="min-w-0 flex-1" class:opacity-50={a.disabled} data-testid="roster-meta">
+      <span class="flex items-baseline gap-2">
+        <!-- No pills: a remote agent gets its source icon after the
+             name; being shared is told in the chat header. -->
+        <span class="flex min-w-0 flex-1 items-center gap-1.5 text-sm {tone.name}">
+          <span class="truncate">{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}</span>
+          <RemoteKindIcon agent={a} />
+        </span>
+        <span class="roster-hide-on-menu shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active, rosterNow)}</span>
+      </span>
+      <span class="roster-line2 mt-0.5 flex items-center gap-1.5" class:pr-6={running.length > 1}>
+        <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
+          {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<Dots /></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
+        </span>
+        <!-- A teammate's question back to its sender: the amber count (the
+             avatar carries the "?"). -->
+        {#if a.team_asks && !a.disabled}<span class="roster-badge shrink-0 rounded-full bg-amber-500 font-bold text-[#1b1300]" aria-label="1 question" data-testid="roster-asks">1</span>{/if}
+        {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
+      </span>
+    </span>
+  </button>
+  <!-- ⋯ on hover, in place of the time: Move to folder. -->
+  <span class="roster-kebab absolute right-1.5 top-1.5" data-testid="roster-agent-menu"><KebabMenu items={agentFolderMenu(a)} ariaLabel="Folder for {a.name}" size="sm" width={220} /></span>
+  {#if running.length > 1}<RosterSessionsMenu sessions={running} now={rosterNow} onopen={(id) => openRowChat(a, id)} />{/if}
+  {#if last}
+    <button
+      type="button"
+      class="roster-last -mt-1 mb-1 block w-full truncate pr-2 text-left text-[11px] text-black-800 hover:underline dark:text-black-600"
+      title="Open {sessionTitle(last)}"
+      data-testid="roster-last"
+      onclick={() => {
+        seenLast = markSeen(seenLast, lastSessionKey(last));
+        openRowChat(a, last.id);
+      }}>Last: {sessionTitle(last)}</button
+    >
+  {/if}
+  </div>
+{/snippet}
 
 {#snippet silentBell()}
   <svg data-testid="roster-silent" viewBox="0 0 24 24" class="mr-1 inline h-3 w-3 shrink-0 align-[-2px]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Silent reply"><path d={mutedBell}></path><path d="M10.3 21a2 2 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg>
@@ -775,101 +979,99 @@
             </div>
           {/each}
         </div>
-      {:else if entries.length === 0}
+      {:else if list.loose.length === 0 && list.folders.length === 0}
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matches.</p>
       {/if}
-      {#each noCaptain ? [] : entries as e (e.kind + e.id)}
+      {#each noCaptain ? [] : list.loose as e (e.kind + e.id)}
         {#if e.kind === "agent"}
-          {@const a = e.agent}
-          {@const active = !route.group && selected?.id === a.id}
-          {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
-          {@const tone = rowTone(st.unread, st.attention)}
-          {@const pv = rowPreview(a)}
-          {@const running = runningSessions(a)}
-          {@const last = lastSession(a, seenLast, route.session)}
-          <!-- The row, plus beside it (a button holds no other button) the
-               count of chats running elsewhere and the Last line. -->
-          <div class="relative {pinIds.has(a.id) ? 'hidden lg:block' : ''}" data-testid="roster-agent-wrap">
-          <button
-            type="button"
-            class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
-              ? 'bg-white-300 dark:bg-navy-600'
-              : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
-            aria-current={active ? "page" : undefined}
-            data-testid="roster-agent"
-            onclick={() => openAgent(a)}
-          >
-            <!-- Sub-agents still working after its own turn: the orbit, plus
-                 a 🤖 so it reads apart from the agent's own tool call. -->
-            <span class="relative flex shrink-0">
-              <RosterAvatar agent={a} {st} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} dozing={dozing(a, st, rosterNow)} />
-              <!-- The status dot replaces the hover tip; its label is read
-                   out with the row (sr-only). -->
-              <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} mark={teamMark(a, st)} />
-              {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
-            </span>
-            <!-- A disabled agent's name and line fade with its avatar: the
-                 only row that reads switched off (an idle one dozes). -->
-            <span class="min-w-0 flex-1" class:opacity-50={a.disabled} data-testid="roster-meta">
-              <span class="flex items-baseline gap-2">
-                <!-- No pills: a remote agent gets its source icon after the
-                     name; being shared is told in the chat header. -->
-                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-sm {tone.name}">
-                  <span class="truncate">{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}</span>
-                  <RemoteKindIcon agent={a} />
-                </span>
-                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active, rosterNow)}</span>
-              </span>
-              <span class="roster-line2 mt-0.5 flex items-center gap-1.5" class:pr-6={running.length > 1}>
-                <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
-                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<Dots /></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
-                </span>
-                <!-- A teammate's question back to its sender: the amber count (the
-                     avatar carries the "?"). -->
-                {#if a.team_asks && !a.disabled}<span class="roster-badge shrink-0 rounded-full bg-amber-500 font-bold text-[#1b1300]" aria-label="1 question" data-testid="roster-asks">1</span>{/if}
-                {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
-              </span>
-            </span>
-          </button>
-          {#if running.length > 1}<RosterSessionsMenu sessions={running} now={rosterNow} onopen={(id) => openRowChat(a, id)} />{/if}
-          {#if last}
-            <button
-              type="button"
-              class="roster-last -mt-1 mb-1 block w-full truncate pr-2 text-left text-[11px] text-black-800 hover:underline dark:text-black-600"
-              title="Open {sessionTitle(last)}"
-              data-testid="roster-last"
-              onclick={() => {
-                seenLast = markSeen(seenLast, lastSessionKey(last));
-                openRowChat(a, last.id);
-              }}>Last: {sessionTitle(last)}</button
-            >
-          {/if}
-          </div>
+          {@render agentRow(e.agent)}
         {:else}
-          {@const g = e.group}
-          {@const unread = g.unread && activeGroupId !== g.id}
-          {@const tone = rowTone(!!unread)}
-          {@const gp = silentPreview(g.last_preview || "", g.last_silent)}
+        {@const g = e.group}
+        {@const unread = g.unread && activeGroupId !== g.id}
+        {@const tone = rowTone(!!unread)}
+        {@const gp = silentPreview(g.last_preview || "", g.last_silent)}
+        <button
+          type="button"
+          class="roster-row relative mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
+          aria-current={activeGroupId === g.id ? "page" : undefined}
+          data-testid="roster-group"
+          onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
+        >
+          <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
+          <span class="min-w-0 flex-1">
+            <span class="flex items-baseline gap-2">
+              <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
+              <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active, rosterNow)}</span>
+            </span>
+            <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
+              <span class="min-w-0 flex-1 truncate text-xs {gp.silent && gp.text ? silentPreviewClass : tone.preview}">{#if gp.silent && gp.text}{@render silentBell()}{/if}{gp.text || `${g.members.length} agents`}</span>
+              {#if unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(g.unread_count)} aria-label="{g.unread_count || 'new'} unread">{unreadLabel(g.unread_count)}</span>{/if}
+            </span>
+          </span>
+        </button>
+        {/if}
+      {/each}
+      <!-- Folders, in the viewer's order (drag to reorder): one row with the
+           members' faces, whose ring tells what runs inside even folded. -->
+      {#each noCaptain ? [] : list.folders as v (v.folder.id)}
+        {@const f = v.folder}
+        {@const open = searching || !f.collapsed}
+        {@const tone = rowTone(v.unread > 0)}
+        <div
+          class="relative"
+          class:opacity-40={dragFolder === f.id}
+          draggable={!searching}
+          role="group"
+          aria-label="Folder {f.name}"
+          data-testid="roster-folder"
+          data-folder={f.id}
+          ondragstart={(e) => { dragFolder = f.id; e.dataTransfer?.setData("text/plain", f.id); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; }}
+          ondragend={() => { dragFolder = ""; dropAt = null; }}
+          ondragover={(e) => folderDragOver(e, f.id)}
+          ondragleave={() => { if (dropAt?.id === f.id) dropAt = null; }}
+          ondrop={(e) => folderDrop(e, f.id)}
+        >
+          {#if dropAt?.id === f.id}<span class="pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-green-500 {dropAt.after ? '-bottom-px' : '-top-px'}" data-testid="roster-folder-drop"></span>{/if}
+          <!-- The folder's own row; its members sit outside it, so hovering
+               one of them does not swap this row's time for its ⋯. -->
+          <div class="roster-item relative">
           <button
             type="button"
-            class="roster-row relative mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
-            aria-current={activeGroupId === g.id ? "page" : undefined}
-            data-testid="roster-group"
-            onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
+            class="roster-row relative mb-0.5 flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-left hover:bg-white-300 dark:hover:bg-navy-600"
+            aria-expanded={open}
+            onclick={() => toggleFolder(f)}
           >
-            <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
-            <span class="min-w-0 flex-1">
-              <span class="flex items-baseline gap-2">
-                <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
-                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active, rosterNow)}</span>
+            <span class="roster-folder-tile relative grid shrink-0 grid-cols-2 place-items-center gap-0.5 rounded-xl bg-white-300 p-1 dark:bg-navy-600 {v.busy ? `roster-folder-${v.busy}` : ''}" data-testid="roster-folder-icon" data-busy={v.busy || undefined}>
+              {#each v.agents.slice(0, 4) as m (m.id)}
+                <AgentAvatar kind={m.avatar?.kind} image={m.avatar?.image} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={13} asleep={m.disabled} />
+              {/each}
+              {#if v.busy === "thinking"}
+                <span class="roster-folder-badge bg-violet-500" data-testid="roster-folder-badge">{#if v.busyAgents.length > 1}{v.busyAgents.length}{:else}<Dots />{/if}</span>
+              {:else if v.busy === "waiting"}
+                <span class="roster-folder-badge bg-amber-500" data-testid="roster-folder-badge"><span class="roster-hourglass">⏳</span></span>
+              {/if}
+            </span>
+            <span class="min-w-0 flex-1" class:opacity-60={v.sleepy && !v.busy}>
+              <span class="flex items-center gap-2">
+                <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{f.name}</span>
+                <span class="roster-hide-on-menu shrink-0 text-[11px] {tone.time}">{rosterTime(v.last_active, rosterNow)}</span>
+                <svg viewBox="0 0 10 10" class="roster-hide-on-menu h-2.5 w-2.5 shrink-0 text-black-700 transition-transform" class:-rotate-90={!open} aria-hidden="true"><path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
-                <span class="min-w-0 flex-1 truncate text-xs {gp.silent && gp.text ? silentPreviewClass : tone.preview}">{#if gp.silent && gp.text}{@render silentBell()}{/if}{gp.text || `${g.members.length} agents`}</span>
-                {#if unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(g.unread_count)} aria-label="{g.unread_count || 'new'} unread">{unreadLabel(g.unread_count)}</span>{/if}
+                <span class="min-w-0 flex-1 truncate text-xs {v.busy === 'thinking' ? 'font-medium text-violet-500' : v.busy === 'waiting' ? 'font-medium text-amber-700 dark:text-amber-300' : tone.preview}" data-testid="roster-folder-summary">{v.summary}</span>
+                {#if v.unread && !v.busy}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" aria-label="{v.unread} unread">{unreadLabel(v.unread)}</span>{/if}
               </span>
             </span>
           </button>
-        {/if}
+          <!-- ⋯ on hover, in place of the time and the chevron. -->
+          <span class="roster-kebab absolute right-1.5 top-1.5" data-testid="roster-folder-menu"><KebabMenu items={folderMenu(v)} ariaLabel="Folder {f.name}" size="sm" width={220} /></span>
+          </div>
+          {#if open && v.agents.length}
+            <div class="mb-1 ml-[26px] border-l border-white-300 pl-1.5 dark:border-navy-600" data-testid="roster-folder-members">
+              {#each v.agents as a (a.id)}{@render agentRow(a)}{/each}
+            </div>
+          {/if}
+        </div>
       {/each}
     </nav>
     <!-- relative z-20: the account menu opens upward over the roster, so this footer must stack above the rows (a group row's overlapping avatars carry their own z-index). -->
@@ -1240,6 +1442,53 @@
     line-height: 1;
     font-variant-numeric: tabular-nums;
   }
+  /* Row ⋯ (Move to folder, folder actions): shown on hover or while open,
+     in place of the time (and a folder's chevron), so the two never
+     overlap. Touch screens have no hover: the open agent's row shows it. */
+  .roster-kebab { opacity: 0; pointer-events: none; }
+  .roster-item:hover > .roster-kebab,
+  .roster-kebab:focus-within,
+  .roster-kebab:has(:global([aria-expanded="true"])) { opacity: 1; pointer-events: auto; }
+  .roster-item:hover > .roster-row .roster-hide-on-menu,
+  .roster-item:has(> .roster-kebab:focus-within) > .roster-row .roster-hide-on-menu,
+  .roster-item:has(> .roster-kebab :global([aria-expanded="true"])) > .roster-row .roster-hide-on-menu { visibility: hidden; }
+  @media (hover: none) {
+    .roster-item[data-active] > .roster-kebab { opacity: 1; pointer-events: auto; }
+    .roster-item[data-active] > .roster-row .roster-hide-on-menu { visibility: hidden; }
+  }
+  /* A folder's icon (mockup .gi): up to four faces on a rounded tile; a
+     purple pulsing ring while a member works, amber while members only
+     wait on teammates, with the badge in the corner. */
+  .roster-folder-tile { width: 38px; height: 38px; transition: box-shadow 0.3s, background 0.3s; }
+  .roster-folder-thinking { background: rgb(139 92 246 / 0.18); box-shadow: 0 0 0 2px #8b5cf6; animation: roster-folder-ring 1.6s ease-in-out infinite; }
+  .roster-folder-waiting { background: rgb(245 158 11 / 0.16); box-shadow: 0 0 0 2px #f59e0b; }
+  .roster-folder-badge {
+    position: absolute;
+    right: -6px;
+    bottom: -6px;
+    display: grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9999px;
+    border: 2px solid rgb(var(--color-white-200));
+    color: #fff;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+  }
+  :global(.dark) .roster-folder-badge { border-color: rgb(var(--color-navy-700)); }
+  .roster-hourglass { display: inline-block; font-size: 9px; animation: roster-hourglass 2s infinite; }
+  @keyframes roster-folder-ring {
+    0%, 100% { box-shadow: 0 0 0 2px #8b5cf6, 0 0 0 0 rgb(139 92 246 / 0.45); }
+    50% { box-shadow: 0 0 0 2px #8b5cf6, 0 0 0 6px rgb(139 92 246 / 0); }
+  }
+  @keyframes roster-hourglass {
+    0%, 40% { transform: rotate(0); }
+    50%, 90% { transform: rotate(180deg); }
+    100% { transform: rotate(360deg); }
+  }
   /* No count from the server (a group chat): a small dot, not an empty pill. */
   .roster-badge-dot { min-width: 8px; height: 8px; padding: 0; margin-right: 5px; }
   /* Floating drawer (mockup .drawer/.scrim): inset 8px on three sides, 20px
@@ -1278,6 +1527,6 @@
     from { opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .team-app, .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
+    .team-app, .agent-drawer, .agent-modal, .agent-scrim, .roster-folder-thinking, .roster-hourglass { animation: none; }
   }
 </style>

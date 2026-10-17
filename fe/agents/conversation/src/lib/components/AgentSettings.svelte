@@ -29,7 +29,7 @@
   import { PERSONA_KIND, PERSONA_UPDATE_FIELDS, improveInput, type PersonaDraft, type PersonaUpdateField } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
   import type { MentionFrom, CaptainCan, CaptainPolicy } from "../api/team.js";
-  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, AUTO_APPROVE_OPTIONS, AUTO_APPROVE_NOTE, captainCanOf, captainPolicyOf, captainBlock } from "../captainSettings.js";
+  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, AUTO_APPROVE_OPTIONS, AUTO_APPROVE_NOTE, FOLDERS_NOTE, captainCanOf, captainPolicyOf, captainBlock } from "../captainSettings.js";
   import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
@@ -939,7 +939,7 @@
           <div class="space-y-2" role="radiogroup" aria-label="Auto-approve the Captain's access proposals" data-testid="captain-auto-approve">
             {#each AUTO_APPROVE_OPTIONS as o (o.value)}
               <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.captain_policy.auto_approve === o.value ? 'border-green-500 bg-green-50 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
-                <input type="radio" name="captain-auto-approve" class="mt-1" value={o.value} checked={draft.captain_policy.auto_approve === o.value} onchange={() => (draft.captain_policy = { auto_approve: o.value })} />
+                <input type="radio" name="captain-auto-approve" class="mt-1" value={o.value} checked={draft.captain_policy.auto_approve === o.value} onchange={() => (draft.captain_policy = { ...draft.captain_policy, auto_approve: o.value })} />
                 <span>
                   <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
                   <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
@@ -948,6 +948,13 @@
             {/each}
           </div>
           <p class="text-xs text-black-800 dark:text-black-600">{AUTO_APPROVE_NOTE}</p>
+          <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="captain-folders">
+            <span>
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">Organize folders</span>
+              <span class="block text-xs text-black-800 dark:text-black-600">{FOLDERS_NOTE}</span>
+            </span>
+            <Toggle checked={!draft.captain_policy.no_folders} onChange={(v) => (draft.captain_policy = { ...draft.captain_policy, no_folders: !v })} label="Organize folders" />
+          </div>
         {/if}
       </div>
     {:else}

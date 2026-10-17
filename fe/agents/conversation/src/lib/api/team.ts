@@ -296,9 +296,10 @@ export type AgentSkill = {
 export type CaptainCan = { persona: boolean; access: boolean; routines: boolean };
 
 /** team.CaptainPolicy: which of the Captain's access proposals skip the
-    owner's card. Set on the Captain. */
+    owner's card, and whether it may organize the Team-sidebar folders
+    (no_folders = not). Set on the Captain. */
 export type AutoApprove = "off" | "created" | "all";
-export type CaptainPolicy = { auto_approve: AutoApprove };
+export type CaptainPolicy = { auto_approve: AutoApprove; no_folders?: boolean };
 
 /** One row of Settings › Access › History. */
 export type AccessHistoryItem = {
@@ -665,6 +666,16 @@ export type GroupTurn = {
       people's "captain" share one thread there). */
   speaker?: { agent_id: string; handle?: string; via: string; session_id?: string; owner_id?: string } | null;
 };
+
+/** team.Folders as GET/PUT /api/team/folders answer it: the viewer's
+    folders in sidebar order, where each agent sits (agent id → folder id),
+    and for a shared agent the viewer has not filed, the name of the folder
+    its owner keeps it in. */
+export type TeamFolder = { id: string; name: string; collapsed?: boolean };
+export type TeamFolders = { folders: TeamFolder[]; place: Record<string, string>; inherited?: Record<string, string> };
+export const getTeamFolders = (base: string) => apiGetE<TeamFolders>(`${base}/api/team/folders`);
+export const saveTeamFolders = (base: string, body: { folders: TeamFolder[]; place: Record<string, string> }) =>
+  apiPutE<TeamFolders>(`${base}/api/team/folders`, body);
 
 export const listGroups = (base: string) => apiGetE<{ groups: GroupItem[] | null }>(`${base}/api/team/groups`);
 export const createGroup = (base: string, body: GroupWrite) => apiPostE<GroupItem>(`${base}/api/team/groups`, body);
