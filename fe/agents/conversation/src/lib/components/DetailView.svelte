@@ -118,6 +118,7 @@
   import SessionFieldChips from "./SessionFieldChips.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
+  import { readRosterCache, teamAgentsByHandle as teamAgentsOf } from "../rosterCache.js";
   import { sessionAgents } from "../ticketSession.js";
   import SessionPanel from "./SessionPanel.svelte";
   import GroupPickerDialog from "./GroupPickerDialog.svelte";
@@ -1521,7 +1522,10 @@
   /* Team agents the `@` menu offers in an agent's chat: the owner's roster
      minus the agent itself and the disabled ones. Read once per agent; a
      plain /sessions chat has no agentMode.agent and never asks. */
-  let teamPeers = $state<TeamPeer[]>([]);
+  /* Seeded from the roster the sidebar cached, so a teammate's picture
+     chip draws its versioned src (already in the browser cache) at once
+     instead of a placeholder until the read below returns. */
+  let teamPeers = $state<TeamPeer[]>(readRosterCache()?.agents ?? []);
   $effect(() => {
     // A ticket session lists the viewer's own agents too (T12b).
     const selfId = agentMode?.agent?.id || (notesInfo?.ticket ? "ticket" : "");
@@ -1534,9 +1538,7 @@
     return () => { stale = true; };
   });
 
-  const teamAgentsByHandle = $derived(
-    Object.fromEntries(teamPeers.map((p) => [p.handle, { id: p.id, name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image }])),
-  );
+  const teamAgentsByHandle = $derived(teamAgentsOf(teamPeers));
   /* Ticket session header (T12b): agents other than the home one that
      answered here; identity is (agent, owner). */
   /* The home agent answers its owner only: anyone else sees whose it is. */

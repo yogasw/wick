@@ -44,6 +44,7 @@
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, getTeamFolders, saveTeamFolders, type GroupItem, type TeamFolder, type TeamFolders } from "./lib/api/team.js";
+  import { readRosterCache, writeRosterCache } from "./lib/rosterCache.js";
   import { canUnfile, createFolder, deleteFolder, foldersOf, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, parseFoldersCache, readApplies, resolveFolders, rosterMotionMs, saveApplies, folderOpen, teamList, toggleOpen, type FolderSync, type FolderView } from "./lib/teamFolders.js";
   import { flip } from "svelte/animate";
   import { crossfade, fade, slide } from "svelte/transition";
@@ -134,15 +135,10 @@
      selected agent's chat (main_session_id) loads in parallel with the
      roster instead of after it. `loaded` still waits for the server, so a
      stale cache never sends an unknown handle away. */
-  const ROSTER_CACHE = "wick.team.roster";
-  try {
-    const c = JSON.parse(sessionStorage.getItem(ROSTER_CACHE) ?? "null") as { agents?: AgentItem[]; captain_id?: string } | null;
-    if (c?.agents?.length) {
-      agents = c.agents;
-      captainId = c.captain_id ?? "";
-    }
-  } catch {
-    /* no cache */
+  const rosterCached = readRosterCache();
+  if (rosterCached?.agents?.length) {
+    agents = rosterCached.agents;
+    captainId = rosterCached.captain_id ?? "";
   }
 
   /* One roster read at a time: the poll, a finished turn and a save can
@@ -159,11 +155,7 @@
       agents = r.agents ?? [];
       captainId = r.captain_id ?? "";
       loadError = "";
-      try {
-        sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
-      } catch {
-        /* storage full or off */
-      }
+      writeRosterCache({ agents, captain_id: captainId });
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
     } finally {
