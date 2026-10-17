@@ -162,7 +162,11 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 	if strings.TrimSpace(sys) == "" {
 		sys = defaultAgentSystemAddon
 	}
-	pid, err := createAgentProjectFor(ctx, mgr.OwnerUserID, name, "", in.Description, sys, "", "", "")
+	prov, err := captainProviderKey(ctx, mgr.OwnerUserID, in.Provider)
+	if err != nil {
+		return nil, err
+	}
+	pid, err := createAgentProjectFor(ctx, mgr.OwnerUserID, name, "", in.Description, sys, prov, in.Model, "")
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +178,11 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 		RunAs:             team.RunAsCaller,
 		Features:          team.EncodeFeatures(team.DefaultFeatures()),
 		Avatar:            team.EncodeAvatar(av),
+		// An agent the Captain makes lets the Captain PROPOSE access to it
+		// from the start: every proposal still waits for the owner's card
+		// (or their auto-approve rule), so this only spares the owner a
+		// trip to Settings › Captain per agent before the first request.
+		CaptainCan: team.EncodeCaptainCan(team.CaptainCan{Persona: true, Access: true, Routines: true}),
 	}
 	if err := globalTeam.Create(ctx, p); err != nil {
 		_ = globalMgr.DeleteProject(ctx, pid)
@@ -243,7 +252,21 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 			}
 		}
 	}
-	if p.ProjectID != "" && (in.Name != nil || in.Description != nil || in.SystemPrompt != nil) {
+	if (in.Provider != nil || in.Model != nil) && IsRemoteAgent(p) {
+		return nil, fmt.Errorf("@%s is a remote agent; it has no provider here", p.Handle)
+	}
+	var prov *string
+	if in.Provider != nil {
+		k := ""
+		if v := strings.TrimSpace(*in.Provider); !strings.EqualFold(v, "default") {
+			var err error
+			if k, err = captainProviderKey(ctx, mgr.OwnerUserID, v); err != nil {
+				return nil, err
+			}
+		}
+		prov = &k
+	}
+	if p.ProjectID != "" && (in.Name != nil || in.Description != nil || in.SystemPrompt != nil || prov != nil || in.Model != nil) {
 		proj, ok := globalMgr.Registry().Project(p.ProjectID)
 		if !ok {
 			return nil, errors.New("the agent's project is gone; its persona cannot be edited")
@@ -258,6 +281,24 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		set(&meta.Name, in.Name, "name")
 		set(&meta.Description, in.Description, "description")
 		set(&meta.Defaults.SystemAddon, in.SystemPrompt, "system prompt")
+		if prov != nil && *prov != meta.Defaults.Provider {
+			meta.Defaults.Provider = *prov
+			changed = append(changed, "provider")
+			// A model id is scoped to one instance: a new provider drops
+			// the old pin unless a model comes with it.
+			if in.Model == nil && meta.Defaults.Model != "" {
+				meta.Defaults.Model = ""
+			}
+		}
+		if in.Model != nil {
+			if meta.Defaults.Provider == "" && strings.TrimSpace(*in.Model) != "" {
+				return nil, errors.New("set a provider before pinning a model (the server default has no fixed model list)")
+			}
+			if nv := modelWithProvider(meta.Defaults.Provider, *in.Model); nv != meta.Defaults.Model {
+				meta.Defaults.Model = nv
+				changed = append(changed, "model")
+			}
+		}
 		if _, err := globalMgr.UpdateProject(ctx, p.ProjectID, meta); err != nil {
 			return nil, err
 		}
@@ -272,6 +313,37 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		emitSystemEvent(s.ID, store.KindPersonaChanged, text, extras)
 	}
 	return map[string]any{"status": "updated", "changed": changed}, nil
+}
+
+// captainProviderKey checks a provider the Captain names for an agent:
+// "type/name" (a bare type means its default instance), an instance
+// that exists, and one the OWNER may use — the same gate as picking it
+// in Settings. "" stays "" (the server default).
+func captainProviderKey(ctx context.Context, owner, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	key := normalizeProviderKey(raw)
+	t, name, ok := splitProviderKey(key)
+	if !ok {
+		return "", fmt.Errorf("provider must be type/name, e.g. claude/claude_waba")
+	}
+	found := false
+	var names []string
+	for _, ps := range providerChoicesCached(ctx) {
+		names = append(names, ps.Type+"/"+ps.Name)
+		if ps.Type == string(t) && ps.Name == name {
+			found = true
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("no provider %s; available: %s", key, strings.Join(names, ", "))
+	}
+	if err := workflowProviderAccess(ctx, owner, string(t), name); err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
 // nextAvatar is p's avatar after in: the JSON look replaces shape, colour

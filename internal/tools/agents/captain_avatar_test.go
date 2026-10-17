@@ -84,3 +84,27 @@ func TestCaptainUpdatesAvatar(t *testing.T) {
 		t.Error("persona off must refuse an avatar change")
 	}
 }
+
+// A Captain-made agent lets the Captain propose access at once, and the
+// provider the Captain names is checked before it lands.
+func TestCaptainCreateDefaultsAndProvider(t *testing.T) {
+	withCaptainWorld(t)
+	ctx := context.Background()
+	if _, err := (CaptainOps{}).Create(ctx, "s-captain", teamagents.CreateInput{Name: "Client Y", Provider: "nope/none"}); err == nil {
+		t.Fatal("an unknown provider must be refused")
+	}
+	if _, err := (CaptainOps{}).Create(ctx, "s-captain", teamagents.CreateInput{Name: "Client Y"}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := globalTeam.GetByHandle(ctx, "u1", "client-y")
+	if !team.DecodeCaptainCan(p.CaptainCan).Access {
+		t.Error("a Captain-made agent must allow access proposals")
+	}
+	if _, err := (CaptainOps{}).UpdatePersona(ctx, "s-captain", teamagents.PersonaInput{Agent: "@client-y", Model: strp("opus")}); err == nil {
+		t.Error("a model without a provider must be refused")
+	}
+	def := "default"
+	if _, err := (CaptainOps{}).UpdatePersona(ctx, "s-captain", teamagents.PersonaInput{Agent: "@client-y", Provider: &def}); err != nil {
+		t.Errorf("provider=default on an agent already on the default: %v", err)
+	}
+}
