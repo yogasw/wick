@@ -86,11 +86,18 @@ func apiTeamFoldersSave(c *tool.Ctx) {
 			delete(f.Place, a)
 		}
 	}
-	if err := globalTeam.SaveTeamFolders(ctx, uid, f); err != nil {
+	// The PUT replaces the whole row, but still under the user's folders
+	// lock, so it cannot interleave with a Captain agents.folders write.
+	saved, err := globalTeam.UpdateTeamFolders(ctx, uid, func(cur *team.Folders) error {
+		*cur = f
+		return nil
+	})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	out, err := teamFoldersOf(ctx, uid, team.DecodeFolders(team.EncodeFolders(f)))
+	publishFoldersChanged(uid)
+	out, err := teamFoldersOf(ctx, uid, saved)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

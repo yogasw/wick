@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -238,17 +239,60 @@ func (s *Store) TeamFolders(ctx context.Context, userID string) (Folders, error)
 	return DecodeFolders(row.Data), nil
 }
 
-// SaveTeamFolders writes userID's whole folders row.
+// SaveTeamFolders writes userID's whole folders row. It goes through
+// UpdateTeamFolders, so it never interleaves with a read-modify-write.
 func (s *Store) SaveTeamFolders(ctx context.Context, userID string, f Folders) error {
+	_, err := s.UpdateTeamFolders(ctx, userID, func(cur *Folders) error {
+		*cur = f
+		return nil
+	})
+	return err
+}
+
+// UpdateTeamFolders read-modify-writes userID's folders atomically: fn
+// gets the current row and edits it in place, then the result is
+// validated and saved. Two callers (parallel Captain moves, a sidebar
+// PUT) can no longer each read the old row and drop the other's change.
+// One transaction holds the row lock (SELECT … FOR UPDATE on Postgres,
+// after inserting an empty row so there is one to lock); a per-user
+// mutex covers this process, and sqlite, which has no row locks. An
+// error from fn or Validate aborts without writing. Returns the saved
+// folders.
+func (s *Store) UpdateTeamFolders(ctx context.Context, userID string, fn func(*Folders) error) (Folders, error) {
 	if userID == "" {
-		return errors.New("team folders: no user")
+		return Folders{}, errors.New("team folders: no user")
 	}
-	if err := f.Validate(); err != nil {
-		return err
+	mu, _ := s.foldersMu.LoadOrStore(userID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+
+	var saved Folders
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		empty := entity.TeamFolders{UserID: userID, Data: EncodeFolders(Folders{}), UpdatedAt: time.Now().UTC()}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&empty).Error; err != nil {
+			return err
+		}
+		q := tx
+		if tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+			q = tx.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		var row entity.TeamFolders
+		if err := q.Where("user_id = ?", userID).First(&row).Error; err != nil {
+			return err
+		}
+		f := DecodeFolders(row.Data)
+		if err := fn(&f); err != nil {
+			return err
+		}
+		if err := f.Validate(); err != nil {
+			return err
+		}
+		saved = DecodeFolders(EncodeFolders(f))
+		return tx.Model(&entity.TeamFolders{}).Where("user_id = ?", userID).
+			Updates(map[string]any{"data": EncodeFolders(saved), "updated_at": time.Now().UTC()}).Error
+	})
+	if err != nil {
+		return Folders{}, err
 	}
-	row := entity.TeamFolders{UserID: userID, Data: EncodeFolders(f), UpdatedAt: time.Now().UTC()}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"data", "updated_at"}),
-	}).Create(&row).Error
+	return saved, nil
 }

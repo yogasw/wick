@@ -37,12 +37,13 @@ func (o CaptainOps) Folders(ctx context.Context, sessionID string, in teamagents
 		return nil, err
 	}
 	owner := mgr.OwnerUserID
-	f, err := globalTeam.TeamFolders(ctx, owner)
-	if err != nil {
-		return nil, err
-	}
+	var edit func(*team.Folders) error
 	switch in.Action {
 	case "list":
+		f, err := globalTeam.TeamFolders(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
 		return o.folderList(ctx, owner, f)
 	case "move":
 		// The manager may file itself too: a folder is the owner's layout,
@@ -53,30 +54,26 @@ func (o CaptainOps) Folders(ctx context.Context, sessionID string, in teamagents
 				return nil, err
 			}
 		}
-		if err := f.Move(p.ID, in.Folder); err != nil {
-			return nil, err
-		}
+		edit = func(f *team.Folders) error { return f.Move(p.ID, in.Folder) }
 	case "rename":
-		if err := f.Rename(in.Folder, in.NewName); err != nil {
-			return nil, err
-		}
+		edit = func(f *team.Folders) error { return f.Rename(in.Folder, in.NewName) }
 	case "delete":
-		if err := f.Delete(in.Folder); err != nil {
-			return nil, err
-		}
+		edit = func(f *team.Folders) error { return f.Delete(in.Folder) }
 	case "order":
 		if len(in.Order) == 0 {
 			return nil, errors.New("order needs folder names, comma-separated")
 		}
-		if err := f.Order(in.Order); err != nil {
-			return nil, err
-		}
+		edit = func(f *team.Folders) error { return f.Order(in.Order) }
 	default:
 		return nil, fmt.Errorf("unknown action %q; use list, move, rename, delete or order", in.Action)
 	}
-	if err := globalTeam.SaveTeamFolders(ctx, owner, f); err != nil {
+	// Read, edit and save under the owner's folders lock, so parallel
+	// calls each land instead of overwriting one another.
+	f, err := globalTeam.UpdateTeamFolders(ctx, owner, edit)
+	if err != nil {
 		return nil, err
 	}
+	publishFoldersChanged(owner)
 	return o.folderList(ctx, owner, f)
 }
 
@@ -108,12 +105,11 @@ func (CaptainOps) folderList(ctx context.Context, owner string, f team.Folders) 
 // fileNewAgent puts agentID in the owner's folder called name (made when
 // missing), for agents.create.
 func fileNewAgent(ctx context.Context, owner, agentID, name string) error {
-	f, err := globalTeam.TeamFolders(ctx, owner)
-	if err != nil {
-		return err
+	_, err := globalTeam.UpdateTeamFolders(ctx, owner, func(f *team.Folders) error {
+		return f.Move(agentID, name)
+	})
+	if err == nil {
+		publishFoldersChanged(owner)
 	}
-	if err := f.Move(agentID, name); err != nil {
-		return err
-	}
-	return globalTeam.SaveTeamFolders(ctx, owner, f)
+	return err
 }

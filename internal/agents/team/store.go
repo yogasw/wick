@@ -56,6 +56,10 @@ type Store struct {
 
 	hookMu   sync.Mutex
 	onChange ChangeHook
+
+	// foldersMu holds one *sync.Mutex per user id, so UpdateTeamFolders
+	// read-modify-writes one user's row at a time in this process.
+	foldersMu sync.Map
 }
 
 // ChangeHook is told about a write that may change who sees agentID in

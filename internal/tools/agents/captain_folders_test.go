@@ -3,11 +3,14 @@ package agents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/team"
 	teamagents "github.com/yogasw/wick/internal/connectors/team-agents"
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // folderView is agents.folders list's answer.
@@ -122,5 +125,55 @@ func TestCaptainFoldersRefusedWhenOff(t *testing.T) {
 	}
 	if !strings.Contains(team.ErrNoFolders.Error(), "Settings › Captain") {
 		t.Error("refusal must point at Settings › Captain")
+	}
+}
+
+// TestCaptainFoldersConcurrentMoves: parallel agents.folders moves of
+// different agents each read-modify-write the owner's one row; every
+// placement must survive (it used to be last-write-wins).
+func TestCaptainFoldersConcurrentMoves(t *testing.T) {
+	withCaptainWorld(t)
+	ctx := context.Background()
+	const n = 20
+	handles := make([]string, n)
+	for i := range handles {
+		handles[i] = fmt.Sprintf("bulk%d", i)
+		seedTeamProject(t, "p-"+handles[i], "u1")
+		if err := globalTeam.Create(ctx, &entity.AgentPersona{OwnerUserID: "u1", Handle: handles[i], ProjectID: "p-" + handles[i]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i, h := range handles {
+		wg.Add(1)
+		go func(i int, h string) {
+			defer wg.Done()
+			_, err := CaptainOps{}.Folders(ctx, "s-captain", teamagents.FoldersInput{Action: "move", Agent: "@" + h, Folder: fmt.Sprintf("Group %d", i%4)})
+			errs <- err
+		}(i, h)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := globalTeam.TeamFolders(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Folders) != 4 || len(f.Place) != n {
+		t.Fatalf("got %d folders, %d placements, want 4 and %d: %+v", len(f.Folders), len(f.Place), n, f)
+	}
+	for i, h := range handles {
+		p, err := globalTeam.GetByHandle(ctx, "u1", h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := fmt.Sprintf("Group %d", i%4); f.NameOf(p.ID) != want {
+			t.Errorf("@%s in %q, want %q", h, f.NameOf(p.ID), want)
+		}
 	}
 }

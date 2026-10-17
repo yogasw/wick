@@ -3,7 +3,9 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -145,5 +147,69 @@ func TestTeamFoldersSaveLoad(t *testing.T) {
 	}
 	if err := st.SaveTeamFolders(ctx, "", f); err == nil {
 		t.Error("no user must not save")
+	}
+}
+
+func TestUpdateTeamFolders(t *testing.T) {
+	st := NewStore(testDB(t))
+	ctx := context.Background()
+	got, err := st.UpdateTeamFolders(ctx, "u1", func(f *Folders) error { return f.Move("a1", "Ops") })
+	if err != nil || got.NameOf("a1") != "Ops" {
+		t.Fatalf("first update (no row yet) = %+v %v", got, err)
+	}
+	boom := errors.New("boom")
+	if _, err := st.UpdateTeamFolders(ctx, "u1", func(f *Folders) error {
+		_ = f.Delete("Ops")
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("fn error = %v", err)
+	}
+	if _, err := st.UpdateTeamFolders(ctx, "u1", func(f *Folders) error {
+		f.Folders = append(f.Folders, Folder{ID: "x", Name: "ops"})
+		return nil
+	}); err == nil {
+		t.Fatal("an edit that fails Validate must not save")
+	}
+	if f, _ := st.TeamFolders(ctx, "u1"); folderNames(f) != "Ops" || f.NameOf("a1") != "Ops" {
+		t.Fatalf("aborted updates wrote: %+v", f)
+	}
+	if _, err := st.UpdateTeamFolders(ctx, "", func(*Folders) error { return nil }); err == nil {
+		t.Error("no user must not update")
+	}
+}
+
+// TestUpdateTeamFoldersConcurrent: parallel read-modify-writes of one
+// user's row all land; none overwrites another.
+func TestUpdateTeamFoldersConcurrent(t *testing.T) {
+	st := NewStore(testDB(t))
+	ctx := context.Background()
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := st.UpdateTeamFolders(ctx, "u1", func(f *Folders) error {
+				return f.Move(fmt.Sprintf("a%d", i), fmt.Sprintf("F%d", i%3))
+			})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, _ := st.TeamFolders(ctx, "u1")
+	if len(f.Folders) != 3 || len(f.Place) != n {
+		t.Fatalf("got %d folders, %d placements: %+v", len(f.Folders), len(f.Place), f)
+	}
+	for i := 0; i < n; i++ {
+		if want := fmt.Sprintf("F%d", i%3); f.NameOf(fmt.Sprintf("a%d", i)) != want {
+			t.Errorf("a%d in %q, want %q", i, f.NameOf(fmt.Sprintf("a%d", i)), want)
+		}
 	}
 }
