@@ -12,6 +12,8 @@ import {
   materialize,
   moveAgent,
   parseFoldersCache,
+  readApplies,
+  saveApplies,
   renameError,
   renameFolder,
   reorderFolder,
@@ -234,5 +236,26 @@ describe("rosterMotionMs", () => {
     expect(rosterMotionMs(false, false)).toBe(ROSTER_MOTION_MS);
     expect(rosterMotionMs(true, false)).toBe(0);
     expect(rosterMotionMs(false, true)).toBe(0);
+  });
+});
+
+describe("folders sync", () => {
+  const clean = { rev: 3, acked: 3, busy: false };
+  test("a read applies when every edit was saved before and after it", () => {
+    expect(readApplies(clean, clean)).toBe(true);
+  });
+  test("a read never undoes an edit still waiting, in flight or made meanwhile", () => {
+    // Collapsed while the read was in flight: the debounce is pending.
+    expect(readApplies(clean, { rev: 4, acked: 3, busy: true })).toBe(false);
+    // ...and saved before the read landed: the read still predates it.
+    expect(readApplies(clean, { rev: 4, acked: 4, busy: false })).toBe(false);
+    // Started while a PUT was in flight, landed after it.
+    expect(readApplies({ rev: 4, acked: 3, busy: true }, { rev: 4, acked: 4, busy: false })).toBe(false);
+    // A PUT answered but a newer one is still queued.
+    expect(readApplies({ rev: 5, acked: 4, busy: false }, { rev: 5, acked: 4, busy: false })).toBe(false);
+  });
+  test("a save's answer applies unless an edit came after it was sent", () => {
+    expect(saveApplies(4, { rev: 4, acked: 4, busy: false })).toBe(true);
+    expect(saveApplies(4, { rev: 5, acked: 4, busy: true })).toBe(false);
   });
 });

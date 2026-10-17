@@ -131,6 +131,11 @@ export type AgentItem = {
   /** Handles of the main chat's background sub-agents still queued or
       running. Independent of status: the agent's own turn may be over. */
   subagents_working?: string[];
+  /** The side chat those sub-agents run from (most recently active when
+      several); absent when the main chat has some working. */
+  subagents_session?: string;
+  /** That chat's last activity. */
+  subagents_active?: string | null;
   /** Handles of the teammates the main chat's open Team tasks
       (team_message / @mention) wait on. Independent of status. */
   team_waiting?: string[];

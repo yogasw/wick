@@ -65,6 +65,28 @@ export function parseFoldersCache(raw: string | null): TeamFolders | null {
   }
 }
 
+/** FolderSync is the sidebar's save bookkeeping: rev counts local edits,
+    acked is the newest rev a PUT has saved, busy is a save waiting (its
+    debounce, or queued behind one in flight) or in flight. */
+export type FolderSync = { rev: number; acked: number; busy: boolean };
+
+const synced = (s: FolderSync) => !s.busy && s.acked === s.rev;
+
+/** readApplies is whether a server read may replace the local folders:
+    every local edit was saved when it started and still is when it
+    lands, with no edit in between. Otherwise the read may predate an
+    edit (a fold the user just made) and is dropped; the save's own
+    answer, or the next read, brings the server copy. */
+export function readApplies(start: FolderSync, now: FolderSync): boolean {
+  return synced(start) && synced(now) && start.rev === now.rev;
+}
+
+/** saveApplies is whether a PUT's answer (sent at rev sent) may replace
+    the local folders: no edit came after it was sent. */
+export function saveApplies(sent: number, now: FolderSync): boolean {
+  return sent === now.rev;
+}
+
 /** Roster rows move (flip, crossfade, a folder opening) for this long;
     not at all under prefers-reduced-motion or while a search filters. */
 export const ROSTER_MOTION_MS = 180;

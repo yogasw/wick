@@ -23,7 +23,7 @@
   import PresenceDot from "./lib/components/team/PresenceDot.svelte";
   import Dots from "./lib/components/team/Dots.svelte";
   import RosterSessionsMenu from "./lib/components/team/RosterSessionsMenu.svelte";
-  import { runningSessions, rowTarget, lastSession, lastSessionKey, loadSeen, markSeen, sessionSignal, sessionTitle } from "./lib/rosterSessions.js";
+  import { runningSessions, rowActive, rowTarget, lastSession, lastSessionKey, loadSeen, markSeen, sessionSignal, sessionTitle } from "./lib/rosterSessions.js";
   import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
@@ -43,7 +43,7 @@
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, getTeamFolders, saveTeamFolders, type GroupItem, type TeamFolder, type TeamFolders } from "./lib/api/team.js";
-  import { canUnfile, createFolder, deleteFolder, foldersOf, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, parseFoldersCache, resolveFolders, rosterMotionMs, setCollapsed, teamList, type FolderView } from "./lib/teamFolders.js";
+  import { canUnfile, createFolder, deleteFolder, foldersOf, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, parseFoldersCache, readApplies, resolveFolders, rosterMotionMs, saveApplies, setCollapsed, teamList, type FolderSync, type FolderView } from "./lib/teamFolders.js";
   import { flip } from "svelte/animate";
   import { crossfade, fade, slide } from "svelte/transition";
   import GroupView from "./lib/components/GroupView.svelte";
@@ -415,7 +415,7 @@
      task, a chat the person opened) while there is one, else its pinned
      main chat. */
   function openAgent(a: AgentItem) {
-    openRowChat(a, rowTarget(a));
+    openRowChat(a, rowTarget(a, statusOf(a).work));
   }
   function openRowChat(a: AgentItem, session: string | null) {
     rosterOpen = false;
@@ -681,24 +681,35 @@
   }
   let folderState = $state<TeamFolders | null>(cachedFolders);
   let foldersSettled = $state(cachedFolders !== null);
-  let folderSeq = 0;
+  /* rev counts local edits, acked is the newest a PUT saved; saves run
+     one at a time (a second waits in saveQueued), so an older PUT never
+     lands after a newer one. A read applies only when every edit was saved
+     both when it started and when it landed (readApplies): a roster
+     reload's read never folds back what the user just changed. */
+  let folderRev = 0;
+  let folderAcked = 0;
   let folderSaving = false;
+  let saveQueued = false;
   let folderTimer: ReturnType<typeof setTimeout> | undefined;
   onDestroy(() => clearTimeout(folderTimer));
-  function setFolders(r: TeamFolders) {
-    folderState = foldersOf(r);
+  const folderSync = (): FolderSync => ({ rev: folderRev, acked: folderAcked, busy: !!folderTimer || folderSaving || saveQueued });
+  function cacheFolders() {
     try {
-      localStorage.setItem(FOLDERS_CACHE, JSON.stringify(folderState));
+      localStorage.setItem(FOLDERS_CACHE, JSON.stringify($state.snapshot(folderState)));
     } catch {
       /* storage full or off */
     }
   }
+  function setFolders(r: TeamFolders) {
+    folderState = foldersOf(r);
+    cacheFolders();
+  }
   const loadFolders = singleFlight(async () => {
-    if (folderTimer || folderSaving) return;
-    const seq = folderSeq;
+    const start = folderSync();
     try {
+      if (!readApplies(start, start)) return;
       const r = await runApi(getTeamFolders(base));
-      if (seq === folderSeq && !folderTimer && !folderSaving) setFolders(r);
+      if (readApplies(start, folderSync())) setFolders(r);
     } catch {
       /* an older server has no folders: everything stays loose */
     } finally {
@@ -707,24 +718,40 @@
   });
   function editFolders(next: TeamFolders) {
     folderState = next;
-    folderSeq++;
+    folderRev++;
+    // The cache follows at once: a reload before the PUT lands still
+    // paints the fold the user made.
+    cacheFolders();
     clearTimeout(folderTimer);
     folderTimer = setTimeout(saveFolders, FOLDER_SAVE_MS);
   }
   async function saveFolders() {
     folderTimer = undefined;
     if (!folderState) return;
-    const seq = folderSeq;
+    if (folderSaving) {
+      saveQueued = true;
+      return;
+    }
+    const sent = folderRev;
     folderSaving = true;
+    let failed = false;
     try {
       const r = await runApi(saveTeamFolders(base, materialize($state.snapshot(folderState), agentIds)));
-      if (seq === folderSeq) setFolders(r);
+      folderAcked = sent;
+      if (saveApplies(sent, folderSync())) setFolders(r);
     } catch (e) {
       toastError(`Save folders: ${e instanceof Error ? e.message : String(e)}`);
-      folderSaving = false;
-      await loadFolders();
+      failed = true;
     } finally {
       folderSaving = false;
+    }
+    if (saveQueued) {
+      saveQueued = false;
+      if (!folderTimer) await saveFolders();
+    } else if (failed && !folderTimer) {
+      // Nothing newer to save: show what the server kept.
+      folderAcked = folderRev;
+      await loadFolders();
     }
   }
   const agentIds = $derived(agents.map((a) => a.id));
@@ -873,7 +900,7 @@
           <span class="truncate">{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}</span>
           <RemoteKindIcon agent={a} />
         </span>
-        <span class="roster-hide-on-menu shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active, rosterNow)}</span>
+        <span class="roster-hide-on-menu shrink-0 text-[11px] {tone.time}">{rosterTime(rowActive(a, st.work), rosterNow)}</span>
       </span>
       <span class="roster-line2 mt-0.5 flex items-center gap-1.5" class:pr-6={running.length > 1}>
         <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
@@ -1051,8 +1078,10 @@
         {@const f = v.folder}
         {@const open = searching || !f.collapsed}
         {@const tone = rowTone(v.unread > 0)}
+        <!-- Expanded, the folder row and its members share one soft card
+             (style "A · Soft card"); folded, it is a plain row. -->
         <div
-          class="relative"
+          class="relative rounded-2xl transition-colors {open && v.agents.length ? 'my-1 bg-white-300/40 p-0.5 dark:bg-navy-600/30' : ''}"
           class:opacity-40={dragFolder === f.id}
           draggable={!searching}
           role="group"
@@ -1102,7 +1131,7 @@
           <span class="roster-kebab absolute right-1.5 top-1.5" data-testid="roster-folder-menu"><KebabMenu items={folderMenu(v)} ariaLabel="Folder {f.name}" size="sm" width={220} /></span>
           </div>
           {#if open && v.agents.length}
-            <div class="mb-1 ml-[26px] border-l border-white-300 pl-1.5 dark:border-navy-600" data-testid="roster-folder-members" transition:slide={{ duration: motionMs() }}>
+            <div class="pb-1 pl-2" data-testid="roster-folder-members" transition:slide={{ duration: motionMs() }}>
               {#each v.agents as a (a.id)}
                 <div animate:flip={{ duration: motionMs() }} in:rowReceive={{ key: "agent" + a.id }} out:rowSend={{ key: "agent" + a.id }}>{@render agentRow(a)}</div>
               {/each}

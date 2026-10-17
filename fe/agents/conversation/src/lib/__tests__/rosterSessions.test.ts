@@ -7,6 +7,7 @@ import {
   lastSessionKey,
   loadSeen,
   markSeen,
+  rowActive,
   rowTarget,
   runningSessions,
   SEEN_KEY,
@@ -24,6 +25,21 @@ describe("rowTarget", () => {
     expect(rowTarget({ disabled: false })).toBeNull();
     expect(rowTarget({ disabled: true, working_sessions: [ws("old")] })).toBeNull();
     expect(runningSessions({ disabled: true, working_sessions: [ws("a")] })).toEqual([]);
+  });
+});
+
+describe("sub-agents' side chat", () => {
+  const row = { disabled: false, last_active: "2026-10-17T10:30:00Z", subagents_session: "side", subagents_active: "2026-10-17T10:20:00Z" };
+  it("opens the chat the sub-agents run from while only they work", () => {
+    expect(rowTarget(row, "subagent")).toBe("side");
+    expect(rowActive(row, "subagent")).toBe("2026-10-17T10:20:00Z");
+  });
+  it("a running chat, the agent's own turn or a disabled agent keep their target", () => {
+    expect(rowTarget({ ...row, working_sessions: [ws("run")] }, "subagent")).toBe("run");
+    expect(rowTarget(row, "thinking")).toBeNull();
+    expect(rowActive(row, "thinking")).toBe(row.last_active);
+    expect(rowTarget({ ...row, disabled: true }, "subagent")).toBeNull();
+    expect(rowTarget({ disabled: false }, "subagent")).toBeNull();
   });
 });
 
@@ -108,7 +124,7 @@ describe("sessionSignal", () => {
 describe("roster wiring", () => {
   it("the row click opens rowTarget; the count menu and Last line sit beside the row button", () => {
     const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
-    expect(app).toMatch(/openRowChat\(a, rowTarget\(a\)\);/);
+    expect(app).toMatch(/openRowChat\(a, rowTarget\(a, statusOf\(a\)\.work\)\);/);
     expect(app).toMatch(/\{#if running\.length > 1\}<RosterSessionsMenu sessions=\{running\}/);
     expect(app).toMatch(/data-testid="roster-last"/);
     expect(app).toMatch(/else if \(sessionSignal\(agents, ev, activeSessions\)\) sessionReload\.call\(\);/);

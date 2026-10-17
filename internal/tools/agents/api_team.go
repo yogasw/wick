@@ -153,6 +153,12 @@ type TeamAgentItem struct {
 	// card can show work carrying on after the agent's own turn ended.
 	// Status is left alone: it stays the agent's own turn state.
 	SubagentsWorking []string `json:"subagents_working,omitempty"`
+	// SubagentsSession is the side chat those sub-agents run from, so the
+	// card opens it rather than the main chat; the most recently active
+	// one when several do. Empty when the main chat has sub-agents working.
+	SubagentsSession string `json:"subagents_session,omitempty"`
+	// SubagentsActive is that chat's last activity, the time its row shows.
+	SubagentsActive *time.Time `json:"subagents_active,omitempty"`
 	// TeamWaiting holds the handles of the teammates the main chat's open
 	// Team tasks (team_message / @mention) wait on: "waiting on N
 	// teammates". Status is left alone, as with SubagentsWorking.
@@ -849,6 +855,29 @@ func (l teamLive) subagentsIn(sessions []session.Session, mainID string) []strin
 		}
 	}
 	return out
+}
+
+// subagentsSession is the chat in sessions, other than mainID, whose
+// sub-agents are working — the most recently active when several are —
+// with its last activity, or "" when the main chat has some or no other
+// chat does.
+func (l teamLive) subagentsSession(sessions []session.Session, mainID string) (string, *time.Time) {
+	if len(l.subagents[mainID]) > 0 {
+		return "", nil
+	}
+	var best *session.Session
+	for i, s := range sessions {
+		if s.ID == mainID || len(l.subagents[s.ID]) == 0 {
+			continue
+		}
+		if best == nil || s.Meta.LastActive.After(best.Meta.LastActive) {
+			best = &sessions[i]
+		}
+	}
+	if best == nil {
+		return "", nil
+	}
+	return best.ID, timePtr(best.Meta.LastActive)
 }
 
 // attention returns the roster preview of what sessionID waits on a

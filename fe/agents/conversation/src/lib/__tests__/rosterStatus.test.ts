@@ -149,7 +149,7 @@ describe("no quick poll", () => {
     expect(intervals.filter((ms) => ms !== "1000" && ms !== "60_000")).toEqual([]);
     expect(src).toMatch(/setInterval\(\(\) => \(waitNow = Date\.now\(\)\), 1000\)/);
     expect(src).toMatch(/setInterval\(\(\) => \(rosterNow = Date\.now\(\)\), 60_000\)/);
-    expect(src).toMatch(/rosterTime\(a\.last_active, rosterNow\)/);
+    expect(src).toMatch(/rosterTime\(rowActive\(a, st\.work\), rosterNow\)/);
     expect(src).toMatch(/dozing=\{dozing\(a, st, rosterNow\)\}/);
     expect(src).not.toMatch(/agents\/live|listAgentsLive|createLivePoll/);
     // The stream itself lives in rosterLive.ts since d979f8fc.
