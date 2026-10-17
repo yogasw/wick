@@ -186,8 +186,13 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 		emitSystemEvent(s.ID, store.KindAgentCreated, text, extras)
 	}
 	out := map[string]any{"id": p.ID, "handle": p.Handle, "name": name, "access": "none"}
-	if len(in.AccessSuggestions) > 0 {
-		res, err := o.propose(ctx, sessionID, mgr, *p, in.AccessSuggestions, "suggested access for the new agent")
+	if len(in.AccessSuggestions) > 0 || in.NativeTools != nil {
+		prop := accessProposal{Grants: in.AccessSuggestions, NativeTools: in.NativeTools,
+			Reason: "suggested access for the new agent", Created: true}
+		if prop.Grants == nil {
+			prop.Grants = []team.ConnectorGrant{}
+		}
+		res, err := o.propose(ctx, sessionID, mgr, *p, prop)
 		if err != nil {
 			out["access_suggestions_error"] = err.Error()
 		} else {
@@ -268,38 +273,118 @@ func (o CaptainOps) SetAccess(ctx context.Context, sessionID string, in teamagen
 	if !team.DecodeCaptainCan(p.CaptainCan).Access {
 		return nil, fmt.Errorf("@%s does not let the Captain propose access changes (its Settings › Captain); ask the owner to change it there", p.Handle)
 	}
-	return o.propose(ctx, sessionID, mgr, p, in.Grants, in.Reason)
+	return o.propose(ctx, sessionID, mgr, p, accessProposal{Grants: in.Grants, NativeTools: in.NativeTools, Reason: in.Reason})
 }
 
-// propose checks grants against the OWNER's own catalog (the same check
-// as Settings › Access), records a pending history row and posts the
-// approval card in the manager's chat.
-func (o CaptainOps) propose(ctx context.Context, sessionID string, mgr, p entity.AgentPersona, grants []team.ConnectorGrant, reason string) (map[string]any, error) {
-	if grants == nil {
-		grants = []team.ConnectorGrant{}
+// accessProposal is what a Captain asks for. Grants nil = keep the
+// connectors, NativeTools nil = keep the tools; Created marks the
+// suggestions agents.create files for the agent it just made.
+type accessProposal struct {
+	Grants      []team.ConnectorGrant
+	NativeTools []string
+	Reason      string
+	Created     bool
+}
+
+// accessChangeOf is the history payload of prop on p.
+func accessChangeOf(p entity.AgentPersona, prop accessProposal) team.AccessChange {
+	ch := team.AccessChange{Grants: prop.Grants, NativeTools: prop.NativeTools}
+	if prop.Grants == nil {
+		ch.KeepConnectors = true
+		ch.Grants = team.DecodeGrants(p.AllowedConnectors)
+	}
+	return ch
+}
+
+// withAccessChange is p with ch applied: the connector checklist unless
+// ch keeps it, the native tools when ch carries them.
+func withAccessChange(p entity.AgentPersona, ch team.AccessChange) entity.AgentPersona {
+	if !ch.KeepConnectors {
+		grants := ch.Grants
+		if grants == nil {
+			grants = []team.ConnectorGrant{}
+		}
+		p.AllowedConnectors = team.EncodeGrants(grants)
+	}
+	if ch.NativeTools != nil {
+		p.AllowedNativeTools = team.EncodeNativeTools(ch.NativeTools)
+	}
+	return p
+}
+
+// fullAccessDiff is accessChangeList plus the native tools that move.
+func fullAccessDiff(before, after entity.AgentPersona, label func(string) string) []string {
+	diff := accessChangeList(before, after, label)
+	return append(diff, team.NativeToolsDiff(team.DecodeNativeTools(before.AllowedNativeTools), team.DecodeNativeTools(after.AllowedNativeTools))...)
+}
+
+// applyAccessChange writes ch onto the agent behind p and announces it in
+// that agent's chat; approvedBy names who let it through.
+func applyAccessChange(ctx context.Context, p entity.AgentPersona, ch team.AccessChange, actor, approvedBy string, label func(string) string) error {
+	before := p
+	p = withAccessChange(p, ch)
+	if err := globalTeam.Update(ctx, &p); err != nil {
+		return err
+	}
+	if diff := fullAccessDiff(before, p, label); len(diff) > 0 {
+		emitAccessChanged(p, diff, actor, approvedBy, label)
+	}
+	return nil
+}
+
+// autoApprovedBy is the decided_by of a proposal the Captain policy
+// applied without a card.
+const autoApprovedBy = "auto-approve (Captain policy)"
+
+// propose checks the proposal against the OWNER's own catalog (the same
+// check as Settings › Access) and records it. It then posts the approval
+// card in the manager's chat, or applies it at once when the owner's
+// Captain policy auto-approves it.
+func (o CaptainOps) propose(ctx context.Context, sessionID string, mgr, p entity.AgentPersona, prop accessProposal) (map[string]any, error) {
+	if err := team.ValidateNativeTools(prop.NativeTools); err != nil {
+		return nil, err
 	}
 	cat, err := globalTeam.OwnerCatalog(ctx, mgr.OwnerUserID)
 	if err != nil {
 		return nil, err
 	}
-	if err := team.CheckGrants(grants, team.CatalogOf(cat)); err != nil {
-		return nil, err
+	ch := accessChangeOf(p, prop)
+	if !ch.KeepConnectors {
+		if err := team.CheckGrants(ch.Grants, team.CatalogOf(cat)); err != nil {
+			return nil, err
+		}
 	}
 	label := labelerOf(cat)
-	after := p
-	after.AllowedConnectors = team.EncodeGrants(grants)
-	diff := accessChangeList(p, after, label)
+	diff := fullAccessDiff(p, withAccessChange(p, ch), label)
 	if len(diff) == 0 {
 		return nil, fmt.Errorf("@%s already has exactly this access", p.Handle)
 	}
+	ch.Diff = diff
 	approvalID := uuid.New().String()
 	by := "@" + mgr.Handle
 	h := &entity.AgentAccessHistory{
 		AgentID: p.ID, OwnerUserID: p.OwnerUserID, Actor: by, ActorAgentID: mgr.ID,
 		Status: team.AccessPending, ApprovalID: approvalID, SessionID: sessionID,
 	}
-	if err := globalTeam.RecordAccess(ctx, h, team.AccessChange{Diff: diff, Grants: grants}); err != nil {
+	if err := globalTeam.RecordAccess(ctx, h, ch); err != nil {
 		return nil, err
+	}
+	reason := prop.Reason
+	if team.DecodeCaptainPolicy(mgr.CaptainPolicy).AutoApproves(prop.Created) {
+		if err := globalTeam.SettleAccess(ctx, h.ID, team.AccessApplied, autoApprovedBy); err != nil {
+			return nil, err
+		}
+		if err := applyAccessChange(ctx, p, ch, by, autoApprovedBy, label); err != nil {
+			return nil, err
+		}
+		emitSystemEvent(sessionID, store.KindAccessChanged,
+			fmt.Sprintf("Access of @%s changed: %s · by %s · %s", p.Handle, strings.Join(diff, ", "), by, autoApprovedBy),
+			map[string]string{"agent_id": p.ID, "handle": p.Handle, "changed_by": by, "approved_by": autoApprovedBy,
+				"changes": strings.Join(diff, ", "), "approval_id": approvalID})
+		return map[string]any{
+			"status": "applied", "approval_id": approvalID, "changes": diff,
+			"note": "Applied at once by the owner's Captain auto-approve rule; it is in the agent's Access history.",
+		}, nil
 	}
 	extras := map[string]string{
 		"approval_id": approvalID, "state": "pending", "type": accessChangeType,
@@ -354,7 +439,7 @@ func resolveAccessApproval(c *tool.Ctx, sessionID, approvalID, decision string) 
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return true
 		}
-		if err := team.CheckGrants(ch.Grants, team.CatalogOf(cat)); err != nil {
+		if err := team.CheckGrants(ch.Grants, team.CatalogOf(cat)); err != nil && !ch.KeepConnectors {
 			c.JSON(http.StatusConflict, map[string]string{"error": err.Error() + " — decline this request"})
 			return true
 		}
@@ -362,14 +447,13 @@ func resolveAccessApproval(c *tool.Ctx, sessionID, approvalID, decision string) 
 			c.JSON(http.StatusGone, map[string]string{"error": "request id no longer pending (timed out or already resolved)"})
 			return true
 		}
-		before := p
-		p.AllowedConnectors = team.EncodeGrants(ch.Grants)
-		if err := globalTeam.Update(c.Context(), &p); err != nil {
-			c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
+		if err := team.ValidateNativeTools(ch.NativeTools); err != nil {
+			c.JSON(http.StatusConflict, map[string]string{"error": err.Error() + " — decline this request"})
 			return true
 		}
-		if diff := accessChangeList(before, p, label); len(diff) > 0 {
-			emitAccessChanged(p, diff, h.Actor, who, label)
+		if err := applyAccessChange(c.Context(), p, ch, h.Actor, who, label); err != nil {
+			c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
+			return true
 		}
 		decision = gate.DecisionApproveOnce
 	} else {

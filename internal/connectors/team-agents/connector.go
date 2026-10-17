@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/team"
@@ -32,8 +33,10 @@ type CreateInput struct {
 	Name, Handle, Tagline, Description, SystemPrompt string
 	// Avatar is a JSON team.Avatar, "" for the handle's default.
 	Avatar string
-	// AccessSuggestions become one approval request, never a grant.
+	// AccessSuggestions and NativeTools become one approval request,
+	// never a grant. NativeTools nil = the read-only defaults stay.
 	AccessSuggestions []team.ConnectorGrant
+	NativeTools       []string
 }
 
 // PersonaInput is agents.update_persona's input. nil = leave as is.
@@ -43,11 +46,13 @@ type PersonaInput struct {
 }
 
 // AccessInput is agents.set_access's input: the agent's whole proposed
-// checklist.
+// connector checklist and/or native-tool list. nil = leave that part as
+// it is; at least one is set.
 type AccessInput struct {
-	Agent  string
-	Grants []team.ConnectorGrant
-	Reason string
+	Agent       string
+	Grants      []team.ConnectorGrant
+	NativeTools []string
+	Reason      string
 }
 
 // ScheduleInput is agents.schedule's input: one action on another
@@ -110,6 +115,7 @@ type createInput struct {
 	SystemPrompt      string `wick:"textarea;desc=The agent's persona and focus. Do not put its name in it."`
 	Avatar            string `wick:"desc=Optional JSON {kind,shape,color,expression}."`
 	AccessSuggestions string `wick:"textarea;desc=Optional JSON array of grants [{connector_id,level:read|all|pick|off,ops?,accounts?}]. Becomes an approval request to the owner, never a grant."`
+	NativeTools       string `wick:"desc=Optional native tools the agent should have, comma-separated or a JSON array, from Read, Grep, Glob, WebFetch, WebSearch, Bash, Edit, Write. The WHOLE list (a new agent has only the read-only five). Joins the same approval request as access_suggestions."`
 }
 
 type personaInput struct {
@@ -121,9 +127,10 @@ type personaInput struct {
 }
 
 type accessInput struct {
-	Agent  string `wick:"required;desc=The agent's @handle or id."`
-	Grants string `wick:"required;textarea;desc=JSON array: the agent's WHOLE new connector checklist [{connector_id,level:read|all|pick|off,ops?,accounts?}]. Only connectors the owner can use."`
-	Reason string `wick:"desc=Why, shown to the owner on the approval card."`
+	Agent       string `wick:"required;desc=The agent's @handle or id."`
+	Grants      string `wick:"textarea;desc=JSON array: the agent's WHOLE new connector checklist [{connector_id,level:read|all|pick|off,ops?,accounts?}]. Only connectors the owner can use. Empty = keep the connectors as they are."`
+	NativeTools string `wick:"desc=The agent's WHOLE new native-tool list, comma-separated or a JSON array, from Read, Grep, Glob, WebFetch, WebSearch, Bash, Edit, Write. Empty = keep the tools as they are. Give grants, native_tools or both."`
+	Reason      string `wick:"desc=Why, shown to the owner on the approval card."`
 }
 
 type scheduleInput struct {
@@ -144,13 +151,13 @@ func Operations(deps Deps) []connector.Category {
 				"Status of every agent of the Team: id, handle, name, tagline, description, remote (with its agent_description), captain, disabled, status (idle or working), current_action, needs_attention, unread, last_error.",
 				listInput{}, deps.list, wickdocs.Docs{}),
 			connector.OpDestructive("create", "Create an Agent",
-				"Create a new agent with NO access (deny by default). access_suggestions are sent to the owner as one approval request; nothing is granted until they accept.",
+				"Create a new agent with NO access (deny by default) and only the read-only native tools. access_suggestions and native_tools (e.g. Bash, Edit, Write) are sent to the owner as one approval request; nothing is granted until they accept, unless the owner set the Captain to auto-approve.",
 				createInput{}, deps.create, wickdocs.Docs{}),
 			connector.OpDestructive("update_persona", "Edit an Agent's Persona",
 				"Change another agent's name, tagline, description or system prompt. For a remote agent the system prompt is its agent description (what it does, when to call it); nothing is sent to the remote. Refused when that agent does not let the Captain edit its persona.",
 				personaInput{}, deps.updatePersona, wickdocs.Docs{}),
 			connector.OpDestructive("set_access", "Propose an Access Change",
-				"Ask the owner to change another agent's connector access. ALWAYS returns pending_approval: the owner accepts or declines on a card, and the change applies only then. Can never exceed the owner's own access. Refused when that agent does not let the Captain propose access changes.",
+				"Ask the owner to change another agent's connector access and/or native tools (Bash, Edit, Write…). Returns pending_approval: the owner accepts or declines on a card, and the change applies only then — or status applied when the owner set the Captain to auto-approve. Can never exceed the owner's own access. Refused when that agent does not let the Captain propose access changes.",
 				accessInput{}, deps.setAccess, wickdocs.Docs{}),
 			connector.OpDestructive("schedule", "Manage an Agent's Schedules",
 				"List, create, update, pause or resume the schedules in another agent's Scheduled drawer. New schedules fire into that agent's main chat. Applies at once and is announced in that agent's chat. Refused when that agent does not let the Captain manage its routines.",
@@ -183,11 +190,15 @@ func (d Deps) create(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	tools, err := ParseNativeTools(c.Input("native_tools"))
+	if err != nil {
+		return nil, err
+	}
 	return ops.Create(c.Context(), c.SessionID(), CreateInput{
 		Name: strings.TrimSpace(c.Input("name")), Handle: c.Input("handle"),
 		Tagline: c.Input("tagline"), Description: c.Input("description"),
 		SystemPrompt: c.Input("system_prompt"), Avatar: strings.TrimSpace(c.Input("avatar")),
-		AccessSuggestions: sugg,
+		AccessSuggestions: sugg, NativeTools: tools,
 	})
 }
 
@@ -213,11 +224,23 @@ func (d Deps) setAccess(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	gs, err := ParseGrants(c.Input("grants"))
+	raw := strings.TrimSpace(c.Input("grants"))
+	gs, err := ParseGrants(raw)
 	if err != nil {
 		return nil, err
 	}
-	return ops.SetAccess(c.Context(), c.SessionID(), AccessInput{Agent: c.Input("agent"), Grants: gs, Reason: c.Input("reason")})
+	if raw != "" && gs == nil {
+		// "[]" is a real proposal (remove every connector), not "keep".
+		gs = []team.ConnectorGrant{}
+	}
+	tools, err := ParseNativeTools(c.Input("native_tools"))
+	if err != nil {
+		return nil, err
+	}
+	if gs == nil && tools == nil {
+		return nil, errors.New("give grants, native_tools or both")
+	}
+	return ops.SetAccess(c.Context(), c.SessionID(), AccessInput{Agent: c.Input("agent"), Grants: gs, NativeTools: tools, Reason: c.Input("reason")})
 }
 
 func (d Deps) schedule(c *connector.Ctx) (any, error) {
@@ -243,4 +266,39 @@ func ParseGrants(raw string) ([]team.ConnectorGrant, error) {
 		return nil, errors.New("grants must be a JSON array of {connector_id, level, ops?, accounts?}: " + err.Error())
 	}
 	return gs, nil
+}
+
+// ParseNativeTools reads a native-tool list, comma-separated or a JSON
+// array, names as team.NativeTools spells them (any case); "" is nil.
+func ParseNativeTools(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var in []string
+	if strings.HasPrefix(raw, "[") {
+		if err := json.Unmarshal([]byte(raw), &in); err != nil {
+			return nil, errors.New("native_tools must be a JSON array of names or a comma-separated list: " + err.Error())
+		}
+	} else {
+		in = strings.Split(raw, ",")
+	}
+	out := []string{}
+	for _, t := range in {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		name := ""
+		for _, n := range team.NativeTools {
+			if strings.EqualFold(n, t) {
+				name = n
+			}
+		}
+		if name == "" {
+			return nil, errors.New("unknown native tool " + strconv.Quote(t) + "; use " + strings.Join(team.NativeTools, ", "))
+		}
+		out = append(out, name)
+	}
+	return team.NormalizeNativeTools(out), nil
 }

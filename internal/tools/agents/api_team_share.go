@@ -364,6 +364,7 @@ func sharedTeamAgentItem(p entity.AgentPersona, sh entity.AgentShare, viewer str
 	it.MentionFrom, it.MentionAllow = "", []string{}
 	it.Remote, it.SlackRemote = nil, nil
 	it.ManageAgents, it.CaptainCan = false, team.CaptainCan{}
+	it.CaptainPolicy = team.CaptainPolicy{AutoApprove: team.AutoApproveOff}
 	it.SharedWith = 0
 	fillChatState(&it, viewer, p.ID, sh.LastReadAt, live)
 	return it

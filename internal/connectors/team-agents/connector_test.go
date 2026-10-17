@@ -1,6 +1,7 @@
 package teamagents
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/team"
@@ -43,5 +44,25 @@ func TestParseGrants(t *testing.T) {
 	}
 	if _, err := ParseGrants(`{"oops":1}`); err == nil {
 		t.Error("non-array must fail")
+	}
+}
+
+func TestParseNativeTools(t *testing.T) {
+	if got, err := ParseNativeTools(""); err != nil || got != nil {
+		t.Errorf("empty = %v %v", got, err)
+	}
+	got, err := ParseNativeTools("write, bash ,Read")
+	if err != nil || strings.Join(got, ",") != "Read,Bash,Write" {
+		t.Errorf("csv = %v %v", got, err)
+	}
+	got, err = ParseNativeTools(`["Edit"]`)
+	if err != nil || len(got) != 1 || got[0] != "Edit" {
+		t.Errorf("json = %v %v", got, err)
+	}
+	if got, err := ParseNativeTools("[]"); err != nil || got == nil || len(got) != 0 {
+		t.Errorf("[] must be an empty, non-nil list: %v %v", got, err)
+	}
+	if _, err := ParseNativeTools("Bash,Rm"); err == nil {
+		t.Error("unknown tool must fail")
 	}
 }

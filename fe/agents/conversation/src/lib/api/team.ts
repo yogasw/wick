@@ -93,6 +93,9 @@ export type AgentItem = {
   manage_agents?: boolean;
   /** What the Captain may do to this agent. Older servers omit it. */
   captain_can?: CaptainCan;
+  /** The Captain's auto-approve rule, read on the Captain only. Older
+      servers omit it. */
+  captain_policy?: CaptainPolicy;
   /** Tools & features: native tools on, Bash commands that run unasked,
       and whether the provider is held to them. Skills tab: skills off.
       Older servers omit them. */
@@ -263,6 +266,7 @@ export type AgentWrite = Partial<{
   max_hops: number;
   manage_agents: boolean;
   captain_can: CaptainCan;
+  captain_policy: CaptainPolicy;
   allowed_native_tools: string[];
   bash_rules: BashRule[];
   disabled_skills: string[];
@@ -290,6 +294,11 @@ export type AgentSkill = {
 /** team.CaptainCan: what the Captain may do to one agent. Access is only
     ever a proposal the owner approves, even when on. */
 export type CaptainCan = { persona: boolean; access: boolean; routines: boolean };
+
+/** team.CaptainPolicy: which of the Captain's access proposals skip the
+    owner's card. Set on the Captain. */
+export type AutoApprove = "off" | "created" | "all";
+export type CaptainPolicy = { auto_approve: AutoApprove };
 
 /** One row of Settings › Access › History. */
 export type AccessHistoryItem = {

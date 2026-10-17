@@ -110,10 +110,13 @@ type TeamAgentItem struct {
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
-	ManageAgents  bool            `json:"manage_agents"`
-	CaptainCan    team.CaptainCan `json:"captain_can"`
-	MainSessionID string          `json:"main_session_id"`
-	LastActive    *time.Time      `json:"last_active"`
+	ManageAgents bool            `json:"manage_agents"`
+	CaptainCan   team.CaptainCan `json:"captain_can"`
+	// CaptainPolicy is the Captain's auto-approve rule (read on the
+	// Captain only). See team.CaptainPolicy.
+	CaptainPolicy team.CaptainPolicy `json:"captain_policy"`
+	MainSessionID string             `json:"main_session_id"`
+	LastActive    *time.Time         `json:"last_active"`
 	// LastAnyActive is the newest LastActive of all the agent's chats with
 	// the owner, main and side chats alike: the roster's dozing reads it,
 	// so work in a side chat keeps the agent awake. LastActive (order,
@@ -278,6 +281,7 @@ type teamAgentWriteReq struct {
 	MaxHops              *int                    `json:"max_hops"`
 	ManageAgents         *bool                   `json:"manage_agents"`
 	CaptainCan           *team.CaptainCan        `json:"captain_can"`
+	CaptainPolicy        *team.CaptainPolicy     `json:"captain_policy"`
 	// ShowInProjects keeps the agent's own project in the sidebar's
 	// Projects list as well (project.VisibleTag). Nil leaves it as is;
 	// on create, nil means hidden.
@@ -1022,6 +1026,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
+		CaptainPolicy:        team.DecodeCaptainPolicy(p.CaptainPolicy),
 		Status:               string(session.StatusIdle),
 	}
 	if p.ProjectID != "" {
@@ -1558,6 +1563,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.CaptainCan != nil {
 		p.CaptainCan = team.EncodeCaptainCan(*req.CaptainCan)
+	}
+	if req.CaptainPolicy != nil {
+		p.CaptainPolicy = team.EncodeCaptainPolicy(*req.CaptainPolicy)
 	}
 	// Captaincy moves by promoting another agent; un-ticking the current
 	// one would leave the owner with none. Promoting goes through the same

@@ -2,7 +2,7 @@
    and how a history row reads. Pure, so the rules are tested here and the
    drawer stays thin. */
 
-import type { AccessHistoryItem, CaptainCan } from "./api/team.js";
+import type { AccessHistoryItem, AutoApprove, CaptainCan, CaptainPolicy } from "./api/team.js";
 
 export const DEFAULT_CAPTAIN_CAN: CaptainCan = { persona: true, access: false, routines: true };
 
@@ -17,6 +17,22 @@ export const CAPTAIN_CAN_OPTIONS: { key: keyof CaptainCan; label: string; hint: 
   { key: "access", label: "Propose access changes", hint: "Every change still waits for your Accept on a card." },
   { key: "routines", label: "Manage routines", hint: "Scheduled messages of this agent." },
 ];
+
+/** captainPolicyOf is the Captain's stored auto-approve rule; anything
+    unknown (or an older server) reads as off. */
+export function captainPolicyOf(v: Partial<CaptainPolicy> | null | undefined): CaptainPolicy {
+  const m = v?.auto_approve;
+  return { auto_approve: m === "created" || m === "all" ? m : "off" };
+}
+
+export const AUTO_APPROVE_OPTIONS: { value: AutoApprove; label: string; hint: string }[] = [
+  { value: "off", label: "Always ask me", hint: "Every access or tool change the Captain proposes waits for your Accept on a card." },
+  { value: "created", label: "Auto-approve agents it creates", hint: "Access and tools (Bash, Edit, Write…) suggested when the Captain creates an agent apply at once. Later changes still ask." },
+  { value: "all", label: "Auto-approve every proposal", hint: "Every proposal applies at once, for agents whose Settings › Captain allows access changes." },
+];
+
+export const AUTO_APPROVE_NOTE =
+  "Auto-approved changes still never exceed your own access, and each one is listed in the agent's Access history and announced in its chat.";
 
 export const CAPTAIN_ACCESS_NOTE =
   "Access never changes without you: the Captain can only propose it, you accept or decline on a card, and it can never exceed your own access.";
