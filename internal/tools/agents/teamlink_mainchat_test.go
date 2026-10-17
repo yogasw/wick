@@ -154,17 +154,25 @@ func TestTeamTaskRevokedOrDisabledKeepsError(t *testing.T) {
 	})
 }
 
-// The owner named as ChatUser keeps the owner's error; nothing opened.
-func TestTeamTaskOwnerChatUserKeepsOwnerError(t *testing.T) {
+// A task to an agent its owner never opened (one the Captain created)
+// opens the owner's main chat, once, whether the owner is named as
+// ChatUser or not; it used to fail until the owner clicked the agent.
+func TestTeamTaskOpensOwnerMainChat(t *testing.T) {
 	withTeamWorld(t)
 	seedTeamProject(t, "p1", "u1")
 	p := seedTeamAgent(t, "u1", "atraxa", "p1")
-	peer := teamlink.Peer{ID: p.ID, OwnerID: "u1", Handle: p.Handle, ChatUser: "u1"}
-	if _, err := mainChatOf(context.Background(), peer); err == nil || !strings.Contains(err.Error(), "its owner has to open it") {
-		t.Fatalf("err = %v", err)
+	for _, chatUser := range []string{"", "u1"} {
+		peer := teamlink.Peer{ID: p.ID, OwnerID: "u1", Handle: p.Handle, ChatUser: chatUser}
+		s, err := mainChatOf(context.Background(), peer)
+		if err != nil {
+			t.Fatalf("ChatUser=%q: err = %v", chatUser, err)
+		}
+		if !s.Meta.AgentMain || s.Meta.UserID != "u1" {
+			t.Fatalf("ChatUser=%q: opened %+v, want the owner's main chat", chatUser, s.Meta)
+		}
 	}
-	if n := len(agentSessions("u1", p.ID)); n != 0 {
-		t.Fatalf("owner has %d chats, want 0", n)
+	if n := len(agentSessions("u1", p.ID)); n != 1 {
+		t.Fatalf("owner has %d chats, want 1", n)
 	}
 }
 

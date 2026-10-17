@@ -771,8 +771,44 @@ func mainChatOf(ctx context.Context, agent teamlink.Peer) (session.Session, erro
 		if agent.ChatUser != "" {
 			return openMainChatFor(ctx, agent)
 		}
-		return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		if globalTeam == nil {
+			return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		}
+		p, err := globalTeam.Get(ctx, agent.ID)
+		if err != nil {
+			return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		}
+		return openOwnerMainChat(ctx, p)
 	}
+	return s, nil
+}
+
+// openOwnerMainChat opens the owner's main chat with p, as opening it
+// once from the Agents app does, for a Team task, a schedule or a
+// delegation that reaches an agent nobody has opened yet (an agent the
+// Captain created has none). Without it every such call was refused
+// until the owner clicked the agent once.
+func openOwnerMainChat(ctx context.Context, p entity.AgentPersona) (session.Session, error) {
+	noChat := fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", p.Handle)
+	if globalMgr == nil || p.OwnerUserID == "" || accountInactive(ctx, p.OwnerUserID) {
+		return session.Session{}, noChat
+	}
+	defer lockMainChat(p.OwnerUserID, p.ID)()
+	// Another task may have opened it while this one waited.
+	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
+		return s, nil
+	}
+	id, err := createAgentChat(ctx, p.OwnerUserID, p, true, uuid.New().String(), session.OriginUI, agentChatSetup{
+		target: func(projectID string) (string, string) { return userSessionTarget(ctx, p.OwnerUserID, projectID) },
+	})
+	if err != nil {
+		return session.Session{}, fmt.Errorf("@%s: open its main chat: %w", p.Handle, err)
+	}
+	s, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		return session.Session{}, noChat
+	}
+	log.Ctx(ctx).Info().Str("agent", p.ID).Str("session", id).Msg("team: opened the owner's main chat on first use")
 	return s, nil
 }
 
@@ -811,8 +847,7 @@ func openMainChatFor(ctx context.Context, agent teamlink.Peer) (session.Session,
 	}
 	p, err := globalTeam.Get(ctx, agent.ID)
 	if err == nil && agent.ChatUser == p.OwnerUserID {
-		// The owner's main chat is theirs to open, as without a ChatUser.
-		return session.Session{}, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		return openOwnerMainChat(ctx, p)
 	}
 	if err != nil || !agentChatMember(ctx, p, agent.ChatUser) || accountInactive(ctx, agent.ChatUser) {
 		return session.Session{}, noChat

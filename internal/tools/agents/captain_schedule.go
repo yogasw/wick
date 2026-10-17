@@ -67,7 +67,11 @@ func (o CaptainOps) Schedule(ctx context.Context, sessionID string, in teamagent
 	switch in.Action {
 	case "create":
 		if mainID == "" {
-			return nil, fmt.Errorf("@%s has no main chat yet; the owner opens it once first", p.Handle)
+			s, err := openOwnerMainChat(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			mainID = s.ID
 		}
 		if message == "" {
 			return nil, errors.New("message is required")
