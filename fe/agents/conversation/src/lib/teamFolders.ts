@@ -47,6 +47,31 @@ export function byTier(entries: RosterEntry[], statusOf: (a: AgentItem) => Statu
 
 /** The id an inherited folder (a shared agent's owner keeps it in a folder
     the viewer has no folder of that name for) goes by until it is saved. */
+/** foldersOf is a GET/PUT answer (or a cached one) with every field
+    present: an older server or a partial cache leaves some out. */
+export function foldersOf(r: Partial<TeamFolders>): TeamFolders {
+  return { folders: r.folders ?? [], place: r.place ?? {}, inherited: r.inherited ?? {} };
+}
+
+/** parseFoldersCache reads the folders the last open stored, for the
+    roster's first paint; null when there is none or it is not folders. */
+export function parseFoldersCache(raw: string | null): TeamFolders | null {
+  try {
+    const c = JSON.parse(raw ?? "null") as Partial<TeamFolders> | null;
+    if (!c || typeof c !== "object" || !Array.isArray(c.folders)) return null;
+    return foldersOf(c);
+  } catch {
+    return null;
+  }
+}
+
+/** Roster rows move (flip, crossfade, a folder opening) for this long;
+    not at all under prefers-reduced-motion or while a search filters. */
+export const ROSTER_MOTION_MS = 180;
+export function rosterMotionMs(reduced: boolean, searching: boolean): number {
+  return reduced || searching ? 0 : ROSTER_MOTION_MS;
+}
+
 export const INHERITED_PREFIX = "inherited:";
 export const isInheritedFolder = (id: string) => id.startsWith(INHERITED_PREFIX);
 

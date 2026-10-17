@@ -32,8 +32,9 @@ export type SessionActivity = {
 export type TicketSignal = { project_id: string; ticket_id: string };
 
 /** One `agent_changed` signal: a Team agent (agent_id) or group chat
-    (group_id) the user sees changed. The roster refetches over REST. */
-export type AgentChangedSignal = { agent_id?: string; group_id?: string };
+    (group_id) the user sees changed, or the user's own sidebar folders
+    (folders). The roster refetches over REST. */
+export type AgentChangedSignal = { agent_id?: string; group_id?: string; folders?: boolean };
 
 export type SessionsStreamHandlers = {
   onActivity?: (ev: SessionActivity) => void;

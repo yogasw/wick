@@ -6,14 +6,18 @@ import {
   createFolder,
   deleteFolder,
   folderView,
+  foldersOf,
   groupTier,
   INHERITED_PREFIX,
   materialize,
   moveAgent,
+  parseFoldersCache,
   renameError,
   renameFolder,
   reorderFolder,
   resolveFolders,
+  ROSTER_MOTION_MS,
+  rosterMotionMs,
   setCollapsed,
   teamList,
   whoLine,
@@ -202,5 +206,33 @@ describe("teamList", () => {
     const out = teamList([ae(agent("a", TODAY))], resolveFolders(s, ["a"]), statuses({}), true, NOW);
     expect(out.folders.map((f) => f.folder.id)).toEqual(["f1"]);
     expect(teamList([], resolveFolders(s, []), statuses({}), false, NOW).folders.map((f) => f.summary)).toEqual(["Empty", "Empty"]);
+  });
+});
+
+describe("folders cache", () => {
+  test("a stored answer reads back whole, missing fields filled", () => {
+    const f: TeamFolders = { folders: [{ id: "f1", name: "Ops" }], place: { a1: "f1" }, inherited: { a2: "Partners" } };
+    expect(parseFoldersCache(JSON.stringify(f))).toEqual(f);
+    expect(parseFoldersCache(JSON.stringify({ folders: [] }))).toEqual({ folders: [], place: {}, inherited: {} });
+  });
+
+  test("nothing stored, junk or not folders is no cache", () => {
+    expect(parseFoldersCache(null)).toBeNull();
+    expect(parseFoldersCache("{oops")).toBeNull();
+    expect(parseFoldersCache("null")).toBeNull();
+    expect(parseFoldersCache(JSON.stringify({ agents: [] }))).toBeNull();
+    expect(parseFoldersCache("[]")).toBeNull();
+  });
+
+  test("foldersOf fills what an older server leaves out", () => {
+    expect(foldersOf({})).toEqual({ folders: [], place: {}, inherited: {} });
+  });
+});
+
+describe("rosterMotionMs", () => {
+  test("rows move, except under reduced motion or a search", () => {
+    expect(rosterMotionMs(false, false)).toBe(ROSTER_MOTION_MS);
+    expect(rosterMotionMs(true, false)).toBe(0);
+    expect(rosterMotionMs(false, true)).toBe(0);
   });
 });

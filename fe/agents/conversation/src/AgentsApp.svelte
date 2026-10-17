@@ -43,7 +43,9 @@
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, getTeamFolders, saveTeamFolders, type GroupItem, type TeamFolder, type TeamFolders } from "./lib/api/team.js";
-  import { canUnfile, createFolder, deleteFolder, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, resolveFolders, setCollapsed, teamList, type FolderView } from "./lib/teamFolders.js";
+  import { canUnfile, createFolder, deleteFolder, foldersOf, isInheritedFolder, materialize, moveAgent, renameError, renameFolder, reorderFolder, parseFoldersCache, resolveFolders, rosterMotionMs, setCollapsed, teamList, type FolderView } from "./lib/teamFolders.js";
+  import { flip } from "svelte/animate";
+  import { crossfade, fade, slide } from "svelte/transition";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
@@ -148,12 +150,14 @@
      the read in flight may predate what it was asked for, a turn that
      just started. */
   const load = singleFlight(async () => {
+    // The folders are read alongside, not after: the rows wait for both
+    // (foldersSettled), so the first paint is already grouped.
+    void loadFolders();
     try {
       const r = await runApi(listAgents(base));
       agents = r.agents ?? [];
       captainId = r.captain_id ?? "";
       loadError = "";
-      void loadFolders();
       try {
         sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
       } catch {
@@ -216,6 +220,7 @@
         load();
         loadGroups();
       },
+      reloadFolders: () => void loadFolders(),
       // A turn's end missed while the stream was down would leave its chat
       // marked mid-turn, and its next start would read nothing.
       onReconnect: () => activeSessions.clear(),
@@ -657,28 +662,49 @@
       : undefined,
   });
 
-  /* Team-sidebar folders (teamFolders.ts): the viewer's own, read again
-     with every roster read so a change the Captain made shows up. An edit
-     applies at once and is saved FOLDER_SAVE_MS later, one PUT a burst; a
-     read or a save answer that predates the newest edit is dropped. */
+  /* Team-sidebar folders (teamFolders.ts): the viewer's own, read with
+     every roster read and on a folders signal (a save in another tab, or
+     the Captain's agents.folders). An edit applies at once and is saved
+     FOLDER_SAVE_MS later, one PUT a burst; a read or a save answer that
+     predates the newest edit is dropped. The last answer is kept in
+     FOLDERS_CACHE so a cached roster paints grouped at once; until the
+     folders are known (cached, read, or the read failed) no row paints,
+     so nothing shows loose and then jumps into its folder. */
   const FOLDER_SAVE_MS = 300;
+  const FOLDERS_CACHE = "wick.team.folders";
   const NO_FOLDERS: TeamFolders = { folders: [], place: {}, inherited: {} };
-  let folderState = $state<TeamFolders | null>(null);
+  let cachedFolders: TeamFolders | null = null;
+  try {
+    cachedFolders = parseFoldersCache(localStorage.getItem(FOLDERS_CACHE));
+  } catch {
+    /* storage off */
+  }
+  let folderState = $state<TeamFolders | null>(cachedFolders);
+  let foldersSettled = $state(cachedFolders !== null);
   let folderSeq = 0;
   let folderSaving = false;
   let folderTimer: ReturnType<typeof setTimeout> | undefined;
   onDestroy(() => clearTimeout(folderTimer));
-  const folderOf = (r: TeamFolders): TeamFolders => ({ folders: r.folders ?? [], place: r.place ?? {}, inherited: r.inherited ?? {} });
-  async function loadFolders() {
+  function setFolders(r: TeamFolders) {
+    folderState = foldersOf(r);
+    try {
+      localStorage.setItem(FOLDERS_CACHE, JSON.stringify(folderState));
+    } catch {
+      /* storage full or off */
+    }
+  }
+  const loadFolders = singleFlight(async () => {
     if (folderTimer || folderSaving) return;
     const seq = folderSeq;
     try {
       const r = await runApi(getTeamFolders(base));
-      if (seq === folderSeq && !folderTimer && !folderSaving) folderState = folderOf(r);
+      if (seq === folderSeq && !folderTimer && !folderSaving) setFolders(r);
     } catch {
       /* an older server has no folders: everything stays loose */
+    } finally {
+      foldersSettled = true;
     }
-  }
+  });
   function editFolders(next: TeamFolders) {
     folderState = next;
     folderSeq++;
@@ -692,7 +718,7 @@
     folderSaving = true;
     try {
       const r = await runApi(saveTeamFolders(base, materialize($state.snapshot(folderState), agentIds)));
-      if (seq === folderSeq) folderState = folderOf(r);
+      if (seq === folderSeq) setFolders(r);
     } catch (e) {
       toastError(`Save folders: ${e instanceof Error ? e.message : String(e)}`);
       folderSaving = false;
@@ -705,6 +731,11 @@
   const folders = $derived(folderState ?? NO_FOLDERS);
   const resolved = $derived(resolveFolders(folderState, agentIds));
   const searching = $derived(!!query.trim());
+  /* Rows glide to their new place (flip within a list, a crossfade between
+     the loose list and a folder) instead of jumping. */
+  const reducedMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+  const motionMs = () => rosterMotionMs(!!reducedMotion?.matches, searching);
+  const [rowSend, rowReceive] = crossfade({ duration: () => motionMs(), fallback: (node) => fade(node, { duration: motionMs() }) });
   const statusOf = (a: AgentItem) => rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) });
   /* Loose rows on top (agents in no folder, and group chats), then the
      folders in the viewer's order; agents sort by tier in both. */
@@ -943,10 +974,11 @@
       </div>
     {/if}
     <nav class="flex-1 overflow-y-auto px-1.5 pb-2" aria-label="Agent list">
-      {#if !loaded}
-        <!-- Skeleton rows while the roster loads (a cached roster shows at
-             once instead, see ROSTER_CACHE). -->
-        {#if agents.length === 0}
+      {#if !loaded || !foldersSettled}
+        <!-- Skeleton rows while the roster or the folders load (a cached
+             roster with cached folders shows at once instead, see
+             ROSTER_CACHE and FOLDERS_CACHE). -->
+        {#if agents.length === 0 || !foldersSettled}
           <div class="animate-pulse" aria-label="Loading agents" data-testid="roster-skeleton">
             {#each [62, 48, 70, 55, 40] as w}
               <div class="flex items-center gap-2.5 px-2 py-2">
@@ -982,7 +1014,8 @@
       {:else if list.loose.length === 0 && list.folders.length === 0}
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matches.</p>
       {/if}
-      {#each noCaptain ? [] : list.loose as e (e.kind + e.id)}
+      {#each noCaptain || !foldersSettled ? [] : list.loose as e (e.kind + e.id)}
+        <div animate:flip={{ duration: motionMs() }} in:rowReceive={{ key: e.kind + e.id }} out:rowSend={{ key: e.kind + e.id }}>
         {#if e.kind === "agent"}
           {@render agentRow(e.agent)}
         {:else}
@@ -1010,10 +1043,11 @@
           </span>
         </button>
         {/if}
+        </div>
       {/each}
       <!-- Folders, in the viewer's order (drag to reorder): one row with the
            members' faces, whose ring tells what runs inside even folded. -->
-      {#each noCaptain ? [] : list.folders as v (v.folder.id)}
+      {#each noCaptain || !foldersSettled ? [] : list.folders as v (v.folder.id)}
         {@const f = v.folder}
         {@const open = searching || !f.collapsed}
         {@const tone = rowTone(v.unread > 0)}
@@ -1023,6 +1057,7 @@
           draggable={!searching}
           role="group"
           aria-label="Folder {f.name}"
+          animate:flip={{ duration: motionMs() }}
           data-testid="roster-folder"
           data-folder={f.id}
           ondragstart={(e) => { dragFolder = f.id; e.dataTransfer?.setData("text/plain", f.id); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; }}
@@ -1067,8 +1102,10 @@
           <span class="roster-kebab absolute right-1.5 top-1.5" data-testid="roster-folder-menu"><KebabMenu items={folderMenu(v)} ariaLabel="Folder {f.name}" size="sm" width={220} /></span>
           </div>
           {#if open && v.agents.length}
-            <div class="mb-1 ml-[26px] border-l border-white-300 pl-1.5 dark:border-navy-600" data-testid="roster-folder-members">
-              {#each v.agents as a (a.id)}{@render agentRow(a)}{/each}
+            <div class="mb-1 ml-[26px] border-l border-white-300 pl-1.5 dark:border-navy-600" data-testid="roster-folder-members" transition:slide={{ duration: motionMs() }}>
+              {#each v.agents as a (a.id)}
+                <div animate:flip={{ duration: motionMs() }} in:rowReceive={{ key: "agent" + a.id }} out:rowSend={{ key: "agent" + a.id }}>{@render agentRow(a)}</div>
+              {/each}
             </div>
           {/if}
         </div>
