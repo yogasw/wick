@@ -1,5 +1,5 @@
 // Package teamagents exposes the Captain's agents.* ops — list, create,
-// update_persona, set_access, schedule — as a fixed, single-instance connector.
+// update_persona, set_access, schedule, folders — as a fixed, single-instance connector.
 //
 // Every op runs on behalf of the OWNER of the calling agent and only ever
 // touches that owner's agents. The scope (team.ManageAgentsKey) shows the
@@ -40,6 +40,9 @@ type CreateInput struct {
 	// Provider is "type/name" (e.g. claude/claude_waba), "" = the
 	// server default. Model pins a model of that provider.
 	Provider, Model string
+	// Folder files the new agent into the owner's Team-sidebar folder of
+	// that name (made when missing); "" = loose.
+	Folder string
 }
 
 // PersonaInput is agents.update_persona's input. nil = leave as is.
@@ -77,6 +80,20 @@ type ScheduleInput struct {
 	Message            string
 }
 
+// FoldersInput is agents.folders's input: one action on the owner's
+// Team-sidebar folders.
+type FoldersInput struct {
+	// Action is list | move | rename | delete | order.
+	Action string
+	// Agent is the @handle or id to move.
+	Agent string
+	// Folder is the folder name; for move "" takes the agent out of any.
+	Folder  string
+	NewName string
+	// Order is folder names, first to last.
+	Order []string
+}
+
 // Ops is what the connector drives; implemented in internal/tools/agents.
 type Ops interface {
 	List(ctx context.Context, sessionID string) (any, error)
@@ -84,6 +101,7 @@ type Ops interface {
 	UpdatePersona(ctx context.Context, sessionID string, in PersonaInput) (any, error)
 	SetAccess(ctx context.Context, sessionID string, in AccessInput) (any, error)
 	Schedule(ctx context.Context, sessionID string, in ScheduleInput) (any, error)
+	Folders(ctx context.Context, sessionID string, in FoldersInput) (any, error)
 }
 
 // Deps wires the connector to its implementation. Ops is late-bound.
@@ -99,7 +117,7 @@ func Meta() connector.Meta {
 		Key:  Key,
 		Name: "Team agents",
 		Description: "Manage the other agents of your owner's Team: see what each is doing, create one, " +
-			"edit its persona and propose access changes for the owner to approve.",
+			"edit its persona, propose access changes for the owner to approve and sort agents into sidebar folders.",
 		Icon:  "🧭",
 		Fixed: true,
 	}
@@ -127,6 +145,7 @@ type createInput struct {
 	Provider          string `wick:"desc=Optional default provider instance as type/name, e.g. claude/claude_waba. Must be one the owner may use. Empty = the server default."`
 	Model             string `wick:"desc=Optional default model of that provider, e.g. opus. Empty = the provider default."`
 	NativeTools       string `wick:"desc=Optional native tools the agent should have, comma-separated or a JSON array, from Read, Grep, Glob, WebFetch, WebSearch, Bash, Edit, Write. The WHOLE list (a new agent has only the read-only five). Joins the same approval request as access_suggestions."`
+	Folder            string `wick:"desc=Optional sidebar folder name to file the new agent in, created when missing. Empty = no folder."`
 }
 
 type personaInput struct {
@@ -158,6 +177,14 @@ type scheduleInput struct {
 	Message    string `wick:"textarea;desc=What the agent is told when it fires (create, update = new text, empty = unchanged)."`
 }
 
+type foldersInput struct {
+	Action  string `wick:"required;desc=list | move | rename | delete | order."`
+	Agent   string `wick:"desc=The agent's @handle or id (move)."`
+	Folder  string `wick:"desc=Folder name. move: the folder to put the agent in (created when missing), empty = take it out of any folder. rename and delete: the folder to change."`
+	NewName string `wick:"desc=The folder's new name (rename)."`
+	Order   string `wick:"desc=Comma-separated folder names, first to last (order). Folders not named keep their order after them."`
+}
+
 // Operations lists the connector's ops.
 func Operations(deps Deps) []connector.Category {
 	return []connector.Category{
@@ -177,6 +204,9 @@ func Operations(deps Deps) []connector.Category {
 			connector.OpDestructive("schedule", "Manage an Agent's Schedules",
 				"List, create, update, pause or resume the schedules in another agent's Scheduled drawer. New schedules fire into that agent's main chat. Applies at once and is announced in that agent's chat. Refused when that agent does not let the Captain manage its routines.",
 				scheduleInput{}, deps.schedule, wickdocs.Docs{}),
+			connector.OpDestructive("folders", "Organize Sidebar Folders",
+				"List or change the owner's Team-sidebar folders: list (folders with their agents, and the loose ones), move an agent into a folder (created when missing) or out of all, rename, delete (its agents become loose) or order folders. Changes only the owner's own sidebar, silently. Refused when the owner switched Captain folder organizing off.",
+				foldersInput{}, deps.folders, wickdocs.Docs{}),
 		),
 	}
 }
@@ -215,6 +245,7 @@ func (d Deps) create(c *connector.Ctx) (any, error) {
 		SystemPrompt: c.Input("system_prompt"), Avatar: strings.TrimSpace(c.Input("avatar")),
 		AccessSuggestions: sugg, NativeTools: tools,
 		Provider: strings.TrimSpace(c.Input("provider")), Model: strings.TrimSpace(c.Input("model")),
+		Folder: strings.TrimSpace(c.Input("folder")),
 	})
 }
 
@@ -270,6 +301,23 @@ func (d Deps) schedule(c *connector.Ctx) (any, error) {
 		Agent: c.Input("agent"), Action: strings.TrimSpace(strings.ToLower(c.Input("action"))),
 		ScheduleID: strings.TrimSpace(c.Input("schedule_id")), RunAt: strings.TrimSpace(c.Input("run_at")),
 		Every: strings.TrimSpace(c.Input("every")), Cron: strings.TrimSpace(c.Input("cron")), Message: c.Input("message"),
+	})
+}
+
+func (d Deps) folders(c *connector.Ctx) (any, error) {
+	ops, err := d.ops()
+	if err != nil {
+		return nil, err
+	}
+	var order []string
+	for _, n := range strings.Split(c.Input("order"), ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			order = append(order, n)
+		}
+	}
+	return ops.Folders(c.Context(), c.SessionID(), FoldersInput{
+		Action: strings.TrimSpace(strings.ToLower(c.Input("action"))), Agent: strings.TrimSpace(c.Input("agent")),
+		Folder: strings.TrimSpace(c.Input("folder")), NewName: strings.TrimSpace(c.Input("new_name")), Order: order,
 	})
 }
 

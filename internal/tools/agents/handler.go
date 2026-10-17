@@ -474,6 +474,9 @@ func Register(r tool.Router) {
 	// The caller's own Team settings (Team instructions, landing choice).
 	r.GET("/api/team/settings", apiTeamSettingsGet)
 	r.PUT("/api/team/settings", apiTeamSettingsSave)
+	// The caller's own Team-sidebar folders ("groups" are group chats).
+	r.GET("/api/team/folders", apiTeamFoldersGet)
+	r.PUT("/api/team/folders", apiTeamFoldersSave)
 
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)

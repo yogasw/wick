@@ -151,6 +151,15 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 	if _, err := globalTeam.GetByHandle(ctx, mgr.OwnerUserID, handle); err == nil {
 		return nil, team.ErrHandleTaken
 	}
+	folder := strings.TrimSpace(in.Folder)
+	if folder != "" {
+		if err := foldersAllowed(mgr); err != nil {
+			return nil, err
+		}
+		if len([]rune(folder)) > team.MaxFolderName {
+			return nil, team.ErrFolderName
+		}
+	}
 	av := team.DefaultAvatarFor(handle)
 	if in.Avatar != "" {
 		if err := json.Unmarshal([]byte(in.Avatar), &av); err != nil {
@@ -196,6 +205,13 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 		emitSystemEvent(s.ID, store.KindAgentCreated, text, extras)
 	}
 	out := map[string]any{"id": p.ID, "handle": p.Handle, "name": name, "access": "none"}
+	if folder != "" {
+		if err := fileNewAgent(ctx, mgr.OwnerUserID, p.ID, folder); err != nil {
+			out["folder_error"] = err.Error()
+		} else {
+			out["folder"] = folder
+		}
+	}
 	if len(in.AccessSuggestions) > 0 || in.NativeTools != nil {
 		prop := accessProposal{Grants: in.AccessSuggestions, NativeTools: in.NativeTools,
 			Reason: "suggested access for the new agent", Created: true}

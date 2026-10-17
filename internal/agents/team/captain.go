@@ -104,7 +104,13 @@ const (
 // in Settings › Access › History and announced in the agent's chat.
 type CaptainPolicy struct {
 	AutoApprove string `json:"auto_approve"`
+	// NoFolders stops the Captain organizing the owner's Team-sidebar
+	// folders (agents.folders, agents.create's folder). Off by default.
+	NoFolders bool `json:"no_folders,omitempty"`
 }
+
+// ErrNoFolders is the refusal of a folder op under CaptainPolicy.NoFolders.
+var ErrNoFolders = errors.New("the owner switched off Captain folder organizing (Settings › Captain)")
 
 // NormalizeAutoApprove maps an unknown mode to AutoApproveOff.
 func NormalizeAutoApprove(m string) string {
@@ -286,7 +292,7 @@ func (s *Service) ManagerFor(ctx context.Context, sessionID string) (entity.Agen
 // other agents" on. Kept to a few lines: the ops' own descriptions carry
 // the details.
 const ManageAgentsBlock = `## Managing your Team
-- You may manage your owner's other agents through the Team agents connector (key agents): list (who is doing what), create, update_persona, set_access.
+- You may manage your owner's other agents through the Team agents connector (key agents): list (who is doing what), create, update_persona, set_access, and folders (sort agents into the owner's sidebar folders).
 - A new agent starts with NO access and only the read-only native tools (Read, Grep, Glob, WebFetch, WebSearch). Access is never yours to grant: create's access_suggestions/native_tools and set_access file a request the owner accepts or declines on a card (or that the owner's auto-approve rule applies at once), and it can never exceed the owner's own access. Bash, Edit and Write go in native_tools.
 - Each agent decides what you may touch (Settings › Captain); a refusal means the owner switched it off — tell them, do not work around it.`
 
