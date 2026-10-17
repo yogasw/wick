@@ -766,6 +766,55 @@ func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (s
 // when it has none yet. A person the agent is shared with who never
 // opened it gets their main chat opened here (openMainChatFor).
 func mainChatOf(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
+	s, err := mainChatOfRaw(ctx, agent)
+	if err != nil {
+		return s, err
+	}
+	return healChatProject(ctx, agent.ID, s), nil
+}
+
+// agentProjectOf is the project an agent's chats belong to: its
+// persona's, when that project is on disk; "" for an unscoped agent.
+func agentProjectOf(ctx context.Context, agentID string) string {
+	if globalTeam == nil || globalMgr == nil {
+		return ""
+	}
+	p, err := globalTeam.Get(ctx, agentID)
+	if err != nil || p.ProjectID == "" {
+		return ""
+	}
+	if _, ok := globalMgr.Registry().Project(p.ProjectID); !ok {
+		return ""
+	}
+	return p.ProjectID
+}
+
+// healChatProject puts a chat of agentID that was opened without the
+// agent's project back into it. A chat opened while its project was
+// missing from the registry (created by the other process during a
+// zero-downtime reload) was made unscoped, so it spawned in
+// sessions/<id>/cwd and never saw the project's CLAUDE.md or knowledge;
+// every new chat copied that from the main one.
+func healChatProject(ctx context.Context, agentID string, s session.Session) session.Session {
+	if s.Meta.ProjectID != "" || globalMgr == nil {
+		return s
+	}
+	pid := agentProjectOf(ctx, agentID)
+	if pid == "" {
+		return s
+	}
+	if err := globalMgr.MoveSession(ctx, s.ID, pid); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("session", s.ID).Str("project", pid).Msg("team: put chat back into its agent's project")
+		return s
+	}
+	log.Ctx(ctx).Info().Str("session", s.ID).Str("project", pid).Msg("team: chat was opened without its agent's project; moved back")
+	if healed, ok := globalMgr.Registry().Session(s.ID); ok {
+		return healed
+	}
+	return s
+}
+
+func mainChatOfRaw(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
 	s, ok := mainSessionOf(chatUserOf(agent), agent.ID)
 	if !ok {
 		if agent.ChatUser != "" {
@@ -924,6 +973,9 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 	if !globalPool.SessionExists(sessionID) {
 		return sessionID, "", errChatNotFound(sessionID)
 	}
+	if s, ok := globalMgr.Registry().Session(sessionID); ok && s.Meta.AgentID == agent.ID {
+		healChatProject(ctx, agent.ID, s)
+	}
 	release, err := teamTurnGate.Acquire(ctx, sessionID, teamlink.TaskIDFrom(ctx))
 	if err != nil {
 		return sessionID, "", err
@@ -1036,9 +1088,13 @@ func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, erro
 		return "", err
 	}
 	id := uuid.New().String()
+	projectID := main.Meta.ProjectID
+	if pid := agentProjectOf(ctx, agent.ID); pid != "" {
+		projectID = pid
+	}
 	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
 		ID:        id,
-		ProjectID: main.Meta.ProjectID,
+		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    main.Meta.Preset,
 		UserID:    main.Meta.UserID,

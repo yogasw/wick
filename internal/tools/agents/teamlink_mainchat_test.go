@@ -232,3 +232,30 @@ func TestTeamTaskRacesRosterOpen(t *testing.T) {
 		t.Fatalf("bob has %d main chats, want 1", got)
 	}
 }
+
+// A main chat opened while the agent's project was missing from the
+// registry is unscoped; using it puts it back, and a new chat beside it
+// opens in the agent's project rather than copying the empty one.
+func TestTeamChatHealsMissingProject(t *testing.T) {
+	withTeamWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	p := seedTeamAgent(t, "u1", "atraxa", "p1")
+	bare := p
+	bare.ProjectID = ""
+	seedAgentSession(t, bare, "main-1", true)
+	peer := teamlink.Peer{ID: p.ID, OwnerID: "u1", Handle: p.Handle}
+	s, err := mainChatOf(context.Background(), peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Meta.ProjectID != "p1" {
+		t.Fatalf("main chat project = %q, want p1", s.Meta.ProjectID)
+	}
+	id, err := poolTurns{}.NewChat(context.Background(), peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := globalMgr.Registry().Session(id); got.Meta.ProjectID != "p1" {
+		t.Fatalf("new chat project = %q, want p1", got.Meta.ProjectID)
+	}
+}
