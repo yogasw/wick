@@ -872,7 +872,8 @@
         {/if}
       {/each}
     </nav>
-    <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account" data-space-account>
+    <!-- relative z-20: the account menu opens upward over the roster, so this footer must stack above the rows (a group row's overlapping avatars carry their own z-index). -->
+    <div class="relative z-20 border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account" data-space-account>
       <!-- Tickets: app navigation next to Team settings, not a roster row. -->
       {#if hasTickets}
       <button

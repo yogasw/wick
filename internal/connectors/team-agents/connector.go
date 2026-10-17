@@ -40,9 +40,13 @@ type CreateInput struct {
 }
 
 // PersonaInput is agents.update_persona's input. nil = leave as is.
+// Avatar is a JSON team.Avatar (kind, shape, color, expression);
+// AvatarImage a picture file path relative to the caller's working
+// folder, which becomes the agent's image avatar.
 type PersonaInput struct {
 	Agent                                    string
 	Name, Tagline, Description, SystemPrompt *string
+	Avatar, AvatarImage                      *string
 }
 
 // AccessInput is agents.set_access's input: the agent's whole proposed
@@ -124,6 +128,8 @@ type personaInput struct {
 	Tagline      string `wick:"desc=New tagline, empty = unchanged."`
 	Description  string `wick:"desc=New short description, empty = unchanged."`
 	SystemPrompt string `wick:"textarea;desc=New system prompt, empty = unchanged."`
+	Avatar       string `wick:"desc=New avatar as JSON {kind,shape,color,expression}: kind \"\" (classic: shape circle|squircle|triangle|diamond) or \"blob\" (shape circle|pebble|squircle|capsule|triangle|cloud|droplet|flame|medal|acorn|jellyfish|clover; expression neutral|attentive|surprised|excited|happy|angry|sad|suspicious|curious|proud|shy|unimpressed); color a #rrggbb hex. Empty = unchanged."`
+	AvatarImage  string `wick:"desc=Path of a PNG or JPEG (max 2 MiB) inside your working folder, e.g. artifacts/avatar.png; it becomes the agent's picture avatar. Empty = unchanged."`
 }
 
 type accessInput struct {
@@ -154,7 +160,7 @@ func Operations(deps Deps) []connector.Category {
 				"Create a new agent with NO access (deny by default) and only the read-only native tools. access_suggestions and native_tools (e.g. Bash, Edit, Write) are sent to the owner as one approval request; nothing is granted until they accept, unless the owner set the Captain to auto-approve.",
 				createInput{}, deps.create, wickdocs.Docs{}),
 			connector.OpDestructive("update_persona", "Edit an Agent's Persona",
-				"Change another agent's name, tagline, description or system prompt. For a remote agent the system prompt is its agent description (what it does, when to call it); nothing is sent to the remote. Refused when that agent does not let the Captain edit its persona.",
+				"Change another agent's name, tagline, description, system prompt or avatar (shape/colour/blob mascot, or a picture file from your working folder). For a remote agent the system prompt is its agent description (what it does, when to call it); nothing is sent to the remote. Refused when that agent does not let the Captain edit its persona.",
 				personaInput{}, deps.updatePersona, wickdocs.Docs{}),
 			connector.OpDestructive("set_access", "Propose an Access Change",
 				"Ask the owner to change another agent's connector access and/or native tools (Bash, Edit, Write…). Returns pending_approval: the owner accepts or declines on a card, and the change applies only then — or status applied when the owner set the Captain to auto-approve. Can never exceed the owner's own access. Refused when that agent does not let the Captain propose access changes.",
@@ -216,6 +222,7 @@ func (d Deps) updatePersona(c *connector.Ctx) (any, error) {
 	return ops.UpdatePersona(c.Context(), c.SessionID(), PersonaInput{
 		Agent: c.Input("agent"), Name: opt("name"), Tagline: opt("tagline"),
 		Description: opt("description"), SystemPrompt: opt("system_prompt"),
+		Avatar: opt("avatar"), AvatarImage: opt("avatar_image"),
 	})
 }
 

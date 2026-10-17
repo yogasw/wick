@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -229,6 +230,19 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 			}
 		}
 	}
+	if in.Avatar != nil || in.AvatarImage != nil {
+		av, err := o.nextAvatar(ctx, sessionID, p, in)
+		if err != nil {
+			return nil, err
+		}
+		if enc := team.EncodeAvatar(av); enc != p.Avatar {
+			p.Avatar = enc
+			changed = append(changed, "avatar")
+			if err := globalTeam.Update(ctx, &p); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if p.ProjectID != "" && (in.Name != nil || in.Description != nil || in.SystemPrompt != nil) {
 		proj, ok := globalMgr.Registry().Project(p.ProjectID)
 		if !ok {
@@ -258,6 +272,59 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		emitSystemEvent(s.ID, store.KindPersonaChanged, text, extras)
 	}
 	return map[string]any{"status": "updated", "changed": changed}, nil
+}
+
+// nextAvatar is p's avatar after in: the JSON look replaces shape, colour
+// and kind (keeping a stored picture), a picture file is re-encoded and
+// stored the way the Settings upload is, and switches the avatar to it.
+func (CaptainOps) nextAvatar(ctx context.Context, sessionID string, p entity.AgentPersona, in teamagents.PersonaInput) (team.Avatar, error) {
+	av := team.DecodeAvatar(p.Avatar)
+	if in.Avatar != nil {
+		var next team.Avatar
+		if err := json.Unmarshal([]byte(*in.Avatar), &next); err != nil {
+			return av, errors.New("avatar must be a JSON object {kind, shape, color, expression}")
+		}
+		next.Image, next.Events = av.Image, av.Events
+		if next.Kind == team.AvatarKindImage && next.Image == nil {
+			return av, errors.New("@" + p.Handle + " has no picture yet; pass avatar_image")
+		}
+		av = next
+	}
+	if in.AvatarImage != nil {
+		sess, ok := globalMgr.Registry().Session(sessionID)
+		if !ok {
+			return av, errors.New("your session is gone; cannot read avatar_image")
+		}
+		cwd, err := resolveSessionCwd(sess)
+		if err != nil {
+			return av, err
+		}
+		path, err := safeJoin(cwd, strings.TrimSpace(*in.AvatarImage))
+		if err != nil {
+			return av, fmt.Errorf("avatar_image must be a file inside your working folder: %w", err)
+		}
+		st, err := os.Stat(path)
+		if err != nil || !st.Mode().IsRegular() {
+			return av, fmt.Errorf("avatar_image %q is not a readable file", *in.AvatarImage)
+		}
+		if st.Size() > team.AvatarImageMaxInput {
+			return av, team.ErrAvatarImageTooLarge
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return av, err
+		}
+		img, err := team.ProcessAvatarImageLimited(ctx, raw)
+		if err != nil {
+			return av, err
+		}
+		if err := globalTeam.SaveAvatarImage(ctx, p.ID, img); err != nil {
+			return av, errors.New("could not save the picture")
+		}
+		av.Kind = team.AvatarKindImage
+		av.Image = &team.AvatarImage{V: img.Version, Aspect: float64(img.Width) / float64(max(1, img.Height))}
+	}
+	return team.NormalizeAvatar(av), nil
 }
 
 // SetAccess implements agents.set_access: it only ever files a proposal.
