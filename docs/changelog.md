@@ -10,6 +10,82 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.17.0](https://github.com/yogasw/wick/compare/v1.16.0...v1.17.0) — Team & Agents
+
+_Released on 2026-10-18_
+
+### Added
+*   **Captain Capabilities:**
+    *   Captain can set an agent's default provider and model.
+    *   Captain-made agents now automatically accept access proposals.
+    *   Captain can change an agent's avatar.
+    *   Captain can propose native tools, with owner auto-approve policy.
+*   **Team Sidebar Folders:**
+    *   Introduced live folder icons, tiered agent order, hover menu, and drag-to-reorder functionality for the team sidebar.
+    *   Implemented atomic per-user folders with read-modify-write operations, stored via `/api/team/folders`.
+*   **Connectors:**
+    *   A second OAuth account for the same person now adds a new row, and refresh tokens are encrypted and live per account.
+*   **UI Components:**
+    *   Approval cards, an updated connector list, and PWA service worker related styles.
+*   **Conversation Rail:**
+    *   The conversation rail now defaults to icons only.
+
+### Improved
+*   **Agent Interaction & UI:**
+    *   When a turn is waiting, agents now show the reason (e.g., queue place, provider slots, a strained host).
+    *   Roster now shows sub-agents delegated from any of the agent's chats.
+    *   Agent chat avatars seed from the cached roster, removing placeholders.
+    *   Mobile pins, chat header, and group faces animate like roster rows.
+    *   Folders stay folded, adopt a soft-card style, and sub-agent rows can open their chat.
+    *   Sidebar folders paint grouped, glide, and follow live saves.
+    *   Groups paint with agents, and group faces move only for group work.
+    *   Teammates show "restarting" or "queued" status instead of silence.
+    *   The Captain can now remove or turn off an agent when the owner asks.
+*   **Conversation & Chat:**
+    *   Teammate and program turns are now accent cards; only a person's message is a green bubble on the right.
+    *   Cleaned up cards for teammate and program turns.
+    *   The line of tasks waiting for a chat shows on both sides.
+    *   A second message to a teammate now joins the first.
+    *   A task's later report now reaches its asker.
+    *   `[silent]` no longer hides a reply between agents.
+    *   The roster's "Last" line opens its chat again.
+    *   A "replying to..." row opens its task's chat, even before the turn runs.
+    *   Open the owner's main chat on first use.
+*   **Agent Management & Reliability:**
+    *   An agent's chats now run in its project, and unscoped ones are moved back.
+    *   An agent's chats follow its default provider when it changes.
+    *   Registry adopts projects created during a reload.
+*   **Provider Management:**
+    *   Provider settings and statuses now live in their own files, one per instance.
+*   **SSE Worker:**
+    *   A reloaded page now gets the running turn's snapshot again.
+
+### Changed
+*   **Task Revision:**
+    *   A task is now revised instead of sending a second one, and an agent's cancel asks the turn to stop.
+
+### Fixed
+*   **Frontend UI/Rendering:**
+    *   HTML file fences now preview images, PDFs, and text inline.
+    *   HTML file fences correctly render images and download links for non-HTML paths.
+*   **Teamlink & Task Management:**
+    *   Removed semicolons from avatar tag descriptions to prevent splitting wick tag options.
+    *   Removed semicolons in amend_task and cancel mode descriptions to prevent splitting wick tag options.
+    *   A task taken over by a draining predecessor and never run is now settled, not left working.
+    *   Eliminated double replies to the asker of the task being answered.
+    *   No follow-up for a chat acting as asker or taken over by a person.
+*   **Provider Configuration:**
+    *   Environment variables and extra arguments no longer vanish after saving provider settings.
+    *   Saving provider settings no longer wipes environment variables, extra arguments, and models.
+*   **Agent Runtime:**
+    *   A process that handed over a turn now correctly avoids sending itself a turn wick.
+    *   Eliminated false idle kills mid-turn, and now retries idle-killed turns.
+*   **Resource Management:**
+    *   `resourceguard` "action off" still queues new agents even when the host nears a hang, preventing total stoppage.
+
+---
+
+
 ## [v1.16.0](https://github.com/yogasw/wick/compare/v1.15.3...v1.16.0) — Team Collaboration & Platform
 
 _Released on 2026-10-16_
