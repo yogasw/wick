@@ -81,8 +81,11 @@ type taskRecord struct {
 	// Brief, RetryOf and the Replaced* fields are taskRef.brief, retryOf
 	// and replacedBy/How/Handle/To; a record written before they existed
 	// reads them unset.
-	Brief          string `json:"brief,omitempty"`
-	RetryOf        string `json:"retry_of,omitempty"`
+	Brief   string `json:"brief,omitempty"`
+	RetryOf string `json:"retry_of,omitempty"`
+	// AmendOf and AmendedBy are taskRef.amendOf and amendedBy.
+	AmendOf        string `json:"amend_of,omitempty"`
+	AmendedBy      string `json:"amended_by,omitempty"`
 	ReplacedBy     string `json:"replaced_by,omitempty"`
 	ReplacedHow    string `json:"replaced_how,omitempty"`
 	ReplacedHandle string `json:"replaced_handle,omitempty"`
@@ -120,12 +123,10 @@ func (h *Hub) Persist(dir string) error {
 		h.fileSession[a2a.TaskID(strings.TrimSuffix(name, ".json"))] = rec.CallerSession
 		h.adoptLocked(rec, true)
 	}
-	for id, ref := range h.tasks {
-		if h.orphanLocked(id, ref) {
-			go h.watchOrphans()
-			break
-		}
-	}
+	// A leftover of the restart, or one a draining predecessor still writes
+	// (B6: a task it took after this process started, then never ran), is
+	// settled by the watcher instead of staying "working" for good.
+	h.kickOrphansLocked()
 	// Batches and undelivered prompts survive the restart (batch.go).
 	if h.loadFaninLocked(dir) {
 		go h.resumeFanin(h.orphanPoll)
@@ -151,6 +152,10 @@ func (h *Hub) orphanLocked(id a2a.TaskID, ref *taskRef) bool {
 // waiting, so the sender may send it again. A task a draining predecessor
 // may still be running is left for later; the count of those is returned.
 func (h *Hub) settleOrphans(ctx context.Context) int {
+	if h.SelfDraining != nil && h.SelfDraining() {
+		// The successor owns the tasks now; it settles what is left.
+		return 0
+	}
 	type orphan struct {
 		id   a2a.TaskID
 		chat string
@@ -176,13 +181,63 @@ func (h *Hub) settleOrphans(ctx context.Context) int {
 }
 
 // watchOrphans runs settleOrphans every orphanPoll until no leftover is
-// waiting on a draining predecessor. The first look waits one period, so
-// the sessions the reason is delivered to are up.
+// waiting on a draining predecessor and the predecessor is done. Each pass
+// first adopts the task files another process wrote since (adoptForeign):
+// a task the draining process took after this one started is otherwise
+// never read, and stays "working" for its sender with no turn behind it.
+// The first look waits one period, so the sessions the reason is
+// delivered to are up.
 func (h *Hub) watchOrphans() {
+	defer h.orphanWatch.Store(false)
 	for {
 		time.Sleep(h.orphanPoll)
-		if h.settleOrphans(context.Background()) == 0 {
-			return
+		h.adoptForeign()
+		left := h.settleOrphans(context.Background())
+		if left == 0 && (h.PredecessorBusy == nil || !h.PredecessorBusy("")) {
+			// One more look: the predecessor may have written a file just
+			// before it exited.
+			h.adoptForeign()
+			if h.settleOrphans(context.Background()) == 0 {
+				return
+			}
+		}
+	}
+}
+
+// kickOrphansLocked starts watchOrphans unless it runs. h.mu is held.
+func (h *Hub) kickOrphansLocked() {
+	if h.dir == "" || !h.orphanWatch.CompareAndSwap(false, true) {
+		return
+	}
+	go h.watchOrphans()
+}
+
+// adoptForeign reads the task files this process does not know yet
+// (written by another wick process) and adopts the unfinished ones, so
+// settleOrphans sees them.
+func (h *Hub) adoptForeign() {
+	ids, ok := taskFiles(h.dir)
+	if !ok {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	for _, id := range ids {
+		if _, known := h.fileSession[id]; known || h.tasks[id] != nil {
+			continue
+		}
+		path, ok := taskPath(h.dir, string(id))
+		if !ok {
+			continue
+		}
+		rec, ok := readRecord(path)
+		if !ok || now.Sub(rec.Touched) > TaskKeep {
+			continue
+		}
+		h.fileSession[id] = rec.CallerSession
+		if !rec.Finished {
+			h.adoptLocked(rec, false)
 		}
 	}
 }
@@ -214,6 +269,11 @@ func (h *Hub) adoptLocked(rec taskRecord, initial bool) {
 			cs.touched = ref.touched
 		}
 	}
+	if !initial && h.orphanLocked(id, ref) {
+		// Read back later and still unfinished: maybe a turn of a process
+		// that is gone (B6). The watcher settles it if nothing runs it.
+		h.kickOrphansLocked()
+	}
 	if rec.Answered != "" {
 		if cur, ok := h.answered[rec.Answered]; !ok || h.tasks[cur] == nil || h.tasks[cur].touched.Before(ref.touched) {
 			h.answered[rec.Answered] = id
@@ -233,6 +293,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
 		chatPicked: rec.ChatPicked, supersededBy: a2a.TaskID(rec.SupersededBy),
 		brief: rec.Brief, retryOf: a2a.TaskID(rec.RetryOf),
+		amendOf: a2a.TaskID(rec.AmendOf), amendedBy: a2a.TaskID(rec.AmendedBy),
 		replacedBy: a2a.TaskID(rec.ReplacedBy), replacedHow: rec.ReplacedHow,
 		replacedHandle: rec.ReplacedHandle, replacedTo: rec.ReplacedTo,
 		replacePending: rec.ReplacePending,
@@ -273,6 +334,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		Origin: r.origin, OriginUser: r.originUser,
 		Log:   append([]ThreadEntry(nil), r.log...),
 		Brief: r.brief, RetryOf: string(r.retryOf),
+		AmendOf: string(r.amendOf), AmendedBy: string(r.amendedBy),
 		ReplacedBy: string(r.replacedBy), ReplacedHow: r.replacedHow,
 		ReplacedHandle: r.replacedHandle, ReplacedTo: r.replacedTo,
 		ReplacePending: r.replacePending,
@@ -320,6 +382,7 @@ func (h *Hub) persist(id a2a.TaskID) {
 		// CallerBusy reads the pool, so it runs outside h.mu.
 		busy := h.CallerBusy != nil && h.CallerBusy(session)
 		view.NeedsYou = needsYou(*view, userAnswer, busy)
+		h.fillWait(view)
 		h.OnTaskChange(session, *view)
 	}
 }
@@ -517,6 +580,13 @@ func sameText(s string) string {
 func textKey(s string) string {
 	sum := sha256.Sum256([]byte(sameText(s)))
 	return hex.EncodeToString(sum[:12])
+}
+
+// echoKey is textKey without a closing full stop or exclamation mark:
+// a final answer that repeats a separate message (Send) as a sentence of
+// its own still matches it.
+func echoKey(s string) string {
+	return "echo:" + textKey(strings.TrimRight(strings.TrimSpace(s), ".! "))
 }
 
 // markSent notes a text key the caller already received.

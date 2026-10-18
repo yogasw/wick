@@ -1257,6 +1257,75 @@ describe("ThreadMessage - Team", () => {
   });
 });
 
+describe("ThreadMessage - message types", () => {
+  test("a teammate's message is a clean surface card on the left: avatar, name, ↗, no accent line", async () => {
+    const onOpenAgent = vi.fn();
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "team", text: "Message from Anton (@anton):\nno 401s today" }), teamAgents: { anton: { name: "Anton" } }, onOpenAgent },
+    });
+    const card = screen.getByTestId("teammate-card");
+    expect(card.className).toContain("justify-start");
+    expect(card.innerHTML).toContain("bg-white-200");
+    expect(card.innerHTML).not.toContain("border-l-");
+    expect(screen.getByTestId("team-sender-chip").textContent).toContain("Anton");
+    expect(container.innerHTML).not.toContain("bg-green-500");
+    await fireEvent.click(screen.getByTestId("card-open"));
+    expect(onOpenAgent).toHaveBeenCalledWith("anton");
+  });
+
+  test("a revision of a task is one muted ↻ line, no status", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "subagent", text: "Revision 2 of task 01a14c56-abc from Captain (@captain):\n\nalso count the 500s\n\n(Same task: your final answer is still its one reply.)" }), onOpenAgent: () => {} },
+    });
+    expect(screen.getByTestId("teammate-card").dataset.kind).toBe("revision");
+    expect(screen.getByTestId("card-revision").textContent).toContain("↻ revision 2");
+    expect(screen.queryByTestId("card-status")).toBeNull();
+    expect(screen.getByText("also count the 500s")).toBeTruthy();
+    expect(screen.queryByText(/Same task/)).toBeNull();
+  });
+
+  test("a task reply handed back as subagent shows its state as a dot + word and the task id in ↗'s tooltip", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "subagent", text: "Reply from Captain (@captain) [task 01a14c56-abc, completed]:\n\nBatch 2 done." }), onOpenAgent: () => {} },
+    });
+    expect(screen.getByTestId("teammate-card").dataset.kind).toBe("reply");
+    expect(screen.getByTestId("card-status").textContent).toContain("completed");
+    expect(screen.getByTestId("card-open").getAttribute("title")).toContain("01a14c56-abc");
+    expect(screen.getByText("Batch 2 done.")).toBeTruthy();
+    // No person's bubble: the green is only on the status dot.
+    expect(container.innerHTML).not.toContain("rounded-br-sm");
+  });
+
+  test("a scheduled message is a muted system card with a grey icon avatar, folded at 3 lines", async () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "schedule", text: "Checkpoint per jam\n1. Baca checklist\n2. Kirim ke Franky\n3. Tunggu balasan" }) },
+    });
+    const card = screen.getByTestId("system-card");
+    expect(card.innerHTML).not.toContain("warning");
+    expect(screen.getByTestId("source-chip").textContent).toContain("Schedule");
+    expect(screen.getByTestId("system-card-body").className).toContain("line-clamp-3");
+    expect(container.innerHTML).not.toContain("bg-green-500");
+    expect(screen.queryByTestId("sender-chip")).toBeNull();
+    await fireEvent.click(screen.getByTestId("card-fold"));
+    expect(screen.getByTestId("system-card-body").className).not.toContain("line-clamp-3");
+  });
+
+  test("a CLI report is a system card named CLI, not folded when short", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ source: "cli", text: "deploy 0.1.535 SELESAI" }) } });
+    expect(screen.getByTestId("source-chip").textContent).toContain("CLI");
+    expect(screen.queryByTestId("card-fold")).toBeNull();
+  });
+
+  test("a person's bubble stays green on the right: 90% / 80% / 44rem, sharp bottom-right corner", () => {
+    const { container } = render(ThreadMessage, { props: { turn: makeTurn({ text: "hi" }) } });
+    expect((container.firstElementChild as HTMLElement).className).toContain("justify-end");
+    expect(container.innerHTML).toContain("max-w-[90%] sm:max-w-[80%] lg:max-w-[44rem]");
+    expect(container.innerHTML).toContain("rounded-br-sm");
+    expect(container.innerHTML).toContain("bg-green-500");
+    expect(screen.queryByTestId("system-card")).toBeNull();
+  });
+});
+
 describe("ThreadMessage - speaker", () => {
   test("an assistant turn names its server-set speaker", () => {
     render(ThreadMessage, {
@@ -1364,6 +1433,17 @@ describe("ThreadMessage - Captain access change card", () => {
     expect(screen.queryByTestId("approval-accept-session")).toBeNull();
     await fireEvent.click(screen.getByTestId("approval-accept"));
     expect(onApprovalDecide).toHaveBeenCalledWith("ap-9", "accept");
+  });
+  test("a long grant shows counts and the first entries, the rest behind a toggle", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => `+Conn ${i} (all)`).concat("-Slack").join("\n");
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "@captain wants to change access of @worker", extras: { ...extras, changes: many } }), onApprovalDecide: vi.fn() } });
+    const summary = screen.getByTestId("approval-access-summary").textContent ?? "";
+    expect(summary).toContain("+12 added");
+    expect(summary).toContain("1 removed");
+    expect(screen.getByTestId("approval-access-diff").querySelectorAll("li")).toHaveLength(8);
+    await fireEvent.click(screen.getByTestId("approval-access-toggle"));
+    expect(screen.getByTestId("approval-access-diff").querySelectorAll("li")).toHaveLength(13);
+    expect(screen.getByTestId("approval-access-toggle").textContent).toContain("Show less");
   });
   test("settled reads applied / declined", () => {
     render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "declined · by Yoga", extras: { ...extras, state: "block" } }) } });

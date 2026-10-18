@@ -43,13 +43,13 @@ export type RailPrefs = {
       having deliberately unfolded everything — and that choice has to
       survive a reload rather than being re-folded as though untouched. */
   hidden: string[] | null;
-  /** Print each tab's name along the strip. On by default (also when
-      unset); only an explicit false leaves icons only, with the name in a
-      tooltip. Chosen in the profile; the rail never writes it. */
+  /** Print each tab's name along the strip. Off by default (also when
+      unset), leaving icons only with the name in a tooltip; only an explicit
+      true prints them. Chosen in the profile; the rail never writes it. */
   labels?: boolean;
 };
 
-export const emptyRailPrefs: RailPrefs = { order: [], hidden: null, labels: true };
+export const emptyRailPrefs: RailPrefs = { order: [], hidden: null, labels: false };
 
 const ids = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
@@ -62,7 +62,7 @@ const ids = (v: unknown): string[] =>
 export function parseRailPrefs(raw: unknown): RailPrefs {
   const o = (raw ?? {}) as Record<string, unknown>;
   const order = ids(o.order);
-  const labels = o.labels !== false;
+  const labels = o.labels === true;
   if (!Array.isArray(o.hidden) && typeof o.visible === "number" && o.visible > 0) {
     return { order, hidden: order.slice(Math.round(o.visible)), labels };
   }

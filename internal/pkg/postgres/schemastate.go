@@ -114,6 +114,7 @@ var migratedModels = []any{
 	&entity.AgentAccessHistory{},
 	// Per-user Team settings (Team instructions, landing choice).
 	&entity.TeamSettings{},
+	&entity.TeamFolders{},
 	// Team agents shared with another user (chat only).
 	&entity.AgentShare{},
 }

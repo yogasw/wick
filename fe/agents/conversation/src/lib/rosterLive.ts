@@ -3,7 +3,7 @@ import { connectSessionsStream, type SessionActivity, type SessionsStreamHandler
 /* How the Team roster stays live without a steady poll. Everything rides
    the per-user /stream/sessions stream: `activity` for each turn step,
    `agent_changed` when an agent or group the user sees is created, edited,
-   shared, unshared or deleted. A signal triggers one REST read of the
+   shared, unshared or deleted, or when the user's own folders are saved. A signal triggers one REST read of the
    roster (debounced: one save can signal more than once), a reconnect
    reads everything afresh rather than replaying what was missed, and only
    while the stream is down does a slow poll stand in for it. */
@@ -19,6 +19,10 @@ export const ROSTER_REFETCH_MAX_WAIT_MS = 2000;
 export type LiveRosterHandlers = {
   /** Read the roster (agents and groups) again. */
   reload: () => void;
+  /** Read the sidebar folders again: a folders-only signal (a save in
+      another tab, or the Captain's agents.folders). Without it the whole
+      roster is read. */
+  reloadFolders?: () => void;
   /** The stream came back after dropping: what it missed meanwhile
       (a turn's end) is gone, so per-turn bookkeeping starts over. */
   onReconnect?: () => void;
@@ -32,6 +36,7 @@ type Connect = (base: string, h: SessionsStreamHandlers, port?: SessionsPort) =>
 export function liveRoster(base: string, h: LiveRosterHandlers, connect: Connect = connectSessionsStream): () => void {
   let dropped = false;
   let refetch: ReturnType<typeof setTimeout> | null = null;
+  let refolder: ReturnType<typeof setTimeout> | null = null;
   let fallback: ReturnType<typeof setInterval> | null = null;
   const stopFallback = () => {
     if (fallback) clearInterval(fallback);
@@ -39,7 +44,15 @@ export function liveRoster(base: string, h: LiveRosterHandlers, connect: Connect
   };
   const leave = connect(base, {
     onActivity: (ev) => h.onActivity?.(ev),
-    onAgentChanged: () => {
+    onAgentChanged: (ev) => {
+      if (ev?.folders && !ev.agent_id && !ev.group_id && h.reloadFolders) {
+        if (refolder) clearTimeout(refolder);
+        refolder = setTimeout(() => {
+          refolder = null;
+          h.reloadFolders?.();
+        }, ROSTER_REFETCH_DEBOUNCE_MS);
+        return;
+      }
       if (refetch) clearTimeout(refetch);
       refetch = setTimeout(() => {
         refetch = null;
@@ -64,6 +77,7 @@ export function liveRoster(base: string, h: LiveRosterHandlers, connect: Connect
   });
   return () => {
     if (refetch) clearTimeout(refetch);
+    if (refolder) clearTimeout(refolder);
     stopFallback();
     leave();
   };

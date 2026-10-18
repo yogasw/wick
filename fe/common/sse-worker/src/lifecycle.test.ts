@@ -199,6 +199,31 @@ describe("multiplexed session stream", () => {
     expect(live()[0].url).toBe("http://x/stream/multi?sessions=stays");
   });
 
+  /* A page reload: pagehide unsubscribes, and the reloaded page subscribes
+     again before the 150ms reopen fires. The set is back to what the open
+     stream carries, so no new stream (whose server-side snapshot would
+     repaint the running turn) is made — the page must get the snapshot
+     from the worker, or the live text and trace stay blank until the turn
+     ends. */
+  test("a reload that resubscribes inside the reopen debounce gets a snapshot", async () => {
+    const connect = await loadWorker();
+    const oldPage = connect();
+    subscribe(oldPage, "s1");
+    settle();
+    live()[0].open();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockClear();
+
+    oldPage.onmessage?.({ data: { type: "unsubscribe", sessionID: "s1" } } as MessageEvent);
+    const newPage = connect();
+    subscribe(newPage, "s1");
+    settle();
+
+    expect(created).toHaveLength(1); // same stream kept, nothing replayed by the server
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("http://x/stream/snapshot?session=s1", expect.anything());
+  });
+
   test("closing every subscriber closes the connection entirely", async () => {
     const connect = await loadWorker();
     const port = connect();

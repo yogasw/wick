@@ -43,6 +43,7 @@
     getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
     type ComposerUsage,
   } from "../api/usage.js";
+  import { parseWaitState, waitNote, type WaitState } from "../waitState.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     getSubAgentPanel,
@@ -64,6 +65,7 @@
   import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
+  import TeamQueueStrip from "./TeamQueueStrip.svelte";
   import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, summarizeTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
@@ -118,6 +120,7 @@
   import SessionFieldChips from "./SessionFieldChips.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
+  import { readRosterCache, teamAgentsByHandle as teamAgentsOf } from "../rosterCache.js";
   import { sessionAgents } from "../ticketSession.js";
   import SessionPanel from "./SessionPanel.svelte";
   import GroupPickerDialog from "./GroupPickerDialog.svelte";
@@ -207,6 +210,24 @@
     progressSent = p;
     untrack(() => agentMode?.onProgress?.(p));
   });
+  /* What the running turn waits on (queue, slots, host; the stream's
+     wait_state) and when the stream last said anything, so the working
+     bubble stops saying "thinking…" over a turn that is queued or stuck.
+     After a reload the silence counts from the page open. */
+  let waitState = $state<WaitState | null>(null);
+  let lastStreamAt = $state(Date.now());
+  let waitClock = $state(Date.now());
+  let wasTyping = false;
+  $effect(() => {
+    const active = typing.active;
+    if (active && !wasTyping) lastStreamAt = Date.now();
+    wasTyping = active;
+    if (!active) return;
+    const id = setInterval(() => { waitClock = Date.now(); }, 1000);
+    return () => clearInterval(id);
+  });
+  const STREAM_OUTPUT = new Set(["text_delta", "text_snapshot", "thinking", "tool_use", "tool_result"]);
+  const turnWait = $derived(typing.active ? waitNote(waitState, waitClock - lastStreamAt) : null);
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   /* When the running turn started, for the context panel's live line. A
      turn can go minutes without saying anything, and every other figure
@@ -1521,7 +1542,10 @@
   /* Team agents the `@` menu offers in an agent's chat: the owner's roster
      minus the agent itself and the disabled ones. Read once per agent; a
      plain /sessions chat has no agentMode.agent and never asks. */
-  let teamPeers = $state<TeamPeer[]>([]);
+  /* Seeded from the roster the sidebar cached, so a teammate's picture
+     chip draws its versioned src (already in the browser cache) at once
+     instead of a placeholder until the read below returns. */
+  let teamPeers = $state<TeamPeer[]>(readRosterCache()?.agents ?? []);
   $effect(() => {
     // A ticket session lists the viewer's own agents too (T12b).
     const selfId = agentMode?.agent?.id || (notesInfo?.ticket ? "ticket" : "");
@@ -1534,9 +1558,7 @@
     return () => { stale = true; };
   });
 
-  const teamAgentsByHandle = $derived(
-    Object.fromEntries(teamPeers.map((p) => [p.handle, { id: p.id, name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image }])),
-  );
+  const teamAgentsByHandle = $derived(teamAgentsOf(teamPeers));
   /* Ticket session header (T12b): agents other than the home one that
      answered here; identity is (agent, owner). */
   /* The home agent answers its owner only: anyone else sees whose it is. */
@@ -2248,6 +2270,9 @@
 
     stream.onEvent((ev) => {
       thread.handleEvent(ev);
+      if (ev.type === "wait_state") waitState = parseWaitState(ev.data);
+      else if (STREAM_OUTPUT.has(ev.type)) lastStreamAt = waitClock = Date.now();
+      else if (ev.type === "lifecycle" && (ev.lifecycle === "idle" || ev.lifecycle === "killed")) waitState = null;
 
       if (ev.type === "ask_user") {
         try {
@@ -3053,8 +3078,8 @@
   /* The "More" button sits below the tabs and is never folded, so its height
      comes out of the budget before anything is fitted. Shorter in icons
      mode, where no "More" runs under the dots. */
-  /* Labels are the default: only an explicit false means icons only. */
-  const railLabels = $derived(railPrefs.labels !== false);
+  /* Icons only is the default: only an explicit true prints the labels. */
+  const railLabels = $derived(railPrefs.labels === true);
   const RAIL_MORE_H = $derived(railLabels ? 44 : 37);
   const railBudget = $derived(railViewH > 0 ? railViewH * RAIL_FILL - RAIL_MORE_H : 0);
   /* What the window can hold, on top of what the user chose to fold. This is
@@ -3261,7 +3286,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} waitNote={detached ? null : turnWait} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
           {#if loadingNewer}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -3335,7 +3360,11 @@
             {/if}
           </div>
         {/if}
-        <div class="page-col relative pb-3 md:pb-6">
+        <!-- Installed (PWA) with viewport-fit=cover, the composer clears the
+             home indicator: its zone's background runs under it. -->
+        <div class="page-col relative pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+          <!-- Team tasks waiting for this chat's turn (B2). -->
+          <TeamQueueStrip {base} {sessionId} />
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->

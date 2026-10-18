@@ -16,12 +16,13 @@ import (
 // instead of polling every 30 seconds.
 const evAgentChanged = "agent_changed"
 
-// agentSignal is what a viewer receives: which agent (or group) changed
-// and nothing else. The roster itself stays REST, which applies its own
-// access rule again.
+// agentSignal is what a viewer receives: which agent (or group) changed,
+// or that their own sidebar folders did, and nothing else. The roster and
+// the folders themselves stay REST, which applies its own access rule again.
 type agentSignal struct {
 	AgentID string `json:"agent_id,omitempty"`
 	GroupID string `json:"group_id,omitempty"`
+	Folders bool   `json:"folders,omitempty"`
 }
 
 // agentSignalBus is the bus payload: the signal plus who may receive it.
@@ -162,13 +163,21 @@ func publishGroupChanged(groupID, ownerID string) {
 	publishAgentSignal(globalBcast, agentSignal{GroupID: groupID}, []string{ownerID})
 }
 
+// publishFoldersChanged signals uid's own rosters that their sidebar
+// folders were saved — by another tab, or by their Captain's
+// agents.folders — so every open Team reads them again. Folders are per
+// user, so nobody else is told.
+func publishFoldersChanged(uid string) {
+	publishAgentSignal(globalBcast, agentSignal{Folders: true}, []string{uid})
+}
+
 // publishAgentSignal publishes sig for audience on the global key. Nobody
 // to tell, nothing published.
 func publishAgentSignal(b *Broadcaster, sig agentSignal, audience []string) {
 	slices.Sort(audience)
 	audience = slices.Compact(audience)
 	audience = slices.DeleteFunc(audience, func(s string) bool { return s == "" })
-	if b == nil || len(audience) == 0 || (sig.AgentID == "" && sig.GroupID == "") {
+	if b == nil || len(audience) == 0 || (sig.AgentID == "" && sig.GroupID == "" && !sig.Folders) {
 		return
 	}
 	body, _ := json.Marshal(agentSignalBus{agentSignal: sig, Audience: audience})

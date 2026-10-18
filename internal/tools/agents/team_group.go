@@ -65,6 +65,13 @@ type TeamGroupMember struct {
 	IsCaptain bool        `json:"is_captain"`
 	Disabled  bool        `json:"disabled"`
 	MaxHops   int         `json:"max_hops"`
+	// SessionID is the member's backing chat for this group (its turns in
+	// the group run there); "" until it has spoken in it.
+	SessionID string `json:"session_id,omitempty"`
+	// Working: the member has a turn running in this group right now.
+	// Work it does anywhere else (its main chat, a Team task) does not
+	// count, so the group row animates only for the group's own work.
+	Working bool `json:"working,omitempty"`
 }
 
 // TeamGroupItem is one group chat.
@@ -154,8 +161,17 @@ func groupItem(ctx context.Context, sess session.Session, byID map[string]teamli
 		LastActive:      timePtr(sess.Meta.LastActive),
 		Members:         make([]TeamGroupMember, 0, len(members)),
 	}
+	backing := map[string]string{}
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.GroupSessionID == sess.ID {
+			backing[s.Meta.AgentID] = s.ID
+		}
+	}
 	for _, p := range members {
 		m := TeamGroupMember{ID: p.ID, Handle: p.Handle, Name: p.Name, IsCaptain: p.IsCaptain, Disabled: p.Disabled, MaxHops: teamlink.EffectiveHops(p.MaxHops)}
+		if sid := backing[p.ID]; sid != "" {
+			m.SessionID, m.Working = sid, poolSessionBusy(sid)
+		}
 		if a, err := globalTeam.Get(ctx, p.ID); err == nil {
 			m.Avatar = team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID)
 		}

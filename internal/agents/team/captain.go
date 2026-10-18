@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,6 +76,95 @@ type AccessChange struct {
 	Diff []string `json:"diff"`
 	// Grants is the checklist a proposal applies on accept.
 	Grants []ConnectorGrant `json:"grants,omitempty"`
+	// KeepConnectors marks a proposal that leaves the connector checklist
+	// as it is (only native tools move). A row from before the field reads
+	// false, so its Grants still apply as they did.
+	KeepConnectors bool `json:"keep_connectors,omitempty"`
+	// NativeTools is the whole native-tool list a proposal applies on
+	// accept (NativeTools names); nil = leave the tools as they are.
+	NativeTools []string `json:"native_tools,omitempty"`
+}
+
+// Auto-approve modes of CaptainPolicy: what the Captain's access
+// proposals may skip the owner's card for.
+const (
+	// AutoApproveOff is the default: every proposal waits for a card.
+	AutoApproveOff = "off"
+	// AutoApproveCreated applies the access suggested at create time to
+	// the agent the Captain just made; later proposals still wait.
+	AutoApproveCreated = "created"
+	// AutoApproveAll applies every proposal at once, to any agent whose
+	// Settings › Captain allows access proposals.
+	AutoApproveAll = "all"
+)
+
+// CaptainPolicy is entity.AgentPersona.CaptainPolicy: the owner's rules
+// for the Captain's own proposals, set on the Captain. An auto-approved
+// proposal is still checked against the owner's catalog, still recorded
+// in Settings › Access › History and announced in the agent's chat.
+type CaptainPolicy struct {
+	AutoApprove string `json:"auto_approve"`
+	// NoFolders stops the Captain organizing the owner's Team-sidebar
+	// folders (agents.folders, agents.create's folder). Off by default.
+	NoFolders bool `json:"no_folders,omitempty"`
+}
+
+// ErrNoFolders is the refusal of a folder op under CaptainPolicy.NoFolders.
+var ErrNoFolders = errors.New("the owner switched off Captain folder organizing (Settings › Captain)")
+
+// NormalizeAutoApprove maps an unknown mode to AutoApproveOff.
+func NormalizeAutoApprove(m string) string {
+	switch m {
+	case AutoApproveCreated, AutoApproveAll:
+		return m
+	}
+	return AutoApproveOff
+}
+
+// DecodeCaptainPolicy parses entity.AgentPersona.CaptainPolicy; "" or
+// malformed is everything off.
+func DecodeCaptainPolicy(raw string) CaptainPolicy {
+	var c CaptainPolicy
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &c)
+	}
+	c.AutoApprove = NormalizeAutoApprove(c.AutoApprove)
+	return c
+}
+
+// EncodeCaptainPolicy is the inverse of DecodeCaptainPolicy.
+func EncodeCaptainPolicy(c CaptainPolicy) string {
+	c.AutoApprove = NormalizeAutoApprove(c.AutoApprove)
+	b, _ := json.Marshal(c)
+	return string(b)
+}
+
+// AutoApproves reports whether a proposal skips the card under c:
+// created is true for the suggestions filed by agents.create.
+func (c CaptainPolicy) AutoApproves(created bool) bool {
+	switch NormalizeAutoApprove(c.AutoApprove) {
+	case AutoApproveAll:
+		return true
+	case AutoApproveCreated:
+		return created
+	}
+	return false
+}
+
+// NativeToolsDiff is the readable change between two native-tool lists:
+// "+Bash (tool)", "-Write (tool)".
+func NativeToolsDiff(before, after []string) []string {
+	var out []string
+	for _, t := range NativeTools {
+		was, is := slices.Contains(before, t), slices.Contains(after, t)
+		switch {
+		case is && !was:
+			out = append(out, "+"+t+" (tool)")
+		case was && !is:
+			out = append(out, "-"+t+" (tool)")
+		}
+	}
+	return out
 }
 
 // ErrNotPending is returned when an access proposal is no longer pending
@@ -202,8 +292,8 @@ func (s *Service) ManagerFor(ctx context.Context, sessionID string) (entity.Agen
 // other agents" on. Kept to a few lines: the ops' own descriptions carry
 // the details.
 const ManageAgentsBlock = `## Managing your Team
-- You may manage your owner's other agents through the Team agents connector (key agents): list (who is doing what), create, update_persona, set_access.
-- A new agent starts with NO access. Access is never yours to grant: set_access only files a request the owner accepts or declines on a card, and it can never exceed the owner's own access.
+- You may manage your owner's other agents through the Team agents connector (key agents): list (who is doing what), create, update_persona, set_access, and folders (sort agents into the owner's sidebar folders).
+- A new agent starts with NO access and only the read-only native tools (Read, Grep, Glob, WebFetch, WebSearch). Access is never yours to grant: create's access_suggestions/native_tools and set_access file a request the owner accepts or declines on a card (or that the owner's auto-approve rule applies at once), and it can never exceed the owner's own access. Bash, Edit and Write go in native_tools.
 - Each agent decides what you may touch (Settings › Captain); a refusal means the owner switched it off — tell them, do not work around it.`
 
 // manageAgentsBlock is ManageAgentsBlock for an agent that has the

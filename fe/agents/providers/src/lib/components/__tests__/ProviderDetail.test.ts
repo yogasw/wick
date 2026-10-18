@@ -297,6 +297,38 @@ describe("ProviderDetail - key-value editor (env)", () => {
     expect(parsed).toEqual([{ key: "FOO", value: "1" }]);
   });
 
+  // The rows "disappeared": a reload (here after Save All) re-seeded the
+  // editor from the server before the typed value had been saved.
+  it("keeps a typed env value across a reload", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockClear();
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("env"));
+    const value = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).find((i) => i.value === "1")!;
+    await fireEvent.input(value, { target: { value: "2" } });
+    await fireEvent.click(await screen.findByText("Configuration"));
+    await fireEvent.click(await screen.findByText("Save All"));
+    await vi.waitFor(() => expect(api.apiGetProviderDetail).toHaveBeenCalledTimes(2));
+    const vals = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).map((i) => i.value);
+    expect(vals).toContain("2");
+  });
+
+  it("Save All waits for an env save still in flight", async () => {
+    let finish!: () => void;
+    vi.mocked(api.apiSaveProviderDetail).mockClear();
+    vi.mocked(api.apiSaveConfigKey).mockImplementationOnce(() => new Promise<void>((r) => { finish = r; }));
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("env"));
+    const value = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).find((i) => i.value === "1")!;
+    await fireEvent.input(value, { target: { value: "2" } });
+    await fireEvent.blur(value);
+    await fireEvent.click(await screen.findByText("Configuration"));
+    await fireEvent.click(await screen.findByText("Save All"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.apiSaveProviderDetail).not.toHaveBeenCalled();
+    finish();
+    await vi.waitFor(() => expect(api.apiSaveProviderDetail).toHaveBeenCalled());
+  });
+
   it("shows empty state when no rows", async () => {
     const data = makeDetail();
     data.ConfigFields = [{ Key: "env", Value: "", Type: "kvlist", Options: "key|value", IsSecret: false, Description: "", Required: false }];

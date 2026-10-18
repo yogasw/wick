@@ -14,6 +14,17 @@
   const v = $derived(approvalView(turn.text, turn.extras));
   let busy = $state(false);
 
+  /* An access change can grant dozens of connectors at once; the full diff
+     pushed the buttons a screen away. Show a count line and the first few
+     entries, the rest behind a toggle. */
+  const PREVIEW = 8;
+  let showAll = $state(false);
+  const changes = $derived(v.access?.changes ?? []);
+  const added = $derived(changes.filter((c) => c.startsWith("+")).length);
+  const removed = $derived(changes.filter((c) => c.startsWith("-")).length);
+  const edited = $derived(changes.length - added - removed);
+  const visible = $derived(showAll ? changes : changes.slice(0, PREVIEW));
+
   function decide(d: ApprovalDecisionChoice) {
     if (busy || !v.id) return;
     busy = true;
@@ -33,11 +44,21 @@
     {/if}
   </div>
   {#if v.access}
-    <ul class="space-y-0.5 rounded-md bg-white-200 px-2 py-1 font-mono text-[11px] dark:bg-navy-900" data-testid="approval-access-diff">
-      {#each v.access.changes as ch}
-        <li class={ch.startsWith("-") ? "text-neg-400" : ch.startsWith("+") ? "text-green-700 dark:text-green-300" : "text-black-900 dark:text-white-100"}>{ch.startsWith("+") || ch.startsWith("-") ? ch : "~ " + ch}</li>
+    <div class="flex flex-wrap gap-1.5 text-[11px]" data-testid="approval-access-summary">
+      {#if added}<span class="rounded-full bg-green-500/10 px-2 py-0.5 font-medium text-green-700 dark:text-green-300">+{added} added</span>{/if}
+      {#if removed}<span class="rounded-full bg-neg-400/10 px-2 py-0.5 font-medium text-neg-400">−{removed} removed</span>{/if}
+      {#if edited}<span class="rounded-full bg-white-300 px-2 py-0.5 font-medium text-black-800 dark:bg-navy-700 dark:text-white-100">~{edited} changed</span>{/if}
+    </div>
+    <ul class="max-h-72 space-y-0.5 overflow-y-auto rounded-md border border-white-300 bg-white-200 px-2 py-1.5 font-mono text-[11px] leading-relaxed dark:border-navy-700 dark:bg-navy-900" data-testid="approval-access-diff">
+      {#each visible as ch}
+        <li class={"break-words " + (ch.startsWith("-") ? "text-neg-400" : ch.startsWith("+") ? "text-green-700 dark:text-green-300" : "text-black-900 dark:text-white-100")}>{ch.startsWith("+") || ch.startsWith("-") ? ch : "~ " + ch}</li>
       {/each}
     </ul>
+    {#if changes.length > PREVIEW}
+      <button type="button" data-testid="approval-access-toggle" onclick={() => (showAll = !showAll)} class="self-start text-[11px] font-medium text-green-700 hover:underline dark:text-green-300">
+        {showAll ? "Show less" : `Show all ${changes.length}`}
+      </button>
+    {/if}
     {#if v.access.reason}
       <p class="text-[11px] text-black-800 dark:text-black-600">{v.access.reason}</p>
     {/if}

@@ -592,6 +592,8 @@ func Save(ins Instance) error {
 	if ins.Type == TypeWick && ins.Name != string(TypeWick) {
 		return fmt.Errorf("wick is single-instance: instance name must be %q (models are added on the instance, not as new instances)", TypeWick)
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -617,7 +619,7 @@ func Save(ins Instance) error {
 	if !updated {
 		*list = append(*list, toUserInstance(ins))
 	}
-	if err := userconfig.Save(AppName(), cfg); err != nil {
+	if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 		return err
 	}
 	invalidateInstanceCache()
@@ -669,6 +671,8 @@ func Rename(t Type, oldName, newName string) error {
 	if t == TypeWick {
 		return fmt.Errorf("wick is single-instance and cannot be renamed")
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -694,7 +698,7 @@ func Rename(t Type, oldName, newName string) error {
 			}
 			// So do failover chains pointing at it, on every type.
 			renameFailoverTargets(&cfg.Providers, InstanceTag(t, oldName), InstanceTag(t, newName))
-			if err := userconfig.Save(AppName(), cfg); err != nil {
+			if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 				return err
 			}
 			invalidateInstanceCache()
@@ -715,7 +719,7 @@ func Rename(t Type, oldName, newName string) error {
 		}
 		*list = append(*list, seeded)
 		renameFailoverTargets(&cfg.Providers, InstanceTag(t, oldName), InstanceTag(t, newName))
-		if err := userconfig.Save(AppName(), cfg); err != nil {
+		if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -733,6 +737,8 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 	if name == "" || event == "" {
 		return errors.New("instance name and event required")
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -749,7 +755,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			(*list)[i].Hooks = map[string]userconfig.HookInstanceConfig{}
 		}
 		(*list)[i].Hooks[event] = userconfig.HookInstanceConfig{Enabled: enabled}
-		if err := userconfig.Save(AppName(), cfg); err != nil {
+		if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -766,7 +772,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			Name:  name,
 			Hooks: map[string]userconfig.HookInstanceConfig{event: {Enabled: enabled}},
 		})
-		if err := userconfig.Save(AppName(), cfg); err != nil {
+		if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -782,6 +788,8 @@ func Delete(t Type, name string) error {
 	if name == "" {
 		return errors.New("instance name required")
 	}
+	configMu.Lock()
+	defer configMu.Unlock()
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -797,7 +805,7 @@ func Delete(t Type, name string) error {
 			*list = append((*list)[:i], (*list)[i+1:]...)
 			// Chains pointing at it, on every type, lose that target.
 			pruneFailoverTargets(&cfg.Providers, InstanceTag(t, name))
-			if err := userconfig.Save(AppName(), cfg); err != nil {
+			if err := userconfig.SaveProviders(AppName(), cfg.Providers); err != nil {
 				return err
 			}
 			invalidateInstanceCache()

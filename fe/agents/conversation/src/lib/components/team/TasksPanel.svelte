@@ -18,7 +18,7 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, statusLabel, taskProgress, taskQuickReplies, taskStatus, userTaskRoute, type TaskStatus } from "../../delegations.js";
+  import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, statusLabel, taskProgress, taskQuickReplies, taskStatus, taskWait, userTaskRoute, type TaskStatus } from "../../delegations.js";
   import { questionHtml } from "../../questionText.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
@@ -214,6 +214,7 @@
             {@const s = taskStatus(t)}
             {@const ask = s === "needs_you" || s === "answering"}
             {@const active = ask || s === "working"}
+            {@const wait = taskWait(t)}
             <div
               data-testid="tasks-row"
               data-status={s}
@@ -226,6 +227,7 @@
                 <div class="flex items-baseline gap-1.5 text-[12.5px]">
                   <span data-testid="tasks-panel-name" class="truncate font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</span>
                   {#if !active}<span data-testid="tasks-row-tag" class={["ml-1.5 shrink-0 text-[10px] font-medium uppercase tracking-[.05em]", TAG_TONE[s]]}>{s}</span>{/if}
+                  {#if wait}<span data-testid="tasks-row-wait" title={wait.detail} class="ml-1.5 shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400">{wait.label}</span>{/if}
                   <span class="flex-1"></span>
                   {#if t.replaced_by}
                     <!-- Sent again: the link to the task that took over. -->

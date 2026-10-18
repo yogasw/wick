@@ -10,7 +10,9 @@
   import { avatarTone } from "../senderTone.js";
   import { isViewer, viewerName } from "../viewer.js";
   import { bareSlashCommand } from "../slashCommand.js";
-  import { teamSender } from "../teamMention.js";
+  import { teamFrame } from "../teamMention.js";
+  import { systemSource, foldable } from "../messageKind.js";
+  import FoldToggle from "./FoldToggle.svelte";
   import { isSystemEventKind } from "../systemEvents.js";
   import SystemEventChip from "./system/SystemEventChip.svelte";
   import RemoteQueueChip from "./RemoteQueueChip.svelte";
@@ -104,10 +106,32 @@
   /* Only an agent's reply can hold a live actioncard; the server's `cards`
      state decides whether a fence IS one (see cardMode). */
 
-  /* A teammate's message (source "team", framed "Message from Name
-     (@handle):") reads as from that agent — its avatar and name on the
-     chip, the frame dropped from the bubble — not as the person typing. */
-  const teamFrom = $derived(isUserTurn(turn) ? teamSender(turn.source, turn.text ?? "") : null);
+  /* A teammate's turn (a "Message from" it sent, a task's "Reply from",
+     a "Follow-up from", the "[team results …]" fan-in) reads as from that
+     agent — a card on the left with its chip, the frame dropped — not as
+     the person typing. */
+  const teamFrom = $derived(isUserTurn(turn) ? teamFrame(turn.source, turn.text ?? "") : null);
+  /* A turn a program posted (a schedule, a job's CLI report, a sub-agent's
+     result, the API): no person typed it, so it is a card on the left too,
+     never the green bubble on the right. */
+  const systemSrc = $derived(isUserTurn(turn) && !teamFrom ? systemSource(turn.source) : null);
+  /* A teammate's long message folds past a screenful; a program's card
+     shows only its first line until opened. */
+  let cardOpen = $state(false);
+  const cardBody = $derived(teamFrom ? teamFrom.body : (turn.text ?? ""));
+  const cardFolds = $derived(foldable(cardBody, 3, 240));
+  /* The card's status: a dot and a muted word, colour only on the dot so
+     "working" does not read as a warning. */
+  const cardStatus = $derived.by(() => {
+    if (!teamFrom) return null;
+    if (teamFrom.kind === "followup") return { label: "follow-up", dot: "bg-link-400" };
+    const st = (teamFrom.state || "").toLowerCase();
+    if (!st) return null;
+    if (st === "completed") return { label: st, dot: "bg-green-500" };
+    if (st === "failed" || st === "rejected" || st === "canceled") return { label: st, dot: "bg-red-500" };
+    if (st.includes("input")) return { label: "needs input", dot: "bg-link-400" };
+    return { label: st, dot: "bg-warning-400" };
+  });
   const teamFromAgent = $derived(teamFrom ? teamAgents[teamFrom.handle] : undefined);
   const isSystemEvent = $derived(turn.role === "system" && isSystemEventKind(turn.kind));
   const teamNames = $derived(Object.fromEntries(Object.entries(teamAgents).map(([h, a]) => [h, a.name])));
@@ -178,7 +202,7 @@
     const raw = turn.text ?? "";
     if (!isUser) return { text: raw, note: "" };
     const at = raw.lastIndexOf("\n\n[routed]");
-    const body = (t: string) => (teamFrom ? (teamSender(turn.source, t)?.body ?? t) : t);
+    const body = (t: string) => (teamFrom ? (teamFrame(turn.source, t)?.body ?? t) : t);
     if (at < 0) return { text: body(raw), note: "" };
     return { text: body(raw.slice(0, at)), note: raw.slice(at + 2) };
   });
@@ -205,9 +229,8 @@
      The name comes from the structured `sender` field, never from the message
      text, so nobody can put someone else's name on their own message. */
   const sourceBadge = $derived.by(() => {
-    if (!isUser || teamFrom) return null;
+    if (!isUser || teamFrom || systemSrc) return null;
     const src = (turn.source ?? "").trim().toLowerCase();
-    if (src === "schedule") return { label: "Scheduled", icon: "clock" };
 
     const isWeb = src === "" || src === "ui" || src === "web";
     if (isWeb && !fromSomeoneElse) return null;
@@ -263,6 +286,7 @@
       return speakerName || agent?.name || turn.agent || "Assistant";
     }
     if (teamFrom) return teamFromAgent?.name || teamFrom.name;
+    if (systemSrc) return systemSrc.label;
     if (fromSomeoneElse && sourceBadge?.who) return sourceBadge.who;
     // Same name the server stores on the reply (sender name), "You" only
     // for a bubble that has none yet.
@@ -640,6 +664,70 @@
   <div class="flex justify-end">
     <span data-testid="postback-chip" title={turn.text} class="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">✓ {turn.postback.label || turn.postback.value}</span>
   </div>
+{:else if isUser && (teamFrom || systemSrc) && turn.text}
+  <!-- A teammate's or a program's turn: a clean card on the surface colour,
+       the width of an answer, on the left — avatar, name, time, then a
+       dot + muted status and ↗ to the task. No accent line, no coloured
+       chip: the surface and the sender tell it apart from an answer (no
+       background) and from a person's message (green, on the right). -->
+  <div class="flex min-w-0 justify-start group" data-testid={teamFrom ? "teammate-card" : "system-card"} data-kind={teamFrom ? teamFrom.kind : systemSrc?.key}>
+    <div class="w-full min-w-0 rounded-xl bg-white-200 px-3 py-2.5 dark:bg-navy-700">
+      <div class="flex min-w-0 items-center gap-2 text-[12.5px] leading-5">
+        {#if teamFrom}
+          {#if teamFrom.handle}
+            <AgentAvatar kind={teamFromAgent?.kind} image={teamFromAgent?.image} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
+          {:else}
+            <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">🤝</span>
+          {/if}
+          <span data-testid="team-sender-chip" title={teamFrom.handle ? `${teamFrom.name} (@${teamFrom.handle}) · Team agent` : "Replies from several teammates"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span>
+        {:else if systemSrc}
+          <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">{systemSrc.icon}</span>
+          <span data-testid="source-chip" title={"Posted by " + systemSrc.label + ", not typed by a person"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{systemSrc.label === "cli" ? "CLI" : systemSrc.label.charAt(0).toUpperCase() + systemSrc.label.slice(1)}</span>
+        {/if}
+        {#if teamFrom?.kind === "revision"}
+          <!-- A revision of a task (amend_task): one muted line, no status —
+               it is the same task, not a new one. -->
+          <span data-testid="card-revision" title={"Revision of task " + teamFrom.taskId} class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">↻ revision {teamFrom.revision}{teamFrom.replace ? " · replaces the brief" : ""}{stamp ? " · " + stamp : ""}</span>
+        {:else if stamp}
+          <span class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">{stamp}</span>
+        {/if}
+        <span class="flex-1"></span>
+        {#if teamFrom && cardStatus}
+          <span data-testid="card-status" class="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-black-700 dark:text-black-600">
+            <span aria-hidden="true" class={"h-[7px] w-[7px] rounded-full " + cardStatus.dot}></span>{cardStatus.label}
+          </span>
+        {/if}
+        {#if teamFrom?.handle && onOpenAgent}
+          <button type="button" data-testid="card-open" onclick={() => onOpenAgent?.(teamFrom.handle)} title={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} aria-label={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} class="shrink-0 rounded-md px-1 text-[13px] text-black-700 hover:bg-white-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:bg-navy-600">↗</button>
+        {/if}
+      </div>
+      {#if teamFrom}
+        <div
+          use:enrich={cardBody}
+          class={"wick-prose wick-prose-sm mt-0.5 min-w-0 break-words text-black-900 dark:text-white-100" + (cardFolds && !cardOpen ? " max-h-[4.8em] overflow-hidden" : "")}
+        >
+          {@html renderMarkdown(cardBody)}
+        </div>
+      {:else}
+        <div data-testid="system-card-body" class={"mt-0.5 min-w-0 whitespace-pre-wrap text-[13px] leading-relaxed text-black-700 [overflow-wrap:anywhere] dark:text-black-600" + (cardFolds && !cardOpen ? " line-clamp-3" : "")}>{@html linkifyText(cardBody)}</div>
+      {/if}
+      {#if cardFolds}
+        <FoldToggle open={cardOpen} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
+      {/if}
+      {#if canReply}
+        <div class="flex justify-end">
+          <button
+            type="button"
+            data-testid="reply-action"
+            aria-label="Reply to this message"
+            title="Reply"
+            onclick={startReply}
+            class="inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-none text-black-700 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
+          >↩ Reply</button>
+        </div>
+      {/if}
+    </div>
+  </div>
 {:else if isUser}
   <!-- Only the bubble the user just sent (optimistic local turn) slides in;
        history and refreshes render still. -->
@@ -647,7 +735,7 @@
        right-hand side means "a person typed this", and an agent writing into
        the thread is not that. -->
   <div class={"flex min-w-0 max-w-full gap-2 group " + (teamFrom ? "justify-start" : "justify-end")} class:wick-enter-up={turn.turn_id?.startsWith("local-user-")}>
-    <div class={"flex flex-col gap-1 max-w-[80%] min-w-0 " + (teamFrom ? "items-start" : "items-end")}>
+    <div class={"flex flex-col gap-1 min-w-0 max-w-[90%] sm:max-w-[80%] lg:max-w-[44rem] " + (teamFrom ? "items-start" : "items-end")}>
       {#if safeAttachments.length > 0}
         <div class={"flex flex-wrap gap-1.5 max-w-full " + (teamFrom ? "justify-start" : "justify-end")}>
           {#each safeAttachments as attachment}
@@ -818,7 +906,7 @@
                glance rather than only by reading the name above them. -->
           <div
             class={"min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
-              (teamFrom ? "rounded-tl-sm " : "rounded-tr-sm ") +
+              (teamFrom ? "rounded-tl-sm " : "rounded-br-sm ") +
               (fromSomeoneElse || teamFrom
                 ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
                 : "bg-green-500 text-white-100")}

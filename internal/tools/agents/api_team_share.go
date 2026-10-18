@@ -364,6 +364,7 @@ func sharedTeamAgentItem(p entity.AgentPersona, sh entity.AgentShare, viewer str
 	it.MentionFrom, it.MentionAllow = "", []string{}
 	it.Remote, it.SlackRemote = nil, nil
 	it.ManageAgents, it.CaptainCan = false, team.CaptainCan{}
+	it.CaptainPolicy = team.CaptainPolicy{AutoApprove: team.AutoApproveOff}
 	it.SharedWith = 0
 	fillChatState(&it, viewer, p.ID, sh.LastReadAt, live)
 	return it
@@ -376,6 +377,8 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	it.Status, it.CurrentAction = string(session.StatusIdle), ""
 	it.AttentionPreview, it.NeedsAttention, it.LastPreview, it.LastSilent = "", false, "", false
 	it.SubagentsWorking, it.TeamWaiting, it.ReplyingTo, it.TeamAsks = nil, nil, "", nil
+	it.ReplyingSession = ""
+	it.SubagentsSession, it.SubagentsActive = "", nil
 	it.WorkingSessions, it.LastSession, it.LastAnyActive = nil, nil, nil
 	// One scan of the registry serves the main chat and the others.
 	sessions := agentSessions(userID, agentID)
@@ -386,9 +389,19 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	}
 	it.MainSessionID = s.ID
 	it.WorkingSessions, it.LastSession = workingSessionsOf(sessions, s.ID, live, time.Now())
-	it.SubagentsWorking = live.subagentsOf(s.ID)
+	it.SubagentsWorking = live.subagentsIn(sessions, s.ID)
+	it.SubagentsSession, it.SubagentsActive = live.subagentsSession(sessions, s.ID)
 	it.TeamWaiting = live.teamWaitingOf(s.ID)
 	it.ReplyingTo = live.replyingTo[viewKey(agentID, userID)]
+	if c := live.replyingChat[viewKey(agentID, userID)]; c != s.ID {
+		// Only a chat of this viewer's with the agent can be opened.
+		for _, x := range sessions {
+			if x.ID == c {
+				it.ReplyingSession = c
+				break
+			}
+		}
+	}
 	if ask, ok := live.teamAsks[viewKey(agentID, userID)]; ok {
 		it.TeamAsks = &ask
 	}

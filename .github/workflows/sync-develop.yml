@@ -9,7 +9,8 @@ name: Sync develop
 #
 # On a conflict it aborts, pushes master's commit to a new branch
 # sync/master-into-develop-<sha> and opens the PR "Sync master into develop"
-# from it (or moves an open one forward), and warns in the job summary. The
+# from it (or moves an open one forward), and warns in the job summary. When
+# develop took master in meanwhile, it opens nothing and ends green. The
 # PR head is never master itself: resolving a conflict in GitHub commits to
 # the head branch, and that must not be master. It never force-pushes, and it
 # ends green on a conflict: a release never waits on this workflow.
@@ -97,6 +98,14 @@ jobs:
         run: |
           set -euo pipefail
           MASTER_SHA=$(git rev-parse origin/master)
+          # develop may have taken master in by hand since the merge failed
+          # (an admin bridge merge): then there is nothing to open, and a PR
+          # with no commits is refused by GitHub.
+          git fetch origin develop
+          if git merge-base --is-ancestor "$MASTER_SHA" origin/develop; then
+            echo "develop already contains master ${MASTER_SHA:0:8}; no sync PR needed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # Push with GITHUB_TOKEN instead of the checkout's ADMIN_TOKEN: an
           # empty extraheader drops the inherited one first. Never forced.
           AUTH=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)

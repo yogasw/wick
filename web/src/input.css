@@ -63,6 +63,7 @@
   --color-navy-600: 16 51 82;
   --color-navy-700: 20 38 58;
   --color-navy-800: 18 25 35;
+  --color-navy-900: 11 16 23;
 
   --color-black-600: 191 191 191;
   --color-black-700: 160 160 160;
@@ -75,6 +76,7 @@
   --color-navy-600: 16 51 82;
   --color-navy-700: 20 38 58;
   --color-navy-800: 18 25 35;
+  --color-navy-900: 11 16 23;
 
   --color-black-600: 191 191 191;
   --color-black-700: 160 160 160;
@@ -96,6 +98,7 @@
   --color-navy-600: 88 110 117;   /* base01 */
   --color-navy-700: 7 54 66;      /* base02 */
   --color-navy-800: 0 43 54;      /* base03 */
+  --color-navy-900: 0 30 38;
 
   --color-black-600: 147 161 161; /* base1 */
   --color-black-700: 131 148 150; /* base0 */
@@ -106,6 +109,7 @@
   --color-navy-600: 98 114 164;   /* comment */
   --color-navy-700: 68 71 90;     /* current line */
   --color-navy-800: 40 42 54;     /* background */
+  --color-navy-900: 33 34 44;
 
   --color-black-600: 248 248 242; /* foreground — primary text on dark */
   --color-black-700: 189 147 249; /* purple — secondary */
@@ -116,6 +120,7 @@
   --color-navy-600: 76 86 106;    /* nord3 */
   --color-navy-700: 59 66 82;     /* nord1 */
   --color-navy-800: 46 52 64;     /* nord0 */
+  --color-navy-900: 36 41 51;
 
   --color-black-600: 236 239 244; /* nord6 */
   --color-black-700: 216 222 233; /* nord4 */
@@ -126,6 +131,7 @@
   --color-navy-600: 102 92 84;    /* bg3 */
   --color-navy-700: 60 56 54;     /* bg1 */
   --color-navy-800: 40 40 40;     /* bg0 */
+  --color-navy-900: 29 32 33;
 
   --color-black-600: 235 219 178; /* fg1 */
   --color-black-700: 189 174 147; /* fg3 */
@@ -147,6 +153,7 @@
   --color-navy-600: 48 54 61;     /* border default */
   --color-navy-700: 22 27 34;     /* canvas subtle */
   --color-navy-800: 13 17 23;     /* canvas default */
+  --color-navy-900: 1 4 9;
 
   --color-black-600: 230 237 243; /* fg default */
   --color-black-700: 139 148 158; /* fg muted */
@@ -168,6 +175,7 @@
   --color-navy-600: 55 71 79;     /* elevated surface */
   --color-navy-700: 38 50 56;     /* surface */
   --color-navy-800: 18 18 18;     /* background */
+  --color-navy-900: 10 10 10;
 
   --color-black-600: 236 239 241; /* text primary */
   --color-black-700: 176 190 197; /* text secondary */
@@ -178,6 +186,7 @@
   --color-navy-600: 73 72 62;     /* highlight line */
   --color-navy-700: 49 48 42;     /* sidebar */
   --color-navy-800: 39 40 34;     /* editor bg */
+  --color-navy-900: 30 31 28;
 
   --color-black-600: 248 248 242; /* fg */
   --color-black-700: 166 226 46;  /* accent green */

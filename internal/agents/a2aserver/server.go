@@ -334,6 +334,19 @@ func (s *Server) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	if ev.Type != event.TextDelta && ev.Type != event.TextReplace && ev.Type != event.Done && ev.Type != event.Error {
 		return
 	}
+	// The process died and the pool is starting it again with the same
+	// message (a crash restart, an idle-kill retry): the turn's answer is
+	// still coming, so the task stays working.
+	if ev.Type == event.Done && exitRestarting(ev.Raw) {
+		return
+	}
+	// The retries of an idle-killed turn are spent: the task fails with
+	// the plain reason instead of completing on whatever text there was.
+	if ev.Type == event.Done {
+		if why := exitGaveUp(ev.Raw); why != "" {
+			ev = event.AgentEvent{Type: event.Error, ErrorMsg: "Agent " + why}
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	q := s.turns[sessionID]
@@ -425,4 +438,35 @@ func firstNonEmpty(v ...string) string {
 		}
 	}
 	return ""
+}
+
+// exitGaveUp is the reason of a delegation.ExitDoneRawGaveUp payload,
+// "" for any other raw.
+func exitGaveUp(raw string) string {
+	if !strings.Contains(raw, "wick_process_exit") {
+		return ""
+	}
+	var m struct {
+		Type   string `json:"type"`
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal([]byte(raw), &m) != nil || m.Type != "wick_process_exit" {
+		return ""
+	}
+	return m.Reason
+}
+
+// exitRestarting reports whether raw is the Done wick publishes for a
+// process exit the pool is restarting (delegation.ExitDoneRaw with
+// restarting true). Parsed here, not imported: delegation sits above this
+// package.
+func exitRestarting(raw string) bool {
+	if !strings.Contains(raw, "wick_process_exit") {
+		return false
+	}
+	var m struct {
+		Type       string `json:"type"`
+		Restarting bool   `json:"restarting"`
+	}
+	return json.Unmarshal([]byte(raw), &m) == nil && m.Type == "wick_process_exit" && m.Restarting
 }

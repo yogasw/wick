@@ -301,6 +301,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
 	r.GET("/sessions/{id}/files/mentions", sessionContextMentions)
 	r.GET("/sessions/{id}/processes", sessionProcesses)
+	r.GET("/sessions/{id}/wait", sessionWait)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
 	r.GET("/sessions/{id}/files/raw", sessionContextRaw)
@@ -321,6 +322,7 @@ func Register(r tool.Router) {
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
 	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
+	r.GET("/api/sessions/{id}/team-queue", sessionTeamQueue)
 	r.POST("/api/sessions/{id}/team-tasks/summarize", sessionTeamTasksSummarize)
 	r.POST("/api/sessions/{id}/team-tasks/cancel-working", sessionTeamTasksCancelWorking)
 	r.GET("/api/sessions/{id}/team-tasks/{task}/thread", sessionTeamTaskThread)
@@ -474,6 +476,9 @@ func Register(r tool.Router) {
 	// The caller's own Team settings (Team instructions, landing choice).
 	r.GET("/api/team/settings", apiTeamSettingsGet)
 	r.PUT("/api/team/settings", apiTeamSettingsSave)
+	// The caller's own Team-sidebar folders ("groups" are group chats).
+	r.GET("/api/team/folders", apiTeamFoldersGet)
+	r.PUT("/api/team/folders", apiTeamFoldersSave)
 
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)
@@ -3737,6 +3742,7 @@ func streamSSE(c *tool.Ctx) {
 	_ = rc.SetWriteDeadline(time.Time{})
 	ch, unsub := globalBcast.Subscribe(sessionID)
 	defer unsub()
+	startWaitPublisher()
 
 	// Start a git fs-watcher for session-scoped subscribers so the SCM
 	// rail badge gets live git_status events. Ref-counted: stops when the
@@ -3855,6 +3861,7 @@ func streamMultiSSE(c *tool.Ctx) {
 	// non-blocking on the forward so one stalled reader can never wedge the
 	// others — same contract as the Broadcaster itself.
 	merged := make(chan Event, 256)
+	startWaitPublisher()
 	for _, id := range ids {
 		ch, unsub := globalBcast.Subscribe(id)
 		defer unsub()
@@ -3942,6 +3949,12 @@ func snapshotEvents(sessionID string) []Event {
 	}
 	if globalPool == nil {
 		return out
+	}
+	// What the session waits on (queue, slots, host), so a page opened
+	// on a stuck turn says why at once instead of "thinking…"; the
+	// publisher (started by the streams) keeps it current from there.
+	if agent, ok := waitingSessions()[sessionID]; ok {
+		out = append(out, waitStateEvent(sessionID, agent))
 	}
 	for _, e := range globalPool.ActiveSnapshot() {
 		if e.SessionID != sessionID {

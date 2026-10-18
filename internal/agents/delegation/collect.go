@@ -29,6 +29,10 @@ type CollectResult struct {
 	Profile      string `json:"profile"`
 	Status       string `json:"status"`
 	TurnsUsed    int    `json:"turns_used"`
+	// Wait is what a pending sub-agent waits on besides its own turn
+	// ("target restarting after an idle timeout, retry 1/2", "target
+	// queued for a free slot (#2)"); "" when nothing.
+	Wait string `json:"wait,omitempty"`
 	// MaxTurns is the cap this delegation ran under, so a partial result
 	// can be read as "10 of 10 turns spent" rather than a bare count.
 	MaxTurns    int    `json:"max_turns,omitempty"`
@@ -142,6 +146,7 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 		out.LastReport = strings.TrimSpace(d.LastReport)
 		out.LastReportAt = formatStamp(d.LastReportAt)
 		out.Note = pendingNote(out.Progress, out.LastReport)
+		s.noteWait(out, d)
 		// Returns BEFORE MarkCollected, and must keep doing so. The
 		// one-shot guard belongs to the final answer; marking a running row
 		// collected would make its real result unreachable — the sub-agent
@@ -203,10 +208,31 @@ func (s *Service) CollectPending(ctx context.Context, parentSessionID string) ([
 			item.LastReport = strings.TrimSpace(d.LastReport)
 			item.LastReportAt = formatStamp(d.LastReportAt)
 			item.Note = pendingNote(item.Progress, item.LastReport)
+			s.noteWait(&item, &row)
 		}
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// waitNoter is the optional Runner part that says what a sub-agent's
+// session waits on besides its own turn (PoolRunner.WaitNote).
+type waitNoter interface {
+	WaitNote(sessionID string) string
+}
+
+// noteWait tells the leader a pending sub-agent is being restarted after
+// an idle kill or waits for a free slot, so it reads as still working,
+// not failed.
+func (s *Service) noteWait(out *CollectResult, d *entity.AgentDelegation) {
+	wn, ok := s.Runner.(waitNoter)
+	if !ok || d == nil {
+		return
+	}
+	if w := wn.WaitNote(d.ChildSessionID); w != "" {
+		out.Wait = w
+		out.Note = "Still working: " + w + ". It has not failed; keep waiting. " + out.Note
+	}
 }
 
 // progressOf reads what a running sub-agent has produced so far.

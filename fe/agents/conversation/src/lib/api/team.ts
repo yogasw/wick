@@ -93,6 +93,9 @@ export type AgentItem = {
   manage_agents?: boolean;
   /** What the Captain may do to this agent. Older servers omit it. */
   captain_can?: CaptainCan;
+  /** The Captain's auto-approve rule, read on the Captain only. Older
+      servers omit it. */
+  captain_policy?: CaptainPolicy;
   /** Tools & features: native tools on, Bash commands that run unasked,
       and whether the provider is held to them. Skills tab: skills off.
       Older servers omit them. */
@@ -128,6 +131,14 @@ export type AgentItem = {
   /** Handles of the main chat's background sub-agents still queued or
       running. Independent of status: the agent's own turn may be over. */
   subagents_working?: string[];
+  /** The side chat those sub-agents run from (most recently active when
+      several); absent when the main chat has some working. */
+  subagents_session?: string;
+  /** The chat the Team task behind replying_to runs in; absent when it is
+      the main chat or not one the viewer can open. */
+  replying_session?: string;
+  /** That chat's last activity. */
+  subagents_active?: string | null;
   /** Handles of the teammates the main chat's open Team tasks
       (team_message / @mention) wait on. Independent of status. */
   team_waiting?: string[];
@@ -263,6 +274,7 @@ export type AgentWrite = Partial<{
   max_hops: number;
   manage_agents: boolean;
   captain_can: CaptainCan;
+  captain_policy: CaptainPolicy;
   allowed_native_tools: string[];
   bash_rules: BashRule[];
   disabled_skills: string[];
@@ -290,6 +302,12 @@ export type AgentSkill = {
 /** team.CaptainCan: what the Captain may do to one agent. Access is only
     ever a proposal the owner approves, even when on. */
 export type CaptainCan = { persona: boolean; access: boolean; routines: boolean };
+
+/** team.CaptainPolicy: which of the Captain's access proposals skip the
+    owner's card, and whether it may organize the Team-sidebar folders
+    (no_folders = not). Set on the Captain. */
+export type AutoApprove = "off" | "created" | "all";
+export type CaptainPolicy = { auto_approve: AutoApprove; no_folders?: boolean };
 
 /** One row of Settings › Access › History. */
 export type AccessHistoryItem = {
@@ -612,6 +630,10 @@ export type GroupMember = {
   is_captain: boolean;
   disabled: boolean;
   max_hops: number;
+  /** The member's backing chat for this group; absent until it spoke. */
+  session_id?: string;
+  /** It has a turn running in this group right now. */
+  working?: boolean;
 };
 
 export type GroupItem = {
@@ -656,6 +678,16 @@ export type GroupTurn = {
       people's "captain" share one thread there). */
   speaker?: { agent_id: string; handle?: string; via: string; session_id?: string; owner_id?: string } | null;
 };
+
+/** team.Folders as GET/PUT /api/team/folders answer it: the viewer's
+    folders in sidebar order, where each agent sits (agent id → folder id),
+    and for a shared agent the viewer has not filed, the name of the folder
+    its owner keeps it in. */
+export type TeamFolder = { id: string; name: string; collapsed?: boolean };
+export type TeamFolders = { folders: TeamFolder[]; place: Record<string, string>; inherited?: Record<string, string> };
+export const getTeamFolders = (base: string) => apiGetE<TeamFolders>(`${base}/api/team/folders`);
+export const saveTeamFolders = (base: string, body: { folders: TeamFolder[]; place: Record<string, string> }) =>
+  apiPutE<TeamFolders>(`${base}/api/team/folders`, body);
 
 export const listGroups = (base: string) => apiGetE<{ groups: GroupItem[] | null }>(`${base}/api/team/groups`);
 export const createGroup = (base: string, body: GroupWrite) => apiPostE<GroupItem>(`${base}/api/team/groups`, body);

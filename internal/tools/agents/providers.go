@@ -260,6 +260,13 @@ func providerDetailPage(c *tool.Ctx) {
 	}))
 }
 
+// providerEditMu serialises the page's load-modify-save of one instance.
+// The detail page saves each field on its own (an env row on blur, the
+// simple fields on Save), often two requests at once; each read the
+// instance, changed its own field and wrote the whole instance back, so
+// the slower one restored what the faster one had just changed.
+var providerEditMu sync.Mutex
+
 // saveProviderDetail saves per-provider settings from the detail page.
 func saveProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
@@ -270,6 +277,8 @@ func saveProviderDetail(c *tool.Ctx) {
 	if !requireProviderDo(c, t, name, ownerPermConfigure) {
 		return
 	}
+	providerEditMu.Lock()
+	defer providerEditMu.Unlock()
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.Error(http.StatusNotFound, "provider not found")
@@ -278,17 +287,25 @@ func saveProviderDetail(c *tool.Ctx) {
 	// Host settings change only for whoever may edit them, each under its
 	// own permission; anyone else's save keeps the stored value whatever
 	// the form carried.
-	if canProviderDo(c, t, name, ownerPermBinary) {
+	// A field the form does not carry keeps its stored value. The detail
+	// page's Save sends only the simple fields; env, extra_args and models
+	// are kvlists saved on their own (saveProviderConfigKey), so reading
+	// their absence as "empty" wiped them on every Save.
+	_ = c.R.ParseForm()
+	sent := func(k string) bool { _, ok := c.R.Form[k]; return ok }
+	if sent("binary") && canProviderDo(c, t, name, ownerPermBinary) {
 		ins.Binary = strings.TrimSpace(c.Form("binary"))
 	}
-	if canProviderDo(c, t, name, ownerPermExtraArgs) {
+	if sent("extra_args") && canProviderDo(c, t, name, ownerPermExtraArgs) {
 		ins.ExtraArgs = splitFields(c.Form("extra_args"))
 	}
-	if canProviderDo(c, t, name, ownerPermEnv) {
+	if sent("env") && canProviderDo(c, t, name, ownerPermEnv) {
 		ins.Env = splitLines(c.Form("env"))
 	}
 	ins.Disabled = c.Form("disabled") == "on"
-	ins.MaxConcurrent = parseIntForm(c.Form("max_concurrent"))
+	if sent("max_concurrent") {
+		ins.MaxConcurrent = parseIntForm(c.Form("max_concurrent"))
+	}
 	// The account dir (opencode data dir / omp profile) decides whose login
 	// runs: borrowing it is auth_from by another name.
 	if canProviderDo(c, t, name, ownerPermAuthFrom) {
@@ -339,9 +356,13 @@ func saveProviderDetail(c *tool.Ctx) {
 	// is a kvlist (JSON [{id,desc}]) so it's decoded via ApplyInstanceConfigKey
 	// rather than splitLines.
 	if t != provider.TypeWick && canProviderDo(c, t, name, ownerPermModels) {
-		ms := strings.TrimSpace(c.Form("model_select"))
-		ins.ModelSelect = ms == "true" || ms == "on"
-		provider.ApplyInstanceConfigKey(&ins, "models", c.Form("models"))
+		if sent("model_select") {
+			ms := strings.TrimSpace(c.Form("model_select"))
+			ins.ModelSelect = ms == "true" || ms == "on"
+		}
+		if sent("models") {
+			provider.ApplyInstanceConfigKey(&ins, "models", c.Form("models"))
+		}
 	}
 	// NOTE: the general detail save intentionally does NOT touch AI-router
 	// settings — this form (binary/args/env/sandbox) carries no airouter fields,
@@ -369,6 +390,8 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if !(provider.IsIdleCompactKey(key) && canManageProvider(c, t, name)) && !requireProviderDo(c, t, name, providerKeyPerm(key)) {
 		return
 	}
+	providerEditMu.Lock()
+	defer providerEditMu.Unlock()
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})

@@ -113,6 +113,21 @@
   let secretTouched = $state<Record<string, boolean>>({});
   /* editorRows holds parsed rows for each kvlist field, keyed by field Key */
   let editorRows = $state<Record<string, KVRow[]>>({});
+  /* Editors changed here but not yet saved, and saves still in flight. A
+     reload (after Save, a toggle, another card) re-seeds every editor from
+     the server: without these it dropped rows typed but not yet saved, or
+     fetched before an env save on blur had landed, so the rows vanished. */
+  const dirtyEditors = new Set<string>();
+  const pendingSaves = new Set<Promise<unknown>>();
+  function trackSave<T>(p: Promise<T>): Promise<T> {
+    pendingSaves.add(p);
+    const done = () => { pendingSaves.delete(p); };
+    p.then(done, done);
+    return p;
+  }
+  async function settleSaves() {
+    while (pendingSaves.size > 0) await Promise.allSettled([...pendingSaves]);
+  }
 
   /* Curated env/args picker for this provider type (click-to-add known
      vars). Fetched once on mount; empty for unknown types. */
@@ -363,12 +378,14 @@
   async function load(silent = false) {
     if (!silent) { loading = true; error = null; }
     try {
+      await settleSaves();
       data = await apiGetProviderDetail(base, type, name);
       const vals: Record<string, string> = {};
       const rows: Record<string, KVRow[]> = {};
       for (const f of data.ConfigFields) {
         if (isKvlist(f)) {
-          rows[f.Key] = parseRows(f);
+          // Keep what is still being typed: the server does not have it yet.
+          rows[f.Key] = dirtyEditors.has(f.Key) && editorRows[f.Key] ? editorRows[f.Key] : parseRows(f);
         } else {
           vals[f.Key] = f.IsSecret ? "" : f.Value;
         }
@@ -416,6 +433,7 @@
   async function doSave() {
     saving = true;
     try {
+      await settleSaves();
       await apiSaveProviderDetail(base, type, name, buildSavePayload());
       toastOk("Settings saved");
       await load(true);
@@ -446,6 +464,7 @@
   }
 
   function setRows(f: ConfigFieldDTO, rows: Record<string, string>[]) {
+    dirtyEditors.add(f.Key);
     editorRows = {
       ...editorRows,
       [f.Key]: rows.map((r) => pickCols(f, r)),
@@ -462,7 +481,9 @@
     setBusy(key, true);
     try {
       const serialized = serializeRows(f, editorRows[f.Key] ?? []);
-      await apiSaveConfigKey(base, type, name, f.Key, serialized);
+      await trackSave(apiSaveConfigKey(base, type, name, f.Key, serialized));
+      // Still dirty if more was typed while this save was in flight.
+      if (serializeRows(f, editorRows[f.Key] ?? []) === serialized) dirtyEditors.delete(f.Key);
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Save failed");
     } finally {

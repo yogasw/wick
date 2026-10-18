@@ -719,11 +719,14 @@
         <div class="mt-4 flex flex-col gap-2 pb-6 {data.disabled_type ? 'opacity-60' : ''}">
           {#each shownRows as row (row.id)}
             {@const chip = statusChip(row)}
-            <div class="group relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400 {row.hidden_for_me ? 'opacity-60' : ''}" data-hidden-for-me={row.hidden_for_me ? "" : undefined}>
-              <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-                <button type="button" class="absolute inset-0 z-0 rounded-xl" aria-label={`Open ${row.label}`} onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}`)}></button>
+            <div class="relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 has-[[data-instance-head]:hover]:border-green-400 {row.hidden_for_me ? 'opacity-60' : ''}" data-hidden-for-me={row.hidden_for_me ? "" : undefined}>
+              <!-- Hover belongs to the header only: the account sub-rows below
+                   open something else, so pointing at one must not light up
+                   the instance title and border as if it were the target. -->
+              <div class="group/head relative flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4" data-instance-head>
+                <button type="button" class="absolute inset-0 z-0 {(row.accounts ?? []).length ? 'rounded-t-xl' : 'rounded-xl'}" aria-label={`Open ${row.label}`} onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}`)}></button>
                 <div class="pointer-events-none relative min-w-0 flex-1">
-                  <span class="block truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{row.label}</span>
+                  <span class="block truncate font-medium text-black-900 dark:text-white-100 group-hover/head:text-green-600">{row.label}</span>
                   <span class="mt-0.5 block truncate font-mono text-[10px] text-black-700 dark:text-black-600">{row.id}</span>
                 </div>
                 <div class="pointer-events-auto relative z-10 flex flex-wrap items-center gap-2 sm:flex-shrink-0">
@@ -833,7 +836,7 @@
                          pointer-events-none content, with the controls lifted
                          back out on z-10. Hunting for the one word that
                          happened to be a link is not a target. -->
-                    <div class="relative flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800">
+                    <div class="group/acc relative flex items-center justify-between gap-3 px-4 py-2.5 last:rounded-b-xl hover:bg-white-200 dark:hover:bg-navy-600/60">
                       <button
                         type="button"
                         class="absolute inset-0 z-0"
@@ -842,7 +845,7 @@
                       ></button>
                       <span class="pointer-events-none relative flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
                         <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                        <span class="truncate font-medium">@{acc.display_name}</span>
+                        <span class="truncate font-medium group-hover/acc:text-green-600">@{acc.display_name}</span>
                       </span>
                       {#if acc.can_manage}
                         <div class="pointer-events-auto relative z-10 flex-shrink-0">

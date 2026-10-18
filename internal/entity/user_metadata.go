@@ -171,15 +171,15 @@ type RailPrefs struct {
 	Hidden []string `json:"hidden"`
 
 	// Labels prints each tab's name along the strip, rotated 90 degrees.
-	// Labels are the default: unset (nil) means on, and only an explicit
-	// false leaves icons only, with the name in a tooltip. Read it through
+	// Icons only is the default: unset (nil) means off, with the name in a
+	// tooltip, and only an explicit true prints the labels. Read it through
 	// LabelsOn. Set from the profile, not by the rail itself, so a layout
 	// save from the rail carries it over untouched (see WithLayout).
 	Labels *bool `json:"labels,omitempty"`
 }
 
-// LabelsOn reports whether the rail prints tab names. Unset is on.
-func (p RailPrefs) LabelsOn() bool { return p.Labels == nil || *p.Labels }
+// LabelsOn reports whether the rail prints tab names. Unset is off (icons).
+func (p RailPrefs) LabelsOn() bool { return p.Labels != nil && *p.Labels }
 
 // WithLayout returns next's order and folded tabs with p's Labels. The rail
 // saves only its arrangement; the label choice belongs to the profile and

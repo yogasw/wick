@@ -28,8 +28,8 @@
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, PERSONA_UPDATE_FIELDS, improveInput, type PersonaDraft, type PersonaUpdateField } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
-  import type { MentionFrom, CaptainCan } from "../api/team.js";
-  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf, captainBlock } from "../captainSettings.js";
+  import type { MentionFrom, CaptainCan, CaptainPolicy } from "../api/team.js";
+  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, AUTO_APPROVE_OPTIONS, AUTO_APPROVE_NOTE, FOLDERS_NOTE, captainCanOf, captainPolicyOf, captainBlock } from "../captainSettings.js";
   import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
@@ -63,7 +63,7 @@
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
-    manage_agents: boolean; captain_can: CaptainCan;
+    manage_agents: boolean; captain_can: CaptainCan; captain_policy: CaptainPolicy;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
     suggested_prompts: SuggestedPrompt[];
   };
@@ -77,7 +77,7 @@
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
-      manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
+      manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can), captain_policy: captainPolicyOf(a.captain_policy),
       native_tools: nativeToolsOf(a.allowed_native_tools), bash_rules: (a.bash_rules ?? []).map((r) => ({ ...r })),
       disabled_skills: [...(a.disabled_skills ?? [])],
       suggested_prompts: (a.suggested_prompts ?? []).map((p) => ({ ...p })),
@@ -333,6 +333,7 @@
     if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
     if (d.manage_agents !== (saved.manage_agents ?? saved.is_captain)) p.manage_agents = d.manage_agents;
     if (!sameValue(d.captain_can, captainCanOf(saved.captain_can))) p.captain_can = { ...d.captain_can };
+    if (!sameValue(d.captain_policy, captainPolicyOf(saved.captain_policy))) p.captain_policy = { ...d.captain_policy };
     if (!sameValue(d.native_tools, nativeToolsOf(saved.allowed_native_tools))) p.allowed_native_tools = [...d.native_tools];
     if (!sameValue(d.bash_rules, saved.bash_rules ?? [])) p.bash_rules = d.bash_rules.map((r) => ({ ...r }));
     if (!sameValue(d.disabled_skills, saved.disabled_skills ?? [])) p.disabled_skills = [...d.disabled_skills];
@@ -933,6 +934,28 @@
           </span>
           <Toggle checked={draft.manage_agents} onChange={(v) => (draft.manage_agents = v)} label="Manage other agents" />
         </div>
+        {#if draft.manage_agents}
+          <p class="pt-2 text-sm font-semibold text-black-900 dark:text-white-100">Access proposals</p>
+          <div class="space-y-2" role="radiogroup" aria-label="Auto-approve the Captain's access proposals" data-testid="captain-auto-approve">
+            {#each AUTO_APPROVE_OPTIONS as o (o.value)}
+              <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.captain_policy.auto_approve === o.value ? 'border-green-500 bg-green-50 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
+                <input type="radio" name="captain-auto-approve" class="mt-1" value={o.value} checked={draft.captain_policy.auto_approve === o.value} onchange={() => (draft.captain_policy = { ...draft.captain_policy, auto_approve: o.value })} />
+                <span>
+                  <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
+                  <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
+                </span>
+              </label>
+            {/each}
+          </div>
+          <p class="text-xs text-black-800 dark:text-black-600">{AUTO_APPROVE_NOTE}</p>
+          <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="captain-folders">
+            <span>
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">Organize folders</span>
+              <span class="block text-xs text-black-800 dark:text-black-600">{FOLDERS_NOTE}</span>
+            </span>
+            <Toggle checked={!draft.captain_policy.no_folders} onChange={(v) => (draft.captain_policy = { ...draft.captain_policy, no_folders: !v })} label="Organize folders" />
+          </div>
+        {/if}
       </div>
     {:else}
       <div class="space-y-2" data-testid="captain-can">

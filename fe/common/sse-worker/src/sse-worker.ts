@@ -282,17 +282,28 @@ function stopLifecycle(): void {
       if (!ports[sid]) ports[sid] = new Set();
       ports[sid].add(port);
 
-      if (!isNew && muxSource && muxSource.readyState !== EventSource.CLOSED) {
+      // Carried means the open stream's set already holds this session, so
+      // no reopen (and no server-side snapshot) is coming for it. Not just
+      // !isNew: a page reload unsubscribes on pagehide and the reloaded page
+      // subscribes again before the debounced reopen runs — isNew is true,
+      // but the reopen finds the same set and keeps the stream, and the page
+      // got no replay: the running turn's text and trace were blank until it
+      // ended.
+      const carried = !!muxSource && muxSource.readyState !== EventSource.CLOSED &&
+        muxSids.split(",").includes(sid);
+      if ((!isNew && muxSource && muxSource.readyState !== EventSource.CLOSED) || carried) {
         // The mux already carries this session — this is a late or
-        // re-subscribing client (a second tab, or one returning from the
-        // background). Give it the current status and a private snapshot
-        // replay so it catches up without disturbing the others.
+        // re-subscribing client (a second tab, a reloaded page, or one
+        // returning from the background). Give it the current status and a
+        // private snapshot replay so it catches up without disturbing the
+        // others.
         port.postMessage({
           type: "status",
           sessionID: sid,
           status: muxSource.readyState === EventSource.OPEN ? "connected" : "connecting",
         });
         fetchSnapshot(sid, base, port);
+        if (carried) everConnected[sid] = true;
         return;
       }
       scheduleMuxReopen();

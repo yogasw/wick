@@ -21,13 +21,15 @@
     /** Idle since before today: dozes (eyes closed, a "z", full colour);
         only a disabled agent greys out. */
     dozing?: boolean;
+    /** Face size: 38 on a row, smaller inside a folder's icon. */
+    size?: number;
   };
-  let { agent: a, st, open, hatching = false, dozing = false }: Props = $props();
+  let { agent: a, st, open, hatching = false, dozing = false, size = 38 }: Props = $props();
 
   const activity = $derived(rosterActivity(st, open));
   const ring = $derived(activity === "remote");
 </script>
 
-<AvatarActivity {activity} size={38} rings>
-  <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={!ring && avatarWorking(a.status, st.work)} tool={st.work === "tool" || st.work === "subagent" || st.work === "replying"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={!ring && st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} {dozing} {hatching} alert={st.attention} />
+<AvatarActivity {activity} {size} rings>
+  <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} {size} live working={!ring && avatarWorking(a.status, st.work)} tool={st.work === "tool" || st.work === "subagent" || st.work === "replying"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={!ring && st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} {dozing} {hatching} alert={st.attention} />
 </AvatarActivity>
