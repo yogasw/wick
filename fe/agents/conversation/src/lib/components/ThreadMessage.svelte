@@ -684,7 +684,11 @@
           <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">{systemSrc.icon}</span>
           <span data-testid="source-chip" title={"Posted by " + systemSrc.label + ", not typed by a person"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{systemSrc.label === "cli" ? "CLI" : systemSrc.label.charAt(0).toUpperCase() + systemSrc.label.slice(1)}</span>
         {/if}
-        {#if stamp}
+        {#if teamFrom?.kind === "revision"}
+          <!-- A revision of a task (amend_task): one muted line, no status —
+               it is the same task, not a new one. -->
+          <span data-testid="card-revision" title={"Revision of task " + teamFrom.taskId} class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">↻ revision {teamFrom.revision}{teamFrom.replace ? " · replaces the brief" : ""}{stamp ? " · " + stamp : ""}</span>
+        {:else if stamp}
           <span class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">{stamp}</span>
         {/if}
         <span class="flex-1"></span>

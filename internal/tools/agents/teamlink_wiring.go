@@ -984,6 +984,9 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 		return sessionID, "", err
 	}
 	defer release()
+	// The task owns the turn now: what it was revised with meanwhile is
+	// read with the brief, later revisions go into the turn.
+	text = teamlink.TurnText(ctx, text)
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
 	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(sessionID)
 	defer unsub()

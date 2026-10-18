@@ -170,6 +170,10 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		// The task id rides on ctx, so Turns can tell this task's turn
 		// from any other the session runs (TurnGate, TaskStopper).
 		tctx := withTaskID(ctx, ec.TaskID)
+		// Revisions sent while the task waited for its turn are read when
+		// the turn starts (Amend, TurnText).
+		taskID := ec.TaskID
+		tctx = withTurnText(tctx, func(t string) string { return h.takeTurnText(taskID, t) })
 		switch op, ok := h.Turns.(ChatOpener); {
 		case canceled:
 			// Canceled while the chat was being picked: no turn for it.

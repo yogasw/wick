@@ -1273,6 +1273,17 @@ describe("ThreadMessage - message types", () => {
     expect(onOpenAgent).toHaveBeenCalledWith("anton");
   });
 
+  test("a revision of a task is one muted ↻ line, no status", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "subagent", text: "Revision 2 of task 01a14c56-abc from Captain (@captain):\n\nalso count the 500s\n\n(Same task: your final answer is still its one reply.)" }), onOpenAgent: () => {} },
+    });
+    expect(screen.getByTestId("teammate-card").dataset.kind).toBe("revision");
+    expect(screen.getByTestId("card-revision").textContent).toContain("↻ revision 2");
+    expect(screen.queryByTestId("card-status")).toBeNull();
+    expect(screen.getByText("also count the 500s")).toBeTruthy();
+    expect(screen.queryByText(/Same task/)).toBeNull();
+  });
+
   test("a task reply handed back as subagent shows its state as a dot + word and the task id in ↗'s tooltip", () => {
     const { container } = render(ThreadMessage, {
       props: { turn: makeTurn({ source: "subagent", text: "Reply from Captain (@captain) [task 01a14c56-abc, completed]:\n\nBatch 2 done." }), onOpenAgent: () => {} },

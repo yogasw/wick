@@ -117,7 +117,7 @@ func (h *Hub) CancelFromUser(ctx context.Context, sessionID, taskID string) (*Re
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.cancelTask(ctx, caller, string(id), true)
+	out, err := h.cancelTask(ctx, caller, string(id), true, true)
 	if err == nil && h.Notify != nil && !userTask {
 		note := fmt.Sprintf("The user canceled the task to %s [task %s]. No reply will come back for it; do not resend it unless the user asks.", to.Label(), id)
 		_ = h.Notify.Deliver(context.WithoutCancel(ctx), sessionID, note) // best-effort: the cancel itself went through

@@ -81,8 +81,11 @@ type taskRecord struct {
 	// Brief, RetryOf and the Replaced* fields are taskRef.brief, retryOf
 	// and replacedBy/How/Handle/To; a record written before they existed
 	// reads them unset.
-	Brief          string `json:"brief,omitempty"`
-	RetryOf        string `json:"retry_of,omitempty"`
+	Brief   string `json:"brief,omitempty"`
+	RetryOf string `json:"retry_of,omitempty"`
+	// AmendOf and AmendedBy are taskRef.amendOf and amendedBy.
+	AmendOf        string `json:"amend_of,omitempty"`
+	AmendedBy      string `json:"amended_by,omitempty"`
 	ReplacedBy     string `json:"replaced_by,omitempty"`
 	ReplacedHow    string `json:"replaced_how,omitempty"`
 	ReplacedHandle string `json:"replaced_handle,omitempty"`
@@ -233,6 +236,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
 		chatPicked: rec.ChatPicked, supersededBy: a2a.TaskID(rec.SupersededBy),
 		brief: rec.Brief, retryOf: a2a.TaskID(rec.RetryOf),
+		amendOf: a2a.TaskID(rec.AmendOf), amendedBy: a2a.TaskID(rec.AmendedBy),
 		replacedBy: a2a.TaskID(rec.ReplacedBy), replacedHow: rec.ReplacedHow,
 		replacedHandle: rec.ReplacedHandle, replacedTo: rec.ReplacedTo,
 		replacePending: rec.ReplacePending,
@@ -273,6 +277,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		Origin: r.origin, OriginUser: r.originUser,
 		Log:   append([]ThreadEntry(nil), r.log...),
 		Brief: r.brief, RetryOf: string(r.retryOf),
+		AmendOf: string(r.amendOf), AmendedBy: string(r.amendedBy),
 		ReplacedBy: string(r.replacedBy), ReplacedHow: r.replacedHow,
 		ReplacedHandle: r.replacedHandle, ReplacedTo: r.replacedTo,
 		ReplacePending: r.replacePending,

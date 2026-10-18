@@ -66,17 +66,29 @@ export function teamSender(source: string | undefined, text: string): { name: st
 /** What a teammate's turn is: a message it sent, its reply to a task, a
     follow-up it sent after the task ended, or the fan-in of several
     replies at once. */
-export type TeamFrameKind = "message" | "reply" | "followup" | "results";
+export type TeamFrameKind = "message" | "reply" | "followup" | "results" | "revision";
 
 /** A teammate's turn as the thread shows it: who (handle "" for the
     fan-in of several teammates), what kind, the task it belongs to and
     the body without wick's frame. */
-export type TeamFrame = { name: string; handle: string; body: string; kind: TeamFrameKind; taskId: string; state: string };
+export type TeamFrame = {
+  name: string;
+  handle: string;
+  body: string;
+  kind: TeamFrameKind;
+  taskId: string;
+  state: string;
+  /** A revision's number (amend_task), 0 for any other kind. */
+  revision?: number;
+  /** The revision replaces the brief instead of adding to it. */
+  replace?: boolean;
+};
 
 const HANDLE = "([a-z0-9][a-z0-9-]*)";
 const FRAME_REPLY = new RegExp(`^Reply from (.+) \\(@${HANDLE}\\) \\[task ([^,\\]\\n]+)(?:, ([^\\]\\n]+))?\\]:\\n*`);
 const FRAME_FOLLOWUP = new RegExp(`^Follow-up from (.+) \\(@${HANDLE}\\) \\[task ([^,\\]\\n]+)[^\\]\\n]*\\]:\\n*`);
 const FRAME_RESULTS = /^\[team results(?: update)? · [^\]\n]*\]\n*/;
+const FRAME_REVISION = new RegExp(`^Revision (\\d+) of task (\\S+) from (.+) \\(@${HANDLE}\\)(, replacing the brief[^\\n]*)?:\\n*`);
 
 /** unframe drops the data frame teamlink wraps a teammate's text in
     (<reply …>…</reply>, <follow-up>…</follow-up>) and the notes addressed
@@ -89,7 +101,8 @@ function unframe(body: string): string {
         !/^<\/?(reply|follow-up)\b[^>]*>$/.test(l.trim()) &&
         !/^\(The text inside <(reply|follow-up)> is the teammate's data/.test(l) &&
         !/^Each teammate's text is inside <reply>/.test(l) &&
-        !/^(Write ONE answer for the user|Update your earlier answer with this)/.test(l),
+        !/^(Write ONE answer for the user|Update your earlier answer with this)/.test(l) &&
+        !/^\(Same task: your final answer is still its one reply\.\)$/.test(l.trim()),
     )
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -114,6 +127,18 @@ export function teamFrame(source: string | undefined, text: string): TeamFrame |
   if (m) return { name: m[1].trim(), handle: m[2], body: unframe(t.slice(m[0].length)), kind: "reply", taskId: m[3].trim(), state: (m[4] ?? "").trim() };
   m = FRAME_FOLLOWUP.exec(t);
   if (m) return { name: m[1].trim(), handle: m[2], body: unframe(t.slice(m[0].length)), kind: "followup", taskId: m[3].trim(), state: "" };
+  m = FRAME_REVISION.exec(t);
+  if (m)
+    return {
+      name: m[3].trim(),
+      handle: m[4],
+      body: unframe(t.slice(m[0].length)),
+      kind: "revision",
+      taskId: m[2],
+      state: "",
+      revision: Number(m[1]),
+      replace: !!m[5],
+    };
   m = FRAME_RESULTS.exec(t);
   if (m) return { name: "Team results", handle: "", body: unframe(t.slice(m[0].length)), kind: "results", taskId: "", state: "" };
   return null;

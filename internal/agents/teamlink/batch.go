@@ -930,7 +930,7 @@ func (h *Hub) commit(sends []sendDelivery, cancels []cancelReq) {
 		}
 	}
 	for _, c := range cancels {
-		_, _ = h.cancelTask(context.Background(), c.caller, string(c.id), false)
+		_, _ = h.cancelTask(context.Background(), c.caller, string(c.id), false, true)
 	}
 }
 

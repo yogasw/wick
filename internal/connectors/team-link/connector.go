@@ -94,6 +94,8 @@ type messageInput struct {
 	Chat      string `wick:"desc=Run the message in this session of the teammate (session_id). On your own only with a session_id from a ticket (ticket_get / ticket_conversations, e.g. owner_session) or from session_lookup. Any other one (e.g. an older chat the chats op listed) ONLY when the user asks for it. Your own other chat (to = yourself) only when both chats are in the same ticket. A turn in a Slack thread session is posted in that thread. Omit to use the chat paired with this conversation."`
 	NewChat   bool   `wick:"desc=true starts a NEW chat with the teammate (a clean context) instead of the one paired with this conversation, and pairs that new chat with it: later messages from this conversation go there. A Slack remote agent gets a new Slack thread — except one whose Remote target is a specific thread, which always posts in that thread."`
 	TaskID    string `wick:"desc=Answer a task that came back state=input_required: pass its task_id (to and context_id may be omitted, and if given they must match that task)."`
+	AmendTask string `wick:"desc=Revise a task you already sent (its task_id) instead of sending a new one: not started yet, the teammate reads it with the brief; running, it goes into that turn; asking, it is the answer; ended, it goes as a new linked task. The teammate does ONE job and you get ONE reply. Set to = the task's teammate."`
+	Replace   bool   `wick:"desc=With amend_task: the message replaces the brief instead of adding to it."`
 	FanIn     string `wick:"dropdown=all|each|first;desc=How the replies of this message's group reach you. all (default): wait for every teammate of the group, then get ONE message with every reply — for one question to several teammates whose answers you combine. each: every reply on its own as it lands — for independent checks. first: the first answer only, the others are canceled — for the same question to several teammates when any one answer will do. Set by the group's first message, later ones keep it."`
 	Group     string `wick:"desc=Keep a discussion across several teammates in one result: pass the group_id an earlier message of this conversation returned to join that group (also in a later turn, while it is still open). none = this task is independent and its reply comes on its own. Omit: the messages you send in one turn form one group."`
 	Separate  bool   `wick:"desc=Only while you answer a task FROM this same teammate: true sends this as a separate message before you finish (refused otherwise, since your final answer already reaches them as the task's reply). A final answer that repeats it is not sent twice."`
@@ -105,6 +107,11 @@ type chatsInput struct {
 
 type getTaskInput struct {
 	TaskID string `wick:"required;desc=A task_id returned by message."`
+}
+
+type cancelTaskInput struct {
+	TaskID string `wick:"required;desc=A task_id returned by message."`
+	Mode   string `wick:"dropdown=soft|hard;desc=soft (default): a running turn is told to stop and wrap up safely; hard: the turn is killed at once (only when soft did not stop it)."`
 }
 
 type listTasksInput struct{}
@@ -166,7 +173,7 @@ func Operations(deps Deps) []connector.Category {
 			connector.Op("cancel_task", "Cancel a Team Task",
 				"Cancel a task you sent that is still working or waiting for your answer: the teammate's turn for it is stopped (or the task leaves the line if it has not started; any other turn of the teammate keeps running) and the task ends canceled. "+
 					"Use it when the user calls the request off or it is no longer needed.",
-				getTaskInput{}, deps.cancelTask, wickdocs.Docs{}),
+				cancelTaskInput{}, deps.cancelTask, wickdocs.Docs{}),
 			connector.Op("session_lookup", "Look Up a Thread's Sessions",
 				"The wick sessions that answer in a Slack thread (permalink, or channel + thread_ts), newest first: "+
 					"session_id, agent (its Team agent's handle, \"\" for none), project_id, ticket_id, owner_user, last_active, "+
@@ -210,6 +217,12 @@ func (d Deps) message(c *connector.Ctx) (any, error) {
 	hub, agentID, err := d.caller(c)
 	if err != nil {
 		return nil, err
+	}
+	if amend := strings.TrimSpace(c.Input("amend_task")); amend != "" {
+		return hub.Amend(c.Context(), teamlink.AmendInput{
+			CallerSession: c.SessionID(), CallerAgentID: agentID, TaskID: amend,
+			Text: c.Input("message"), Replace: c.InputBool("replace"),
+		})
 	}
 	// wait_seconds is gone: a message waits QuickWait at most. An older
 	// prompt that still sends it is not refused.
@@ -272,6 +285,9 @@ func (d Deps) cancelTask(c *connector.Ctx) (any, error) {
 	hub, agentID, err := d.caller(c)
 	if err != nil {
 		return nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Input("mode")), "hard") {
+		return hub.CancelTaskHard(c.Context(), agentID, strings.TrimSpace(c.Input("task_id")))
 	}
 	return hub.CancelTask(c.Context(), agentID, strings.TrimSpace(c.Input("task_id")))
 }

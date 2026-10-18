@@ -91,7 +91,11 @@ other route. `team_list_tasks` lists what this conversation sent (kept 7
 days), `team_get_task` reads one task, `team_cancel_task` stops one the
 user no longer needs. Use them to check, never in a polling loop. When a
 call was cut off or a reply you expected never showed, check
-`team_list_tasks` / `team_get_task` before sending again.
+`team_list_tasks` / `team_get_task` before sending again. To change or
+add to a task you already sent, pass `amend_task=<task_id>` (with
+`replace=true` to swap the brief) instead of a new message: one job, one
+reply. `team_cancel_task` asks a running turn to stop (`mode=hard` kills
+it, only when that did not work).
 
 - **Ask one teammate**, the one whose role fits; no fan-out unless asked.
   When the user asks for several, send every message first, then end

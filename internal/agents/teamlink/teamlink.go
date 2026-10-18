@@ -468,6 +468,15 @@ type taskRef struct {
 	firstCanceled bool
 	// undelivered: the outbox gave up on the prompt with its reply.
 	undelivered bool
+	// revisions are the amends (Amend) of a task whose turn had not
+	// started; turnTaken: its turn started and read them (TurnText), so a
+	// later revision goes into the running turn. Memory only: a restart
+	// ends the turn anyway.
+	revisions []revision
+	turnTaken bool
+	// amendOf is the ended task this one revises (Amend); amendedBy the
+	// task that revised this one after it ended.
+	amendOf, amendedBy a2a.TaskID
 	// echo: the task's reply repeats a message the teammate already sent
 	// the asker while answering it (Send, separate): not delivered.
 	echo bool
@@ -1609,11 +1618,24 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 // A task the person started (taskRef.origin) is theirs to cancel:
 // ErrUserTask.
 func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
-	return h.cancelTask(ctx, callerAgentID, taskID, false)
+	return h.cancelTask(ctx, callerAgentID, taskID, false, false)
 }
 
+// CancelTaskHard is CancelTask that kills the teammate's running turn for
+// the task (as a person's cancel does) instead of asking it to stop.
+func (h *Hub) CancelTaskHard(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
+	return h.cancelTask(ctx, callerAgentID, taskID, false, true)
+}
+
+// softStopNote ends the reason of an agent's cancel that asked the
+// running turn to stop rather than killing it.
+const softStopNote = "; the teammate was told to stop (its turn was not killed, so nothing it was doing is cut off mid-step)"
+
 // cancelTask is CancelTask; byUser is the person's cancel (CancelFromUser).
-func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUser bool) (*Result, error) {
+// An agent's cancel (not byUser, not hard) of a task whose turn is
+// running asks that turn to stop instead of killing it: a kill can cut a
+// write or a deploy half-way. A person's cancel and hard kill it.
+func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUser, hard bool) (*Result, error) {
 	id := a2a.TaskID(strings.TrimSpace(taskID))
 	by := "the sender"
 	if byUser {
@@ -1649,7 +1671,16 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 	agentID, to := ref.agentID, ref.to
 	h.mu.Unlock()
 
-	if ts, ok := h.Turns.(TaskStopper); ok && isRunning && running.session != "" {
+	soft := !byUser && !hard && isRunning && running.session != "" && h.TurnOwner != nil && h.TurnOwner(running.session) == id && h.Notify != nil
+	if soft {
+		msg := fmt.Sprintf("Task %s was canceled by %s: stop working on it now, leave things in a safe state, and end your turn with [silent]. Nothing you say for it is delivered.", id, by)
+		if soft = h.Notify.Deliver(ctx, running.session, msg) == nil; soft {
+			h.mu.Lock()
+			ref.reply = reason + softStopNote
+			h.mu.Unlock()
+		}
+	}
+	if ts, ok := h.Turns.(TaskStopper); ok && !soft && isRunning && running.session != "" {
 		stop, _ := ts.StopTask(ctx, to, running.session, id, by)
 		switch stop {
 		case TaskStopRunning:
