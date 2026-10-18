@@ -916,6 +916,10 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	}
 	key := sessionKey(sessionID, agentName)
 	entry, alive := p.active[key]
+	if p.refuseWhileDrainingLocked(entry, alive, source) {
+		p.mu.Unlock()
+		return ErrHandedOver
+	}
 	// A person messaging the session is the intervention the halt notice
 	// asked for: they have seen it, and may well have fixed the cause. Give
 	// the agent its full restart budget back rather than holding a
@@ -2703,6 +2707,41 @@ func (p *Pool) PartialText(sessionID, agentName string) string {
 // queued". A queued sub-agent is cancelled by dropping it from the
 // queue, not by killing a process that does not exist yet.
 var ErrAgentNotActive = errors.New("agent not active in pool")
+
+// ErrHandedOver refuses a message wick itself sends (a teammate's task, a
+// sub-agent's result, a schedule, a CLI report…) to a process that has
+// handed over to a new build and is only draining: the successor runs that
+// session, so a turn here would run it twice.
+var ErrHandedOver = errors.New("wick is handing over to a new build: this process takes no new turns; the message goes to the new process")
+
+// drainRefused are the sources wick itself sends from. A draining process
+// keeps channel intake (Slack, Telegram, …) until it exits, so those are
+// not refused; these come from in-process paths that also run in the
+// successor.
+var drainRefused = map[string]bool{
+	"team": true, "subagent": true, "schedule": true, "watch": true, "agent": true,
+	"agentctl": true, "cli": true, "workflow": true, "failover": true,
+}
+
+// drainingNow is upgrade.Draining; tests swap it.
+var drainingNow = upgrade.Draining
+
+// refuseWhileDrainingLocked: after the handover this process starts no
+// turn wick sends itself (B5). Only a turn already running here may take
+// more (a sub-agent's result into the turn that waits for it); an idle
+// subprocess left over does not count, the successor owns that session
+// now. p.mu is held.
+func (p *Pool) refuseWhileDrainingLocked(entry *runEntry, alive bool, source string) bool {
+	if !drainRefused[source] || !drainingNow() {
+		return false
+	}
+	if alive && entry != nil && entry.state != nil {
+		if lc := entry.state.Lifecycle(); lc == state.LifecycleWorking || lc == state.LifecycleSpawning {
+			return false
+		}
+	}
+	return true
+}
 
 // KillAgent stops exactly ONE agent inside a session, leaving its
 // siblings running.
