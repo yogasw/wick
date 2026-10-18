@@ -324,7 +324,7 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Persist token to connector row. Pass the wick platform user ID (from the
 	// OAuth state entry) as wickUserID and the provider-side user ID as externalUserID.
-	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, entry.wickUserID, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth, row.MultiAccount)
+	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, entry.wickUserID, userID, displayName, accessToken, refreshToken, entry.connectorRowID)
 	if saveErr != nil {
 		log.Error().Err(saveErr).Str("connector", key).Str("user_id", userID).Msg("manager oauth: oauthSaveToken failed")
 		http.Error(w, "failed to save token: "+saveErr.Error(), http.StatusInternalServerError)
@@ -335,8 +335,12 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		Str("connector_row_id", savedRowID).
 		Msg("manager oauth: user token saved successfully")
 
-	// Persist refresh_token when received (e.g. Google OAuth offline access).
-	if refreshToken != "" {
+	// The refresh token lives on the account (saved above). A single-account
+	// instance also keeps the legacy instance-level copy, which connectors
+	// still read for accounts saved before the per-account column was used.
+	// A multi-account instance must not: that one shared slot was what let
+	// one person's account refresh with somebody else's token.
+	if refreshToken != "" && !row.MultiAccount {
 		if err := h.connectors.Update(r.Context(), savedRowID, row.Label,
 			map[string]string{"refresh_token": refreshToken}, row.Disabled); err != nil {
 			log.Warn().Err(err).Str("connector", key).Msg("manager oauth: failed to save refresh token")
@@ -466,11 +470,12 @@ func (h *Handler) exchangeGenericCode(ctx context.Context, tokenURL, clientID, c
 // originating connector row. MultiAccount behaviour is handled by the repo
 // upsert: false = replace existing account, true = add new account.
 // wickUserID is the wick platform user; externalUserID is the provider-side ID.
-func (h *Handler) oauthSaveToken(ctx context.Context, key, wickUserID, externalUserID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta, multiAccount bool) (savedRowID string, err error) {
+// refreshToken may be "" (providers without offline access).
+func (h *Handler) oauthSaveToken(ctx context.Context, key, wickUserID, externalUserID, displayName, accessToken, refreshToken, connectorRowID string) (savedRowID string, err error) {
 	if connectorRowID == "" {
 		return "", fmt.Errorf("oauth save: connector_id is required")
 	}
-	if err := h.connectors.SaveAccount(ctx, connectorRowID, wickUserID, externalUserID, displayName, accessToken); err != nil {
+	if err := h.connectors.SaveAccountTokens(ctx, connectorRowID, wickUserID, externalUserID, displayName, accessToken, refreshToken, nil); err != nil {
 		return "", fmt.Errorf("oauth save: %w", err)
 	}
 	log.Info().Str("connector", key).Str("wick_user_id", wickUserID).Str("external_user_id", externalUserID).

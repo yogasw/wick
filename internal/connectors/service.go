@@ -1112,6 +1112,14 @@ func (s *Service) SaveAccountTokens(ctx context.Context, connectorID, wickUserID
 	if err != nil {
 		return err
 	}
+	// A refresh token outlives the access token, so it is never stored in
+	// plaintext. Callers that already encrypted it pass it through.
+	if refreshToken != "" && s.enc != nil && !s.enc.Disabled() &&
+		!enc.IsMasterToken(refreshToken) && !strings.HasPrefix(refreshToken, "wick_enc_") {
+		if refreshToken, err = s.enc.EncryptMaster(refreshToken); err != nil {
+			return fmt.Errorf("encrypt refresh token: %w", err)
+		}
+	}
 	acc := &entity.ConnectorAccount{
 		ConnectorID:    connectorID,
 		WickUserID:     wickUserID,
@@ -2119,6 +2127,13 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	if acct != nil {
 		configs["user_token"] = acct.AccessToken
 		configs["auth_mode"] = "user_token"
+		// The account's own refresh token wins over the instance-level one,
+		// which is shared by every account on the row. Only for connectors on
+		// the generic OAuth flow: that is the flow that writes refresh_token,
+		// and custom connectors refresh from the account themselves.
+		if acct.RefreshToken != "" && mod.OAuth != nil {
+			configs["refresh_token"] = acct.RefreshToken
+		}
 	}
 
 	// Session-workspace instance secrets are stored as MASTER (wick_cenc_)
