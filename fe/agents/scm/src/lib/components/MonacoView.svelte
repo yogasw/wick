@@ -124,14 +124,18 @@
 
   // Options applied to each inner editor of the diff editor (original + modified).
   // createDiffEditor opts don't propagate fully to inner editors.
+  // In the inline view Monaco puts the original editor's line numbers right
+  // against the modified one's, so with no decoration gap "333" and "416"
+  // read as "333416". The gap after each number column keeps them apart, and
+  // 4 chars keeps a 1000+ line file from touching too.
   const innerEditorOpts = {
     fontSize: 12,
     fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace",
     lineHeight: 18,
     minimap: { enabled: false },
     lineNumbers: "on" as const,
-    lineNumbersMinChars: 3,
-    lineDecorationsWidth: 0,
+    lineNumbersMinChars: 4,
+    lineDecorationsWidth: 12,
     glyphMargin: false,
     renderLineHighlight: "all" as const,
     folding: true,
