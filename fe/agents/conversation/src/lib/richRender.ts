@@ -941,6 +941,44 @@ export function buildAutoHeightSrcdoc(html: string, id: string, policy?: WidgetP
 const HTML_ARTIFACT_MAX_WAIT_RETRIES = 40; // ~2s at the 50ms debounce
 const htmlArtifactWaitCounts = new WeakMap<HTMLElement, number>();
 
+/* Classifies an `htmlfile` path by extension. A path with no extension keeps
+   the HTML preview (today's behaviour); a known image renders as <img>; any
+   other extension gets a download link instead of an iframe. */
+const HTMLFILE_IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+const HTMLFILE_HTML_EXT = /\.html?$/i;
+export function htmlFileKind(path: string): "html" | "image" | "other" {
+  const name = path.trim().split(/[?#]/)[0].split("/").pop() ?? "";
+  if (HTMLFILE_IMAGE_EXT.test(name)) return "image";
+  if (HTMLFILE_HTML_EXT.test(name) || !name.includes(".")) return "html";
+  return "other";
+}
+
+function renderNonHtmlFile(el: HTMLElement, kind: "image" | "other", url: string, name: string): void {
+  el.innerHTML = "";
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.setAttribute("data-htmlfile-nonhtml", kind);
+  if (kind === "image") {
+    el.className = "w-full";
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = name;
+    img.loading = "lazy";
+    img.className = "max-w-full h-auto rounded-lg";
+    a.className = "inline-block";
+    a.appendChild(img);
+  } else {
+    el.className = "";
+    a.download = name;
+    a.textContent = `${name} (not HTML, click to download)`;
+    a.className =
+      "inline-flex items-center rounded-full border border-black-300 dark:border-black-700 px-3 py-1 text-sm text-black-800 dark:text-white-300 hover:bg-black-100 dark:hover:bg-black-800 no-underline";
+  }
+  el.appendChild(a);
+}
+
 function renderHtmlArtifacts(node: HTMLElement): void {
   const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
   for (const el of els) {
@@ -964,6 +1002,13 @@ function renderHtmlArtifacts(node: HTMLElement): void {
       htmlArtifactWaitCounts.delete(el);
       el.setAttribute("data-enriched", "");
       const name = path.split("/").pop() || "preview.html";
+      // Only HTML belongs in the iframe preview: a binary file (e.g. a PNG)
+      // loaded as a document renders its raw bytes as text.
+      const kind = htmlFileKind(path);
+      if (kind !== "html") {
+        renderNonHtmlFile(el, kind, fileDownloadURL(path), name);
+        continue;
+      }
       el.innerHTML = "";
       el.className = "w-full";
       mount(HtmlArtifact, {

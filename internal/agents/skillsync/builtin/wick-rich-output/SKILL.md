@@ -42,6 +42,8 @@ palembang-house-dashboard.html
 
 One line, session-relative path. The UI fetches and renders the same sandboxed preview with Full screen / Show code / Download. Cost is one line regardless of file size.
 
+An `htmlfile` fence pointing at an image (.png/.jpg/.jpeg/.gif/.webp/.svg) now shows the image, and any other non-HTML path shows a download link instead of a preview.
+
 ## HTML artifacts: use the theme bridge
 
 An artifact renders in a sandboxed iframe inside a chat that has a light and a dark mode. The runtime injects CSS variables on `:root`:
