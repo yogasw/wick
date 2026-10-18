@@ -43,20 +43,25 @@ func TestFollowUpAfterTaskEnded(t *testing.T) {
 		t.Fatal("answering session not known")
 	}
 	ctx := context.Background()
-	if h.FollowUpAfter(ctx, "sess-a-anton", "too early", time.Now().Add(-time.Hour)) {
+	if h.FollowUpAfter(ctx, "sess-a-anton", "too early", time.Now().Add(-time.Hour), time.Time{}) {
 		t.Fatal("a reply from before the task ended was forwarded")
 	}
-	if h.FollowUpAfter(ctx, "sess-a-anton", "too late", time.Now().Add(FollowUpWindow+time.Hour)) {
+	if h.FollowUpAfter(ctx, "sess-a-anton", "too late", time.Now().Add(FollowUpWindow+time.Hour), time.Time{}) {
 		t.Fatal("a reply past the window was forwarded")
 	}
-	if !h.FollowUpAfter(ctx, "sess-a-anton", "final report: all 12 done", time.Now().Add(time.Second)) {
+	// A person wrote in the chat after the task ended: the chat is
+	// theirs, what the agent tells them is not the asker's (B4).
+	if h.FollowUpAfter(ctx, "sess-a-anton", "Yoga, here is the summary", time.Now().Add(time.Second), time.Now().Add(time.Millisecond)) {
+		t.Fatal("a reply to a person was forwarded")
+	}
+	if !h.FollowUpAfter(ctx, "sess-a-anton", "final report: all 12 done", time.Now().Add(time.Second), time.Now().Add(-time.Hour)) {
 		t.Fatal("final report not forwarded")
 	}
 	got := quiet(t, note, 1)[0]
 	if !strings.Contains(got, "Follow-up from Anton (@anton) [task "+a.TaskID+"]") || !strings.Contains(got, "final report: all 12 done") {
 		t.Fatalf("delivered = %q", got)
 	}
-	if h.FollowUpAfter(ctx, "sess-unknown", "x", time.Now()) {
+	if h.FollowUpAfter(ctx, "sess-unknown", "x", time.Now(), time.Time{}) {
 		t.Fatal("a session that answered nothing forwarded")
 	}
 }

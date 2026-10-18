@@ -53,17 +53,39 @@ func TestLastOwnTurn(t *testing.T) {
 		{"a person's message", []store.ConversationTurn{task, ack,
 			{Role: "user", Source: "ui", Text: "hi"},
 			{Role: "assistant", Text: "hello", Timestamp: at}}, ""},
+		// B4: the chat sent a task of its own; the teammate's answer starts
+		// a turn that answers whoever the chat works for, not the asker.
+		{"a teammate's reply to this chat's task", []store.ConversationTurn{task, ack,
+			{Role: "user", Source: "subagent", Text: "Reply from Captain (@captain) [task 01a, completed]:\n\ndone"},
+			{Role: "assistant", Text: "Captain is done, Yoga", Timestamp: at}}, ""},
+		{"a teammate's follow-up", []store.ConversationTurn{task, ack,
+			{Role: "user", Source: "subagent", Text: "Follow-up from Captain (@captain) [task 01a]:\n\nmore"},
+			{Role: "assistant", Text: "more from Captain", Timestamp: at}}, ""},
+		{"team results", []store.ConversationTurn{task, ack,
+			{Role: "user", Source: "subagent", Text: "[team results · group g_1 · 1 of 1 replied]\n..."},
+			{Role: "assistant", Text: "both answered", Timestamp: at}}, ""},
 		{"interrupted", []store.ConversationTurn{task, ack,
 			{Role: "user", Source: "schedule", Text: "check"},
 			{Role: "assistant", Text: "half", Interrupted: true, Timestamp: at}}, ""},
 	}
 	for _, c := range cases {
-		text, got, ok := lastOwnTurn(writeConvTurns(t, c.turns...))
-		if text != c.want || ok != (c.want != "") || ok && !got.Equal(at) {
-			t.Errorf("%s: got %q %v %v, want %q", c.name, text, got, ok, c.want)
+		got, ok := lastOwnTurn(writeConvTurns(t, c.turns...))
+		if got.text != c.want || ok != (c.want != "") || ok && !got.at.Equal(at) {
+			t.Errorf("%s: got %q %v %v, want %q", c.name, got.text, got.at, ok, c.want)
 		}
 	}
-	if _, _, ok := lastOwnTurn(filepath.Join(t.TempDir(), "missing.jsonl")); ok {
+	// The newest turn a person wrote is reported, so the hub can tell a
+	// chat a person took over since the task ended.
+	person := at.Add(-time.Minute)
+	got, ok := lastOwnTurn(writeConvTurns(t, task, ack,
+		store.ConversationTurn{Role: "user", Source: "ui", Text: "status?", Timestamp: person},
+		store.ConversationTurn{Role: "assistant", Text: "working", Timestamp: person},
+		store.ConversationTurn{Role: "user", Source: "schedule", Text: "check"},
+		store.ConversationTurn{Role: "assistant", Text: "build passed", Timestamp: at}))
+	if !ok || !got.personAt.Equal(person) {
+		t.Errorf("personAt = %v %v, want %v", got.personAt, ok, person)
+	}
+	if _, ok := lastOwnTurn(filepath.Join(t.TempDir(), "missing.jsonl")); ok {
 		t.Error("a missing file gave a follow-up")
 	}
 }

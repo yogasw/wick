@@ -1896,8 +1896,10 @@ func (h *Hub) HasAnswered(sessionID string) bool {
 // reaches the asker of the task that session answered last. Only a task
 // that completed, before at and at most FollowUpWindow earlier, takes
 // it: a reply of the task itself, an older exchange, a remote agent
-// (its follow-ups come from the remote) or a canceled task do not.
-func (h *Hub) FollowUpAfter(ctx context.Context, sessionID, text string, at time.Time) bool {
+// (its follow-ups come from the remote) or a canceled task do not. Nor
+// does a chat a person wrote in after the task ended (personAt): the
+// chat is that person's again and what the agent says is for them.
+func (h *Hub) FollowUpAfter(ctx context.Context, sessionID, text string, at, personAt time.Time) bool {
 	if sessionID == "" || strings.TrimSpace(text) == "" {
 		return false
 	}
@@ -1909,7 +1911,7 @@ func (h *Hub) FollowUpAfter(ctx context.Context, sessionID, text string, at time
 	}
 	fresh := ok && ref != nil && ref.finished && ref.state == a2a.TaskStateCompleted &&
 		!ref.canceled && !ref.to.Remote && !ref.ended.IsZero() &&
-		at.After(ref.ended) && at.Sub(ref.ended) <= FollowUpWindow
+		at.After(ref.ended) && at.Sub(ref.ended) <= FollowUpWindow && !personAt.After(ref.ended)
 	h.mu.Unlock()
 	if !fresh {
 		return false

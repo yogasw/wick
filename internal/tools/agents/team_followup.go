@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,19 +58,51 @@ func teamFollowUpOnTurnEnd(hub *teamlink.Hub, sessionID string) {
 		return
 	}
 	time.AfterFunc(followUpSettle, func() {
-		text, at, ok := lastOwnTurn(globalLayout.SessionConversation(sessionID))
+		t, ok := lastOwnTurn(globalLayout.SessionConversation(sessionID))
 		if ok {
-			hub.FollowUpAfter(context.Background(), sessionID, text, at)
+			hub.FollowUpAfter(context.Background(), sessionID, t.text, t.at, t.personAt)
 		}
 	})
+}
+
+// ownTurn is the newest reply of a chat that may be a follow-up: its
+// text, when it was said, and when a person last wrote in the chat (zero
+// when none did in the window read).
+type ownTurn struct {
+	text     string
+	at       time.Time
+	personAt time.Time
+}
+
+// teamDelivery reports whether a sub-agent-path turn is a teammate's
+// answer to a task THIS chat sent ("Reply from", "Follow-up from", the
+// "[team results …]" fan-in). The turn it starts is this chat acting as
+// an asker of someone else: its reply is not news for the task the chat
+// answered. Before this, the Yelan chat Yoga works in had answered one of
+// Captain's tasks, and every summary it wrote Yoga after a Captain reply
+// went back to Captain as "Follow-up from Yelan".
+func teamDelivery(t store.ConversationTurn) bool {
+	if t.Source != "subagent" {
+		return false
+	}
+	return strings.HasPrefix(t.Text, "Reply from ") || strings.HasPrefix(t.Text, "Follow-up from ") ||
+		strings.HasPrefix(t.Text, "[team results")
 }
 
 // lastOwnTurn reads the newest assistant turn of a conversation.jsonl and
 // the message that started it. ok is true when that reply has text, is
 // not [silent], was not cut short, and its trigger is one of
-// followUpSources.
-func lastOwnTurn(path string) (text string, at time.Time, ok bool) {
+// followUpSources and not a teammate's answer to this chat's own task
+// (teamDelivery). personAt is the newest turn a person wrote, so the hub
+// can tell a chat a person has taken over since the task ended.
+func lastOwnTurn(path string) (ownTurn, bool) {
 	turns := tailTurns(path, 64<<10)
+	var personAt time.Time
+	for _, t := range turns {
+		if t.Role == "user" && !followUpSources[t.Source] && t.Timestamp.After(personAt) {
+			personAt = t.Timestamp
+		}
+	}
 	reply := -1
 	for i := len(turns) - 1; i >= 0; i-- {
 		if turns[i].Role == "assistant" {
@@ -78,26 +111,26 @@ func lastOwnTurn(path string) (text string, at time.Time, ok bool) {
 		}
 	}
 	if reply < 0 {
-		return "", time.Time{}, false
+		return ownTurn{}, false
 	}
 	a := turns[reply]
 	body, silent := teamlink.StripSilent(a.Text)
 	if silent || a.Interrupted || body == "" {
-		return "", time.Time{}, false
+		return ownTurn{}, false
 	}
 	for i := reply - 1; i >= 0; i-- {
 		switch turns[i].Role {
 		case "assistant":
 			// Two replies in a row: the second has no trigger of its own.
-			return "", time.Time{}, false
+			return ownTurn{}, false
 		case "user":
-			if !followUpSources[turns[i].Source] {
-				return "", time.Time{}, false
+			if !followUpSources[turns[i].Source] || teamDelivery(turns[i]) {
+				return ownTurn{}, false
 			}
-			return body, a.Timestamp, true
+			return ownTurn{text: body, at: a.Timestamp, personAt: personAt}, true
 		}
 	}
-	return "", time.Time{}, false
+	return ownTurn{}, false
 }
 
 // tailTurns parses the turns in the last n bytes of a conversation.jsonl,
