@@ -1365,6 +1365,17 @@ describe("ThreadMessage - Captain access change card", () => {
     await fireEvent.click(screen.getByTestId("approval-accept"));
     expect(onApprovalDecide).toHaveBeenCalledWith("ap-9", "accept");
   });
+  test("a long grant shows counts and the first entries, the rest behind a toggle", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => `+Conn ${i} (all)`).concat("-Slack").join("\n");
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "@captain wants to change access of @worker", extras: { ...extras, changes: many } }), onApprovalDecide: vi.fn() } });
+    const summary = screen.getByTestId("approval-access-summary").textContent ?? "";
+    expect(summary).toContain("+12 added");
+    expect(summary).toContain("1 removed");
+    expect(screen.getByTestId("approval-access-diff").querySelectorAll("li")).toHaveLength(8);
+    await fireEvent.click(screen.getByTestId("approval-access-toggle"));
+    expect(screen.getByTestId("approval-access-diff").querySelectorAll("li")).toHaveLength(13);
+    expect(screen.getByTestId("approval-access-toggle").textContent).toContain("Show less");
+  });
   test("settled reads applied / declined", () => {
     render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "declined · by Yoga", extras: { ...extras, state: "block" } }) } });
     expect(screen.getByTestId("approval-pill").textContent).toContain("declined");
