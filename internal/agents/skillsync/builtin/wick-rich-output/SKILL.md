@@ -42,7 +42,7 @@ palembang-house-dashboard.html
 
 One line, session-relative path. The UI fetches and renders the same sandboxed preview with Full screen / Show code / Download. Cost is one line regardless of file size.
 
-An `htmlfile` fence pointing at an image (.png/.jpg/.jpeg/.gif/.webp/.svg) now shows the image, and any other non-HTML path shows a download link instead of a preview.
+An `htmlfile` fence pointing at a non-HTML file shows it inline too: images (.png/.jpg/.jpeg/.gif/.webp/.svg) as the image, .pdf in a viewer, .txt/.md/.json/.csv/.log as a text block (first ~200 KB). Any other format shows a download link.
 
 ## HTML artifacts: use the theme bridge
 
