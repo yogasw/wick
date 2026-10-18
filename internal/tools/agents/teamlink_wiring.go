@@ -107,6 +107,7 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	}
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
+	hub.SelfDraining = upgrade.Draining
 	hub.PredecessorBusy = func(chat string) bool {
 		if chat == "" {
 			_, draining := upgrade.ReadDrainState(globalLayout.BaseDir)

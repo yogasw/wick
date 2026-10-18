@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -401,6 +402,12 @@ type Hub struct {
 	// orphanPoll is how often the tasks a restart left working are
 	// checked (settleOrphans). Tests shorten it.
 	orphanPoll time.Duration
+	// SelfDraining reports whether THIS process has handed over to a
+	// successor: a task it does not run may be the successor's, so it
+	// settles no orphan. nil = never.
+	SelfDraining func() bool
+	// orphanWatch: watchOrphans is running.
+	orphanWatch atomic.Bool
 	// progressHub holds the live progress of working tasks (progress.go).
 	progressHub
 	// batchHub holds the fan-in batches and the delivery outbox (batch.go).
