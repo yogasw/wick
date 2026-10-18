@@ -94,7 +94,7 @@ type messageInput struct {
 	Chat      string `wick:"desc=Run the message in this session of the teammate (session_id). On your own only with a session_id from a ticket (ticket_get / ticket_conversations, e.g. owner_session) or from session_lookup. Any other one (e.g. an older chat the chats op listed) ONLY when the user asks for it. Your own other chat (to = yourself) only when both chats are in the same ticket. A turn in a Slack thread session is posted in that thread. Omit to use the chat paired with this conversation."`
 	NewChat   bool   `wick:"desc=true starts a NEW chat with the teammate (a clean context) instead of the one paired with this conversation, and pairs that new chat with it: later messages from this conversation go there. A Slack remote agent gets a new Slack thread — except one whose Remote target is a specific thread, which always posts in that thread."`
 	TaskID    string `wick:"desc=Answer a task that came back state=input_required: pass its task_id (to and context_id may be omitted, and if given they must match that task)."`
-	AmendTask string `wick:"desc=Revise a task you already sent (its task_id) instead of sending a new one: not started yet, the teammate reads it with the brief; running, it goes into that turn; asking, it is the answer; ended, it goes as a new linked task. The teammate does ONE job and you get ONE reply. Set to = the task's teammate."`
+	AmendTask string `wick:"desc=Revise a task you already sent (its task_id) instead of sending a new one. Not started yet: the teammate reads it with the brief. Running: it goes into that turn. Asking: it is the answer. Ended: it goes as a new linked task. The teammate does ONE job and you get ONE reply. Set to = the task's teammate."`
 	Replace   bool   `wick:"desc=With amend_task: the message replaces the brief instead of adding to it."`
 	FanIn     string `wick:"dropdown=all|each|first;desc=How the replies of this message's group reach you. all (default): wait for every teammate of the group, then get ONE message with every reply — for one question to several teammates whose answers you combine. each: every reply on its own as it lands — for independent checks. first: the first answer only, the others are canceled — for the same question to several teammates when any one answer will do. Set by the group's first message, later ones keep it."`
 	Group     string `wick:"desc=Keep a discussion across several teammates in one result: pass the group_id an earlier message of this conversation returned to join that group (also in a later turn, while it is still open). none = this task is independent and its reply comes on its own. Omit: the messages you send in one turn form one group."`
@@ -111,7 +111,7 @@ type getTaskInput struct {
 
 type cancelTaskInput struct {
 	TaskID string `wick:"required;desc=A task_id returned by message."`
-	Mode   string `wick:"dropdown=soft|hard;desc=soft (default): a running turn is told to stop and wrap up safely; hard: the turn is killed at once (only when soft did not stop it)."`
+	Mode   string `wick:"dropdown=soft|hard;desc=soft (default): a running turn is told to stop and wrap up safely. hard: the turn is killed at once (only when soft did not stop it)."`
 }
 
 type listTasksInput struct{}
