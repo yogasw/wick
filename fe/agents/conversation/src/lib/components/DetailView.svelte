@@ -3359,7 +3359,9 @@
             {/if}
           </div>
         {/if}
-        <div class="page-col relative pb-3 md:pb-6">
+        <!-- Installed (PWA) with viewport-fit=cover, the composer clears the
+             home indicator: its zone's background runs under it. -->
+        <div class="page-col relative pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.5rem,env(safe-area-inset-bottom))]">
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->

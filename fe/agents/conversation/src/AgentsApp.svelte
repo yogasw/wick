@@ -974,7 +974,12 @@
 
 <ToastHost />
 
-<div class="team-app relative flex h-full w-full overflow-hidden bg-white-100 dark:bg-navy-800">
+<!-- viewport-fit=cover (layout.templ) lets the page reach under a notch
+     and the status bar of an installed PWA: the app keeps clear of them
+     here. The bottom inset is the composer's (DetailView), so its
+     background runs under the home indicator; the shell itself adds none
+     (agents_app_viewport_test). env() is 0 everywhere else. -->
+<div class="team-app relative flex h-full w-full overflow-hidden bg-white-100 dark:bg-navy-800 pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
   <!-- Roster -->
   {#if rosterOpen}
     <button

@@ -1257,6 +1257,58 @@ describe("ThreadMessage - Team", () => {
   });
 });
 
+describe("ThreadMessage - message types", () => {
+  test("a teammate's message is a link-400 card on the left with a 🤝 @handle chip", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "team", text: "Message from Anton (@anton):\nno 401s today" }), teamAgents: { anton: { name: "Anton" } } },
+    });
+    const card = screen.getByTestId("teammate-card");
+    expect(card.className).toContain("justify-start");
+    expect(card.innerHTML).toContain("border-l-link-400");
+    expect(screen.getByTestId("source-chip").textContent).toContain("🤝 @anton");
+    expect(container.innerHTML).not.toContain("bg-green-500");
+  });
+
+  test("a task reply handed back as subagent is a teammate card with its task, not a green bubble", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "subagent", text: "Reply from Captain (@captain) [task 01a14c56-abc, completed]:\n\nBatch 2 done." }) },
+    });
+    expect(screen.getByTestId("teammate-card").dataset.kind).toBe("reply");
+    expect(screen.getByTestId("task-chip").textContent).toContain("01a14c56");
+    expect(screen.getByTestId("task-chip").textContent).toContain("completed");
+    expect(screen.getByText("Batch 2 done.")).toBeTruthy();
+    expect(container.innerHTML).not.toContain("bg-green-500");
+  });
+
+  test("a scheduled message is a warning-400 system card, folded to its first line", async () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "schedule", text: "Checkpoint per jam\n1. Baca checklist\n2. Kirim ke Franky" }) },
+    });
+    const card = screen.getByTestId("system-card");
+    expect(card.innerHTML).toContain("border-l-warning-400");
+    expect(screen.getByTestId("source-chip").textContent).toContain("⏰ schedule");
+    expect(screen.getByTestId("system-card-body").textContent?.trim()).toBe("Checkpoint per jam");
+    expect(container.innerHTML).not.toContain("bg-green-500");
+    expect(screen.queryByTestId("sender-chip")).toBeNull();
+    await fireEvent.click(screen.getByTestId("card-fold"));
+    expect(screen.getByTestId("system-card-body").textContent).toContain("2. Kirim ke Franky");
+  });
+
+  test("a CLI report is a system card with the ⌨ cli chip", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ source: "cli", text: "deploy 0.1.535 SELESAI" }) } });
+    expect(screen.getByTestId("source-chip").textContent).toContain("⌨ cli");
+    expect(screen.queryByTestId("card-fold")).toBeNull();
+  });
+
+  test("a person's bubble stays green on the right, sized by the thread column", () => {
+    const { container } = render(ThreadMessage, { props: { turn: makeTurn({ text: "hi" }) } });
+    expect((container.firstElementChild as HTMLElement).className).toContain("justify-end");
+    expect(container.querySelector(".wick-human-col")).not.toBeNull();
+    expect(container.innerHTML).toContain("bg-green-500");
+    expect(screen.queryByTestId("system-card")).toBeNull();
+  });
+});
+
 describe("ThreadMessage - speaker", () => {
   test("an assistant turn names its server-set speaker", () => {
     render(ThreadMessage, {

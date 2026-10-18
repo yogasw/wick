@@ -304,7 +304,10 @@
   });
 </script>
 
-<div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3">
+<!-- The thread column is a size container (wick-thread): a person's bubble
+     sizes against it (ThreadMessage), so a narrow split view reads like a
+     phone. -->
+<div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3 [container:wick-thread/inline-size]">
   <div data-floating-day class="pointer-events-none sticky top-2 z-20 -mb-3 flex h-0 items-start justify-center">
     {#if floatLabel}
       <span class="rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm transition-opacity duration-300 {floatVisible ? 'opacity-100' : 'opacity-0'}">{floatLabel}</span>

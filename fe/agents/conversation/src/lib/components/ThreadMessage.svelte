@@ -10,7 +10,9 @@
   import { avatarTone } from "../senderTone.js";
   import { isViewer, viewerName } from "../viewer.js";
   import { bareSlashCommand } from "../slashCommand.js";
-  import { teamSender } from "../teamMention.js";
+  import { teamFrame } from "../teamMention.js";
+  import { systemSource, foldable, firstLine } from "../messageKind.js";
+  import FoldToggle from "./FoldToggle.svelte";
   import { isSystemEventKind } from "../systemEvents.js";
   import SystemEventChip from "./system/SystemEventChip.svelte";
   import RemoteQueueChip from "./RemoteQueueChip.svelte";
@@ -104,10 +106,20 @@
   /* Only an agent's reply can hold a live actioncard; the server's `cards`
      state decides whether a fence IS one (see cardMode). */
 
-  /* A teammate's message (source "team", framed "Message from Name
-     (@handle):") reads as from that agent — its avatar and name on the
-     chip, the frame dropped from the bubble — not as the person typing. */
-  const teamFrom = $derived(isUserTurn(turn) ? teamSender(turn.source, turn.text ?? "") : null);
+  /* A teammate's turn (a "Message from" it sent, a task's "Reply from",
+     a "Follow-up from", the "[team results …]" fan-in) reads as from that
+     agent — a card on the left with its chip, the frame dropped — not as
+     the person typing. */
+  const teamFrom = $derived(isUserTurn(turn) ? teamFrame(turn.source, turn.text ?? "") : null);
+  /* A turn a program posted (a schedule, a job's CLI report, a sub-agent's
+     result, the API): no person typed it, so it is a card on the left too,
+     never the green bubble on the right. */
+  const systemSrc = $derived(isUserTurn(turn) && !teamFrom ? systemSource(turn.source) : null);
+  /* A teammate's long message folds past a screenful; a program's card
+     shows only its first line until opened. */
+  let cardOpen = $state(false);
+  const cardBody = $derived(teamFrom ? teamFrom.body : (turn.text ?? ""));
+  const cardFolds = $derived(teamFrom ? foldable(cardBody, 14, 1200) : foldable(cardBody, 1, 160));
   const teamFromAgent = $derived(teamFrom ? teamAgents[teamFrom.handle] : undefined);
   const isSystemEvent = $derived(turn.role === "system" && isSystemEventKind(turn.kind));
   const teamNames = $derived(Object.fromEntries(Object.entries(teamAgents).map(([h, a]) => [h, a.name])));
@@ -178,7 +190,7 @@
     const raw = turn.text ?? "";
     if (!isUser) return { text: raw, note: "" };
     const at = raw.lastIndexOf("\n\n[routed]");
-    const body = (t: string) => (teamFrom ? (teamSender(turn.source, t)?.body ?? t) : t);
+    const body = (t: string) => (teamFrom ? (teamFrame(turn.source, t)?.body ?? t) : t);
     if (at < 0) return { text: body(raw), note: "" };
     return { text: body(raw.slice(0, at)), note: raw.slice(at + 2) };
   });
@@ -205,9 +217,8 @@
      The name comes from the structured `sender` field, never from the message
      text, so nobody can put someone else's name on their own message. */
   const sourceBadge = $derived.by(() => {
-    if (!isUser || teamFrom) return null;
+    if (!isUser || teamFrom || systemSrc) return null;
     const src = (turn.source ?? "").trim().toLowerCase();
-    if (src === "schedule") return { label: "Scheduled", icon: "clock" };
 
     const isWeb = src === "" || src === "ui" || src === "web";
     if (isWeb && !fromSomeoneElse) return null;
@@ -263,6 +274,7 @@
       return speakerName || agent?.name || turn.agent || "Assistant";
     }
     if (teamFrom) return teamFromAgent?.name || teamFrom.name;
+    if (systemSrc) return systemSrc.label;
     if (fromSomeoneElse && sourceBadge?.who) return sourceBadge.who;
     // Same name the server stores on the reply (sender name), "You" only
     // for a bubble that has none yet.
@@ -640,6 +652,74 @@
   <div class="flex justify-end">
     <span data-testid="postback-chip" title={turn.text} class="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">✓ {turn.postback.label || turn.postback.value}</span>
   </div>
+{:else if isUser && (teamFrom || systemSrc) && turn.text}
+  <!-- A teammate's or a program's turn: a card the width of an answer, on
+       the left, with its source chip and an accent on the left edge
+       (teammate link-400, program warning-400). The right side and the
+       green stay "a person typed this". -->
+  <div class="flex min-w-0 justify-start group" data-testid={teamFrom ? "teammate-card" : "system-card"} data-kind={teamFrom ? teamFrom.kind : systemSrc?.key}>
+    <div
+      class={"w-full min-w-0 rounded-xl border border-white-300 border-l-4 shadow-sm dark:border-navy-600 " +
+        (teamFrom
+          ? "border-l-link-400 bg-white-100 px-3 py-2 dark:border-l-link-400 dark:bg-navy-800"
+          : "border-l-warning-400 bg-warning-100/40 px-3 py-1.5 dark:border-l-warning-400 dark:bg-warning-400/10")}
+    >
+      <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] leading-4 text-black-800 dark:text-black-600">
+        {#if teamFrom}
+          <span data-testid="team-sender-chip" title={teamFrom.handle ? `${teamFrom.name} (@${teamFrom.handle}) · Team agent` : "Replies from several teammates"} class="inline-flex min-w-0 items-center gap-1.5">
+            {#if teamFrom.handle}
+              <AgentAvatar kind={teamFromAgent?.kind} image={teamFromAgent?.image} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={18} />
+              <span class="min-w-0 truncate font-medium text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span>
+            {/if}
+            {#if teamFrom.handle && onOpenAgent}
+              <button type="button" data-testid="source-chip" onclick={() => onOpenAgent?.(teamFrom.handle)} title={`Open the chat with @${teamFrom.handle}`} class="rounded-full bg-link-100 px-2 py-px font-semibold text-link-800 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-link-400 dark:bg-link-400/15 dark:text-link-100">🤝 @{teamFrom.handle}</button>
+            {:else}
+              <span data-testid="source-chip" class="rounded-full bg-link-100 px-2 py-px font-semibold text-link-800 dark:bg-link-400/15 dark:text-link-100">🤝 {teamFrom.handle ? "@" + teamFrom.handle : "team results"}</span>
+            {/if}
+          </span>
+          <span class="opacity-70">{teamFrom.kind === "message" ? "message" : teamFrom.kind === "reply" ? "task reply" : teamFrom.kind === "followup" ? "follow-up" : "team results"}</span>
+          {#if teamFrom.taskId}
+            <span data-testid="task-chip" title={"task " + teamFrom.taskId} class="rounded-full border border-link-400/30 px-1.5 font-mono text-[10px] text-link-800 dark:text-link-100">task {teamFrom.taskId.slice(0, 8)}{teamFrom.state ? " · " + teamFrom.state : ""}</span>
+          {/if}
+        {:else if systemSrc}
+          <span data-testid="source-chip" title={"Posted by " + systemSrc.label + ", not typed by a person"} class="rounded-full bg-warning-100 px-2 py-px font-semibold text-warning-800 dark:bg-warning-400/15 dark:text-warning-100">{systemSrc.icon} {systemSrc.label}</span>
+        {/if}
+        {#if stamp}
+          <span class="ml-auto shrink-0 text-[10px] text-black-500 dark:text-black-600">{stamp}</span>
+        {/if}
+      </div>
+      {#if teamFrom}
+        <div
+          use:enrich={cardBody}
+          class={"wick-prose wick-prose-sm mt-1 min-w-0 break-words text-black-900 dark:text-white-100" + (cardFolds && !cardOpen ? " max-h-80 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]" : "")}
+        >
+          {@html renderMarkdown(cardBody)}
+        </div>
+      {:else}
+        <div data-testid="system-card-body" class="mt-0.5 min-w-0 whitespace-pre-wrap text-sm leading-relaxed text-black-800 [overflow-wrap:anywhere] dark:text-black-600">
+          {#if cardFolds && !cardOpen}{firstLine(cardBody)}{:else}{@html linkifyText(cardBody)}{/if}
+        </div>
+      {/if}
+      <div class="flex items-center justify-end gap-1">
+        {#if cardFolds}
+          <FoldToggle open={cardOpen} label={teamFrom ? "Show more" : "Show full instructions"} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
+        {/if}
+        {#if canReply}
+          <button
+            type="button"
+            data-testid="reply-action"
+            aria-label="Reply to this message"
+            title="Reply"
+            onclick={startReply}
+            class="mt-1 inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-none text-black-500 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
+          >
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6.5 4 2.5 8l4 4M3 8h6.5a4 4 0 0 1 4 4v1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            Reply
+          </button>
+        {/if}
+      </div>
+    </div>
+  </div>
 {:else if isUser}
   <!-- Only the bubble the user just sent (optimistic local turn) slides in;
        history and refreshes render still. -->
@@ -647,7 +727,9 @@
        right-hand side means "a person typed this", and an agent writing into
        the thread is not that. -->
   <div class={"flex min-w-0 max-w-full gap-2 group " + (teamFrom ? "justify-start" : "justify-end")} class:wick-enter-up={turn.turn_id?.startsWith("local-user-")}>
-    <div class={"flex flex-col gap-1 max-w-[80%] min-w-0 " + (teamFrom ? "items-start" : "items-end")}>
+    <!-- Width follows the thread column (container query, see
+         ConversationThread): 90% on a phone, 80% on a tablet, 70% wide. -->
+    <div class={"wick-human-col flex flex-col gap-1 min-w-0 " + (teamFrom ? "items-start" : "items-end")}>
       {#if safeAttachments.length > 0}
         <div class={"flex flex-wrap gap-1.5 max-w-full " + (teamFrom ? "justify-start" : "justify-end")}>
           {#each safeAttachments as attachment}
@@ -1138,5 +1220,15 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .wick-enter-up { animation: none; }
+  }
+  /* A person's bubble: as wide as the thread column allows, read from the
+     column (container wick-thread) rather than the window, so a split
+     view or an open side panel counts too. */
+  .wick-human-col { max-width: 90%; }
+  @container wick-thread (min-width: 600px) {
+    .wick-human-col { max-width: 80%; }
+  }
+  @container wick-thread (min-width: 900px) {
+    .wick-human-col { max-width: 70%; }
   }
 </style>
