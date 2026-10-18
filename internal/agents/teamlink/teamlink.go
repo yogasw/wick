@@ -152,6 +152,11 @@ var (
 	// "only_me"). Send returns it wrapped in an OwnerOnlyError that names
 	// the agent and the way out.
 	ErrRemoteOwnerOnly = errors.New("that remote agent is set to take messages from its owner only — tell the user instead")
+	// ErrReplyInTask refuses a separate message to the teammate whose task
+	// the caller is answering right now: the turn's final answer already
+	// goes back to it as the task's reply, so the message would reach it
+	// twice. Send wraps it with the task id.
+	ErrReplyInTask = errors.New("you are answering this teammate's task right now — write it in your reply instead: your final answer goes back to them as the task's reply. Pass separate=true only for a message they must get on its own before you finish")
 )
 
 // OwnerOnlyError is ErrRemoteOwnerOnly for one agent: it says which
@@ -463,6 +468,9 @@ type taskRef struct {
 	firstCanceled bool
 	// undelivered: the outbox gave up on the prompt with its reply.
 	undelivered bool
+	// echo: the task's reply repeats a message the teammate already sent
+	// the asker while answering it (Send, separate): not delivered.
+	echo bool
 	// origin is OriginUser for a task a person's @mention started in the
 	// caller's chat (SendInput.Human), set by Send and never from model
 	// input; "" = the agent's own task. Only that person answers or
@@ -769,6 +777,10 @@ type SendInput struct {
 	// session; GroupNone keeps the task out of every batch; "" = the
 	// turn's batch.
 	Group string
+	// Separate lets a message through to the teammate whose task the
+	// caller is answering right now (ErrReplyInTask); a final reply that
+	// only repeats it is then not delivered again.
+	Separate bool
 }
 
 // Result is what a caller gets back.
@@ -874,6 +886,21 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
+	}
+	// A message to the asker of the task this turn answers would reach it
+	// twice: once now, once as the task's reply.
+	var replyTo a2a.TaskID
+	if answer == "" && in.Chat == "" && !in.Human && !self {
+		h.mu.Lock()
+		replyTo = h.answeringForLocked(caller.ID, in.CallerSession, target.ID)
+		h.mu.Unlock()
+		if replyTo != "" && !in.Separate {
+			err := fmt.Errorf("%w (task %s)", ErrReplyInTask, replyTo)
+			if in.Mention {
+				h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: target.Handle, Err: err})
+			}
+			return nil, err
+		}
 	}
 	// The switch is read once, outside h.mu (it may read the config).
 	batchOn := h.batching()
@@ -988,6 +1015,15 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	claim = nil
 	if lost != "" {
 		h.supersede(lost, task.ID)
+	}
+	if replyTo != "" {
+		// The asker has this text already: a final reply that repeats it
+		// is not delivered again (settle, taskRef.echo).
+		h.mu.Lock()
+		if r := h.tasks[replyTo]; r != nil {
+			r.markSent(echoKey(in.Text))
+		}
+		h.mu.Unlock()
 	}
 
 	wait := in.Wait
@@ -1213,6 +1249,25 @@ func (h *Hub) admit(ownerID, callerID, callerSession, contextID string, afterRep
 	cs.turns++
 	cs.touched = h.now()
 	return contextID, depth, cs.limit, nil
+}
+
+// answeringForLocked is the task callerSession is answering right now
+// for the agent asker (asked by that agent, not by a person's mention),
+// "" for none. Only an exact session match counts: a message from
+// another chat of the caller is no reply to it.
+func (h *Hub) answeringForLocked(callerID, callerSession, asker string) a2a.TaskID {
+	if callerSession == "" {
+		return ""
+	}
+	for id, in := range h.inflight[callerID] {
+		if in.session != callerSession {
+			continue
+		}
+		if ref := h.tasks[id]; ref != nil && ref.callerAgentID == asker && !ref.finished && !ref.canceled && !ref.userTask() {
+			return id
+		}
+	}
+	return ""
 }
 
 // inboundOf picks the inbound task a message from callerID continues:
@@ -1707,18 +1762,23 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 		// their chat (OnTaskChange), never as a prompt waking its agent.
 		ref.delivered, deliver = true, false
 	}
+	// A reply that only repeats what the teammate already sent the asker
+	// during the task (a separate message, Send) is not delivered again.
+	if !again {
+		ref.echo = state == a2a.TaskStateCompleted && reply != "" && ref.sent[echoKey(reply)]
+	}
 	if deliver {
 		ref.delivered = true
 		if reply != "" {
 			ref.markSent(textKey(reply))
 		}
 	}
-	session, to, opts := ref.callerSession, ref.to, ref.options
+	session, to, opts, echo := ref.callerSession, ref.to, ref.options, ref.echo
 	inBatch := h.byTask[id] != nil
 	h.mu.Unlock()
 	text := ""
 	// [silent]: nothing to hand back.
-	if deliver && h.Notify != nil && !(state == a2a.TaskStateCompleted && reply == "") {
+	if deliver && h.Notify != nil && !(state == a2a.TaskStateCompleted && reply == "") && !echo {
 		text = fmt.Sprintf("Reply from %s [task %s, %s]:\n\n%s", to.Label(), id, stateName(state), reply)
 		if state == a2a.TaskStateInputRequired {
 			if len(opts) > 0 {

@@ -520,6 +520,13 @@ func textKey(s string) string {
 	return hex.EncodeToString(sum[:12])
 }
 
+// echoKey is textKey without a closing full stop or exclamation mark:
+// a final answer that repeats a separate message (Send) as a sentence of
+// its own still matches it.
+func echoKey(s string) string {
+	return "echo:" + textKey(strings.TrimRight(strings.TrimSpace(s), ".! "))
+}
+
 // markSent notes a text key the caller already received.
 func (r *taskRef) markSent(key string) {
 	if r.sent == nil {

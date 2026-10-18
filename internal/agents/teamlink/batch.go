@@ -578,7 +578,7 @@ func (h *Hub) closeIfDoneLocked(b *batch) {
 // deliverable reports whether ref's ending is worth a prompt: an empty
 // reply ([silent]) and a cancel are not.
 func deliverable(ref *taskRef) bool {
-	if ref == nil || ref.canceled || ref.state == a2a.TaskStateCanceled {
+	if ref == nil || ref.canceled || ref.echo || ref.state == a2a.TaskStateCanceled {
 		return false
 	}
 	return !(ref.state == a2a.TaskStateCompleted && strings.TrimSpace(ref.reply) == "")

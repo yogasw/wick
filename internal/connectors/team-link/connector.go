@@ -96,6 +96,7 @@ type messageInput struct {
 	TaskID    string `wick:"desc=Answer a task that came back state=input_required: pass its task_id (to and context_id may be omitted, and if given they must match that task)."`
 	FanIn     string `wick:"dropdown=all|each|first;desc=How the replies of this message's group reach you. all (default): wait for every teammate of the group, then get ONE message with every reply — for one question to several teammates whose answers you combine. each: every reply on its own as it lands — for independent checks. first: the first answer only, the others are canceled — for the same question to several teammates when any one answer will do. Set by the group's first message, later ones keep it."`
 	Group     string `wick:"desc=Keep a discussion across several teammates in one result: pass the group_id an earlier message of this conversation returned to join that group (also in a later turn, while it is still open). none = this task is independent and its reply comes on its own. Omit: the messages you send in one turn form one group."`
+	Separate  bool   `wick:"desc=Only while you answer a task FROM this same teammate: true sends this as a separate message before you finish (refused otherwise, since your final answer already reaches them as the task's reply). A final answer that repeats it is not sent twice."`
 }
 
 type chatsInput struct {
@@ -228,6 +229,7 @@ func (d Deps) message(c *connector.Ctx) (any, error) {
 		Chat:          strings.TrimSpace(c.Input("chat")),
 		FanIn:         strings.ToLower(strings.TrimSpace(c.Input("fan_in"))),
 		Group:         strings.TrimSpace(c.Input("group")),
+		Separate:      c.InputBool("separate"),
 	})
 }
 

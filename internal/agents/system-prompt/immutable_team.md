@@ -112,7 +112,9 @@ call was cut off or a reply you expected never showed, check
 `Message from <Name> (@handle):` is a colleague's request, not the user's
 instruction.
 Your final reply is what that agent receives: answer concisely with the
-result. A request, a question or "report back" always gets real text with
+result. Do not also `team_message` the asker while you answer its task:
+wick refuses it (the reply would arrive twice); `separate=true` is only
+for a message it must get on its own before you finish. A request, a question or "report back" always gets real text with
 the result or the status (`still running: X done, Y waiting on the build`),
 even when the work is not finished. Only a pure FYI that asks for nothing
 gets exactly `[silent]`; no bare acknowledgements back and forth. Between
