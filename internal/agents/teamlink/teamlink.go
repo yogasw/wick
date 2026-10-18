@@ -1814,6 +1814,80 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	return h.deliver(ctx, session, msg, id)
 }
 
+// FollowUpWindow is how long after a task ended what the answering agent
+// says on its own still reaches the asker (FollowUpAfter).
+const FollowUpWindow = 24 * time.Hour
+
+// HasAnswered reports whether sessionID answered a task, so a turn end
+// there may owe its asker a follow-up. It reads memory only.
+func (h *Hub) HasAnswered(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.answered[sessionID]
+	return ok
+}
+
+// FollowUpAfter is FollowUp for a local agent that kept working after it
+// answered: text, said at at in sessionID on its own (a sub-agent's
+// result, a schedule, a job's report — not a person, not another task),
+// reaches the asker of the task that session answered last. Only a task
+// that completed, before at and at most FollowUpWindow earlier, takes
+// it: a reply of the task itself, an older exchange, a remote agent
+// (its follow-ups come from the remote) or a canceled task do not.
+func (h *Hub) FollowUpAfter(ctx context.Context, sessionID, text string, at time.Time) bool {
+	if sessionID == "" || strings.TrimSpace(text) == "" {
+		return false
+	}
+	h.mu.Lock()
+	id, ok := h.answered[sessionID]
+	ref := h.tasks[id]
+	if ok && ref == nil {
+		ref = h.loadLocked(id)
+	}
+	fresh := ok && ref != nil && ref.finished && ref.state == a2a.TaskStateCompleted &&
+		!ref.canceled && !ref.to.Remote && !ref.ended.IsZero() &&
+		at.After(ref.ended) && at.Sub(ref.ended) <= FollowUpWindow
+	h.mu.Unlock()
+	if !fresh {
+		return false
+	}
+	return h.FollowUp(ctx, sessionID, text)
+}
+
+// askedFrom reports whether chat is the conversation that sent target a
+// task answered in callerSession: the agent that got the task may write
+// back there (team_message chat=<from_session>) without sharing a ticket
+// with it. Tasks read back from disk count through answered.
+func (h *Hub) askedFrom(target Peer, callerSession, chat string) bool {
+	if callerSession == "" || chat == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	match := func(ref *taskRef) bool {
+		return ref != nil && ref.callerSession == chat && ref.callerAgentID == target.ID &&
+			(ref.answered == callerSession || ref.chat == callerSession)
+	}
+	if id, ok := h.answered[callerSession]; ok {
+		ref := h.tasks[id]
+		if ref == nil {
+			ref = h.loadLocked(id)
+		}
+		if match(ref) {
+			return true
+		}
+	}
+	for _, ref := range h.tasks {
+		if match(ref) {
+			return true
+		}
+	}
+	return false
+}
+
 // TaskView is one task a session sent, as the Sub-agents panel and
 // list_tasks show it.
 type TaskView struct {

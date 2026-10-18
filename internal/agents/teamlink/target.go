@@ -47,6 +47,11 @@ func (h *Hub) chatAllowed(ctx context.Context, target Peer, callerSession, chat 
 	if !self && h.ownsChat(ctx, target, chat) {
 		return true, nil
 	}
+	// The conversation that sent this chat a task: its answer may go
+	// back there, ticket or not. Never paired (a chat of the asker's).
+	if !self && h.askedFrom(target, callerSession, chat) {
+		return false, nil
+	}
 	st, ok := h.Turns.(SessionTargeter)
 	if !ok {
 		return false, ErrUnknownChat

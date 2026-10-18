@@ -79,6 +79,9 @@ func TestTaskAskedAndEndedAt(t *testing.T) {
 	}
 
 	h2, _, _ := newTestHub(func(Peer, string) string { return "" })
+	// The same clock: on the real one the fixed 2026-10-10 dates age past
+	// TaskKeep and the restart drops the task.
+	h2.now = clock.get
 	if err := h2.Persist(dir); err != nil {
 		t.Fatal(err)
 	}

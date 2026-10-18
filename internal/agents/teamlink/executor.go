@@ -13,7 +13,21 @@ import (
 
 // SilentToken is the reply that means "nothing to add". The task still
 // completes, just without text, so no acknowledgement ping-pongs back.
+// Between agents the marker only keeps people's channels quiet: a reply
+// that opens with it and says more is delivered whole (StripSilent).
 const SilentToken = "[silent]"
+
+// StripSilent returns s without a leading [silent] marker (case ignored,
+// leading whitespace tolerated) and whether it had one. A teammate's
+// reply is the asker's data whatever its marker says, so only the marker
+// goes; a bare marker leaves "".
+func StripSilent(s string) (string, bool) {
+	t := strings.TrimLeft(s, " \t\r\n")
+	if len(t) < len(SilentToken) || !strings.EqualFold(t[:len(SilentToken)], SilentToken) {
+		return s, false
+	}
+	return strings.TrimSpace(t[len(SilentToken):]), true
+}
 
 // executor is the a2asrv.AgentExecutor of one Team agent.
 type executor struct {
@@ -199,11 +213,14 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		case runErr != nil:
 			state = a2a.TaskStateFailed
 			reply = "the teammate's turn failed: " + runErr.Error()
-		case reply == SilentToken:
-			reply = ""
-		case strings.HasPrefix(reply, InputRequiredToken):
-			state = a2a.TaskStateInputRequired
-			reply = strings.TrimSpace(strings.TrimPrefix(reply, InputRequiredToken))
+		default:
+			// [silent] only quiets people's channels: what follows the
+			// marker is still the asker's answer.
+			reply, _ = StripSilent(reply)
+			if strings.HasPrefix(reply, InputRequiredToken) {
+				state = a2a.TaskStateInputRequired
+				reply = strings.TrimSpace(strings.TrimPrefix(reply, InputRequiredToken))
+			}
 		}
 		if reply != "" {
 			out = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(reply))

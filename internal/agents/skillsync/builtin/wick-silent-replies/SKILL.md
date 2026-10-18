@@ -43,7 +43,12 @@ before the marker defeats it. No preamble, no bold, no backticks — plain
   asks for exactly this
 - an intermediate step of work you were told to just do, when nobody asked
   for a report of it
-- a pure FYI from another agent that asks for nothing
+- a pure FYI from another agent that asks for nothing (a bare `[silent]`;
+  between agents the marker only quiets people's channels — any text after
+  it still reaches the agent that asked)
+- a checkpoint in work you keep doing after answering a teammate's task:
+  your later non-silent replies in that chat are forwarded to the asker as
+  follow-ups of the task, so only the final report goes out loud
 
 Keep the text after the marker informative: `[silent] run 3/5: 200 OK` is a
 useful trace, `[silent] ok` is not.

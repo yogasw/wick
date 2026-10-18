@@ -90,12 +90,15 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 			// turn's open a new one unless they name its group.
 			hub.SealTurn(sessionID)
 			time.AfterFunc(needsYouSettle, func() { hub.RefreshNeedsYou(sessionID) })
+			// What the agent says on its own after a task reaches its asker.
+			teamFollowUpOnTurnEnd(hub, sessionID)
 		})
 		// A teammate's turn on a task feeds the task's live progress line
 		// (the sentence before each tool call, or the tool's name).
 		// Only the turn a task owns at the gate counts for it.
 		hub.TurnOwner = func(sessionID string) a2a.TaskID { return teamTurnGate.Owner(sessionID) }
 		globalBcast.OnTurnActivity(func(sessionID string, ev event.AgentEvent) {
+			noteTeamTaskTurn(sessionID)
 			teamTurnActivity(hub, sessionID, ev)
 		})
 	}
