@@ -230,6 +230,11 @@ export function taskWait(t: TeamTaskItem): TaskWait | null {
     const label = `queued · #${t.queue_pos}`;
     return { kind: "queued", label, detail: t.wait_note || label };
   }
+  if ((t.gate_pos ?? 0) > 0) {
+    // In line at the teammate's chat: its current turn has to end first.
+    const label = `in line · #${t.gate_pos}${t.to_handle ? ` at @${t.to_handle}` : ""}`;
+    return { kind: "queued", label, detail: t.wait_note || label };
+  }
   return null;
 }
 

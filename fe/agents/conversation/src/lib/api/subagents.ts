@@ -28,6 +28,24 @@ export const getTeamTasksView = (base: string, id: string) =>
     `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
   ).pipe(Effect.map((r) => ({ tasks: r?.tasks ?? [], showTeammates: r?.show_teammates !== false })));
 
+/** A team task waiting for its turn in this chat (GET …/team-queue). */
+export type QueuedTeamTask = {
+  task_id: string;
+  pos: number;
+  from_handle: string;
+  from_name: string;
+  title: string;
+  since: string;
+  revisions?: number;
+};
+
+// getTeamQueue lists the team tasks waiting for their turn in this chat,
+// next first, for the "Queued (n)" strip over the composer.
+export const getTeamQueue = (base: string, id: string) =>
+  apiGetE<{ queue: QueuedTeamTask[] | null }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-queue`,
+  ).pipe(Effect.map((r) => r?.queue ?? []));
+
 // getTeamTaskThread reads the messages of one task this chat sent, oldest
 // first, for the task's thread (chip section, Tasks tab).
 export const getTeamTaskThread = (base: string, id: string, taskId: string) =>

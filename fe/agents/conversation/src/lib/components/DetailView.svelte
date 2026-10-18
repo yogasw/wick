@@ -65,6 +65,7 @@
   import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
+  import TeamQueueStrip from "./TeamQueueStrip.svelte";
   import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, summarizeTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
@@ -3362,6 +3363,8 @@
         <!-- Installed (PWA) with viewport-fit=cover, the composer clears the
              home indicator: its zone's background runs under it. -->
         <div class="page-col relative pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+          <!-- Team tasks waiting for this chat's turn (B2). -->
+          <TeamQueueStrip {base} {sessionId} />
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->

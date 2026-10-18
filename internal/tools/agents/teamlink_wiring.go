@@ -50,6 +50,9 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// A question no turn of the sending chat is handling waits for the
 	// user: the thread shows it as "Needs you".
 	hub.CallerBusy = poolSessionBusy
+	// The tasks waiting for their turn in a chat show on both sides: the
+	// sender's card ("#2 in line") and the chat's "Queued (n)" strip.
+	hub.GateLine = teamTurnGate.Waiting
 	// A working task's teammate being restarted after an idle kill, or
 	// waiting for a free slot, reads "Restarting · retry 1/2" / "Queued ·
 	// #2" on its card instead of a silent spinner.
@@ -437,6 +440,31 @@ func sessionTeamTasks(c *tool.Ctx) {
 	// show_teammates: the session's agent names teammates in its channels;
 	// off = its sent replies carry "teammates hidden in …" (any view).
 	c.JSON(http.StatusOK, map[string]any{"tasks": tasks, "show_teammates": TeamShowsTeammates(c.Context(), id)})
+}
+
+// sessionTeamQueue handles GET /api/sessions/{id}/team-queue: the team
+// tasks waiting for their turn in this chat (TurnGate), next first, for
+// the "Queued (n)" strip over its composer. Read-only; the session must
+// be the caller's.
+func sessionTeamQueue(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	queue := []teamlink.QueuedTask{}
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			if q := h.QueueAt(c.Context(), id); q != nil {
+				queue = q
+			}
+		}
+	}
+	c.JSON(http.StatusOK, map[string]any{"queue": queue})
 }
 
 // sessionTeamTaskThread handles GET /api/sessions/{id}/team-tasks/{task}/thread:

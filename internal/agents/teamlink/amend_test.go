@@ -14,6 +14,8 @@ type heldTurns struct {
 	start chan struct{}
 	got   chan string
 	reply chan string
+	// answer, when set, answers from the turn's text instead of reply.
+	answer func(text string) string
 }
 
 func newHeldTurns() *heldTurns {
@@ -24,7 +26,11 @@ func (g *heldTurns) MainSession(_ context.Context, agent Peer) string { return "
 
 func (g *heldTurns) Run(ctx context.Context, agent Peer, text string) (string, string, error) {
 	<-g.start
-	g.got <- TurnText(ctx, text)
+	text = TurnText(ctx, text)
+	g.got <- text
+	if g.answer != nil {
+		return "sess-" + agent.ID, g.answer(text), nil
+	}
 	return "sess-" + agent.ID, <-g.reply, nil
 }
 

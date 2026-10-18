@@ -52,7 +52,9 @@ func (h *Hub) fillWait(v *TaskView) {
 	}
 	w := h.WaitOf(v.to, v.ChatID)
 	v.RestartAttempt, v.RestartMax, v.QueuePos = w.RestartAttempt, w.RestartMax, w.QueuePos
-	v.WaitNote = w.Note()
+	if n := w.Note(); n != "" || v.GatePos == 0 {
+		v.WaitNote = n
+	}
 	h.waitMu.Lock()
 	if h.shownWait == nil {
 		h.shownWait = map[a2a.TaskID]TargetWait{}

@@ -20,6 +20,11 @@ describe("taskWait", () => {
     expect(taskWait(t)?.label).toBe("queued · #2");
     expect(taskProgress(t)).toBe("target queued for a free slot (#2)");
   });
+  test("a task in line at the teammate's chat says where and which place", () => {
+    const t = task({ gate_pos: 2, wait_note: "waiting for its turn at @jaya (#2 in line)" });
+    expect(taskWait(t)).toEqual({ kind: "queued", label: "in line · #2 at @jaya", detail: "waiting for its turn at @jaya (#2 in line)" });
+    expect(chipLabel(t, "Captain")).toBe("in line · #2 at @jaya");
+  });
   test("own progress line wins over the wait detail", () => {
     expect(taskProgress(task({ queue_pos: 1, progress: "Reading Notion…" }))).toBe("Reading Notion…");
   });

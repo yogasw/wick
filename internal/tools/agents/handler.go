@@ -322,6 +322,7 @@ func Register(r tool.Router) {
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
 	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
+	r.GET("/api/sessions/{id}/team-queue", sessionTeamQueue)
 	r.POST("/api/sessions/{id}/team-tasks/summarize", sessionTeamTasksSummarize)
 	r.POST("/api/sessions/{id}/team-tasks/cancel-working", sessionTeamTasksCancelWorking)
 	r.GET("/api/sessions/{id}/team-tasks/{task}/thread", sessionTeamTaskThread)

@@ -980,6 +980,8 @@ export type TeamTaskItem = {
   restart_max?: number;
   /** The teammate waits for a free slot (1 = next). */
   queue_pos?: number;
+  /** Place in the line of the teammate's chat (TurnGate, 1 = next). */
+  gate_pos?: number;
   /** restart_attempt / queue_pos in one plain line, for the details. */
   wait_note?: string;
   /** The batch (group_id) the task is in. */

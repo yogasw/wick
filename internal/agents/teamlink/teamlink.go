@@ -381,6 +381,9 @@ type Hub struct {
 	// linkMu serialises pairing a caller's conversation with a target's
 	// chat (chatFor), so two messages sent at once open one chat, not two.
 	linkMu sync.Mutex
+	// GateLine lists the tasks waiting for their turn in a session
+	// (TurnGate.Waiting), next first; nil = no line is shown.
+	GateLine func(sessionID string) []a2a.TaskID
 	// CallerBusy reports whether a session runs (or waits for) a turn. A
 	// question nobody's turn is handling waits for the user (NeedsYou);
 	// nil = never busy.
@@ -909,6 +912,26 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 				h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: target.Handle, Err: err})
 			}
 			return nil, err
+		}
+	}
+	// A second message to a teammate that has not started on the first
+	// one yet joins it as a revision: one job, one reply (B2). separate,
+	// a new or chosen chat and an explicit group keep it a task of its own.
+	if answer == "" && in.Chat == "" && !in.NewChat && !in.Human && !self && !in.Separate && in.Group == "" && in.ContextID == "" {
+		h.mu.Lock()
+		open := h.openTaskToLocked(caller.ID, in.CallerSession, target.ID)
+		h.mu.Unlock()
+		if open != "" {
+			res, err := h.Amend(ctx, AmendInput{CallerSession: in.CallerSession, CallerAgentID: caller.ID, TaskID: string(open), Text: in.Text})
+			if err == nil && res != nil {
+				// It may have started or ended meanwhile: Amend put the text
+				// in its turn, or sent it as a new linked task.
+				if res.TaskID == string(open) {
+					res.State = "merged"
+					res.Note = fmt.Sprintf("Merged into task %s, which @%s had not finished yet: ONE reply comes for both. Next time pass amend_task=%s. (separate=true sends a task of its own.) ", open, target.Handle, open) + res.Note
+				}
+				return res, nil
+			}
 		}
 	}
 	// The switch is read once, outside h.mu (it may read the config).
@@ -2049,10 +2072,13 @@ type TaskView struct {
 	// idle kill (retry 1 of 2) and QueuePos: it waits for a free slot (1 =
 	// next). The task stays working; WaitNote says it in one line. Read
 	// live from the pool (wait.go), never stored.
-	RestartAttempt int    `json:"restart_attempt,omitempty"`
-	RestartMax     int    `json:"restart_max,omitempty"`
-	QueuePos       int    `json:"queue_pos,omitempty"`
-	WaitNote       string `json:"wait_note,omitempty"`
+	RestartAttempt int `json:"restart_attempt,omitempty"`
+	RestartMax     int `json:"restart_max,omitempty"`
+	QueuePos       int `json:"queue_pos,omitempty"`
+	// GatePos is the task's place in the line of its teammate's chat
+	// (TurnGate, 1 = next): it waits for a turn of that chat to end.
+	GatePos  int    `json:"gate_pos,omitempty"`
+	WaitNote string `json:"wait_note,omitempty"`
 	// to is the teammate, for fillWait.
 	to Peer
 }
@@ -2270,6 +2296,9 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	v.ReplacedToHandle, v.ReplacedToName = ref.replacedHandle, ref.replacedTo
 	if v.State == "working" {
 		v.Progress = h.progressOf(id)
+		if v.GatePos = h.gatePosLocked(id, ref); v.GatePos > 0 {
+			v.WaitNote = gateNote(ref.to.Handle, v.GatePos)
+		}
 	}
 	return v
 }
