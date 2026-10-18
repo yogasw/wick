@@ -1724,19 +1724,30 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
+	if err := afterTeamAgentDelete(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// afterTeamAgentDelete removes what a deleted agent leaves behind: its
+// channel links, remote, schedules and project (purged with its chats, or
+// untagged). rows is the owner's roster as it was before the delete. Used
+// by the Settings delete and the Captain's agents.delete alike.
+func afterTeamAgentDelete(ctx context.Context, p entity.AgentPersona, rows []entity.AgentPersona, purge bool) error {
 	removeAgentSlack(p.ID)
 	removeAgentSlackInstant(p.ID)
 	removeAgentRemote(p)
 	removeAgentREST(p.ID)
 	removeAgentTelegram(p.ID)
 	// Before the project goes: the scope is read from the live sessions.
-	deleteAgentSchedules(c.Context(), p)
-	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
-		log.Ctx(c.Context()).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": "agent deleted, but its project was not: " + err.Error()})
-		return
+	deleteAgentSchedules(ctx, p)
+	if err := releaseTeamAgentProject(ctx, p, rows, purge); err != nil {
+		log.Ctx(ctx).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
+		return fmt.Errorf("agent deleted, but its project was not: %w", err)
 	}
-	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	return nil
 }
 
 // releaseTeamAgentProject settles the project of a deleted agent: purge it

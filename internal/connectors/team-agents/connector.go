@@ -94,6 +94,20 @@ type FoldersInput struct {
 	Order []string
 }
 
+// DeleteInput is agents.delete's input.
+type DeleteInput struct {
+	// Agent is the @handle or id to remove.
+	Agent string
+	// Confirm must repeat the agent's handle: a typo never removes the
+	// wrong agent.
+	Confirm string
+	// Mode is delete (gone for good) or disable (kept, turned off).
+	Mode string
+	// PurgeChats deletes the agent's project with its chats; false keeps
+	// the project as an ordinary one (delete only).
+	PurgeChats bool
+}
+
 // Ops is what the connector drives; implemented in internal/tools/agents.
 type Ops interface {
 	List(ctx context.Context, sessionID string) (any, error)
@@ -102,6 +116,7 @@ type Ops interface {
 	SetAccess(ctx context.Context, sessionID string, in AccessInput) (any, error)
 	Schedule(ctx context.Context, sessionID string, in ScheduleInput) (any, error)
 	Folders(ctx context.Context, sessionID string, in FoldersInput) (any, error)
+	Delete(ctx context.Context, sessionID string, in DeleteInput) (any, error)
 }
 
 // Deps wires the connector to its implementation. Ops is late-bound.
@@ -117,7 +132,7 @@ func Meta() connector.Meta {
 		Key:  Key,
 		Name: "Team agents",
 		Description: "Manage the other agents of your owner's Team: see what each is doing, create one, " +
-			"edit its persona, propose access changes for the owner to approve and sort agents into sidebar folders.",
+			"edit its persona, propose access changes for the owner to approve, sort agents into sidebar folders and, when the owner asks, delete or turn one off.",
 		Icon:  "🧭",
 		Fixed: true,
 	}
@@ -185,6 +200,13 @@ type foldersInput struct {
 	Order   string `wick:"desc=Comma-separated folder names, first to last (order). Folders not named keep their order after them."`
 }
 
+type deleteInput struct {
+	Agent      string `wick:"required;desc=The agent's @handle or id."`
+	Confirm    string `wick:"required;desc=The agent's handle again (e.g. @client-dermies), as a confirmation."`
+	Mode       string `wick:"dropdown=delete|disable;desc=delete (default): the agent is removed for good. disable: it stays, turned off (the owner can turn it on again)."`
+	PurgeChats bool   `wick:"desc=delete only: also delete the agent's project with its chats and files. false (default) keeps them as an ordinary project."`
+}
+
 // Operations lists the connector's ops.
 func Operations(deps Deps) []connector.Category {
 	return []connector.Category{
@@ -207,6 +229,9 @@ func Operations(deps Deps) []connector.Category {
 			connector.OpDestructive("folders", "Organize Sidebar Folders",
 				"List or change the owner's Team-sidebar folders: list (folders with their agents, and the loose ones), move an agent into a folder (created when missing) or out of all, rename, delete (its agents become loose) or order folders. Changes only the owner's own sidebar, silently. Refused when the owner switched Captain folder organizing off.",
 				foldersInput{}, deps.folders, wickdocs.Docs{}),
+			connector.OpDestructive("delete", "Delete or Disable an Agent",
+				"Remove another agent of the Team (mode=delete) or turn it off (mode=disable). Only when the owner (or an admin) is the person of this chat, never a Captain, never yourself, and confirm repeating its handle. Refused while any chat of that agent is running or queued: try again once it is idle. Do it only when the owner asked for it.",
+				deleteInput{}, deps.delete, wickdocs.Docs{}),
 		),
 	}
 }
@@ -318,6 +343,17 @@ func (d Deps) folders(c *connector.Ctx) (any, error) {
 	return ops.Folders(c.Context(), c.SessionID(), FoldersInput{
 		Action: strings.TrimSpace(strings.ToLower(c.Input("action"))), Agent: strings.TrimSpace(c.Input("agent")),
 		Folder: strings.TrimSpace(c.Input("folder")), NewName: strings.TrimSpace(c.Input("new_name")), Order: order,
+	})
+}
+
+func (d Deps) delete(c *connector.Ctx) (any, error) {
+	ops, err := d.ops()
+	if err != nil {
+		return nil, err
+	}
+	return ops.Delete(c.Context(), c.SessionID(), DeleteInput{
+		Agent: strings.TrimSpace(c.Input("agent")), Confirm: strings.TrimSpace(c.Input("confirm")),
+		Mode: strings.TrimSpace(strings.ToLower(c.Input("mode"))), PurgeChats: c.InputBool("purge_chats"),
 	})
 }
 
