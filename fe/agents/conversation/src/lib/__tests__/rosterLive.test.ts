@@ -28,6 +28,27 @@ describe("liveRoster", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  test("a folders signal reads only the folders, once a burst", () => {
+    const { s, connect } = fakeStream();
+    const reload = vi.fn();
+    const reloadFolders = vi.fn();
+    liveRoster("/b", { reload, reloadFolders }, connect);
+    s.h!.onAgentChanged!({ folders: true });
+    s.h!.onAgentChanged!({ folders: true });
+    vi.advanceTimersByTime(ROSTER_REFETCH_DEBOUNCE_MS);
+    expect(reloadFolders).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  test("a folders signal reads the whole roster when nobody reads folders alone", () => {
+    const { s, connect } = fakeStream();
+    const reload = vi.fn();
+    liveRoster("/b", { reload }, connect);
+    s.h!.onAgentChanged!({ folders: true });
+    vi.advanceTimersByTime(ROSTER_REFETCH_DEBOUNCE_MS);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   test("no poll while connected; a slow one while down; a read on reconnect", () => {
     const { s, connect } = fakeStream();
     const reload = vi.fn();

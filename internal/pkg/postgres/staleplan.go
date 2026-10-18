@@ -28,14 +28,22 @@ const sqlStateInvalidCachedPlan = "0A000"
 // from outside the process, the symptom stays invisible to users instead
 // of surfacing as an intermittent 500.
 //
-// Retrying on the same connection is correct — pgx flushes the offending
-// statement from that connection's cache when it fails, so the second
-// attempt re-plans against the current schema. That is pgx's documented
-// behaviour (see TestStmtCacheInvalidation in jackc/pgx), and it is why
-// this needs no way to evict a connection from database/sql's pool.
+// pgx flushes the offending statement from a connection's cache when it
+// fails, so a retry on that connection re-plans against the current
+// schema (TestStmtCacheInvalidation in jackc/pgx). But database/sql hands
+// the retry ANY free connection, and after a schema change every pooled
+// connection holds the stale plan. That is exactly the zero-downtime
+// handover: the successor runs AutoMigrate while the old process is still
+// serving and draining, so the old process's whole pool goes stale at
+// once (0.1.524 added agent_personas.captain_policy; the Team page then
+// showed 0A000 for ~10 minutes until the drain ended). One retry landed
+// on the next stale connection and surfaced the error.
 //
-// One retry only. A second 0A000 means something is rewriting the schema
-// continuously, which is a real bug worth surfacing rather than hiding.
+// So retry up to staleRetries times: each failure cleans one connection,
+// and the idle pool is smaller than that. Still bounded, so a schema that
+// is rewritten continuously surfaces instead of looping forever.
+const staleRetries = 12
+
 type stalePlanPool struct {
 	gorm.ConnPool
 }
@@ -92,15 +100,28 @@ func logRetry(query string) {
 
 func (p stalePlanPool) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	res, err := p.ConnPool.ExecContext(ctx, query, args...)
-	if isStalePlan(err) {
+	for i := 0; i < staleRetries && isStalePlan(err); i++ {
 		logRetry(query)
-		return p.ConnPool.ExecContext(ctx, query, args...)
+		res, err = p.ConnPool.ExecContext(ctx, query, args...)
 	}
 	return res, err
 }
 
 func (p stalePlanPool) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	rows, err := p.ConnPool.QueryContext(ctx, query, args...)
+	for i := 0; i < staleRetries; i++ {
+		if !p.stale(rows, err) {
+			break
+		}
+		logRetry(query)
+		rows, err = p.ConnPool.QueryContext(ctx, query, args...)
+	}
+	return rows, err
+}
+
+// stale reports whether a QueryContext result hit a stale plan, closing
+// the rows when it did.
+func (stalePlanPool) stale(rows *sql.Rows, err error) bool {
 	// A stale plan can surface either from QueryContext itself or from
 	// rows.Err() once the result set is walked, depending on where the
 	// protocol notices the mismatch. Checking both is what makes the
@@ -108,22 +129,17 @@ func (p stalePlanPool) QueryContext(ctx context.Context, query string, args ...a
 	if err == nil && rows != nil {
 		if rerr := rows.Err(); isStalePlan(rerr) {
 			rows.Close()
-			logRetry(query)
-			return p.ConnPool.QueryContext(ctx, query, args...)
+			return true
 		}
 	}
-	if isStalePlan(err) {
-		logRetry(query)
-		return p.ConnPool.QueryContext(ctx, query, args...)
-	}
-	return rows, err
+	return isStalePlan(err)
 }
 
 func (p stalePlanPool) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	row := p.ConnPool.QueryRowContext(ctx, query, args...)
-	if row != nil && isStalePlan(row.Err()) {
+	for i := 0; i < staleRetries && row != nil && isStalePlan(row.Err()); i++ {
 		logRetry(query)
-		return p.ConnPool.QueryRowContext(ctx, query, args...)
+		row = p.ConnPool.QueryRowContext(ctx, query, args...)
 	}
 	return row
 }

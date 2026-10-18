@@ -272,6 +272,18 @@ describe("ConversationThread remote progress label", () => {
   });
 });
 
+describe("ConversationThread wait note", () => {
+  test("a queued turn says so instead of thinking…; a silent one keeps its label and adds the silence", async () => {
+    const props = (waitNote: { label: string; replaces: boolean } | null) => ({ turns: [], live: null, typing: { active: true, substate: "spawning" }, loading: false, waitNote });
+    const { rerender } = render(ConversationThread, { props: props({ label: "queued #2 · claude/claude_waba 4/4", replaces: true }) });
+    expect(screen.getByTestId("typing-label").textContent).toBe("queued #2 · claude/claude_waba 4/4");
+    await rerender(props({ label: "no output for 1m 40s · host strained (memory 93%, CPU 97%)", replaces: false }));
+    expect(screen.getByTestId("typing-label").textContent).toBe("spawning… · no output for 1m 40s · host strained (memory 93%, CPU 97%)");
+    await rerender(props(null));
+    expect(screen.getByTestId("typing-label").textContent).toBe("spawning…");
+  });
+});
+
 describe("ConversationThread working indicator placement", () => {
   test("sits above the turn's trace and stays while the live turn runs", async () => {
     vi.useFakeTimers();

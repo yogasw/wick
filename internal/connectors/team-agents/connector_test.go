@@ -1,6 +1,7 @@
 package teamagents
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/team"
@@ -14,7 +15,7 @@ func TestModuleShape(t *testing.T) {
 	if team.TierOf(m.Meta.DefaultTags) != team.TierPlatform {
 		t.Error("the connector must be Platform-tagged so the owner's catalog carries it")
 	}
-	want := map[string]bool{"list": false, "create": true, "update_persona": true, "set_access": true, "schedule": true}
+	want := map[string]bool{"list": false, "create": true, "update_persona": true, "set_access": true, "schedule": true, "folders": true, "delete": true}
 	n := 0
 	for _, cat := range m.Operations {
 		for _, op := range cat.Ops {
@@ -43,5 +44,25 @@ func TestParseGrants(t *testing.T) {
 	}
 	if _, err := ParseGrants(`{"oops":1}`); err == nil {
 		t.Error("non-array must fail")
+	}
+}
+
+func TestParseNativeTools(t *testing.T) {
+	if got, err := ParseNativeTools(""); err != nil || got != nil {
+		t.Errorf("empty = %v %v", got, err)
+	}
+	got, err := ParseNativeTools("write, bash ,Read")
+	if err != nil || strings.Join(got, ",") != "Read,Bash,Write" {
+		t.Errorf("csv = %v %v", got, err)
+	}
+	got, err = ParseNativeTools(`["Edit"]`)
+	if err != nil || len(got) != 1 || got[0] != "Edit" {
+		t.Errorf("json = %v %v", got, err)
+	}
+	if got, err := ParseNativeTools("[]"); err != nil || got == nil || len(got) != 0 {
+		t.Errorf("[] must be an empty, non-nil list: %v %v", got, err)
+	}
+	if _, err := ParseNativeTools("Bash,Rm"); err == nil {
+		t.Error("unknown tool must fail")
 	}
 }

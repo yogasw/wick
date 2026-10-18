@@ -941,6 +941,118 @@ export function buildAutoHeightSrcdoc(html: string, id: string, policy?: WidgetP
 const HTML_ARTIFACT_MAX_WAIT_RETRIES = 40; // ~2s at the 50ms debounce
 const htmlArtifactWaitCounts = new WeakMap<HTMLElement, number>();
 
+/* Classifies an `htmlfile` path by extension so the file shows in the chat
+   the way it can be shown. A path with no extension keeps the HTML preview
+   (today's behaviour); images, PDFs and plain text render inline; anything
+   else falls back to a download link. */
+const HTMLFILE_IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+const HTMLFILE_PDF_EXT = /\.pdf$/i;
+const HTMLFILE_TEXT_EXT = /\.(txt|md|json|csv|log)$/i;
+const HTMLFILE_HTML_EXT = /\.html?$/i;
+export type HtmlFileKind = "html" | "image" | "pdf" | "text" | "other";
+export function htmlFileKind(path: string): HtmlFileKind {
+  const name = path.trim().split(/[?#]/)[0].split("/").pop() ?? "";
+  if (HTMLFILE_IMAGE_EXT.test(name)) return "image";
+  if (HTMLFILE_PDF_EXT.test(name)) return "pdf";
+  if (HTMLFILE_TEXT_EXT.test(name)) return "text";
+  if (HTMLFILE_HTML_EXT.test(name) || !name.includes(".")) return "html";
+  return "other";
+}
+
+// files/raw serves whitelisted types (images, pdf, text) with
+// Content-Disposition: inline + nosniff, and SVG under a sandbox CSP, so
+// <img>/<iframe> show the file instead of triggering a download.
+function fileRawURL(path: string): string {
+  return `${fileBase}/sessions/${fileSessionId}/files/raw?path=${encodeURIComponent(path)}`;
+}
+function fileReadURL(path: string): string {
+  return `${fileBase}/sessions/${fileSessionId}/files/read?path=${encodeURIComponent(path)}`;
+}
+
+// A text file previews at most this much; the rest is one click away.
+export const HTMLFILE_TEXT_PREVIEW_BYTES = 200 * 1024;
+
+function htmlFileDownloadChip(path: string, name: string, label: string): HTMLAnchorElement {
+  const a = document.createElement("a");
+  a.href = fileDownloadURL(path);
+  a.download = name;
+  a.setAttribute("data-htmlfile-download", "");
+  a.textContent = label;
+  a.className =
+    "inline-flex items-center rounded-full border border-black-300 dark:border-black-700 px-3 py-1 text-sm text-black-800 dark:text-white-300 hover:bg-black-100 dark:hover:bg-black-800 no-underline";
+  return a;
+}
+
+function renderNonHtmlFile(el: HTMLElement, kind: Exclude<HtmlFileKind, "html">, path: string, name: string): void {
+  el.innerHTML = "";
+  el.setAttribute("data-htmlfile-nonhtml", kind);
+  if (kind === "image") {
+    el.className = "w-full";
+    const a = document.createElement("a");
+    a.href = fileRawURL(path);
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "inline-block";
+    const img = document.createElement("img");
+    img.src = fileRawURL(path);
+    img.alt = name;
+    img.loading = "lazy";
+    img.className = "max-w-full h-auto rounded-lg";
+    a.appendChild(img);
+    el.appendChild(a);
+    return;
+  }
+  if (kind === "pdf") {
+    el.className = "w-full";
+    const frame = document.createElement("iframe");
+    frame.src = fileRawURL(path);
+    frame.title = name;
+    frame.className = "w-full h-[600px] rounded-lg border border-black-300 dark:border-black-700";
+    el.appendChild(frame);
+    return;
+  }
+  if (kind === "text") {
+    el.className = "w-full";
+    const pre = document.createElement("pre");
+    pre.className =
+      "max-h-[480px] overflow-auto rounded-lg bg-black-100 dark:bg-black-800 p-3 text-xs whitespace-pre-wrap break-words";
+    pre.textContent = `Loading ${name}…`;
+    el.appendChild(pre);
+    void loadHtmlFileText(el, pre, path, name);
+    return;
+  }
+  el.className = "";
+  el.appendChild(htmlFileDownloadChip(path, name, `${name} (cannot be previewed, click to download)`));
+}
+
+// Reads through the same files/read JSON endpoint the file panel uses. A file
+// the server will not inline (too big, binary) or a failed read degrades to
+// the download chip.
+async function loadHtmlFileText(el: HTMLElement, pre: HTMLElement, path: string, name: string): Promise<void> {
+  try {
+    const res = await fetch(fileReadURL(path), { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as { content?: string; binary?: boolean; tooBig?: boolean };
+    if (body.tooBig || body.binary || typeof body.content !== "string") throw new Error("not previewable");
+    let text = body.content;
+    const truncated = text.length > HTMLFILE_TEXT_PREVIEW_BYTES;
+    if (truncated) text = text.slice(0, HTMLFILE_TEXT_PREVIEW_BYTES);
+    pre.textContent = text;
+    if (truncated) {
+      const note = document.createElement("div");
+      note.setAttribute("data-htmlfile-truncated", "");
+      note.className = "mt-1 text-xs text-black-700 dark:text-white-400 italic";
+      note.append(`Truncated to the first ${HTMLFILE_TEXT_PREVIEW_BYTES / 1024} KB. `);
+      note.appendChild(htmlFileDownloadChip(path, name, `Download ${name}`));
+      el.appendChild(note);
+    }
+  } catch {
+    el.innerHTML = "";
+    el.className = "";
+    el.appendChild(htmlFileDownloadChip(path, name, `${name} (preview unavailable, click to download)`));
+  }
+}
+
 function renderHtmlArtifacts(node: HTMLElement): void {
   const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
   for (const el of els) {
@@ -964,6 +1076,13 @@ function renderHtmlArtifacts(node: HTMLElement): void {
       htmlArtifactWaitCounts.delete(el);
       el.setAttribute("data-enriched", "");
       const name = path.split("/").pop() || "preview.html";
+      // Only HTML belongs in HtmlArtifact: a binary file (e.g. a PNG) loaded
+      // as a document renders its raw bytes as text.
+      const kind = htmlFileKind(path);
+      if (kind !== "html") {
+        renderNonHtmlFile(el, kind, path, name);
+        continue;
+      }
       el.innerHTML = "";
       el.className = "w-full";
       mount(HtmlArtifact, {

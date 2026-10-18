@@ -1,7 +1,7 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v8';
+const CACHE = 'wick-static-v9';
 const ASSETS = [
   '/public/img/icon.svg',
   '/public/img/icon-192.png',
@@ -172,6 +172,18 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const res = await fetchNetwork(req);
     if (res) return res;
+    // A navigation replayed through fetch() keeps the browser's own cache
+    // mode for it. On a reload or a history entry that mode can demand the
+    // HTTP cache, and Chrome then fails the request with ERR_CACHE_MISS
+    // without ever reaching the network — the page simply cannot be opened
+    // by URL. Ask once more as a plain request before giving up. redirect
+    // stays manual: a navigation must get the redirect itself, a followed
+    // one is refused by respondWith().
+    if (req.mode === 'navigate') {
+      try {
+        return await fetch(req.url, { credentials: 'include', cache: 'no-store', redirect: 'manual' });
+      } catch (_) { /* fall through to the offline copy */ }
+    }
     const cached = await caches.match(req);
     return cached || Response.error();
   })());

@@ -559,9 +559,28 @@ func Path(name string) (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
-// Load reads the config file for the given project name. Missing file
-// → defaults; parse errors surface to the caller.
+// Load reads the config file for the given project name, with the
+// provider instances and statuses taken from their own files (see
+// providers_store.go). Missing file → defaults; parse errors surface to
+// the caller.
 func Load(name string) (Config, error) {
+	cfg, err := loadFile(name)
+	if err != nil {
+		return Config{}, err
+	}
+	unlock, err := lockProviders(name)
+	if err != nil {
+		return Config{}, err
+	}
+	defer unlock()
+	if err := overlayProvidersLocked(name, &cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// loadFile reads config.json alone, providers as it holds them.
+func loadFile(name string) (Config, error) {
 	path, err := Path(name)
 	if err != nil {
 		return Config{}, err
@@ -597,7 +616,25 @@ func Load(name string) (Config, error) {
 // that Save itself spawns — would otherwise clobber each other's shared
 // temp file, and one rename would fail with "no such file or directory"
 // once the other consumed the temp first.
+//
+// The provider instances and statuses in cfg are NOT written: they are
+// the provider store's (SaveProviders / SaveProviderStatuses), and a
+// caller's copy may be older than what is on disk. config.json gets the
+// files' current providers as its mirror instead.
 func Save(name string, cfg Config) error {
+	unlock, err := lockProviders(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := overlayProvidersLocked(name, &cfg); err != nil {
+		return err
+	}
+	return saveFile(name, cfg)
+}
+
+// saveFile writes cfg to config.json as it is.
+func saveFile(name string, cfg Config) error {
 	path, err := Path(name)
 	if err != nil {
 		return err

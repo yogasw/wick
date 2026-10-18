@@ -1094,8 +1094,11 @@ func (s *Service) await(
 						text.Reset()
 						continue
 					}
-					return s.unfinishedResult(ctx, row, labelUnfinished(withLastReport(finalText())), billedTurns(),
-						"sub-agent process died before finishing its turn and was not restarted"), nil
+					why := "sub-agent process died before finishing its turn and was not restarted"
+					if r := ExitDoneReason(ev.Raw); r != "" {
+						why = "sub-agent " + r
+					}
+					return s.unfinishedResult(ctx, row, labelUnfinished(withLastReport(finalText())), billedTurns(), why), nil
 				}
 
 				// A finished turn with STREAMED text is the sub-agent's
@@ -1187,6 +1190,34 @@ const exitDoneType = "wick_process_exit"
 // exit; restarting says whether the pool is starting the agent again.
 func ExitDoneRaw(restarting bool) string {
 	return fmt.Sprintf(`{"type":%q,"restarting":%t}`, exitDoneType, restarting)
+}
+
+// ExitDoneRawGaveUp is ExitDoneRaw(false) for an exit whose automatic
+// retries were spent: reason says so in plain words ("stopped after 2
+// retries: no output for 20m"), for the waiting side's failure.
+func ExitDoneRawGaveUp(reason string) string {
+	b, _ := json.Marshal(struct {
+		Type       string `json:"type"`
+		Restarting bool   `json:"restarting"`
+		Reason     string `json:"reason,omitempty"`
+	}{exitDoneType, false, reason})
+	return string(b)
+}
+
+// ExitDoneReason is the reason an ExitDoneRawGaveUp payload carries, ""
+// for any other raw.
+func ExitDoneReason(raw string) string {
+	if !strings.Contains(raw, exitDoneType) {
+		return ""
+	}
+	var m struct {
+		Type   string `json:"type"`
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal([]byte(raw), &m) != nil || m.Type != exitDoneType {
+		return ""
+	}
+	return m.Reason
 }
 
 // ParseExitDone reports whether raw is an ExitDoneRaw payload and, if so,

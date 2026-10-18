@@ -49,6 +49,25 @@ describe("RosterAvatar", () => {
   });
 });
 
+/* A row's face is 38px; a folder's icon passes a smaller size, which
+   reaches both the activity wrapper and the avatar itself. */
+describe("size", () => {
+  const width = (size?: number) => {
+    const r = render(RosterAvatar, { agent: agent(), st: rosterStatus(agent()), open: false, ...(size ? { size } : {}) });
+    return r.container.querySelector("[data-testid=avatar-activity] svg[width]")?.getAttribute("width");
+  };
+  test("defaults to 38 and follows the size prop", () => {
+    expect(width()).toBe("38");
+    expect(width(13)).toBe("13");
+  });
+  test("the size prop is threaded into AvatarActivity and AgentAvatar", () => {
+    const src = readFileSync(resolve(__dirname, "../RosterAvatar.svelte"), "utf8");
+    expect(src).toMatch(/size = 38/);
+    expect(src).toMatch(/<AvatarActivity \{activity\} \{size\} rings>/);
+    expect(src).toMatch(/<AgentAvatar [^>]*\{size\}/);
+  });
+});
+
 /* The roster rows render through RosterAvatar, silenced by the main chat
    only (not by another chat of the same agent). */
 describe("roster wiring", () => {

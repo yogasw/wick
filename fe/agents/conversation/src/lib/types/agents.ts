@@ -973,6 +973,17 @@ export type TeamTaskItem = {
       sentence before its newest tool call, or "Running <tool>…"); only
       while the task works, pushed on the team_task event, never stored. */
   progress?: string;
+  /** The teammate is being restarted after an idle kill: retry
+      restart_attempt of restart_max. The task stays working. Read live
+      from the pool, never stored. */
+  restart_attempt?: number;
+  restart_max?: number;
+  /** The teammate waits for a free slot (1 = next). */
+  queue_pos?: number;
+  /** Place in the line of the teammate's chat (TurnGate, 1 = next). */
+  gate_pos?: number;
+  /** restart_attempt / queue_pos in one plain line, for the details. */
+  wait_note?: string;
   /** The batch (group_id) the task is in. */
   group?: string;
   /** "Summarize now" on its batch would hand the agent something now:

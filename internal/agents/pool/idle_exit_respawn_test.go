@@ -56,8 +56,10 @@ func TestIdleKillOfRespawnAgentReleasesSlotAndRunsQueue(t *testing.T) {
 	p := New(PoolConfig{
 		MaxConcurrent: 1,
 		IdleTimeout:   150 * time.Millisecond,
-		Layout:        layout,
-		Factory:       factory,
+		// No longer mid-turn window: the silent turn dies on the idle one.
+		TurnIdleTimeout: 150 * time.Millisecond,
+		Layout:          layout,
+		Factory:         factory,
 	})
 	factory.OnExit = p.HandleExit
 	t.Cleanup(p.Stop)

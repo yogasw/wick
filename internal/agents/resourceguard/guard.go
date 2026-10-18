@@ -109,6 +109,11 @@ type Guard struct {
 	mu      sync.Mutex
 	history []Event
 	hold    bool
+	// lastLook is the host as the last tick saw it, with the reason it
+	// counted as near a hang ("" = it did not).
+	lastLook   hostState
+	lastReason string
+	lastAt     time.Time
 
 	samples    []sample
 	prevCPU    map[int]uint64
@@ -168,6 +173,43 @@ func (g *Guard) History() []Event {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]Event(nil), g.history...)
+}
+
+// HostStatus is the guard's last look at the host, for a person asking
+// why their agent waits. Zero when the guard is off.
+type HostStatus struct {
+	Hold        bool      `json:"hold"`
+	Reason      string    `json:"reason,omitempty"`
+	MemUsedPct  float64   `json:"mem_used_pct"`
+	CPUBusyPct  float64   `json:"cpu_busy_pct"`
+	MemPressure float64   `json:"mem_pressure"` // "full" avg10, %
+	CPUPressure float64   `json:"cpu_pressure"` // "some" avg10, %
+	At          time.Time `json:"at"`
+}
+
+// Status returns the last look at the host.
+func (g *Guard) Status() HostStatus {
+	if g == nil {
+		return HostStatus{}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.lastAt.IsZero() {
+		return HostStatus{Hold: g.hold}
+	}
+	st := g.lastLook
+	return HostStatus{
+		Hold: g.hold, Reason: g.lastReason,
+		MemUsedPct: st.memUsedPct, CPUBusyPct: st.busyPct,
+		MemPressure: st.psiMemFull, CPUPressure: st.psiCPU,
+		At: g.lastAt,
+	}
+}
+
+func (g *Guard) look(st hostState, reason string, at time.Time) {
+	g.mu.Lock()
+	g.lastLook, g.lastReason, g.lastAt = st, reason, at
+	g.mu.Unlock()
 }
 
 // HoldSpawns reports whether a new agent should wait: the host is near a
@@ -284,8 +326,9 @@ func (g *Guard) Tick() {
 	cfg := g.load()
 	now := g.now()
 	defer func() { g.lastTick = now }()
-	if !cfg.Enabled || cfg.Action == ActionOff || cfg.Action == "" {
+	if !cfg.Enabled {
 		g.setHold(false)
+		g.look(hostState{}, "", time.Time{})
 		return
 	}
 	if cfg.SafePct <= 0 || cfg.SafePct > 100 {
@@ -294,8 +337,15 @@ func (g *Guard) Tick() {
 	if cfg.CPUPSIMax <= 0 {
 		cfg.CPUPSIMax = defaultPSICPU
 	}
-	g.dryRun = cfg.Measure || cfg.Action == ActionLog
-	g.applyQuota(cfg)
+	// Action off still watches and still holds new spawns when the host
+	// nears a hang: holding only queues work, it stops nothing. Returning
+	// early here let every agent start into a host stalled on memory
+	// (pressure "full" ~60% for minutes), so all of them hung together.
+	off := cfg.Action == ActionOff || cfg.Action == ""
+	g.dryRun = cfg.Measure || cfg.Action == ActionLog || off
+	if !off {
+		g.applyQuota(cfg)
+	}
 
 	st, ok := g.sample(cfg, now)
 	scopes := g.host.Scopes()
@@ -342,6 +392,9 @@ func (g *Guard) Tick() {
 	} else if !g.cpuHotSince.IsZero() && now.Sub(g.cpuHotSince) >= cpuHotFor {
 		cpuReason = fmt.Sprintf("CPU %.0f%% busy with pressure %.0f%% for %s", st.busyPct, st.psiCPU, now.Sub(g.cpuHotSince).Round(time.Second))
 	}
+
+	look := strings.TrimSuffix(strings.TrimPrefix(memReason+"; "+cpuReason, "; "), "; ")
+	g.look(st, look, now)
 
 	if !g.cpuHotSince.IsZero() || st.lagging || memReason != "" {
 		g.topOutside = g.busiestOutside(procs, st)

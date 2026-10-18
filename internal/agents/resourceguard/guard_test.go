@@ -291,6 +291,31 @@ func TestMeasureModeTouchesNothing(t *testing.T) {
 	}
 }
 
+// Action off touches nothing but still queues new agents while the host
+// is near a hang, and lets them through once it recovers.
+func TestActionOffStillHoldsSpawns(t *testing.T) {
+	h := agentTree()
+	cfg := enforce()
+	cfg.Action = ActionOff
+	g, c := newTestGuard(h, cfg)
+	h.memFull = 60
+	ticks(g, c, 3)
+	if len(h.signals)+len(h.killedScopes)+len(h.quota) != 0 {
+		t.Fatalf("action off acted: signals=%v killed=%v quota=%v", h.signals, h.killedScopes, h.quota)
+	}
+	if !g.HoldSpawns() {
+		t.Fatal("spawns not held under memory pressure with action off")
+	}
+	if st := g.Status(); !st.Hold || st.MemPressure != 60 || !strings.Contains(st.Reason, "memory pressure") {
+		t.Fatalf("status while held = %+v", st)
+	}
+	h.memFull = 0
+	ticks(g, c, 3)
+	if g.HoldSpawns() {
+		t.Fatal("spawns still held after the host recovered")
+	}
+}
+
 // pause stops and freezes instead of killing, and resumes after calm.
 func TestPauseActionStopsThenResumes(t *testing.T) {
 	h := agentTree()

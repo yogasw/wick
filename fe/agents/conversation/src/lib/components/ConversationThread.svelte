@@ -51,6 +51,9 @@
     compacting?: boolean;
     /** What a remote agent says it is doing; replaces "thinking…". */
     progressLabel?: string;
+    /** What the turn waits on (queue, slots, a strained host) or how long
+        it has been silent; see waitState.ts. */
+    waitNote?: import("../waitState.js").WaitNote | null;
     /** Set in the Team app: the empty thread introduces the agent and its
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
@@ -77,7 +80,7 @@
     jumpPendingId?: string | null;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teammatesHidden = false, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPendingId = null }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, waitNote = null, loading = false, agent, teammatesHidden = false, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPendingId = null }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -91,7 +94,9 @@
       ? undefined
       : compacting
         ? "compacting the conversation…"
-        : (!typing.toolName && progressLabel) || activityLabel(typing.substate, typing.toolName),
+        : waitNote?.replaces
+          ? waitNote.label
+          : ((!typing.toolName && progressLabel) || activityLabel(typing.substate, typing.toolName)) + (waitNote ? ` · ${waitNote.label}` : ""),
   );
 
   /* The working bubble stays up through a turn: typing can drop for an

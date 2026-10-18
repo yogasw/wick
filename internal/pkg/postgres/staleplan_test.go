@@ -140,10 +140,10 @@ func TestIsStalePlanThroughWrappedError(t *testing.T) {
 	}
 }
 
-// A second consecutive 0A000 means something is rewriting the schema
+// A 0A000 that never clears means something is rewriting the schema
 // continuously. That is a real bug, so the error must surface rather
 // than the wrapper retrying forever.
-func TestStalePlanGivesUpAfterOneRetry(t *testing.T) {
+func TestStalePlanGivesUpAfterBoundedRetries(t *testing.T) {
 	// alwaysFails never recovers, unlike fakePool.
 	always := &alwaysStalePool{}
 	p := stalePlanPool{ConnPool: always}
@@ -152,9 +152,35 @@ func TestStalePlanGivesUpAfterOneRetry(t *testing.T) {
 	if !isStalePlan(err) {
 		t.Fatalf("expected the second 0A000 to propagate, got: %v", err)
 	}
-	if always.calls != 2 {
-		t.Fatalf("expected exactly 2 calls (no infinite retry), got %d", always.calls)
+	if always.calls != 1+staleRetries {
+		t.Fatalf("expected exactly %d calls (no infinite retry), got %d", 1+staleRetries, always.calls)
 	}
+}
+
+// After a schema change every pooled connection is stale, and each retry
+// may land on another one: keep going until one has been cleaned.
+func TestStalePlanRetriesAcrossStaleConnections(t *testing.T) {
+	f := &staleNPool{n: 10}
+	p := stalePlanPool{ConnPool: f}
+	if _, err := p.ExecContext(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("expected success after 10 stale connections, got: %v", err)
+	}
+	if f.calls != 11 {
+		t.Fatalf("calls = %d, want 11", f.calls)
+	}
+}
+
+type staleNPool struct {
+	n, calls int
+	gorm.ConnPool
+}
+
+func (s *staleNPool) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	s.calls++
+	if s.calls <= s.n {
+		return nil, stalePlanErr()
+	}
+	return nil, nil
 }
 
 type alwaysStalePool struct {

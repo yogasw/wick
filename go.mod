@@ -6,6 +6,7 @@ require (
 	fyne.io/systray v1.12.1
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/a-h/templ v0.3.1020
+	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb
 	github.com/caarlos0/env/v9 v9.0.0
@@ -44,7 +45,6 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/a2aproject/a2a-go/v2 v2.6.0 // indirect
 	github.com/akavel/rsrc v0.10.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect

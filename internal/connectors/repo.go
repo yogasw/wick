@@ -396,8 +396,11 @@ func (r *Repo) AccountFilterTagIDs(ctx context.Context, accountIDs []string) (ma
 // UpsertAccount saves a connected account.
 //
 //   - MultiAccount=false: replace any existing account for this connector (1 slot).
-//   - MultiAccount=true: update existing account if same wick_user_id exists,
-//     otherwise insert new (prevents duplicate rows for the same user).
+//   - MultiAccount=true: update the existing account when the same wick user
+//     reconnects the same provider identity (wick_user_id + external_user_id),
+//     otherwise insert new. Keying on the wick user alone made "Connect
+//     another" overwrite the person's first account with the second one.
+//     A legacy row with no external_user_id still matches, and is backfilled.
 func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, multiAccount bool) error {
 	if !multiAccount {
 		// Single-account: replace whatever is there.
@@ -408,21 +411,38 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 			return tx.Create(acc).Error
 		})
 	}
-	// Multi-account: upsert by (connector_id, wick_user_id) to avoid duplicates.
+	// Multi-account: upsert by (connector_id, wick_user_id, external_user_id)
+	// so a reconnect refreshes the row and a different account adds one.
 	if acc.WickUserID != "" {
+		mine := func() *gorm.DB {
+			return r.db.WithContext(ctx).
+				Where("connector_id = ? AND wick_user_id = ?", acc.ConnectorID, acc.WickUserID)
+		}
 		var existing entity.ConnectorAccount
-		err := r.db.WithContext(ctx).
-			Where("connector_id = ? AND wick_user_id = ?", acc.ConnectorID, acc.WickUserID).
-			First(&existing).Error
+		var err error
+		if acc.ExternalUserID == "" {
+			err = mine().First(&existing).Error
+		} else {
+			// Exact identity first; a legacy row saved without one is the fallback.
+			err = mine().Where("external_user_id = ?", acc.ExternalUserID).First(&existing).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				err = mine().Where("external_user_id = '' OR external_user_id IS NULL").First(&existing).Error
+			}
+		}
 		if err == nil {
-			// Update token + display name on existing row.
-			return r.db.WithContext(ctx).Model(&existing).Updates(map[string]any{
-				"access_token":  acc.AccessToken,
-				"refresh_token": acc.RefreshToken,
-				"expires_at":    acc.ExpiresAt,
-				"display_name":  acc.DisplayName,
-				"updated_at":    acc.UpdatedAt,
-			}).Error
+			updates := map[string]any{
+				"external_user_id": acc.ExternalUserID,
+				"access_token":     acc.AccessToken,
+				"expires_at":       acc.ExpiresAt,
+				"display_name":     acc.DisplayName,
+				"updated_at":       acc.UpdatedAt,
+			}
+			// Providers may omit the refresh token on a repeat consent;
+			// keep the stored one rather than wiping it.
+			if acc.RefreshToken != "" {
+				updates["refresh_token"] = acc.RefreshToken
+			}
+			return r.db.WithContext(ctx).Model(&existing).Updates(updates).Error
 		}
 	}
 	return r.db.WithContext(ctx).Create(acc).Error

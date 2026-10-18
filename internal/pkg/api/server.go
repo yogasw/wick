@@ -666,6 +666,10 @@ func NewServer() *Server {
 		SpawnLogger: agentsSpawnLogger,
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
+			// Output from a restarted agent ends its "Restarting" state.
+			if agentsPool != nil && ev.Type != agentevent.Done && ev.Type != agentevent.Error {
+				agentsPool.NoteOutput(sid)
+			}
 			// Name passed through so a sub-agent's relayed progress is labelled
 			// with the agent that produced it rather than its session seed.
 			channelReg.DispatchAgentEventFrom(sid, name, ev)
@@ -698,8 +702,26 @@ func NewServer() *Server {
 			if reason == provider.ExitError || reason == provider.ExitOOM {
 				bcastDone.Raw = delegation.ExitDoneRaw(restarting)
 			}
+			// An idle kill the pool is retrying (its messages go to the
+			// restarted process) is the same: the turn's answer is still
+			// coming. The channel copy carries the marker too, so an A2A
+			// task (a Team task) stays working instead of completing empty.
+			chanDone := doneEv
+			if reason == provider.ExitIdle && restarting {
+				bcastDone.Raw = delegation.ExitDoneRaw(true)
+				chanDone.Raw = bcastDone.Raw
+			}
+			// An idle kill whose retries are spent ends the turn with a
+			// plain reason, so the waiting side fails saying why instead
+			// of closing on an empty answer.
+			if reason == provider.ExitIdle && !restarting {
+				if why := agentsPool.TakeGiveUp(sid); why != "" {
+					bcastDone.Raw = delegation.ExitDoneRawGaveUp(why)
+					chanDone.Raw = bcastDone.Raw
+				}
+			}
 			agentsBcast.Publish(sid, name, bcastDone)
-			channelReg.DispatchAgentEvent(sid, doneEv)
+			channelReg.DispatchAgentEvent(sid, chanDone)
 			// Catches a turn whose real Done never arrived because the
 			// agent exited first. Already-flushed turns are a no-op here:
 			// the observer drops a Done with an empty buffer.
@@ -1002,7 +1024,10 @@ func NewServer() *Server {
 		},
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
 		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
-		PreemptIdle:   preemptIdle,
+		// An open turn (model thinking, slow API call, background job) is
+		// not killed on the short idle window, only after this much silence.
+		TurnIdleTimeout: agentpool.DefaultTurnIdleTimeout,
+		PreemptIdle:     preemptIdle,
 		// Per-user identity plumbing. A subprocess carries the MCP credential
 		// of whoever spawned it (baked into its argv), so the pool needs to
 		// know who each message is from to decide whether that process can be
@@ -2020,6 +2045,8 @@ func NewServer() *Server {
 			teamHub = agentstool.NewTeamLinkHub(teamSvc, func(ctx context.Context, sessionID, text string) error {
 				return d.DeliverToSession(ctx, sessionID, "", text)
 			})
+			// A teammate restarting or queued shows on its task's card.
+			agentsPool.SetOnWaitChange(teamHub.RefreshWaiting)
 		})
 		return teamHub
 	}

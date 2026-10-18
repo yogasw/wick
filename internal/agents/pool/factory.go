@@ -531,12 +531,13 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	}
 
 	a := provider.New(provider.Options{
-		Workspace:     opt.Workspace,
-		SessionDir:    f.Layout.SessionDir(opt.SessionID),
-		SessionID:     opt.SessionID,
-		ResumeID:      opt.ResumeID,
-		IdleTimeout:   opt.IdleTimeout,
-		KillAfterIdle: opt.KillAfterIdle,
+		Workspace:       opt.Workspace,
+		SessionDir:      f.Layout.SessionDir(opt.SessionID),
+		SessionID:       opt.SessionID,
+		ResumeID:        opt.ResumeID,
+		IdleTimeout:     opt.IdleTimeout,
+		KillAfterIdle:   opt.KillAfterIdle,
+		TurnIdleTimeout: opt.TurnIdleTimeout,
 		ParserFactory: func() event.Parser {
 			if pType == provider.TypeCodex {
 				// The codex parser reads the turn's context level out of

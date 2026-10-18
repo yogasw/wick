@@ -50,6 +50,13 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// A question no turn of the sending chat is handling waits for the
 	// user: the thread shows it as "Needs you".
 	hub.CallerBusy = poolSessionBusy
+	// The tasks waiting for their turn in a chat show on both sides: the
+	// sender's card ("#2 in line") and the chat's "Queued (n)" strip.
+	hub.GateLine = teamTurnGate.Waiting
+	// A working task's teammate being restarted after an idle kill, or
+	// waiting for a free slot, reads "Restarting · retry 1/2" / "Queued ·
+	// #2" on its card instead of a silent spinner.
+	hub.WaitOf = poolTargetWait
 	// A task's every change reaches the sending chat's open viewers, so
 	// "Needs you" shows at once instead of on the next poll. The Team
 	// roster refetches too, but only when the task's state moved
@@ -86,17 +93,21 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 			// turn's open a new one unless they name its group.
 			hub.SealTurn(sessionID)
 			time.AfterFunc(needsYouSettle, func() { hub.RefreshNeedsYou(sessionID) })
+			// What the agent says on its own after a task reaches its asker.
+			teamFollowUpOnTurnEnd(hub, sessionID)
 		})
 		// A teammate's turn on a task feeds the task's live progress line
 		// (the sentence before each tool call, or the tool's name).
 		// Only the turn a task owns at the gate counts for it.
 		hub.TurnOwner = func(sessionID string) a2a.TaskID { return teamTurnGate.Owner(sessionID) }
 		globalBcast.OnTurnActivity(func(sessionID string, ev event.AgentEvent) {
+			noteTeamTaskTurn(sessionID)
 			teamTurnActivity(hub, sessionID, ev)
 		})
 	}
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
+	hub.SelfDraining = upgrade.Draining
 	hub.PredecessorBusy = func(chat string) bool {
 		if chat == "" {
 			_, draining := upgrade.ReadDrainState(globalLayout.BaseDir)
@@ -432,6 +443,31 @@ func sessionTeamTasks(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"tasks": tasks, "show_teammates": TeamShowsTeammates(c.Context(), id)})
 }
 
+// sessionTeamQueue handles GET /api/sessions/{id}/team-queue: the team
+// tasks waiting for their turn in this chat (TurnGate), next first, for
+// the "Queued (n)" strip over its composer. Read-only; the session must
+// be the caller's.
+func sessionTeamQueue(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	queue := []teamlink.QueuedTask{}
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			if q := h.QueueAt(c.Context(), id); q != nil {
+				queue = q
+			}
+		}
+	}
+	c.JSON(http.StatusOK, map[string]any{"queue": queue})
+}
+
 // sessionTeamTaskThread handles GET /api/sessions/{id}/team-tasks/{task}/thread:
 // the messages of one task this session sent (brief, replies, answers),
 // oldest first, as the Hub logged them. Read-only; the session must be
@@ -762,13 +798,98 @@ func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (s
 // when it has none yet. A person the agent is shared with who never
 // opened it gets their main chat opened here (openMainChatFor).
 func mainChatOf(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
+	s, err := mainChatOfRaw(ctx, agent)
+	if err != nil {
+		return s, err
+	}
+	return healChatProject(ctx, agent.ID, s), nil
+}
+
+// agentProjectOf is the project an agent's chats belong to: its
+// persona's, when that project is on disk; "" for an unscoped agent.
+func agentProjectOf(ctx context.Context, agentID string) string {
+	if globalTeam == nil || globalMgr == nil {
+		return ""
+	}
+	p, err := globalTeam.Get(ctx, agentID)
+	if err != nil || p.ProjectID == "" {
+		return ""
+	}
+	if _, ok := globalMgr.Registry().Project(p.ProjectID); !ok {
+		return ""
+	}
+	return p.ProjectID
+}
+
+// healChatProject puts a chat of agentID that was opened without the
+// agent's project back into it. A chat opened while its project was
+// missing from the registry (created by the other process during a
+// zero-downtime reload) was made unscoped, so it spawned in
+// sessions/<id>/cwd and never saw the project's CLAUDE.md or knowledge;
+// every new chat copied that from the main one.
+func healChatProject(ctx context.Context, agentID string, s session.Session) session.Session {
+	if s.Meta.ProjectID != "" || globalMgr == nil {
+		return s
+	}
+	pid := agentProjectOf(ctx, agentID)
+	if pid == "" {
+		return s
+	}
+	if err := globalMgr.MoveSession(ctx, s.ID, pid); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("session", s.ID).Str("project", pid).Msg("team: put chat back into its agent's project")
+		return s
+	}
+	log.Ctx(ctx).Info().Str("session", s.ID).Str("project", pid).Msg("team: chat was opened without its agent's project; moved back")
+	if healed, ok := globalMgr.Registry().Session(s.ID); ok {
+		return healed
+	}
+	return s
+}
+
+func mainChatOfRaw(ctx context.Context, agent teamlink.Peer) (session.Session, error) {
 	s, ok := mainSessionOf(chatUserOf(agent), agent.ID)
 	if !ok {
 		if agent.ChatUser != "" {
 			return openMainChatFor(ctx, agent)
 		}
-		return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		if globalTeam == nil {
+			return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		}
+		p, err := globalTeam.Get(ctx, agent.ID)
+		if err != nil {
+			return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		}
+		return openOwnerMainChat(ctx, p)
 	}
+	return s, nil
+}
+
+// openOwnerMainChat opens the owner's main chat with p, as opening it
+// once from the Agents app does, for a Team task, a schedule or a
+// delegation that reaches an agent nobody has opened yet (an agent the
+// Captain created has none). Without it every such call was refused
+// until the owner clicked the agent once.
+func openOwnerMainChat(ctx context.Context, p entity.AgentPersona) (session.Session, error) {
+	noChat := fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", p.Handle)
+	if globalMgr == nil || p.OwnerUserID == "" || accountInactive(ctx, p.OwnerUserID) {
+		return session.Session{}, noChat
+	}
+	defer lockMainChat(p.OwnerUserID, p.ID)()
+	// Another task may have opened it while this one waited.
+	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
+		return s, nil
+	}
+	id, err := createAgentChat(ctx, p.OwnerUserID, p, true, uuid.New().String(), session.OriginUI, agentChatSetup{
+		target: func(projectID string) (string, string) { return userSessionTarget(ctx, p.OwnerUserID, projectID) },
+	})
+	if err != nil {
+		return session.Session{}, fmt.Errorf("@%s: open its main chat: %w", p.Handle, err)
+	}
+	s, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		return session.Session{}, noChat
+	}
+	log.Ctx(ctx).Info().Str("agent", p.ID).Str("session", id).Msg("team: opened the owner's main chat on first use")
 	return s, nil
 }
 
@@ -807,8 +928,7 @@ func openMainChatFor(ctx context.Context, agent teamlink.Peer) (session.Session,
 	}
 	p, err := globalTeam.Get(ctx, agent.ID)
 	if err == nil && agent.ChatUser == p.OwnerUserID {
-		// The owner's main chat is theirs to open, as without a ChatUser.
-		return session.Session{}, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		return openOwnerMainChat(ctx, p)
 	}
 	if err != nil || !agentChatMember(ctx, p, agent.ChatUser) || accountInactive(ctx, agent.ChatUser) {
 		return session.Session{}, noChat
@@ -859,6 +979,22 @@ func poolSessionBusy(sessionID string) bool {
 	return false
 }
 
+// poolTargetWait is teamlink.Hub.WaitOf over the pool: what the
+// teammate's chat ("" = its main chat) waits on.
+func poolTargetWait(to teamlink.Peer, chat string) teamlink.TargetWait {
+	if globalPool == nil {
+		return teamlink.TargetWait{}
+	}
+	if chat == "" {
+		chat = poolTurns{}.MainSession(context.Background(), to)
+	}
+	if chat == "" {
+		return teamlink.TargetWait{}
+	}
+	w := globalPool.WaitOf(chat)
+	return teamlink.TargetWait{RestartAttempt: w.RestartAttempt, RestartMax: w.RestartMax, QueuePos: w.QueuePos}
+}
+
 // RunIn is Run in sessionID (teamlink.ChatOpener). A team task's turn
 // waits until the session runs nothing else, so the turn it starts is
 // its own (teamTurnGate).
@@ -869,11 +1005,17 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 	if !globalPool.SessionExists(sessionID) {
 		return sessionID, "", errChatNotFound(sessionID)
 	}
+	if s, ok := globalMgr.Registry().Session(sessionID); ok && s.Meta.AgentID == agent.ID {
+		healChatProject(ctx, agent.ID, s)
+	}
 	release, err := teamTurnGate.Acquire(ctx, sessionID, teamlink.TaskIDFrom(ctx))
 	if err != nil {
 		return sessionID, "", err
 	}
 	defer release()
+	// The task owns the turn now: what it was revised with meanwhile is
+	// read with the brief, later revisions go into the turn.
+	text = teamlink.TurnText(ctx, text)
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
 	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(sessionID)
 	defer unsub()
@@ -981,9 +1123,13 @@ func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, erro
 		return "", err
 	}
 	id := uuid.New().String()
+	projectID := main.Meta.ProjectID
+	if pid := agentProjectOf(ctx, agent.ID); pid != "" {
+		projectID = pid
+	}
 	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
 		ID:        id,
-		ProjectID: main.Meta.ProjectID,
+		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    main.Meta.Preset,
 		UserID:    main.Meta.UserID,
@@ -1316,6 +1462,17 @@ func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remot
 				b.Reset()
 				b.WriteString(ev.Text)
 			case event.Done:
+				// The process died and is being restarted with the turn
+				// (a crash restart, an idle-kill retry): its answer is
+				// still coming on this stream.
+				if exited, restarting := delegation.ParseExitDone(ev.Raw); exited && restarting {
+					b.Reset()
+					continue
+				}
+				// Its retries are spent: the task fails with the reason.
+				if why := delegation.ExitDoneReason(ev.Raw); why != "" {
+					return b.String(), "Agent " + why
+				}
 				return b.String(), failed
 			}
 		}

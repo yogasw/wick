@@ -110,10 +110,13 @@ type TeamAgentItem struct {
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
-	ManageAgents  bool            `json:"manage_agents"`
-	CaptainCan    team.CaptainCan `json:"captain_can"`
-	MainSessionID string          `json:"main_session_id"`
-	LastActive    *time.Time      `json:"last_active"`
+	ManageAgents bool            `json:"manage_agents"`
+	CaptainCan   team.CaptainCan `json:"captain_can"`
+	// CaptainPolicy is the Captain's auto-approve rule (read on the
+	// Captain only). See team.CaptainPolicy.
+	CaptainPolicy team.CaptainPolicy `json:"captain_policy"`
+	MainSessionID string             `json:"main_session_id"`
+	LastActive    *time.Time         `json:"last_active"`
 	// LastAnyActive is the newest LastActive of all the agent's chats with
 	// the owner, main and side chats alike: the roster's dozing reads it,
 	// so work in a side chat keeps the agent awake. LastActive (order,
@@ -144,11 +147,18 @@ type TeamAgentItem struct {
 	// AttentionPreview is the short line of what NeedsAttention waits on
 	// ("Butuh input: …", "Bash — butuh approval"); also LastPreview then.
 	AttentionPreview string `json:"attention_preview,omitempty"`
-	// SubagentsWorking holds the handles of the background sub-agents the
-	// main session delegated to that are still queued or running, so the
+	// SubagentsWorking holds the handles of the background sub-agents any
+	// of the viewer's chats with the agent (main or side) delegated to
+	// that are still queued or running, so the
 	// card can show work carrying on after the agent's own turn ended.
 	// Status is left alone: it stays the agent's own turn state.
 	SubagentsWorking []string `json:"subagents_working,omitempty"`
+	// SubagentsSession is the side chat those sub-agents run from, so the
+	// card opens it rather than the main chat; the most recently active
+	// one when several do. Empty when the main chat has sub-agents working.
+	SubagentsSession string `json:"subagents_session,omitempty"`
+	// SubagentsActive is that chat's last activity, the time its row shows.
+	SubagentsActive *time.Time `json:"subagents_active,omitempty"`
 	// TeamWaiting holds the handles of the teammates the main chat's open
 	// Team tasks (team_message / @mention) wait on: "waiting on N
 	// teammates". Status is left alone, as with SubagentsWorking.
@@ -156,6 +166,9 @@ type TeamAgentItem struct {
 	// ReplyingTo names who the agent works on a Team task for ("replying
 	// to Captain"), in any of its chats; "" when it works on none.
 	ReplyingTo string `json:"replying_to,omitempty"`
+	// ReplyingSession is the chat that Team task runs in ("" = its main
+	// chat or unknown): a click on a "replying to …" row opens it.
+	ReplyingSession string `json:"replying_session,omitempty"`
 	// WorkingSessions are the agent's other chats (not its main chat) that
 	// run a turn now — a Team task Captain sent, a chat the person opened
 	// — oldest turn first; nil when none. LastSession is the newest of
@@ -278,6 +291,7 @@ type teamAgentWriteReq struct {
 	MaxHops              *int                    `json:"max_hops"`
 	ManageAgents         *bool                   `json:"manage_agents"`
 	CaptainCan           *team.CaptainCan        `json:"captain_can"`
+	CaptainPolicy        *team.CaptainPolicy     `json:"captain_policy"`
 	// ShowInProjects keeps the agent's own project in the sidebar's
 	// Projects list as well (project.VisibleTag). Nil leaves it as is;
 	// on create, nil means hidden.
@@ -603,7 +617,11 @@ type teamLive struct {
 	// never reads its owner's tasks, and "you" is always the viewer.
 	teamWaiting map[string][]string
 	replyingTo  map[string]string
-	teamAsks    map[string]TeamAsk
+	// replyingChat is the teammate chat that replyingTo's task runs in
+	// (same key), so the row opens it even before its turn is seen
+	// running (queued, starting, between two turns of the task).
+	replyingChat map[string]string
+	teamAsks     map[string]TeamAsk
 	// teamSettled is each teammate's newest answered or declined Team
 	// task per viewer, sender already named ("Replied to Captain: …").
 	teamSettled map[string]teamSettled
@@ -740,6 +758,7 @@ func teamAgentName(agentID string) string {
 // chat has no known person is told to nobody.
 func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
 	l.teamWaiting, l.replyingTo, l.teamAsks, l.taskChats = map[string][]string{}, map[string]string{}, map[string]TeamAsk{}, map[string]string{}
+	l.replyingChat = map[string]string{}
 	for _, t := range tasks {
 		if t.ToHandle != "" && !slices.Contains(l.teamWaiting[t.FromSession], t.ToHandle) {
 			l.teamWaiting[t.FromSession] = append(l.teamWaiting[t.FromSession], t.ToHandle)
@@ -752,6 +771,7 @@ func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
 		if t.Working {
 			if _, seen := l.replyingTo[key]; !seen {
 				l.replyingTo[key] = n.sender(t.Origin, t.FromAgentID)
+				l.replyingChat[key] = t.Chat
 			}
 			if _, seen := l.taskChats[t.Chat]; t.Chat != "" && !seen {
 				l.taskChats[t.Chat] = n.sender(t.Origin, t.FromAgentID)
@@ -826,6 +846,47 @@ func (l teamLive) subagentsOf(sessionID string) []string {
 		return nil
 	}
 	return slices.Clone(l.subagents[sessionID])
+}
+
+// subagentsIn is subagentsOf over every one of the agent's chats in
+// sessions, main chat first then in sessions' order, each handle once:
+// a sub-agent delegated from a side chat animates the avatar too.
+func (l teamLive) subagentsIn(sessions []session.Session, mainID string) []string {
+	out := l.subagentsOf(mainID)
+	for _, s := range sessions {
+		if s.ID == mainID {
+			continue
+		}
+		for _, h := range l.subagents[s.ID] {
+			if !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+// subagentsSession is the chat in sessions, other than mainID, whose
+// sub-agents are working — the most recently active when several are —
+// with its last activity, or "" when the main chat has some or no other
+// chat does.
+func (l teamLive) subagentsSession(sessions []session.Session, mainID string) (string, *time.Time) {
+	if len(l.subagents[mainID]) > 0 {
+		return "", nil
+	}
+	var best *session.Session
+	for i, s := range sessions {
+		if s.ID == mainID || len(l.subagents[s.ID]) == 0 {
+			continue
+		}
+		if best == nil || s.Meta.LastActive.After(best.Meta.LastActive) {
+			best = &sessions[i]
+		}
+	}
+	if best == nil {
+		return "", nil
+	}
+	return best.ID, timePtr(best.Meta.LastActive)
 }
 
 // attention returns the roster preview of what sessionID waits on a
@@ -1022,6 +1083,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
+		CaptainPolicy:        team.DecodeCaptainPolicy(p.CaptainPolicy),
 		Status:               string(session.StatusIdle),
 	}
 	if p.ProjectID != "" {
@@ -1559,6 +1621,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if req.CaptainCan != nil {
 		p.CaptainCan = team.EncodeCaptainCan(*req.CaptainCan)
 	}
+	if req.CaptainPolicy != nil {
+		p.CaptainPolicy = team.EncodeCaptainPolicy(*req.CaptainPolicy)
+	}
 	// Captaincy moves by promoting another agent; un-ticking the current
 	// one would leave the owner with none. Promoting goes through the same
 	// checks and transfer as "Make Captain", after the rest is saved.
@@ -1578,9 +1643,11 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 
 	// Persona text goes to the project (after any project switch above,
 	// so it lands in the project the agent now points at).
+	oldProv, followDefault := "", false
 	if p.ProjectID != "" {
 		if proj, ok := globalMgr.Registry().Project(p.ProjectID); ok {
 			meta := proj.Meta
+			oldProv, followDefault = meta.Defaults.Provider, req.Provider != nil || req.Model != nil
 			if applyProjectFields(&meta, req) {
 				if _, err := globalMgr.UpdateProject(c.Context(), p.ProjectID, meta); err != nil {
 					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1594,6 +1661,11 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if err := globalTeam.Update(c.Context(), &p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
+	}
+	// After the save, so the agent's allow_provider_switch is the one
+	// just stored: its existing chats follow a changed default.
+	if followDefault {
+		followAgentDefault(c.Context(), p, oldProv)
 	}
 	if promote {
 		if _, err := globalTeam.MakeCaptain(c.Context(), p.OwnerUserID, p.ID); err != nil {
@@ -1652,19 +1724,30 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
+	if err := afterTeamAgentDelete(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// afterTeamAgentDelete removes what a deleted agent leaves behind: its
+// channel links, remote, schedules and project (purged with its chats, or
+// untagged). rows is the owner's roster as it was before the delete. Used
+// by the Settings delete and the Captain's agents.delete alike.
+func afterTeamAgentDelete(ctx context.Context, p entity.AgentPersona, rows []entity.AgentPersona, purge bool) error {
 	removeAgentSlack(p.ID)
 	removeAgentSlackInstant(p.ID)
 	removeAgentRemote(p)
 	removeAgentREST(p.ID)
 	removeAgentTelegram(p.ID)
 	// Before the project goes: the scope is read from the live sessions.
-	deleteAgentSchedules(c.Context(), p)
-	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
-		log.Ctx(c.Context()).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": "agent deleted, but its project was not: " + err.Error()})
-		return
+	deleteAgentSchedules(ctx, p)
+	if err := releaseTeamAgentProject(ctx, p, rows, purge); err != nil {
+		log.Ctx(ctx).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
+		return fmt.Errorf("agent deleted, but its project was not: %w", err)
 	}
-	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	return nil
 }
 
 // releaseTeamAgentProject settles the project of a deleted agent: purge it

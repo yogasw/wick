@@ -2,7 +2,8 @@
    composer show. The server decides routing and caps (teamlink/group.go);
    these only word them. */
 
-import type { GroupItem, GroupMember, GroupTurn } from "./api/team.js";
+import type { AgentItem, GroupItem, GroupMember, GroupTurn } from "./api/team.js";
+import type { RosterStatus } from "./rosterStatus.js";
 
 export const MIN_GROUP_MEMBERS = 2;
 export const GROUP_NAME_MAX = 64;
@@ -63,4 +64,14 @@ export function backingLink(t: Pick<GroupTurn, "speaker">): { handle: string; se
 export function mergeTurn(turns: GroupTurn[], t: GroupTurn): GroupTurn[] {
   if (t.turn_id && turns.some((x) => x.turn_id === t.turn_id)) return turns;
   return [...turns, t];
+}
+
+/** groupFace is a group member as the group's faces draw it: its roster
+    avatar, but at work only while it has a turn running IN this group
+    (working). Work elsewhere (its main chat, a Team task, sub-agents)
+    leaves the group's face still, so a group row never animates for
+    something that is not happening in it. */
+export function groupFace(a: AgentItem, st: RosterStatus, working: boolean): { agent: AgentItem; st: RosterStatus } {
+  if (working) return { agent: a, st: { ...st, work: "thinking", attention: false } };
+  return { agent: { ...a, status: "idle", current_action: "" }, st: { ...st, work: "idle", attention: false, typing: null } };
 }

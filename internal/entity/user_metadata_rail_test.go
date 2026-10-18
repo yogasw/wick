@@ -7,10 +7,10 @@ import (
 
 func boolp(b bool) *bool { return &b }
 
-// Labels are the default: only an explicit false turns them off.
+// Icons only is the default: only an explicit true turns the labels on.
 func TestRailPrefsLabelsOn(t *testing.T) {
-	if !(RailPrefs{}).LabelsOn() {
-		t.Fatal("unset: LabelsOn = false, want labels on")
+	if (RailPrefs{}).LabelsOn() {
+		t.Fatal("unset: LabelsOn = true, want icons only")
 	}
 	if (RailPrefs{Labels: boolp(false)}).LabelsOn() {
 		t.Fatal("explicit false: LabelsOn = true, want icons only")
@@ -37,7 +37,7 @@ func TestRailPrefsWithLayoutKeepsLabels(t *testing.T) {
 }
 
 // Unset leaves "labels" off the wire, and the client reads a missing key as
-// labels on; an explicit choice is written either way.
+// icons only; an explicit choice is written either way.
 func TestRailPrefsLabelsWire(t *testing.T) {
 	b, _ := json.Marshal(RailPrefs{})
 	if string(b) != `{"hidden":null}` {
@@ -52,7 +52,7 @@ func TestRailPrefsLabelsWire(t *testing.T) {
 		t.Fatalf("labels off = %s", b)
 	}
 	var p RailPrefs
-	if err := json.Unmarshal([]byte(`{"hidden":null}`), &p); err != nil || !p.LabelsOn() {
-		t.Fatalf("missing key: LabelsOn = %v (err %v), want true", p.LabelsOn(), err)
+	if err := json.Unmarshal([]byte(`{"hidden":null}`), &p); err != nil || p.LabelsOn() {
+		t.Fatalf("missing key: LabelsOn = %v (err %v), want false", p.LabelsOn(), err)
 	}
 }

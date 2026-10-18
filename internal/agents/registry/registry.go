@@ -206,12 +206,39 @@ func (r *Registry) ProjectIDs() []string {
 	return out
 }
 
-// Project returns one project by id, ok=false if missing.
+// Project returns one project by id, ok=false if missing. A cache miss
+// reads disk before answering no, for the same reason Session does: a
+// project the other process created during a zero-downtime reload is
+// on disk but was never announced here, and every caller reads a miss
+// as "deleted" (a Team agent then refuses persona edits for good).
 func (r *Registry) Project(id string) (project.Project, bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	p, ok := r.projects[id]
-	return p, ok
+	r.mu.RUnlock()
+	if ok {
+		return p, true
+	}
+	return r.adoptProject(id)
+}
+
+// adoptProject loads one project straight from disk and caches it.
+// ok=false only when its meta.json is really unreadable or absent.
+func (r *Registry) adoptProject(id string) (project.Project, bool) {
+	if id == "" || !project.ValidID(id) {
+		return project.Project{}, false
+	}
+	p, err := project.Load(r.layout, id)
+	if err != nil {
+		return project.Project{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.projects[id]; ok {
+		return existing, true
+	}
+	r.projects[id] = p
+	log.Info().Str("project", id).Msg("registry: adopted project from disk after cache miss")
+	return p, true
 }
 
 // Sessions returns a shared read-only snapshot of the sessions map. The

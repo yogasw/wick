@@ -7,6 +7,7 @@ import {
   lastSessionKey,
   loadSeen,
   markSeen,
+  rowActive,
   rowTarget,
   runningSessions,
   SEEN_KEY,
@@ -19,11 +20,32 @@ import {
 const ws = (id: string, trigger = "you", since = "2026-10-11T10:00:00Z") => ({ id, label: `chat ${id}`, trigger, since });
 
 describe("rowTarget", () => {
+  test("a replying row opens its Team task's chat before the turn shows running", () => {
+    expect(rowTarget({ disabled: false, replying_session: "task" }, "replying")).toBe("task");
+    expect(rowTarget({ disabled: false, replying_session: "task", working_sessions: [ws("run")] }, "replying")).toBe("run");
+    expect(rowTarget({ disabled: false, replying_session: "task" }, "thinking")).toBeNull();
+    expect(rowTarget({ disabled: true, replying_session: "task" }, "replying")).toBeNull();
+  });
   it("opens the oldest running chat, else the main chat", () => {
     expect(rowTarget({ disabled: false, working_sessions: [ws("old"), ws("new")] })).toBe("old");
     expect(rowTarget({ disabled: false })).toBeNull();
     expect(rowTarget({ disabled: true, working_sessions: [ws("old")] })).toBeNull();
     expect(runningSessions({ disabled: true, working_sessions: [ws("a")] })).toEqual([]);
+  });
+});
+
+describe("sub-agents' side chat", () => {
+  const row = { disabled: false, last_active: "2026-10-17T10:30:00Z", subagents_session: "side", subagents_active: "2026-10-17T10:20:00Z" };
+  it("opens the chat the sub-agents run from while only they work", () => {
+    expect(rowTarget(row, "subagent")).toBe("side");
+    expect(rowActive(row, "subagent")).toBe("2026-10-17T10:20:00Z");
+  });
+  it("a running chat, the agent's own turn or a disabled agent keep their target", () => {
+    expect(rowTarget({ ...row, working_sessions: [ws("run")] }, "subagent")).toBe("run");
+    expect(rowTarget(row, "thinking")).toBeNull();
+    expect(rowActive(row, "thinking")).toBe(row.last_active);
+    expect(rowTarget({ ...row, disabled: true }, "subagent")).toBeNull();
+    expect(rowTarget({ disabled: false }, "subagent")).toBeNull();
   });
 });
 
@@ -108,9 +130,12 @@ describe("sessionSignal", () => {
 describe("roster wiring", () => {
   it("the row click opens rowTarget; the count menu and Last line sit beside the row button", () => {
     const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
-    expect(app).toMatch(/openRowChat\(a, rowTarget\(a\)\);/);
+    expect(app).toMatch(/openRowChat\(a, rowTarget\(a, statusOf\(a\)\.work\)\);/);
     expect(app).toMatch(/\{#if running\.length > 1\}<RosterSessionsMenu sessions=\{running\}/);
     expect(app).toMatch(/data-testid="roster-last"/);
+    // The Last line reads the chat before marking it seen: marking it
+    // re-derives `last` to null, and reading last.id after it threw.
+    expect(app).toMatch(/const \{ id, key \} = \{ id: last\.id, key: lastSessionKey\(last\) \};\s*openRowChat\(a, id\);\s*seenLast = markSeen\(seenLast, key\);/);
     expect(app).toMatch(/else if \(sessionSignal\(agents, ev, activeSessions\)\) sessionReload\.call\(\);/);
     expect(app).toMatch(/boundedDebounce\(\(\) => load\(\), ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS\)/);
     expect(app).toMatch(/onReconnect: \(\) => activeSessions\.clear\(\),/);

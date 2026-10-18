@@ -386,3 +386,20 @@ func TestResetSessionStatusKeepsConcurrentAgents(t *testing.T) {
 		t.Fatalf("meta=%q in-memory=%q, want idle", got.Meta.Status, s.Agents[0].Status)
 	}
 }
+
+func TestProjectAdoptsFolderCreatedByAnotherProcess(t *testing.T) {
+	layout := newLayout(t)
+	r := New(layout)
+	if err := r.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	// Stands in for the predecessor during a reload: writes the folder, tells us nothing.
+	mkProject(t, layout, "P-new", "Client X")
+	p, ok := r.Project("P-new")
+	if !ok || p.Meta.Name != "Client X" {
+		t.Fatalf("Project() reported a project that exists on disk as missing (ok=%v)", ok)
+	}
+	if _, ok := r.Project("never-existed"); ok {
+		t.Fatal("Project() invented a project with no folder on disk")
+	}
+}

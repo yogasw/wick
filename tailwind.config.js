@@ -134,6 +134,10 @@ module.exports = {
         600: 'rgb(var(--color-navy-600) / <alpha-value>)',
         700: 'rgb(var(--color-navy-700) / <alpha-value>)',
         800: 'rgb(var(--color-navy-800) / <alpha-value>)',
+        // Inset well / scrim, one step deeper than the 800 surface. Used
+        // across the agents UI long before it existed here, so every
+        // `dark:bg-navy-900` was silently dropped and fell back to light.
+        900: 'rgb(var(--color-navy-900) / <alpha-value>)',
       },
 
       // Black — text tokens. Themed.

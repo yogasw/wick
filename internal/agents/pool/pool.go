@@ -93,6 +93,12 @@ type Pool struct {
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState
+	// idleRetries counts, per agent, the automatic re-deliveries of
+	// messages an idle kill handed back (retryUnanswered).
+	idleRetries map[string]*crashState
+	// waitStates says what a session waits on (restart, queue) for the
+	// cards of whoever waits on it; see waitstate.go.
+	waitStates
 	// ghostWarned remembers which active entries HandoverBlockers already
 	// logged (and reaped) as ghosts, so a drain polling every few hundred
 	// milliseconds says it once per entry. Lazily created; guarded by mu.
@@ -136,6 +142,11 @@ type PoolConfig struct {
 	MaxConcurrent int
 	IdleTimeout   time.Duration
 	KillAfterIdle time.Duration
+	// TurnIdleTimeout is the silence a spawn may keep while a turn is
+	// open or a background task is pending (provider.Options). 0 = none:
+	// IdleTimeout everywhere, the legacy behaviour. The server passes
+	// DefaultTurnIdleTimeout.
+	TurnIdleTimeout time.Duration
 	// MinFreeMemoryLoader returns the floor, in MB, below which a spawn is
 	// queued rather than started. 0 or a nil loader disables the check, so
 	// a pool built without it behaves exactly as it always has.
@@ -393,16 +404,17 @@ type SpawnStartMeta struct {
 type FactoryOptions struct {
 	// CallerUserID is the wick user whose message triggered this spawn.
 	// Empty = no resolved caller (cron, system job, legacy session).
-	CallerUserID  string
-	SessionID     string
-	AgentName     string
-	ProviderType  string
-	ProviderName  string
-	Workspace     string
-	ResumeID      string
-	IdleTimeout   time.Duration
-	KillAfterIdle time.Duration
-	OnEvent       func(event.AgentEvent)
+	CallerUserID    string
+	SessionID       string
+	AgentName       string
+	ProviderType    string
+	ProviderName    string
+	Workspace       string
+	ResumeID        string
+	IdleTimeout     time.Duration
+	KillAfterIdle   time.Duration
+	TurnIdleTimeout time.Duration
+	OnEvent         func(event.AgentEvent)
 	// PresetName is the preset name from session meta. Factory resolves
 	// the content from disk — pool passes the name so factory avoids a
 	// redundant session.Load.
@@ -468,6 +480,10 @@ type runEntry struct {
 	// global one. Set at spawn time from the session's agents.json.
 	provType string
 	provName string
+	// pinnedModel is the model pin agents.json named at spawn, as stored
+	// (before a foreign pin is dropped): maybeFollowDefault compares it
+	// with agents.json to spot a process left on an older pin.
+	pinnedModel string
 	// callerUserID is the wick user whose message caused this subprocess to
 	// spawn. Its MCP credential is minted for that human, and the credential
 	// is baked into the spawn argv — so it cannot change while the process
@@ -900,6 +916,10 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	}
 	key := sessionKey(sessionID, agentName)
 	entry, alive := p.active[key]
+	if p.refuseWhileDrainingLocked(entry, alive, source) {
+		p.mu.Unlock()
+		return ErrHandedOver
+	}
 	// A person messaging the session is the intervention the halt notice
 	// asked for: they have seen it, and may well have fixed the cause. Give
 	// the agent its full restart budget back rather than holding a
@@ -943,11 +963,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		entry = nil
 	}
 
-	// A session on a failover stand-in goes back to its home (or up the
-	// home's chain) before a new message, when that is usable again.
+	// A session whose agent's default moved follows it, and one on a
+	// failover stand-in goes back to its home (or up the home's chain),
+	// before a new message, when that is usable again.
 	// Re-read either way: a concurrent send may have switched, stopped or
 	// spawned meanwhile, and a stale entry would write into a dead process.
 	if role == "user" {
+		p.maybeFollowDefault(ctx, sessionID, agentName)
 		p.maybeReturnHome(sessionID, agentName)
 		p.mu.Lock()
 		entry, alive = p.active[key]
@@ -1167,6 +1189,9 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 		p.queue = append(p.queue, queueEntry{sessionID, agentName, time.Now()})
 	}
 	p.mu.Unlock()
+	if !already {
+		p.waitChanged()
+	}
 	if p.cfg.PreemptIdle {
 		p.preemptIdleSlot()
 	}
@@ -1373,6 +1398,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	maxTurns := 0
 	thinkingTokens := ""
 	modelID := ""
+	pinnedModel := ""
 	pType := ""
 	pName := ""
 	for _, a := range sess.Agents {
@@ -1381,6 +1407,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 			maxTurns = a.MaxTurns
 			thinkingTokens = a.ThinkingTokens
 			modelID = a.ModelID
+			pinnedModel = a.ModelID
 			// A pin only means anything on the instance it was chosen on.
 			// wick's ids are opaque ("m_…", or "<entry>@<vendorModel>") and a
 			// CLI given one dies on `--model m_…`. This happens when a pin
@@ -1415,26 +1442,27 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	}
 
 	br, err := p.cfg.Factory.Build(FactoryOptions{
-		CallerUserID:   callerUserID,
-		SessionID:      sessionID,
-		AgentName:      agentName,
-		ProviderType:   pType,
-		ProviderName:   pName,
-		Workspace:      cwd,
-		ResumeID:       resumeID,
-		IdleTimeout:    p.cfg.IdleTimeout,
-		KillAfterIdle:  p.cfg.KillAfterIdle,
-		PresetName:     sess.Meta.Preset,
-		SystemAddon:    composeSystemAddon(p.cfg.Layout, sess),
-		Origin:         string(sess.Meta.Origin),
-		IsSubAgent:     sess.Meta.ParentSessionID != "",
-		Title:          sess.Meta.Label,
-		TitleCustom:    sess.Meta.TitleCustom,
-		MaxTurns:       maxTurns,
-		ThinkingTokens: thinkingTokens,
-		ModelID:        modelID,
-		OnFailover:     failoverHook(sess.Meta, p.decideFailover),
-		FailoverMsgKey: resend.msgKey,
+		CallerUserID:    callerUserID,
+		SessionID:       sessionID,
+		AgentName:       agentName,
+		ProviderType:    pType,
+		ProviderName:    pName,
+		Workspace:       cwd,
+		ResumeID:        resumeID,
+		IdleTimeout:     p.cfg.IdleTimeout,
+		KillAfterIdle:   p.cfg.KillAfterIdle,
+		TurnIdleTimeout: p.cfg.TurnIdleTimeout,
+		PresetName:      sess.Meta.Preset,
+		SystemAddon:     composeSystemAddon(p.cfg.Layout, sess),
+		Origin:          string(sess.Meta.Origin),
+		IsSubAgent:      sess.Meta.ParentSessionID != "",
+		Title:           sess.Meta.Label,
+		TitleCustom:     sess.Meta.TitleCustom,
+		MaxTurns:        maxTurns,
+		ThinkingTokens:  thinkingTokens,
+		ModelID:         modelID,
+		OnFailover:      failoverHook(sess.Meta, p.decideFailover),
+		FailoverMsgKey:  resend.msgKey,
 		OnTurnOK: func(sentAt time.Time) {
 			p.turnOK(sessionID, agentName, pType+"/"+pName, sentAt)
 		},
@@ -1447,15 +1475,16 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	// Wire OnExit so the pool reclaims the slot.
 	key := sessionKey(sessionID, agentName)
 	entry := &runEntry{
-		agent:    a,
-		state:    st,
-		store:    sto,
-		sessID:   sessionID,
-		agentNm:  agentName,
-		cwd:      cwd,
-		ctx:      ctx,
-		provType: pType,
-		provName: pName,
+		agent:       a,
+		state:       st,
+		store:       sto,
+		sessID:      sessionID,
+		agentNm:     agentName,
+		cwd:         cwd,
+		ctx:         ctx,
+		provType:    pType,
+		provName:    pName,
+		pinnedModel: pinnedModel,
 		// Remember who this process speaks for, and with which credential,
 		// so a later message from a DIFFERENT user can be detected (the MCP
 		// identity is fixed in the argv) and so the credential dies with the
@@ -1871,6 +1900,7 @@ func (p *Pool) tryGrantQueue() {
 	p.spawningKeys[key] = struct{}{}
 	p.wg.Add(1)
 	p.mu.Unlock()
+	p.waitChanged()
 	// Background spawn — don't block whoever fired the exit hook.
 	go func() {
 		defer p.wg.Done()
@@ -2678,6 +2708,41 @@ func (p *Pool) PartialText(sessionID, agentName string) string {
 // queue, not by killing a process that does not exist yet.
 var ErrAgentNotActive = errors.New("agent not active in pool")
 
+// ErrHandedOver refuses a message wick itself sends (a teammate's task, a
+// sub-agent's result, a schedule, a CLI report…) to a process that has
+// handed over to a new build and is only draining: the successor runs that
+// session, so a turn here would run it twice.
+var ErrHandedOver = errors.New("wick is handing over to a new build: this process takes no new turns; the message goes to the new process")
+
+// drainRefused are the sources wick itself sends from. A draining process
+// keeps channel intake (Slack, Telegram, …) until it exits, so those are
+// not refused; these come from in-process paths that also run in the
+// successor.
+var drainRefused = map[string]bool{
+	"team": true, "subagent": true, "schedule": true, "watch": true, "agent": true,
+	"agentctl": true, "cli": true, "workflow": true, "failover": true,
+}
+
+// drainingNow is upgrade.Draining; tests swap it.
+var drainingNow = upgrade.Draining
+
+// refuseWhileDrainingLocked: after the handover this process starts no
+// turn wick sends itself (B5). Only a turn already running here may take
+// more (a sub-agent's result into the turn that waits for it); an idle
+// subprocess left over does not count, the successor owns that session
+// now. p.mu is held.
+func (p *Pool) refuseWhileDrainingLocked(entry *runEntry, alive bool, source string) bool {
+	if !drainRefused[source] || !drainingNow() {
+		return false
+	}
+	if alive && entry != nil && entry.state != nil {
+		if lc := entry.state.Lifecycle(); lc == state.LifecycleWorking || lc == state.LifecycleSpawning {
+			return false
+		}
+	}
+	return true
+}
+
 // KillAgent stops exactly ONE agent inside a session, leaving its
 // siblings running.
 //
@@ -2913,17 +2978,40 @@ func (p *Pool) handleExit(sessionID, agentName string, reason provider.ExitReaso
 	// line after them: the turn never started. The spawn already drained
 	// them from the buffer, so without this they died with the process —
 	// the person saw no reply and no event, and the next spawn ran without
-	// them. Put them back BEFORE the slot is released, so whichever spawn
-	// comes next (a new message, a sub-agent result) delivers them.
+	// them. Put them back BEFORE the slot is released, so the retry below
+	// (or whichever spawn comes next) delivers them.
 	var unanswered []string
 	if reason == provider.ExitIdle {
 		unanswered = p.rebufferUnanswered(sessionID, agentName)
+		if len(unanswered) == 0 {
+			// An idle reap of an agent that answered: whatever stalled
+			// before is over, so a later stall gets its full retry budget.
+			p.mu.Lock()
+			delete(p.idleRetries, sessionKey(sessionID, agentName))
+			p.mu.Unlock()
+		}
 	}
 	p.onAgentExit(sessionID, agentName)
 	if len(unanswered) > 0 {
-		// After onAgentExit, so the notice buffers instead of being written
-		// into the dead process. It does not spawn: a CLI that just sat
-		// silent for the whole idle window would most likely do it again.
+		// After onAgentExit, so the retry competes for a free slot like any
+		// other spawn and the notice is never written into the dead process.
+		// Nothing else may ever wake the agent — the person asked once and
+		// is waiting — so it is started again on its own, a bounded number
+		// of times. Only when that is spent do the messages wait for the
+		// next one, announced without spawning.
+		if p.retryUnanswered(sessionID, agentName, len(unanswered)) {
+			return true
+		}
+		why := p.idleGiveUp(sessionID, agentName)
+		log.Warn().
+			Str("component", "pool").
+			Str("session", sessionID).
+			Str("agent", agentName).
+			Int("retries", maxIdleRetries).
+			Int("messages", len(unanswered)).
+			Str("reason", why).
+			Msg("pool.exit: idle-killed again; automatic retries spent, messages wait for the next wake")
+		p.markGaveUp(sessionID, why)
 		p.noticeNotify(sessionID, agentName, unansweredNotice(len(unanswered)), errUnansweredRequeued)
 	}
 	// After the slot is released, decide whether this death deserves a
@@ -3103,8 +3191,85 @@ func unansweredNotice(n int) string {
 	if n > 1 {
 		what = fmt.Sprintf("Your last %d messages were", n)
 	}
-	return what + " not answered: the agent produced no output before the idle timeout and was stopped. " +
+	return what + " not answered: the agent produced no output before the idle timeout and was stopped, " +
+		"and the automatic retry did not get an answer either. " +
 		"They are kept and will be delivered together with the next message (or sub-agent result) that wakes the agent."
+}
+
+// retryUnanswered starts the agent again after an idle kill handed its
+// messages back, so they are delivered without anyone having to write
+// again. Reports whether a retry was scheduled: false once maxIdleRetries
+// is spent within respawnWindow, or when crash recovery already gave up
+// on this agent (a process that cannot start would only loop).
+//
+// The retry is a "recover" system turn, like a crash restart: Send's one
+// spawn path, so slot accounting and queueing apply, and the spawn drains
+// the re-buffered messages together with the notice.
+func (p *Pool) retryUnanswered(sessionID, agentName string, n int) bool {
+	key := sessionKey(sessionID, agentName)
+	p.mu.Lock()
+	if st, ok := p.crashes[key]; ok && st.halted {
+		p.mu.Unlock()
+		return false
+	}
+	attempt := noteAttemptLocked(&p.idleRetries, key, time.Now())
+	p.mu.Unlock()
+	if attempt > maxIdleRetries {
+		return false
+	}
+	delay := idleRetryBackoff[min(attempt, len(idleRetryBackoff))-1]
+	log.Warn().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Int("attempt", attempt).
+		Int("max_attempts", maxIdleRetries).
+		Int("messages", n).
+		Dur("delay", delay).
+		Msg("pool.exit: idle-killed before answering; retrying automatically")
+	msg := idleRetryNotice(n, attempt)
+	p.markRestarting(sessionID, attempt)
+	time.AfterFunc(delay, func() {
+		select {
+		case <-p.stopCh:
+			return
+		default:
+		}
+		// Something else woke the agent meanwhile (a new message): that
+		// spawn already took the messages, so there is nothing to retry.
+		p.mu.Lock()
+		_, running := p.active[key]
+		p.mu.Unlock()
+		if running {
+			return
+		}
+		p.notifySession(sessionID, agentName, msg)
+	})
+	return true
+}
+
+// idleGiveUp is why the idle retries of an agent stopped, for
+// TakeGiveUp: its process was idle-killed mid-turn, so the window was
+// the mid-turn one.
+func (p *Pool) idleGiveUp(sessionID, agentName string) string {
+	p.mu.Lock()
+	st, ok := p.crashes[sessionKey(sessionID, agentName)]
+	halted := ok && st.halted
+	p.mu.Unlock()
+	return idleGiveUpReason(maxIdleRetries, max(p.cfg.IdleTimeout, p.cfg.TurnIdleTimeout), halted)
+}
+
+// idleRetryNotice heads the retry turn: the person sees why the agent
+// starts again, the agent that its previous process died silent.
+func idleRetryNotice(n, attempt int) string {
+	what := "Your last message was"
+	if n > 1 {
+		what = fmt.Sprintf("Your last %d messages were", n)
+	}
+	return fmt.Sprintf("[system] %s not answered: the agent produced no output before the idle timeout and was stopped. "+
+		"Retrying automatically (attempt %d of %d); the messages are delivered again with this notice. "+
+		"Your conversation is intact: check what was already done before continuing, do not start over.",
+		what, attempt, maxIdleRetries)
 }
 
 // errUnansweredRequeued names the condition for SpawnErrorEvent consumers'

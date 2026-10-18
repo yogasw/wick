@@ -149,7 +149,7 @@ describe("no quick poll", () => {
     expect(intervals.filter((ms) => ms !== "1000" && ms !== "60_000")).toEqual([]);
     expect(src).toMatch(/setInterval\(\(\) => \(waitNow = Date\.now\(\)\), 1000\)/);
     expect(src).toMatch(/setInterval\(\(\) => \(rosterNow = Date\.now\(\)\), 60_000\)/);
-    expect(src).toMatch(/rosterTime\(a\.last_active, rosterNow\)/);
+    expect(src).toMatch(/rosterTime\(rowActive\(a, st\.work\), rosterNow\)/);
     expect(src).toMatch(/dozing=\{dozing\(a, st, rosterNow\)\}/);
     expect(src).not.toMatch(/agents\/live|listAgentsLive|createLivePoll/);
     // The stream itself lives in rosterLive.ts since d979f8fc.
@@ -314,7 +314,8 @@ describe("Team task work in the avatar and the header", () => {
     const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
     const avatar = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
     expect(avatar).toMatch(/working=\{!ring && avatarWorking\(a\.status, st\.work\)\} tool=\{st\.work === "tool" \|\| st\.work === "subagent" \|\| st\.work === "replying"\}/);
-    expect(app).toMatch(/working=\{!!headerStatus && avatarWorking\(selected\.status, headerStatus\.work\)\} tool=\{headerStatus\?\.work === "tool" \|\| headerStatus\?\.work === "subagent" \|\| headerStatus\?\.work === "replying"\}/);
+    // The header avatar is a RosterAvatar fed the header's status.
+    expect(app).toMatch(/<RosterAvatar agent=\{selected\} st=\{headerStatus\}/);
     expect(app).toMatch(/\{:else if isWorking\(selected\.status\) \|\| \(headerStatus && busyWork\(headerStatus\.work\)\)\}/);
   });
 

@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -152,6 +153,11 @@ var (
 	// "only_me"). Send returns it wrapped in an OwnerOnlyError that names
 	// the agent and the way out.
 	ErrRemoteOwnerOnly = errors.New("that remote agent is set to take messages from its owner only — tell the user instead")
+	// ErrReplyInTask refuses a separate message to the teammate whose task
+	// the caller is answering right now: the turn's final answer already
+	// goes back to it as the task's reply, so the message would reach it
+	// twice. Send wraps it with the task id.
+	ErrReplyInTask = errors.New("you are answering this teammate's task right now — write it in your reply instead: your final answer goes back to them as the task's reply. Pass separate=true only for a message they must get on its own before you finish")
 )
 
 // OwnerOnlyError is ErrRemoteOwnerOnly for one agent: it says which
@@ -376,6 +382,9 @@ type Hub struct {
 	// linkMu serialises pairing a caller's conversation with a target's
 	// chat (chatFor), so two messages sent at once open one chat, not two.
 	linkMu sync.Mutex
+	// GateLine lists the tasks waiting for their turn in a session
+	// (TurnGate.Waiting), next first; nil = no line is shown.
+	GateLine func(sessionID string) []a2a.TaskID
 	// CallerBusy reports whether a session runs (or waits for) a turn. A
 	// question nobody's turn is handling waits for the user (NeedsYou);
 	// nil = never busy.
@@ -393,10 +402,18 @@ type Hub struct {
 	// orphanPoll is how often the tasks a restart left working are
 	// checked (settleOrphans). Tests shorten it.
 	orphanPoll time.Duration
+	// SelfDraining reports whether THIS process has handed over to a
+	// successor: a task it does not run may be the successor's, so it
+	// settles no orphan. nil = never.
+	SelfDraining func() bool
+	// orphanWatch: watchOrphans is running.
+	orphanWatch atomic.Bool
 	// progressHub holds the live progress of working tasks (progress.go).
 	progressHub
 	// batchHub holds the fan-in batches and the delivery outbox (batch.go).
 	batchHub
+	// waitHub reads what a working task's teammate waits on (wait.go).
+	waitHub
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -461,6 +478,18 @@ type taskRef struct {
 	firstCanceled bool
 	// undelivered: the outbox gave up on the prompt with its reply.
 	undelivered bool
+	// revisions are the amends (Amend) of a task whose turn had not
+	// started; turnTaken: its turn started and read them (TurnText), so a
+	// later revision goes into the running turn. Memory only: a restart
+	// ends the turn anyway.
+	revisions []revision
+	turnTaken bool
+	// amendOf is the ended task this one revises (Amend); amendedBy the
+	// task that revised this one after it ended.
+	amendOf, amendedBy a2a.TaskID
+	// echo: the task's reply repeats a message the teammate already sent
+	// the asker while answering it (Send, separate): not delivered.
+	echo bool
 	// origin is OriginUser for a task a person's @mention started in the
 	// caller's chat (SendInput.Human), set by Send and never from model
 	// input; "" = the agent's own task. Only that person answers or
@@ -767,6 +796,10 @@ type SendInput struct {
 	// session; GroupNone keeps the task out of every batch; "" = the
 	// turn's batch.
 	Group string
+	// Separate lets a message through to the teammate whose task the
+	// caller is answering right now (ErrReplyInTask); a final reply that
+	// only repeats it is then not delivered again.
+	Separate bool
 }
 
 // Result is what a caller gets back.
@@ -872,6 +905,41 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
+	}
+	// A message to the asker of the task this turn answers would reach it
+	// twice: once now, once as the task's reply.
+	var replyTo a2a.TaskID
+	if answer == "" && in.Chat == "" && !in.Human && !self {
+		h.mu.Lock()
+		replyTo = h.answeringForLocked(caller.ID, in.CallerSession, target.ID)
+		h.mu.Unlock()
+		if replyTo != "" && !in.Separate {
+			err := fmt.Errorf("%w (task %s)", ErrReplyInTask, replyTo)
+			if in.Mention {
+				h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: target.Handle, Err: err})
+			}
+			return nil, err
+		}
+	}
+	// A second message to a teammate that has not started on the first
+	// one yet joins it as a revision: one job, one reply (B2). separate,
+	// a new or chosen chat and an explicit group keep it a task of its own.
+	if answer == "" && in.Chat == "" && !in.NewChat && !in.Human && !self && !in.Separate && in.Group == "" && in.ContextID == "" {
+		h.mu.Lock()
+		open := h.openTaskToLocked(caller.ID, in.CallerSession, target.ID)
+		h.mu.Unlock()
+		if open != "" {
+			res, err := h.Amend(ctx, AmendInput{CallerSession: in.CallerSession, CallerAgentID: caller.ID, TaskID: string(open), Text: in.Text})
+			if err == nil && res != nil {
+				// It may have started or ended meanwhile: Amend put the text
+				// in its turn, or sent it as a new linked task.
+				if res.TaskID == string(open) {
+					res.State = "merged"
+					res.Note = fmt.Sprintf("Merged into task %s, which @%s had not finished yet: ONE reply comes for both. Next time pass amend_task=%s. (separate=true sends a task of its own.) ", open, target.Handle, open) + res.Note
+				}
+				return res, nil
+			}
+		}
 	}
 	// The switch is read once, outside h.mu (it may read the config).
 	batchOn := h.batching()
@@ -987,6 +1055,15 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if lost != "" {
 		h.supersede(lost, task.ID)
 	}
+	if replyTo != "" {
+		// The asker has this text already: a final reply that repeats it
+		// is not delivered again (settle, taskRef.echo).
+		h.mu.Lock()
+		if r := h.tasks[replyTo]; r != nil {
+			r.markSent(echoKey(in.Text))
+		}
+		h.mu.Unlock()
+	}
 
 	wait := in.Wait
 	h.mu.Lock()
@@ -1049,6 +1126,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if out != nil {
 		out.GroupID = group
 		out.Note = groupNote + out.Note
+		h.noteWait(out)
 	}
 	return out, err
 }
@@ -1210,6 +1288,25 @@ func (h *Hub) admit(ownerID, callerID, callerSession, contextID string, afterRep
 	cs.turns++
 	cs.touched = h.now()
 	return contextID, depth, cs.limit, nil
+}
+
+// answeringForLocked is the task callerSession is answering right now
+// for the agent asker (asked by that agent, not by a person's mention),
+// "" for none. Only an exact session match counts: a message from
+// another chat of the caller is no reply to it.
+func (h *Hub) answeringForLocked(callerID, callerSession, asker string) a2a.TaskID {
+	if callerSession == "" {
+		return ""
+	}
+	for id, in := range h.inflight[callerID] {
+		if in.session != callerSession {
+			continue
+		}
+		if ref := h.tasks[id]; ref != nil && ref.callerAgentID == asker && !ref.finished && !ref.canceled && !ref.userTask() {
+			return id
+		}
+	}
+	return ""
 }
 
 // inboundOf picks the inbound task a message from callerID continues:
@@ -1536,6 +1633,7 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 			out.ReplyText = messageText(t.Status.Message)
 		}
 	}
+	h.noteWait(out)
 	return out, nil
 }
 
@@ -1550,11 +1648,24 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 // A task the person started (taskRef.origin) is theirs to cancel:
 // ErrUserTask.
 func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
-	return h.cancelTask(ctx, callerAgentID, taskID, false)
+	return h.cancelTask(ctx, callerAgentID, taskID, false, false)
 }
 
+// CancelTaskHard is CancelTask that kills the teammate's running turn for
+// the task (as a person's cancel does) instead of asking it to stop.
+func (h *Hub) CancelTaskHard(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
+	return h.cancelTask(ctx, callerAgentID, taskID, false, true)
+}
+
+// softStopNote ends the reason of an agent's cancel that asked the
+// running turn to stop rather than killing it.
+const softStopNote = "; the teammate was told to stop (its turn was not killed, so nothing it was doing is cut off mid-step)"
+
 // cancelTask is CancelTask; byUser is the person's cancel (CancelFromUser).
-func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUser bool) (*Result, error) {
+// An agent's cancel (not byUser, not hard) of a task whose turn is
+// running asks that turn to stop instead of killing it: a kill can cut a
+// write or a deploy half-way. A person's cancel and hard kill it.
+func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUser, hard bool) (*Result, error) {
 	id := a2a.TaskID(strings.TrimSpace(taskID))
 	by := "the sender"
 	if byUser {
@@ -1590,7 +1701,16 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 	agentID, to := ref.agentID, ref.to
 	h.mu.Unlock()
 
-	if ts, ok := h.Turns.(TaskStopper); ok && isRunning && running.session != "" {
+	soft := !byUser && !hard && isRunning && running.session != "" && h.TurnOwner != nil && h.TurnOwner(running.session) == id && h.Notify != nil
+	if soft {
+		msg := fmt.Sprintf("Task %s was canceled by %s: stop working on it now, leave things in a safe state, and end your turn with [silent]. Nothing you say for it is delivered.", id, by)
+		if soft = h.Notify.Deliver(ctx, running.session, msg) == nil; soft {
+			h.mu.Lock()
+			ref.reply = reason + softStopNote
+			h.mu.Unlock()
+		}
+	}
+	if ts, ok := h.Turns.(TaskStopper); ok && !soft && isRunning && running.session != "" {
 		stop, _ := ts.StopTask(ctx, to, running.session, id, by)
 		switch stop {
 		case TaskStopRunning:
@@ -1703,18 +1823,23 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 		// their chat (OnTaskChange), never as a prompt waking its agent.
 		ref.delivered, deliver = true, false
 	}
+	// A reply that only repeats what the teammate already sent the asker
+	// during the task (a separate message, Send) is not delivered again.
+	if !again {
+		ref.echo = state == a2a.TaskStateCompleted && reply != "" && ref.sent[echoKey(reply)]
+	}
 	if deliver {
 		ref.delivered = true
 		if reply != "" {
 			ref.markSent(textKey(reply))
 		}
 	}
-	session, to, opts := ref.callerSession, ref.to, ref.options
+	session, to, opts, echo := ref.callerSession, ref.to, ref.options, ref.echo
 	inBatch := h.byTask[id] != nil
 	h.mu.Unlock()
 	text := ""
 	// [silent]: nothing to hand back.
-	if deliver && h.Notify != nil && !(state == a2a.TaskStateCompleted && reply == "") {
+	if deliver && h.Notify != nil && !(state == a2a.TaskStateCompleted && reply == "") && !echo {
 		text = fmt.Sprintf("Reply from %s [task %s, %s]:\n\n%s", to.Label(), id, stateName(state), reply)
 		if state == a2a.TaskStateInputRequired {
 			if len(opts) > 0 {
@@ -1810,6 +1935,82 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	return h.deliver(ctx, session, msg, id)
 }
 
+// FollowUpWindow is how long after a task ended what the answering agent
+// says on its own still reaches the asker (FollowUpAfter).
+const FollowUpWindow = 24 * time.Hour
+
+// HasAnswered reports whether sessionID answered a task, so a turn end
+// there may owe its asker a follow-up. It reads memory only.
+func (h *Hub) HasAnswered(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.answered[sessionID]
+	return ok
+}
+
+// FollowUpAfter is FollowUp for a local agent that kept working after it
+// answered: text, said at at in sessionID on its own (a sub-agent's
+// result, a schedule, a job's report — not a person, not another task),
+// reaches the asker of the task that session answered last. Only a task
+// that completed, before at and at most FollowUpWindow earlier, takes
+// it: a reply of the task itself, an older exchange, a remote agent
+// (its follow-ups come from the remote) or a canceled task do not. Nor
+// does a chat a person wrote in after the task ended (personAt): the
+// chat is that person's again and what the agent says is for them.
+func (h *Hub) FollowUpAfter(ctx context.Context, sessionID, text string, at, personAt time.Time) bool {
+	if sessionID == "" || strings.TrimSpace(text) == "" {
+		return false
+	}
+	h.mu.Lock()
+	id, ok := h.answered[sessionID]
+	ref := h.tasks[id]
+	if ok && ref == nil {
+		ref = h.loadLocked(id)
+	}
+	fresh := ok && ref != nil && ref.finished && ref.state == a2a.TaskStateCompleted &&
+		!ref.canceled && !ref.to.Remote && !ref.ended.IsZero() &&
+		at.After(ref.ended) && at.Sub(ref.ended) <= FollowUpWindow && !personAt.After(ref.ended)
+	h.mu.Unlock()
+	if !fresh {
+		return false
+	}
+	return h.FollowUp(ctx, sessionID, text)
+}
+
+// askedFrom reports whether chat is the conversation that sent target a
+// task answered in callerSession: the agent that got the task may write
+// back there (team_message chat=<from_session>) without sharing a ticket
+// with it. Tasks read back from disk count through answered.
+func (h *Hub) askedFrom(target Peer, callerSession, chat string) bool {
+	if callerSession == "" || chat == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	match := func(ref *taskRef) bool {
+		return ref != nil && ref.callerSession == chat && ref.callerAgentID == target.ID &&
+			(ref.answered == callerSession || ref.chat == callerSession)
+	}
+	if id, ok := h.answered[callerSession]; ok {
+		ref := h.tasks[id]
+		if ref == nil {
+			ref = h.loadLocked(id)
+		}
+		if match(ref) {
+			return true
+		}
+	}
+	for _, ref := range h.tasks {
+		if match(ref) {
+			return true
+		}
+	}
+	return false
+}
+
 // TaskView is one task a session sent, as the Sub-agents panel and
 // list_tasks show it.
 type TaskView struct {
@@ -1874,6 +2075,19 @@ type TaskView struct {
 	ReplacedHow      string `json:"replaced_how,omitempty"`
 	ReplacedToHandle string `json:"replaced_to_handle,omitempty"`
 	ReplacedToName   string `json:"replaced_to_name,omitempty"`
+	// RestartAttempt/RestartMax: the teammate is being restarted after an
+	// idle kill (retry 1 of 2) and QueuePos: it waits for a free slot (1 =
+	// next). The task stays working; WaitNote says it in one line. Read
+	// live from the pool (wait.go), never stored.
+	RestartAttempt int `json:"restart_attempt,omitempty"`
+	RestartMax     int `json:"restart_max,omitempty"`
+	QueuePos       int `json:"queue_pos,omitempty"`
+	// GatePos is the task's place in the line of its teammate's chat
+	// (TurnGate, 1 = next): it waits for a turn of that chat to end.
+	GatePos  int    `json:"gate_pos,omitempty"`
+	WaitNote string `json:"wait_note,omitempty"`
+	// to is the teammate, for fillWait.
+	to Peer
 }
 
 // SentFrom lists the tasks sessionID sent, newest first: those in memory
@@ -1896,6 +2110,16 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	ids := h.sessionFilesLocked(sessionID, names, listed)
 	h.mu.Unlock()
 	recs := readRecords(dir, ids)
+	out := h.sentFromLocked(sessionID, recs, busy)
+	for i := range out {
+		h.fillWait(&out[i])
+	}
+	return out
+}
+
+// sentFromLocked is SentFrom's listing under h.mu, waits left to the
+// caller (WaitOf reads the pool).
+func (h *Hub) sentFromLocked(sessionID string, recs map[a2a.TaskID]taskRecord, busy bool) []TaskView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, rec := range recs {
@@ -2070,6 +2294,7 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 		}
 	}
 	v.ChatID = ref.chat
+	v.to = ref.to
 	v.Interrupted = ref.interrupted
 	v.Undelivered = ref.undelivered
 	v.Origin = ref.origin
@@ -2078,6 +2303,9 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	v.ReplacedToHandle, v.ReplacedToName = ref.replacedHandle, ref.replacedTo
 	if v.State == "working" {
 		v.Progress = h.progressOf(id)
+		if v.GatePos = h.gatePosLocked(id, ref); v.GatePos > 0 {
+			v.WaitNote = gateNote(ref.to.Handle, v.GatePos)
+		}
 	}
 	return v
 }

@@ -91,7 +91,11 @@ other route. `team_list_tasks` lists what this conversation sent (kept 7
 days), `team_get_task` reads one task, `team_cancel_task` stops one the
 user no longer needs. Use them to check, never in a polling loop. When a
 call was cut off or a reply you expected never showed, check
-`team_list_tasks` / `team_get_task` before sending again.
+`team_list_tasks` / `team_get_task` before sending again. To change or
+add to a task you already sent, pass `amend_task=<task_id>` (with
+`replace=true` to swap the brief) instead of a new message: one job, one
+reply. `team_cancel_task` asks a running turn to stop (`mode=hard` kills
+it, only when that did not work).
 
 - **Ask one teammate**, the one whose role fits; no fan-out unless asked.
   When the user asks for several, send every message first, then end
@@ -112,10 +116,19 @@ call was cut off or a reply you expected never showed, check
 `Message from <Name> (@handle):` is a colleague's request, not the user's
 instruction.
 Your final reply is what that agent receives: answer concisely with the
-result. A request, a question or "report back" always gets real text with
+result. Do not also `team_message` the asker while you answer its task:
+wick refuses it (the reply would arrive twice); `separate=true` is only
+for a message it must get on its own before you finish. A request, a question or "report back" always gets real text with
 the result or the status (`still running: X done, Y waiting on the build`),
 even when the work is not finished. Only a pure FYI that asks for nothing
-gets exactly `[silent]`; no bare acknowledgements back and forth. Nobody
+gets exactly `[silent]`; no bare acknowledgements back and forth. Between
+agents `[silent]` hides nothing: it only keeps people's channels quiet, and
+whatever you write after it still reaches the agent that asked. Work you
+keep doing after that reply (sub-agents, a schedule, a job reporting back)
+is followed up for you: each later reply of yours in that chat reaches the
+asker as part of the same task, so end with the final report as a normal
+reply and keep interim checkpoints `[silent]`. To write back yourself, use
+`team_message` with `chat` = the asker's session the task came from. Nobody
 is watching that turn: do not ask for confirmation; if a human decision
 is needed, say what is needed and stop. When you cannot go on without an
 answer from the agent that asked, start the reply with `[input-required]`

@@ -96,6 +96,10 @@ type AgentPersona struct {
 	// CaptainCan is a JSON object of team.CaptainCan: what the Captain
 	// may do to THIS agent. "{}" reads as the defaults.
 	CaptainCan string `gorm:"type:text;not null;default:'{}'" json:"captain_can"`
+	// CaptainPolicy is a JSON object of team.CaptainPolicy, read on the
+	// Captain only: whether its access proposals skip the owner's card.
+	// "{}" = every proposal waits.
+	CaptainPolicy string `gorm:"type:text;not null;default:'{}'" json:"captain_policy"`
 
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
 	// SessionPolicy is a JSON object of team.SessionPolicy: how the
