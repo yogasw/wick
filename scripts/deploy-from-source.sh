@@ -48,12 +48,13 @@ Flags
   --restart        update with stop / swap / start even when a zero-downtime reload is
                    possible (picked automatically when the daemon cannot reload)
   --no-install     build only: leave the result in bin/ and install nothing
+  --force          wick: rebuild even when the installed build is already from the newest commit
   --dry-run        print what would run, change nothing
 EOF
 }
 
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
-DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"
+DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0; KEYS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,6 +67,7 @@ while [ $# -gt 0 ]; do
     --wick) WICK_DIR="$(cd "$2" && pwd)"; shift 2 ;;
     --restart) RESTART=1; shift ;;
     --no-install) NOINSTALL=1; shift ;;
+    --force) FORCE=1; shift ;;
     --no-upgrade) UPGRADE=0; shift ;;
     --no-pull) PULL=0; shift ;;
     --no-bump) BUMP=0; shift ;;
@@ -232,8 +234,6 @@ core() {
   install_build "$installed"
 }
 
-# install_build INSTALLED — put bin/<app>-<os>-<arch> (cwd = the app) in place: a first
-# install, a stop/swap/start with --restart, else the zero-downtime reload.
 # start_app: as a systemd user service when the machine has one — the packaged unit runs
 # with WICK_GRACEFUL_UPGRADE=1, which is what makes every later update a zero-downtime
 # reload, and it survives a reboot — else as a plain daemon (`<app> start`).
@@ -265,6 +265,27 @@ daemon_mode() {
   if printf '%s\n' "$env" | grep -qx 'WICK_GRACEFUL_UPGRADE=1'; then echo graceful; else echo running; fi
 }
 
+# done_note: what to do once wick-agent is up — the questions a first run leaves.
+done_note() {
+  local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  cat <<EOF
+
+== done — $APP is installed${1:+ ($1)}
+   open      http://${ip:-<this-host>}:9425   (first admin login: ~/.$APP/INITIAL_CREDENTIALS.txt)
+   status    $APP status            logs: $APP status shows the daemon log tail
+   stop/run  systemctl --user stop|start $APP   (or $APP stop|start without the service)
+   update    run this same command again — it skips the build when $REF has no new commit
+   note      'wick' is the dev CLI (build/init); the server is '$APP'
+EOF
+}
+
+# mark_built records the source commit the installed binary was built from (wick mode),
+# so a rerun on the same commit skips the build. Written once the binary is in place.
+mark_built() {
+  [ -n "$BUILT_SHA" ] && [ "$DRY" = 0 ] || return 0
+  mkdir -p "$HOME/.$APP" && echo "$BUILT_SHA" >"$HOME/.$APP/built-commit" || true
+}
+
 # install_build INSTALLED — put the build (cwd = the app) in place: a first install + start,
 # else the zero-downtime reload when the daemon supports it, else stop / swap / start.
 install_build() {
@@ -280,6 +301,7 @@ install_build() {
     else
       say "first install (/usr/local/bin/$APP)"; run $SUDO install -m 755 "$bin" "/usr/local/bin/$APP"
     fi
+    mark_built
     start_app
     echo "   web UI: http://<this-host>:9425 · first-boot admin login: ~/.$APP/INITIAL_CREDENTIALS.txt"
     echo "   update later: run this same command again   (the 'wick' command is the dev CLI, not the server)"
@@ -295,16 +317,17 @@ install_build() {
       # --sudo only when not root: a root shell on a fresh server often has no sudo at all.
       run "$APP" reload --binary "$PWD/$bin" ${SUDO:+--sudo} -y --wait || \
         die "reload refused or failed — the running binary is unchanged (reason above)."
+      mark_built
       ;;
     running)
       say "update with stop / swap / start (short downtime: $APP was started without graceful upgrade)"
       run "$APP" stop || true
-      run $SUDO install -m 755 "$PWD/$bin" "$target"
+      run $SUDO install -m 755 "$PWD/$bin" "$target"; mark_built
       start_app
       ;;
     stopped)
       say "update $target ($APP is not running)"
-      run $SUDO install -m 755 "$PWD/$bin" "$target"
+      run $SUDO install -m 755 "$PWD/$bin" "$target"; mark_built
       start_app
       ;;
   esac
@@ -360,6 +383,21 @@ wick_self() {
     say "clone wick ($REF) -> $SRC"
     run git clone --quiet --branch "$REF" https://github.com/yogasw/wick.git "$SRC"
   fi
+  # Same commit as the installed build: nothing to rebuild, only make sure it runs.
+  local sha="" stamp="$HOME/.$APP/built-commit"   # next to the app's own data (~/.wick-agent)
+  [ -d "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$sha" ] && [ -z "$FORCE" ] && command -v "$APP" >/dev/null 2>&1 && \
+     [ "$(cat "$stamp" 2>/dev/null)" = "$sha" ]; then
+    say "$APP is already built from ${sha:0:12} ($REF) — nothing to rebuild (--force to rebuild anyway)"
+    case "$(daemon_mode)" in
+      stopped) start_app ;;
+      running) echo "   running without graceful upgrade: the next update restarts it once and moves it onto the service" ;;
+      graceful) echo "   running (zero-downtime updates on)" ;;
+    esac
+    done_note "${sha:0:12}"
+    return 0
+  fi
+  BUILT_SHA="$sha"
   setup_go "$SRC/go.mod"
   setup_node
   prep_wick_source
@@ -387,6 +425,7 @@ wick_self() {
   run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
   say "build ($TARGET)"; heavy "$APP-build" env GOFLAGS= wick build --target "$TARGET"
   install_build "$installed"
+  [ "$NOINSTALL" = 1 ] || done_note "${BUILT_SHA:0:12}"
 }
 
 # ---------------------------------------------------------------- plugins

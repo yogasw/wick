@@ -51,8 +51,10 @@ What it does:
    becomes a user service (`wick-agent service install`): it starts at boot, and its unit runs
    with `WICK_GRACEFUL_UPGRADE=1`, which every later update needs for a zero-downtime reload.
 
-**To update, run the same command again.** It fetches the newest commit of `--ref`,
-rebuilds, and swaps the build in: a zero-downtime `reload` when the daemon supports it,
+**To update, run the same command again.** It fetches the newest commit of `--ref`. If the
+installed build already comes from that commit (recorded in `~/.wick-agent/built-commit`) it
+only makes sure wick-agent is running and stops there; `--force` rebuilds anyway. Otherwise it
+rebuilds and swaps the build in: a zero-downtime `reload` when the daemon supports it,
 otherwise (a daemon started with a plain `wick-agent start`) stop / swap / start, which also
 moves it onto the service so the next update is zero-downtime. Windows always uses stop /
 swap / start.
@@ -165,6 +167,7 @@ version is left alone.
 | `--bump-plugins` | | bump each built plugin's `VERSION` patch first |
 | `--restart` | | force stop / swap / start even when a zero-downtime `reload` is possible |
 | `--no-install` | | build only, leave the result in `bin/` |
+| `--force` | | wick: rebuild even when the installed build is from the newest commit |
 | `--dry-run` | | print, change nothing |
 
 On Windows the same flags are PowerShell switches: `-Ref`, `-Src`, `-Dir`, `-Git`, `-Branch`, `-App`, `-Wick`,
