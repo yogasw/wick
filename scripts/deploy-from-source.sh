@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# deploy-from-source.sh — build a wick app (and its plugins) from source on Linux or
-# macOS and hot-reload it with no downtime. Installs what the build needs (git, Go,
-# the wick CLI) when missing. Windows: deploy-from-source.ps1.
+# deploy-from-source.sh — build wick (the wick-agent app) or your own wick app from source
+# on Linux or macOS, install it, and hot-reload it with no downtime after that. Installs
+# what the build needs (git, Go, the wick CLI) when missing. Windows: deploy-from-source.ps1.
 #
+#   # wick itself, from branch master (install the first time, update after that)
+#   curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.sh | bash
+#   # … another branch or tag
+#   curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.sh | bash -s -- --ref develop
+#   # your own wick app + its plugins
 #   curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.sh \
 #     | bash -s -- all --git https://github.com/org/myapp.git
 #
@@ -10,9 +15,12 @@
 set -euo pipefail
 
 usage() { cat <<'EOF'
-Usage: deploy-from-source.sh <command> [flags] [plugin-key...]
+Usage: deploy-from-source.sh [command] [flags] [plugin-key...]
 
 Commands
+  wick      (default) build wick itself from source at --ref: the wick CLI and the
+            wick-agent app (scaffolded once in ~/wick-agent, built against the source),
+            installed the first time, zero-downtime reload after that
   setup     install git, Go (the version the app's go.mod asks for) and the wick CLI
   core      build the app binary and swap it in: zero-downtime reload when the app is
             running, a fresh .deb install when it is not installed yet
@@ -22,7 +30,10 @@ Commands
   status    app version and installed plugins
 
 Flags
-  --dir DIR        app checkout (default: current dir if it has wick.yml, else ~/<repo name>)
+  --ref REF        wick: branch or tag to build (default: master)
+  --src DIR        wick: source checkout (default: ~/wick-src)
+  --dir DIR        app checkout (default: current dir if it has wick.yml, else ~/<repo name>;
+                   wick: ~/wick-agent)
   --git URL        clone this repo into --dir when it is not there yet (https recommended;
                    private GitHub repo: set TOKEN=ghp_... in the environment)
   --branch NAME    branch to clone / pull (default: the repo's default branch)
@@ -40,12 +51,14 @@ Flags
 EOF
 }
 
-CMD="${1:-}"; [ $# -gt 0 ] && shift
-DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""
+CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
+DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; KEYS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
+    --ref) REF="$2"; shift 2 ;;
+    --src) SRC="$2"; shift 2 ;;
     --git) GIT_URL="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --app) APP="$2"; shift 2 ;;
@@ -125,11 +138,11 @@ need_pkgs() { # install missing OS packages (apt/dnf/apk, brew on macOS)
   else die "install ${miss[*]} by hand (no apt/dnf/apk)"; fi
 }
 
-go_wanted() { # the Go version the app's go.mod asks for (toolchain wins), else the latest
-  local v=""
-  if [ -f "$DIR/go.mod" ]; then
-    v="$(awk '/^toolchain go/{sub("go","",$2); print $2; exit}' "$DIR/go.mod")"
-    [ -n "$v" ] || v="$(awk '/^go [0-9]/{print $2; exit}' "$DIR/go.mod")"
+go_wanted() { # GOMOD -> the Go version it asks for (toolchain wins), else the latest
+  local v="" m=$1
+  if [ -f "$m" ]; then
+    v="$(awk '/^toolchain go/{sub("go","",$2); print $2; exit}' "$m")"
+    [ -n "$v" ] || v="$(awk '/^go [0-9]/{print $2; exit}' "$m")"
   fi
   [ -n "$v" ] || v="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1 | sed 's/^go//')"
   echo "$v"
@@ -137,9 +150,8 @@ go_wanted() { # the Go version the app's go.mod asks for (toolchain wins), else 
 
 ver_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]; }   # ver_ge A B: A >= B
 
-setup() {
-  need_pkgs git curl tar
-  local want have=""; want="$(go_wanted)"
+setup_go() { # GOMOD
+  local want have=""; want="$(go_wanted "$1")"
   command -v go >/dev/null 2>&1 && have="$(go env GOVERSION | sed 's/^go//')"
   if [ -z "$have" ] || ! ver_ge "$have" "$want"; then
     say "install Go $want (have: ${have:-none}) -> /usr/local/go"
@@ -153,6 +165,14 @@ setup() {
   else
     echo "   Go $have ok (need $want)"
   fi
+  # go install puts tools (wick, templ from `wick setup`) in GOPATH/bin: it must be on PATH
+  # for the rest of this run, or `wick build` fails on "templ: executable file not found".
+  command -v go >/dev/null 2>&1 && export PATH="$(go env GOPATH)/bin:$PATH"
+}
+
+setup() {
+  need_pkgs git curl tar
+  setup_go "$DIR/go.mod"
   if ! command -v wick >/dev/null 2>&1; then
     # the CLI version the app already depends on, so `wick build` matches the module
     local wv=""; [ -f "$DIR/go.mod" ] && wv="$(awk '$1=="github.com/yogasw/wick"{print $2; exit}' "$DIR/go.mod")"
@@ -199,7 +219,13 @@ core() {
   [ "$TEST" = 1 ] && { say "test"; heavy "$APP-test" env GOFLAGS= go test -p 1 ./...; }
   say "build ($TARGET)"; heavy "$APP-build" wick build --target "$TARGET"
   restore_gomod
-  bin="bin/$APP-$OS-$ARCH"
+  install_build "$installed"
+}
+
+# install_build INSTALLED — put bin/<app>-<os>-<arch> (cwd = the app) in place: a first
+# install, a stop/swap/start with --restart, else the zero-downtime reload.
+install_build() {
+  local installed=$1 bin="bin/$APP-$OS-$ARCH"
   [ "$DRY" = 1 ] || [ -f "$bin" ] || die "build produced no $bin"
   if [ "$installed" = 0 ]; then
     local deb; deb="$(ls -t bin/"$APP"-*-linux-"$ARCH".deb 2>/dev/null | head -1 || true)"
@@ -215,7 +241,7 @@ core() {
     local target; target="$(command -v "$APP")"
     say "install with restart (short downtime) -> $target"
     run "$APP" stop || true
-    run $SUDO install -m 755 "$DIR/$bin" "$target"
+    run $SUDO install -m 755 "$PWD/$bin" "$target"
     run "$APP" start
     say "now running"; run "$APP" version
     return 0
@@ -223,9 +249,52 @@ core() {
   say "swap + zero-downtime reload"
   # reload checks the candidate (wick module, app, arch, version direction), swaps it
   # in atomically, hands the socket over and rolls back if the successor never serves.
-  run "$APP" reload --binary "$DIR/$bin" --sudo -y --wait || \
+  # --sudo only when not root: a root shell on a fresh server often has no sudo at all.
+  run "$APP" reload --binary "$PWD/$bin" ${SUDO:+--sudo} -y --wait || \
     die "reload refused or failed — the running binary is unchanged (reason above). If the daemon runs without WICK_GRACEFUL_UPGRADE=1, rerun with --restart (short downtime)."
   say "now running"; run "$APP" version
+}
+
+# ---------------------------------------------------------------- wick itself
+# wick-agent is what the release ships: `wick init wick-agent` from the wick CLI, built
+# with `wick build`. From source the same app is scaffolded once and built against the
+# checkout at --ref, so a branch with unreleased commits installs like a release.
+wick_self() {
+  DIR="${DIR:-$HOME/wick-agent}"; APP="${APP:-$(basename "$DIR")}"
+  need_pkgs git curl tar
+  if [ -d "$SRC/.git" ]; then
+    say "wick source $SRC -> $REF"
+    run git -C "$SRC" fetch --quiet origin "$REF"
+    run git -C "$SRC" checkout --quiet --detach FETCH_HEAD
+  else
+    say "clone wick ($REF) -> $SRC"
+    run git clone --quiet --branch "$REF" https://github.com/yogasw/wick.git "$SRC"
+  fi
+  setup_go "$SRC/go.mod"
+  say "wick CLI from source"
+  (cd "$SRC" 2>/dev/null || cd "$HOME"; heavy wick-cli env GOWORK=off GOFLAGS= go install .)
+  local installed=0 base ver
+  command -v "$APP" >/dev/null 2>&1 && installed=1
+  if [ ! -f "$DIR/wick.yml" ]; then
+    say "scaffold $DIR"
+    run mkdir -p "$(dirname "$DIR")"
+    if [ "$DRY" = 1 ]; then echo "   \$ (cd $(dirname "$DIR") && wick init $(basename "$DIR") --skip-setup)"
+    else (cd "$(dirname "$DIR")" && run wick init "$(basename "$DIR")" --skip-setup); fi
+  fi
+  [ "$DRY" = 1 ] && [ ! -d "$DIR" ] && { echo "   (dry-run: $DIR is not scaffolded yet, nothing more to show)"; return 0; }
+  cd "$DIR"
+  run go mod edit -replace "github.com/yogasw/wick=$SRC"
+  say "setup (tailwind, templ, go mod tidy)"; heavy "$APP-setup" env GOFLAGS= wick setup
+  # Version: the source's VERSION, next patch, plus the build time as a 4th number
+  # (1.17.2.202610191010). reload compares versions numerically and ignores a -suffix, so
+  # this is what makes every source build newer than the release before it and than the
+  # previous source build.
+  base="$(tr -d '[:space:]' <"$SRC/VERSION" 2>/dev/null || echo 0.0.0)"
+  ver="$(echo "${base#v}" | awk -F. -v OFS=. '{$3=$3+1; print $1,$2,$3}').$(date +%Y%m%d%H%M)"
+  say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
+  run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
+  say "build ($TARGET)"; heavy "$APP-build" env GOFLAGS= wick build --target "$TARGET"
+  install_build "$installed"
 }
 
 # ---------------------------------------------------------------- plugins
@@ -280,6 +349,7 @@ plugins() {
 }
 
 case "$CMD" in
+  wick)    wick_self ;;
   setup)   resolve_dir; setup ;;
   core)    resolve_dir; core ;;
   plugins) resolve_dir; plugins ;;

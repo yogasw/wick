@@ -1,21 +1,28 @@
-# deploy-from-source.ps1 — build a wick app (and its plugins) from source on Windows and
-# install it. Installs what the build needs (Git, Go, the wick CLI) when missing, per-user,
-# no admin prompt. Linux / macOS: deploy-from-source.sh.
+# deploy-from-source.ps1 — build wick (the wick-agent app) or your own wick app from source
+# on Windows and install it. Installs what the build needs (Git, Go, the wick CLI) when
+# missing, per-user, no admin prompt. Linux / macOS: deploy-from-source.sh.
 #
-#   & ([scriptblock]::Create((iwr -useb https://yogasw.github.io/wick/deploy-from-source.ps1))) all -Git https://github.com/org/myapp.git
+#   # wick itself, from branch master (install the first time, update after that)
+#   & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.ps1)))
+#   # another branch or tag
+#   & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.ps1))) -Ref develop
+#   # your own wick app + its plugins
+#   & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.ps1))) all -Git https://github.com/org/myapp.git
 #
 # Private repo: $env:TOKEN='ghp_xxx' first (sent as a header, never written to .git/config).
 # Windows has no zero-downtime handover: an update stops the app, swaps the .exe, starts it.
 #
-# Commands: setup | core | plugins | all | status   (see the guide: /guide/deploy-from-source)
+# Commands: wick (default) | setup | core | plugins | all | status   (guide: /guide/deploy-from-source)
 param(
-  [Parameter(Position = 0)][string]$Command = '',
+  [Parameter(Position = 0)][string]$Command = 'wick',
   [Parameter(Position = 1, ValueFromRemainingArguments = $true)][string[]]$Keys = @(),
   [string]$Dir = '',
   [string]$Git = '',
   [string]$Branch = '',
   [string]$App = '',
   [string]$Wick = '',
+  [string]$Ref = 'master',
+  [string]$Src = (Join-Path $env:USERPROFILE 'wick-src'),
   [switch]$NoUpgrade, [switch]$NoPull, [switch]$NoBump, [switch]$NoTest,
   [switch]$AllPlugins, [switch]$BumpPlugins, [switch]$DryRun
 )
@@ -83,8 +90,7 @@ function Pull-Repo {
   $script:NoPull = $true
 }
 
-function GoWanted {
-  $mod = Join-Path $Dir 'go.mod'
+function GoWanted($mod) {
   if (Test-Path $mod) {
     $t = Select-String -Path $mod -Pattern '^toolchain go(\S+)' | Select-Object -First 1
     if ($t) { return $t.Matches[0].Groups[1].Value }
@@ -95,13 +101,22 @@ function GoWanted {
 }
 
 function Setup {
+  Setup-Git
+  Setup-Go (Join-Path $Dir 'go.mod')
+  Setup-WickCli
+}
+
+function Setup-Git {
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Die 'install Git first: https://git-scm.com/download/win' }
     Say 'install Git'
     Run winget @('install', '--id', 'Git.Git', '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements')
     $env:Path = "$env:ProgramFiles\Git\cmd;$env:Path"
   }
-  $want = GoWanted; $have = ''
+}
+
+function Setup-Go($mod) {
+  $want = GoWanted $mod; $have = ''
   if (Get-Command go -ErrorAction SilentlyContinue) { $have = (& go env GOVERSION) -replace '^go', '' }
   if (-not $have -or ([version]($have -replace '[^\d.].*$', '')) -lt [version]($want -replace '[^\d.].*$', '')) {
     Say "install Go $want (have: $(if ($have) { $have } else { 'none' })) -> $GoRoot"
@@ -116,6 +131,9 @@ function Setup {
     }
     Add-UserPath "$GoRoot\bin"
   } else { Write-Host "   Go $have ok (need $want)" }
+}
+
+function Setup-WickCli {
   if (-not (Get-Command wick -ErrorAction SilentlyContinue)) {
     $wv = 'latest'; $mod = Join-Path $Dir 'go.mod'
     if (Test-Path $mod) { $m = Select-String -Path $mod -Pattern '^\s*github.com/yogasw/wick (\S+)' | Select-Object -First 1; if ($m) { $wv = $m.Matches[0].Groups[1].Value } }
@@ -168,7 +186,13 @@ function Core {
     if (-not $NoTest) { Say 'test'; Run go @('test', '-p', '1', './...') }
     Say "build ($Target)"; Run wick @('build', '--target', $Target)
     Restore-GoMod
-    $bin = Join-Path $Dir "bin\$App-windows-$Arch.exe"
+    Install-Build $exe (Join-Path $Dir "bin\$App-windows-$Arch.exe")
+  } finally { Restore-GoMod; Pop-Location }
+}
+
+# Install-Build: a first install into %LOCALAPPDATA%\Programs\<app> (where install.ps1 puts
+# a release too), else stop, swap the .exe, start. Windows has no socket handover.
+function Install-Build($exe, $bin) {
     if (-not $DryRun -and -not (Test-Path $bin)) { Die "build produced no $bin" }
     if (-not $exe) {
       $dest = Join-Path $env:LOCALAPPDATA "Programs\$App"
@@ -187,7 +211,47 @@ function Core {
     }
     Run $exe @('start')
     Say 'now running'; Run $exe @('version')
-  } finally { Restore-GoMod; Pop-Location }
+}
+
+# Wick-Self builds wick itself at -Ref: the wick CLI from the source, then the wick-agent app
+# (what the release ships: `wick init wick-agent`), scaffolded once and built against it.
+function Wick-Self {
+  if (-not $script:Dir) { $script:Dir = Join-Path $env:USERPROFILE 'wick-agent' }
+  if (-not $script:App) { $script:App = Split-Path $script:Dir -Leaf }
+  Setup-Git
+  if (Test-Path (Join-Path $Src '.git')) {
+    Say "wick source $Src -> $Ref"
+    Run git @('-C', $Src, 'fetch', '--quiet', 'origin', $Ref)
+    Run git @('-C', $Src, 'checkout', '--quiet', '--detach', 'FETCH_HEAD')
+  } else {
+    Say "clone wick ($Ref) -> $Src"
+    Run git @('clone', '--quiet', '--branch', $Ref, 'https://github.com/yogasw/wick.git', $Src)
+  }
+  Setup-Go (Join-Path $Src 'go.mod')
+  Say 'wick CLI from source'
+  if (-not $DryRun) { Push-Location $Src; try { $env:GOWORK = 'off'; Run go @('install', '.') } finally { Remove-Item Env:GOWORK -ErrorAction SilentlyContinue; Pop-Location } }
+  else { Write-Host "   > (cd $Src) go install ." }
+  $exe = Find-AppExe
+  if (-not (Test-Path (Join-Path $Dir 'wick.yml'))) {
+    Say "scaffold $Dir"
+    $parent = Split-Path $Dir
+    if (-not $DryRun) { New-Item -ItemType Directory -Force $parent | Out-Null; Push-Location $parent; try { Run wick @('init', (Split-Path $Dir -Leaf), '--skip-setup') } finally { Pop-Location } }
+    else { Write-Host "   > (cd $parent) wick init $(Split-Path $Dir -Leaf) --skip-setup"; Write-Host '   (dry-run: not scaffolded yet, nothing more to show)'; return }
+  }
+  Push-Location $Dir
+  try {
+    Run go @('mod', 'edit', '-replace', "github.com/yogasw/wick=$((Resolve-Path $Src).Path)")
+    Say 'setup (tailwind, templ, go mod tidy)'; Run wick @('setup')
+    # the source's VERSION, next patch, plus the build time as a 4th number: newer than the
+    # release it came from and than the previous source build (versions compare numerically)
+    $base = '0.0.0'; $vf = Join-Path $Src 'VERSION'; if (Test-Path $vf) { $base = (Get-Content $vf -Raw).Trim().TrimStart('v') }
+    $p = $base -split '\.'; $ver = "$($p[0]).$($p[1]).$([int]$p[2] + 1).$(Get-Date -Format yyyyMMddHHmm)"
+    Say "version $ver"
+    if (-not $DryRun) { $yml = Get-Content -Raw wick.yml; Set-Content -NoNewline wick.yml ([regex]::new('(?m)^version:.*$').Replace($yml, "version: $ver", 1)) }
+    Get-ChildItem bin -Filter "$App-windows-*" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Say "build ($Target)"; Run wick @('build', '--target', $Target)
+    Install-Build $exe (Join-Path $Dir "bin\$App-windows-$Arch.exe")
+  } finally { Pop-Location }
 }
 
 function Installed-Version($key, $kind, $exe) {
@@ -246,10 +310,11 @@ function Plugins {
 }
 
 switch ($Command) {
+  'wick'    { Wick-Self }
   'setup'   { Resolve-AppDir; Setup }
   'core'    { Resolve-AppDir; Core }
   'plugins' { Resolve-AppDir; Plugins }
   'all'     { Resolve-AppDir; Setup; Core; Plugins }
   'status'  { Resolve-AppDir; $e = Find-AppExe; if (-not $e) { Die "$App is not installed" }; & $e version; & $e plugin list }
-  default   { Get-Content $PSCommandPath -TotalCount 11 -ErrorAction SilentlyContinue; Write-Host 'Usage: deploy-from-source.ps1 setup|core|plugins|all|status [-Git URL] [-Dir DIR] [-Branch B] [-App NAME] [-Wick DIR] [-NoUpgrade] [-NoPull] [-NoBump] [-NoTest] [-AllPlugins] [-BumpPlugins] [-DryRun] [plugin-key ...]'; exit 2 }
+  default   { Get-Content $PSCommandPath -TotalCount 11 -ErrorAction SilentlyContinue; Write-Host 'Usage: deploy-from-source.ps1 [wick|setup|core|plugins|all|status] [-Ref BRANCH] [-Src DIR] [-Git URL] [-Dir DIR] [-Branch B] [-App NAME] [-Wick DIR] [-NoUpgrade] [-NoPull] [-NoBump] [-NoTest] [-AllPlugins] [-BumpPlugins] [-DryRun] [plugin-key ...]'; exit 2 }
 }

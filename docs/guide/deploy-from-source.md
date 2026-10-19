@@ -1,14 +1,65 @@
 # Build & Deploy from Source
 
-Build a wick app (a project made with `wick init`, e.g. your own `myapp`) and its plugins
-from **source** and install or update it, in one command, like the normal installer but from
-your repo instead of a GitHub release. On a fresh machine it first installs what the build
-needs: Git, Go (the version your `go.mod` asks for) and the wick CLI, so nothing has to be
-set up by hand.
+Install or update **wick** (the `wick-agent` app) from source, at any branch or tag, with
+one command, the same way the normal installer works but without waiting for a release.
+On a fresh machine the script first installs what the build needs: Git, Go (the version
+wick's `go.mod` asks for) and the wick CLI, so nothing has to be set up by hand.
+
+The same script also builds **your own wick app** (a project made with `wick init`) and its
+plugins from your repo: see [Your own app](#your-own-app).
 
 For release builds (no Go needed) use the normal installer: [Wick Agent quick install](/guide/agents-only#quick-install).
 
-## Quickstart
+## Install wick from source
+
+::: code-group
+
+```bash [Linux / macOS]
+# branch master: install the first time, update (zero downtime) every time after
+curl -fsSL https://yogasw.github.io/wick/deploy-from-source.sh | bash
+
+# another branch or tag
+curl -fsSL https://yogasw.github.io/wick/deploy-from-source.sh | bash -s -- --ref develop
+```
+
+```powershell [Windows]
+# branch master: install the first time, update every time after
+& ([scriptblock]::Create((iwr -useb https://yogasw.github.io/wick/deploy-from-source.ps1)))
+
+# another branch or tag
+& ([scriptblock]::Create((iwr -useb https://yogasw.github.io/wick/deploy-from-source.ps1))) -Ref develop
+```
+
+:::
+
+What it does:
+
+1. Clones `https://github.com/yogasw/wick.git` at `--ref` into `~/wick-src` (later runs fetch
+   and check out the ref again).
+2. Installs Go if it is missing or older than the source needs, then the wick CLI from that
+   source (`go install .`).
+3. Scaffolds `~/wick-agent` once with `wick init wick-agent`, the same scaffold the release
+   builds, and points its `go.mod` at `~/wick-src`.
+4. `wick setup`, sets the version to the source's next patch plus the build time
+   (`1.17.2.202610191030`, so every build is newer than the release before it and than the
+   previous build), `wick build`.
+5. Installs it: the first time as a package (`.deb` on Linux, else `/usr/local/bin`;
+   `%LOCALAPPDATA%\Programs\wick-agent` on Windows), then start it with `wick-agent start`.
+   Every later run swaps the new build into the running daemon with a zero-downtime
+   `reload` (Linux / macOS) or stop / swap / start (Windows).
+
+`--src DIR`, `--dir DIR` and `--app NAME` (`-Src`, `-Dir`, `-App`) change those locations.
+
+::: tip Script URL before a release
+`yogasw.github.io/wick/…` is published with the docs on every wick release. Until a release
+includes these scripts, use the raw files from a branch:
+`https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.sh`
+(`.ps1` for Windows; `/develop/` for the newest version).
+:::
+
+## Your own app
+
+For a project made with `wick init`, in its own repo:
 
 ::: code-group
 
@@ -22,7 +73,6 @@ cd ~/myapp && curl -fsSL https://yogasw.github.io/wick/deploy-from-source.sh | b
 ```
 
 ```powershell [Windows]
-# fresh machine: Git, Go + wick CLI (per-user, no admin), clone, build, install, plugins
 & ([scriptblock]::Create((iwr -useb https://yogasw.github.io/wick/deploy-from-source.ps1))) all -Git https://github.com/org/myapp.git
 
 # every update after that, from inside the checkout
@@ -47,13 +97,6 @@ $env:TOKEN = 'ghp_xxx'
 
 :::
 
-::: tip Script URL before a release
-`yogasw.github.io/wick/…` is published with the docs on every wick release. Until a release
-includes these scripts, use the raw files from a branch:
-`https://raw.githubusercontent.com/yogasw/wick/master/scripts/deploy-from-source.sh`
-(`.ps1` for Windows; `/develop/` for the newest version).
-:::
-
 Add `--dry-run` (`-DryRun` on Windows) to print every step without changing anything.
 
 | | Linux | macOS | Windows |
@@ -66,6 +109,7 @@ Add `--dry-run` (`-DryRun` on Windows) to print every step without changing anyt
 
 | Command | What it does |
 |---|---|
+| `wick` (default) | Build and install wick itself from source at `--ref`, see [above](#install-wick-from-source). |
 | `setup` | Installs git/curl/tar (apt, dnf or apk), Go into `/usr/local/go` when missing or older than `go.mod` needs, and the wick CLI at the version your app depends on. |
 | `core` | `git pull`, bumps the patch `version:` in `wick.yml`, `wick upgrade -y` (latest wick release), `go test`, `wick build`, then installs the build (below). |
 | `plugins` | Builds and installs every plugin under `plugins/{connector,tool,job,service}/<key>/` whose `VERSION` is newer than the installed one, or not installed yet. Name keys to force: `plugins my_tool other_tool`. |
@@ -91,6 +135,8 @@ version is left alone.
 
 | Flag | Default | |
 |---|---|---|
+| `--ref REF` | `master` | wick: branch or tag to build |
+| `--src DIR` | `~/wick-src` | wick: source checkout |
 | `--dir DIR` | current dir if it has `wick.yml`, else `~/<repo name>` | app checkout |
 | `--git URL` | | clone into `--dir` when it is not there yet (https recommended) |
 | `--branch NAME` | repo default | branch to clone / pull |
@@ -103,7 +149,7 @@ version is left alone.
 | `--restart` | | stop / swap / start instead of `reload` (short downtime) |
 | `--dry-run` | | print, change nothing |
 
-On Windows the same flags are PowerShell switches: `-Dir`, `-Git`, `-Branch`, `-App`, `-Wick`,
+On Windows the same flags are PowerShell switches: `-Ref`, `-Src`, `-Dir`, `-Git`, `-Branch`, `-App`, `-Wick`,
 `-NoUpgrade`, `-NoPull`, `-NoBump`, `-NoTest`, `-AllPlugins`, `-BumpPlugins`, `-DryRun`.
 
 ## Build by hand
