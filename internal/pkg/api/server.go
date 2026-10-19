@@ -2633,6 +2633,7 @@ func NewServer() *Server {
 			return out, true
 		}).
 		WithSchedule(scheduleStore).
+		WithThreadListen(channelReg.ThreadListen).
 		WithRefreshSession(func(id string) error {
 			syncSessionMeta(id)
 			return nil

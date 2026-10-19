@@ -143,6 +143,15 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// Listen mode (Slack) — what a "listen" request set for THIS thread on
+	// top of the agent's LISTEN.md. ListenPrompt is extra instructions for
+	// the thread; ListenDelaySec overrides the agent's delay (nil = keep it,
+	// 0 = answer at once). ListenStopped records an explicit stop (word,
+	// tool or 🤖), which wins over a channel/all scope that would otherwise
+	// keep the thread listening.
+	ListenPrompt   string `json:"listen_prompt,omitempty"`
+	ListenDelaySec *int   `json:"listen_delay_sec,omitempty"`
+	ListenStopped  bool   `json:"listen_stopped,omitempty"`
 	// TeamHold marks the session as taken over by a person: while true, a
 	// Team message another AGENT sends to it is recorded (its handoff row)
 	// but no turn runs for it, and the task ends rejected. A person's own

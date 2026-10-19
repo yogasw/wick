@@ -370,6 +370,12 @@ type Channel struct {
 	// re-react to re-arm. Guarded by mu.
 	autoReply map[string]bool
 
+	// listenWaits holds, per session key, the reply a listening thread is
+	// waiting out its delay on (listen.go). Lazily created; guarded by mu.
+	listenWaits map[string]*listenWait
+	// listenDispatchHook replaces the turn a held reply starts (tests).
+	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
+
 	// userTokenCache maps Slack user ID → resolved xoxp token.
 	// Avoids repeated connectorToken lookups on every send call.
 	userTokenMu    sync.RWMutex
@@ -1798,6 +1804,16 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				// the 🤖 auto-reply switch never does (bot loop guard).
 				if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
 					s.handleMessage(ctx, ev, nil)
+					return
+				}
+				// Another bot answering in a listening thread is read, never
+				// answered: it only tells a held reply that someone spoke.
+				if ev.ThreadTimeStamp != "" && ev.ThreadTimeStamp != ev.TimeStamp {
+					author := ev.BotID
+					if author == "" {
+						author = ev.User
+					}
+					s.noteListenOther(s.sessionKey(ev.ThreadTimeStamp), author)
 				}
 				return
 			}
@@ -1847,9 +1863,23 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				if s.mentionsBot(ev.Text) {
 					return
 				}
-				if !s.autoReplyOn(s.sessionKey(threadKey(ev.ThreadTimeStamp, ev.TimeStamp))) {
+				sid := s.sessionKey(threadKey(ev.ThreadTimeStamp, ev.TimeStamp))
+				if !s.listening(sid, ev.Channel) {
 					return
 				}
+				// A listening thread: a bare "stop" is acted on at once (in
+				// handleMessage, after the access checks, quietly for a
+				// sender outside them); anything else waits out the delay.
+				var files []slackgo.File
+				if ev.Message != nil {
+					files = ev.Message.Files
+				}
+				if isStopCommand(ev.Text) {
+					s.dispatchListen(sid, ev, files, listenSettings{}, 0, false)
+				} else {
+					s.queueListenMessage(ctx, sid, ev, files)
+				}
+				return
 			}
 			// MessageEvent stashes a file_share's files under .Message
 			// (slackevents only populates the top-level Files field on
@@ -2009,7 +2039,17 @@ func (s *Channel) handleReactionAdded(ctx context.Context, ev *slackevents.React
 		return
 	}
 
+	// A thread already listening: the reactor clicked the bot's own 🤖
+	// (Slack adds theirs beside it, it cannot take the bot's away). Read it
+	// as the toggle it looks like — stop, and the bot takes its 🤖 down.
+	if s.listening(sessionID, channelID) {
+		s.ListenOff(sessionID, channelID, parentTS, "🤖 clicked by "+ev.User, false)
+		return
+	}
 	s.setAutoReply(sessionID, true)
+	if ls, ok := s.listenStore(); ok {
+		ls.SetListenThread(sessionID, agentchannels.ListenThread{})
+	}
 	// Arming a thread is the moment its replies start coming from automation
 	// rather than from someone typing, so record where they belong while the
 	// event still carries the channel. Without this the switch can be on for
@@ -2045,11 +2085,12 @@ func (s *Channel) handleReactionRemoved(ev *slackevents.ReactionRemovedEvent) {
 		return
 	}
 	sessionID := s.sessionKey(parentTS)
-	if !s.autoReplyOn(sessionID) {
+	if !s.listening(sessionID, ev.Item.Channel) {
 		return
 	}
-	s.setAutoReply(sessionID, false)
-	log.Info().Str("channel", "slack").Str("slack_channel", ev.Item.Channel).Str("thread_ts", parentTS).Str("user", ev.User).Msg("auto-reply switch OFF")
+	// Off, and the bot's own 🤖 goes too: otherwise the thread still shows
+	// the marker while nothing answers, and only the bot could remove it.
+	s.ListenOff(sessionID, ev.Item.Channel, parentTS, "🤖 removed by "+ev.User, false)
 }
 
 // isBotUser reports whether userID is this channel's own bot, so a reaction
@@ -2440,6 +2481,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 			return
 		}
 	} else if ok, reason, groupIDs := s.allowedSender(cfg, ev.User, ev.Channel); !ok {
+		// A reply in a listening thread was not addressed to the bot: a
+		// sender outside the allowlist is simply not answered, without the
+		// 🚫 and DM a direct request gets.
+		if _, listen := listenTurnFrom(ctx); listen {
+			log.Info().Str("channel", "slack").Str("user", ev.User).Str("reason", reason).
+				Msg("listen: sender not allowed; not answered")
+			return
+		}
 		log.Warn().Str("channel", "slack").
 			Str("user", ev.User).
 			Str("slack_channel", ev.Channel).
@@ -2507,6 +2556,22 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	dmMain := false
 	if id := s.dmMainSession(ev); id != "" {
 		sessionID, dmMain = id, true
+	}
+
+	// Listen mode, on a channel thread reply: a bare "stop" (with or without
+	// the mention) switches it off without the model; a turn that is not
+	// the listen path itself (a mention) answers now, so a reply held for
+	// the delay would only repeat it.
+	listenT, isListen := listenTurnFrom(ctx)
+	if !dmMain && ev.ChannelType != "im" && ev.ChannelType != "mpim" && ev.TimeStamp != threadTS {
+		if isStopCommand(ev.Text) && s.listening(sessionID, ev.Channel) {
+			s.ListenOff(sessionID, ev.Channel, threadTS, "stop word from "+ev.User, false)
+			s.postReply(ev.Channel, threadTS, "Oke, aku berhenti mendengarkan thread ini. Pasang 🤖 lagi atau minta aku listen kalau perlu.")
+			return
+		}
+		if !isListen {
+			s.cancelListenWait(sessionID)
+		}
 	}
 
 	// An Instant agent riding this bot answers when the channel is bound to
@@ -2666,6 +2731,16 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if hook := s.onSessionStart; hook != nil {
 			hook(sessionID, "slack", ctxText)
 		}
+	} else if isListen && !dmMain {
+		// A listening turn always reads the thread, up to now: what was said
+		// before the reply AND during its delay (someone else's answer is
+		// exactly what the agent must see). The reply itself is the turn's
+		// own text, so it is left out of the block.
+		now := slackTSNow()
+		if block := s.threadCatchUpUntil(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen, now); block != "" {
+			userText = block + "\n\n" + userText
+		}
+		s.persistThreadBindingSeen(sessionID, ev.Channel, threadTS, now)
 	} else if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS && cfg.ThreadCatchUpEnabled {
 		// An existing thread session only wakes on a mention or the 🤖
 		// switch: open the turn with what people said in between. A new
@@ -2674,6 +2749,9 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if block := s.threadCatchUp(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen); block != "" {
 			userText = block + "\n\n" + userText
 		}
+	}
+	if isListen {
+		userText = listenNote(listenT) + "\n\n" + userText
 	}
 
 	userCtx := agentchannels.WithSender(baseCtx, sender)
@@ -2690,7 +2768,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// mention. The marker doubles as the on/off switch — remove it to stop,
 	// re-add to resume (handleReactionRemoved / handleReactionAdded). DMs are
 	// already always-on, so they get neither the switch nor the marker.
-	if isNewSession && ev.ChannelType == "channel" && cfg.ReactionTriggerEnabled && reactionChannelAllowed(cfg, ev.Channel) {
+	if isNewSession && ev.ChannelType == "channel" && cfg.ReactionTriggerEnabled && reactionChannelAllowed(cfg, ev.Channel) && !listenManual(cfg, ev.Channel) {
 		s.setAutoReply(sessionID, true)
 		// threadTS is the parent message for a new thread; mark it.
 		s.setReaction(reactionTrigger, ev.Channel, threadTS, "")

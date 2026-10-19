@@ -478,6 +478,17 @@ func (r *Registry) ChannelByName(name string) Channel {
 }
 
 // Channels returns a snapshot of the registered channels.
+// ThreadListen serves wick_slack_listen: the channel instance that owns
+// sessionID (a ThreadListener) answers for its thread.
+func (r *Registry) ThreadListen(sessionID string, req ListenRequest) (ListenResult, error) {
+	for _, c := range r.Channels() {
+		if tl, ok := c.(ThreadListener); ok && tl.OwnsSession(sessionID) {
+			return tl.ThreadListen(sessionID, req)
+		}
+	}
+	return ListenResult{}, fmt.Errorf("this session is not a Slack channel thread, so there is nothing to listen to")
+}
+
 func (r *Registry) Channels() []Channel {
 	r.mu.Lock()
 	defer r.mu.Unlock()

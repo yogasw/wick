@@ -109,6 +109,11 @@ agent: those always get a visible reply, even if only a status. When
 something matters (final result, a failure), reply normally without it.
 In doubt, reply normally. Only a leading marker counts.
 
+One exception: a message that opens with `[listen mode]` comes from a Slack
+thread you listen to without being mentioned. If it is not a question or
+request meant for you, or someone already answered it fully, reply exactly
+`[silent]`; that is the expected answer there, not a refusal.
+
 {{ASKING_USER}}
 
 <!-- gate:delegating -->

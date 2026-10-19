@@ -231,6 +231,58 @@ type SessionChecker interface {
 	SetThreadBinding(sessionID string, b ThreadBinding)
 }
 
+// ListenThread is what a "listen" request stored on one chat thread
+// session (Slack listen mode). See session.Meta.ListenPrompt.
+type ListenThread struct {
+	Prompt   string
+	DelaySec *int
+	Stopped  bool
+}
+
+// ListenStore is optionally implemented by the SessionChecker (the pool):
+// the per-thread listen state, the LISTEN.md documents that shape a
+// session's listening, and the channels a bot listens to as a whole
+// (scope "channel"). A checker without it leaves listen mode to the plain
+// auto-reply switch.
+type ListenStore interface {
+	ListenThread(sessionID string) ListenThread
+	SetListenThread(sessionID string, lt ListenThread)
+	// ListenDocs returns the wick-wide default LISTEN.md and the one in
+	// the session's project folder ("" when absent).
+	ListenDocs(sessionID string) (wickDefault, agent string)
+	// ListenChannel / SetListenChannel: whether instance listens to every
+	// thread it has in chatID (scope "channel").
+	ListenChannel(instance, chatID string) bool
+	SetListenChannel(instance, chatID string, on bool)
+}
+
+// ListenRequest is the wick_slack_listen tool's input: Action is on, off or
+// status. Instructions and DelaySec (nil = the agent's LISTEN.md delay) are
+// read by on; WholeChannel by off, to also stop a channel scope.
+type ListenRequest struct {
+	Action       string
+	Instructions string
+	DelaySec     *int
+	WholeChannel bool
+}
+
+// ListenResult is the thread's listen state after the request.
+type ListenResult struct {
+	Listening    bool   `json:"listening"`
+	ChannelID    string `json:"channel_id"`
+	ThreadTS     string `json:"thread_ts"`
+	DelaySec     int    `json:"delay_sec"`
+	Scope        string `json:"scope"`
+	OnTeamReply  string `json:"on_team_reply"`
+	Instructions string `json:"instructions,omitempty"`
+}
+
+// ThreadListener is implemented by a channel with listen mode (Slack).
+type ThreadListener interface {
+	OwnsSession(sessionID string) bool
+	ThreadListen(sessionID string, req ListenRequest) (ListenResult, error)
+}
+
 // ThreadBinding is the chat location a session's replies belong to.
 type ThreadBinding struct {
 	Channel  string // adapter name: "slack", "telegram"

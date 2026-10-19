@@ -430,6 +430,7 @@ var teamToolLabels = map[string][2]string{
 	"wick_compact":           {"Compact", "Summarise the conversation to free context."},
 	"wick_cli_token":         {"CLI token", "Mint a token for the wick CLI."},
 	"wick_session_workspace": {"Session workspace", "Add throwaway connectors for this conversation."},
+	"wick_slack_listen":      {"Slack listen", "Listen to a Slack thread and answer replies without a mention, or stop."},
 }
 
 // validateGrants rejects a checklist the owner could not have ticked: an

@@ -61,6 +61,14 @@ func tsAfter(a, b string) bool { return agentchannels.SlackTSAfter(a, b) }
 // an existing thread session, "" when there is nothing to add. A failed fetch
 // is logged and skipped: the turn still runs, only without the block.
 func (s *Channel) threadCatchUp(sessionID, channelID, threadTS, triggerTS, lastSeen string) string {
+	return s.threadCatchUpUntil(sessionID, channelID, threadTS, triggerTS, lastSeen, triggerTS)
+}
+
+// threadCatchUpUntil is threadCatchUp reading up to until rather than up to
+// the waking message: a listening turn also shows what was said during its
+// delay. The waking message itself is never in the block (it is the turn's
+// own text).
+func (s *Channel) threadCatchUpUntil(sessionID, channelID, threadTS, triggerTS, lastSeen, until string) string {
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
@@ -77,7 +85,7 @@ func (s *Channel) threadCatchUp(sessionID, channelID, threadTS, triggerTS, lastS
 			Timestamp: threadTS,
 			Cursor:    cursor,
 			Oldest:    lastSeen,
-			Latest:    triggerTS,
+			Latest:    until,
 			Limit:     200,
 		}
 		batch, hasMore, next, err := api.GetConversationRepliesContext(ctx, params)
@@ -93,7 +101,7 @@ func (s *Channel) threadCatchUp(sessionID, channelID, threadTS, triggerTS, lastS
 		}
 		cursor = next
 	}
-	return formatThreadCatchUp(s.catchUpEntries(msgs, triggerTS, lastSeen))
+	return formatThreadCatchUp(s.catchUpEntriesUntil(msgs, triggerTS, lastSeen, until))
 }
 
 // catchUpEntries keeps the messages the agent has not seen: newer than
@@ -103,6 +111,12 @@ func (s *Channel) threadCatchUp(sessionID, channelID, threadTS, triggerTS, lastS
 // reply counts — catching up on the whole thread would replay history the
 // agent already answered — and a thread with no reply of ours yields nothing.
 func (s *Channel) catchUpEntries(msgs []slackgo.Message, triggerTS, lastSeen string) []catchUpEntry {
+	return s.catchUpEntriesUntil(msgs, triggerTS, lastSeen, triggerTS)
+}
+
+// catchUpEntriesUntil is catchUpEntries bounded by until instead of the
+// waking message, which it still leaves out.
+func (s *Channel) catchUpEntriesUntil(msgs []slackgo.Message, triggerTS, lastSeen, until string) []catchUpEntry {
 	floor := lastSeen
 	if floor == "" {
 		for _, m := range msgs {
@@ -116,7 +130,7 @@ func (s *Channel) catchUpEntries(msgs []slackgo.Message, triggerTS, lastSeen str
 	}
 	var out []catchUpEntry
 	for _, m := range msgs {
-		if !tsAfter(m.Timestamp, floor) || !tsAfter(triggerTS, m.Timestamp) {
+		if !tsAfter(m.Timestamp, floor) || !tsAfter(until, m.Timestamp) || m.Timestamp == triggerTS {
 			continue
 		}
 		if !catchUpSubtype(m.SubType) || s.isOwnMessage(m) {
