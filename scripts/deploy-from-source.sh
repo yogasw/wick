@@ -250,8 +250,9 @@ start_app() {
     run env -u DISPLAY -u WAYLAND_DISPLAY "$APP" service install
     run systemctl --user restart "$APP.service"
   else
-    say "start $APP"
-    run "$APP" start || echo "   start failed — run '$APP start' by hand (or '$APP server' in the foreground)"
+    # no DISPLAY: on a server with a desktop session `start` would launch the tray app
+    say "start $APP (daemon)"
+    run env -u DISPLAY -u WAYLAND_DISPLAY "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
   fi
 }
 
@@ -275,6 +276,7 @@ done_note() {
    status    $APP status            logs: $APP status shows the daemon log tail
    stop/run  systemctl --user stop|start $APP   (or $APP stop|start without the service)
    update    run this same command again — it skips the build when $REF has no new commit
+   foreground  $APP all   (bare '$APP' is the desktop tray app, not the server)
    note      'wick' is the dev CLI (build/init); the server is '$APP'
 EOF
 }
