@@ -1067,6 +1067,9 @@ func normalizeAPIMethod(raw string) (string, error) {
 // permits only the configured method names, where a trailing * matches
 // any method sharing that prefix.
 func checkMethodAllowed(c *connector.Ctx, method string) error {
+	if isUsergroupWrite(method) && !c.CfgBool("allow_usergroup_write") {
+		return fmt.Errorf("method %q changes a workspace user group and is blocked on every Slack connector — an admin must check allow_usergroup_write on this connector's page first", method)
+	}
 	mode := strings.TrimSpace(c.Cfg("custom_api_mode"))
 	if mode == "" {
 		mode = "allowlist"
@@ -1088,6 +1091,22 @@ func checkMethodAllowed(c *connector.Ctx, method string) error {
 		}
 	}
 	return fmt.Errorf("method %q is not in this connector's Custom API allowlist (allowed: %s) — add it there, or switch the mode to 'all'", method, strings.Join(allowed, ", "))
+}
+
+// usergroupWriteMethods are the Slack methods that create, rename, toggle
+// or re-member a user group.
+var usergroupWriteMethods = map[string]bool{
+	"usergroups.create":       true,
+	"usergroups.update":       true,
+	"usergroups.enable":       true,
+	"usergroups.disable":      true,
+	"usergroups.users.update": true,
+}
+
+// isUsergroupWrite reports a user group write method, matched the way
+// Slack resolves method names (case-insensitive).
+func isUsergroupWrite(method string) bool {
+	return usergroupWriteMethods[strings.ToLower(strings.TrimSpace(method))]
 }
 
 // parseAllowlist reads the kvlist-backed allowlist config. The widget
