@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 )
@@ -57,19 +58,38 @@ func (p *Pool) SetListenThread(sessionID string, lt agentchannels.ListenThread) 
 // one in the session's project folder. Read on every call: an edit applies
 // to the next message without a restart.
 func (p *Pool) ListenDocs(sessionID string) (wickDefault, agent string) {
-	wickDefault = readListenDoc(filepath.Join(p.cfg.Layout.BaseDir, ListenDocName))
+	wickDefault = ReadListenDoc(WickListenDocPath(p.cfg.Layout))
 	sess, err := session.Load(p.cfg.Layout, sessionID)
-	if err != nil || sess.Meta.ProjectID == "" {
+	if err != nil {
 		return wickDefault, ""
 	}
-	dir, err := project.ResolvePath(p.cfg.Layout, sess.Meta.ProjectID)
-	if err != nil || dir == "" {
-		return wickDefault, ""
-	}
-	return wickDefault, readListenDoc(filepath.Join(dir, ListenDocName))
+	return wickDefault, ReadListenDoc(AgentListenDocPath(p.cfg.Layout, sess.Meta.ProjectID))
 }
 
-func readListenDoc(path string) string {
+// WickListenDocPath is where the wick-wide LISTEN.md goes: the agents root.
+func WickListenDocPath(layout agentconfig.Layout) string {
+	return filepath.Join(layout.BaseDir, ListenDocName)
+}
+
+// AgentListenDocPath is projectID's LISTEN.md, "" when the project has no
+// folder.
+func AgentListenDocPath(layout agentconfig.Layout, projectID string) string {
+	if projectID == "" {
+		return ""
+	}
+	dir, err := project.ResolvePath(layout, projectID)
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, ListenDocName)
+}
+
+// ReadListenDoc reads up to listenDocMax bytes of path; "" when it is
+// missing or path is empty.
+func ReadListenDoc(path string) string {
+	if path == "" {
+		return ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""

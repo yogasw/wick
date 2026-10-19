@@ -275,6 +275,9 @@ type ListenResult struct {
 	Scope        string `json:"scope"`
 	OnTeamReply  string `json:"on_team_reply"`
 	Instructions string `json:"instructions,omitempty"`
+	// ThreadPrompt is the part of Instructions this thread's own "listen"
+	// request added, so a UI can edit it without the LISTEN.md layers.
+	ThreadPrompt string `json:"thread_prompt,omitempty"`
 }
 
 // ThreadListener is implemented by a channel with listen mode (Slack).

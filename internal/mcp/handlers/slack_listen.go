@@ -21,7 +21,7 @@ const slackListenDescription = "Listen mode for the Slack channel thread THIS co
 	"the person said about this thread ('only WABA questions') and delay_sec when they named a wait ('wait 2 minutes' = 120). " +
 	"action=off when they ask you to stop in any wording (a bare 'stop' reply and removing the 🤖 are already handled " +
 	"by wick); whole_channel=true also stops a channel-wide listen. action=status reports the current state. " +
-	"Defaults come from LISTEN.md: the wick-wide one at the agents root and yours in your project folder, " +
+	"Defaults come from LISTEN.md: the wick-wide one at the agents root (a built-in default while that file is absent) and yours in your project folder, " +
 	"frontmatter `delay: 60s`, `scope: thread|channel|all`, `on_team_reply: review|skip`, `replace_default: true|false`, " +
 	"then the instructions as plain text. When a person corrects what you should or should not answer while listening, " +
 	"add that rule to your own LISTEN.md. No session_id: the thread is resolved from the call."

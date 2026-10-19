@@ -18,7 +18,19 @@ export type SlackSettingField = {
   note?: string;
 };
 /** owner_slack_* is the agent owner's Slack account, found by email only. */
-export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string };
+/** listen: which LISTEN.md files shape the agent's listen mode and what a
+    new thread gets from them (api_listen.go). */
+export type AgentListenInfo = {
+  wick_path: string;
+  wick_exists: boolean;
+  agent_path?: string;
+  agent_exists: boolean;
+  delay_sec: number;
+  scope: string;
+  on_team_reply: string;
+  instructions: string;
+};
+export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string; listen?: AgentListenInfo };
 export type PickerItem = { id: string; name: string };
 
 const enc = encodeURIComponent;

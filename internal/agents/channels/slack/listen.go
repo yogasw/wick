@@ -179,6 +179,26 @@ func resolveListen(wickDoc, agentDoc string, lt agentchannels.ListenThread) list
 	return st
 }
 
+// BuiltinListenDoc is the default used while the agents root has no
+// LISTEN.md of its own.
+const BuiltinListenDoc = defaultListenDoc
+
+// ListenEffective is what a thread of an agent gets before any "listen"
+// request of its own: the wick default, then the agent's LISTEN.md.
+type ListenEffective struct {
+	DelaySec     int    `json:"delay_sec"`
+	Scope        string `json:"scope"`
+	OnTeamReply  string `json:"on_team_reply"`
+	Instructions string `json:"instructions"`
+}
+
+// EffectiveListen resolves wickDoc (empty = the built-in default) and
+// agentDoc the way a thread does, for Settings to show.
+func EffectiveListen(wickDoc, agentDoc string) ListenEffective {
+	st := resolveListen(wickDoc, agentDoc, agentchannels.ListenThread{})
+	return ListenEffective{DelaySec: int(st.Delay / time.Second), Scope: st.Scope, OnTeamReply: st.OnTeamReply, Instructions: st.Instructions}
+}
+
 // listenStore is the session checker's listen half, when it has one.
 func (s *Channel) listenStore() (agentchannels.ListenStore, bool) {
 	if s.sessions == nil {
@@ -350,7 +370,12 @@ func (s *Channel) ThreadListen(sessionID string, req ListenRequest) (ListenResul
 		return ListenResult{}, fmt.Errorf("action must be on, off or status")
 	}
 	st := s.listenSettingsFor(sessionID)
+	var threadPrompt string
+	if ls, ok := s.listenStore(); ok {
+		threadPrompt = ls.ListenThread(sessionID).Prompt
+	}
 	return ListenResult{
+		ThreadPrompt: threadPrompt,
 		Listening:    s.listening(sessionID, b.ChatID),
 		ChannelID:    b.ChatID,
 		ThreadTS:     b.ThreadID,

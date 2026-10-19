@@ -29,6 +29,7 @@
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
   import AgentHeaderTitle from "./lib/components/team/AgentHeaderTitle.svelte";
+  import ListenChip from "./lib/components/ListenChip.svelte";
   import TeammatesChip from "./lib/components/team/TeammatesChip.svelte";
   import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteChatMode, remoteTarget, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
@@ -1339,6 +1340,7 @@
               <span>disabled</span><span aria-hidden="true">·</span>
             {/if}
             {#if headerTeammates > 0}<TeammatesChip count={headerTeammates} /><span aria-hidden="true">·</span>{/if}
+            {#if chatSessionId && !isRemoteAgent(selected)}<ListenChip {base} sessionId={chatSessionId} />{/if}
             <span class="truncate">@{selected.handle}{route.session ? " · other chat" : ""}</span>
             {#if isRemoteAgent(selected)}
               <span aria-hidden="true">·</span>

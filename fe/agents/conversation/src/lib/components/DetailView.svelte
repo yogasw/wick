@@ -3265,6 +3265,8 @@
       teammatesBusy={busyTeammateCount}
       {activeView}
       {ticketJump}
+      {base}
+      {sessionId}
       onKill={handleKill}
       onDelete={handleDelete}
       onTabChange={handleTabChange}

@@ -230,4 +230,17 @@ describe("accessSummary", () => {
     const v = { users_mode: "whitelist", allowed_users: ONLY_ME, groups_mode: "whitelist", allowed_groups: JSON.stringify([{ id: "SB", name: "B" }]), channels_mode: "all" };
     expect(accessSummary(v, "UOWNER", "Yoga")).toBe("Access: only Yoga · 1 group · all channels");
   });
+
+  test("Reaction Auto-Reply shows the listen mode in effect and the agent's LISTEN.md", async () => {
+    current = {
+      fields: fields(), owner_slack_id: "UOWNER", owner_slack_name: "Yoga",
+      listen: { wick_path: "/a/LISTEN.md", wick_exists: false, agent_path: "/p/franky/LISTEN.md", agent_exists: true, delay_sec: 120, scope: "thread", on_team_reply: "review", instructions: "Only WABA." },
+    };
+    render(SlackSettingsGroups, { props: { base: "/b", agent } });
+    const info = await screen.findByTestId("listen-info");
+    expect(info.closest("[data-group]")?.getAttribute("data-group")).toBe("Reaction Auto-Reply");
+    expect(screen.getByTestId("listen-effective").textContent).toContain("Delay 2m · scope thread · when someone else answers: review");
+    expect(info.textContent).toContain("/p/franky/LISTEN.md");
+    expect(info.textContent).toContain("built-in");
+  });
 });

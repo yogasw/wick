@@ -11,8 +11,9 @@
   import {
     getAgentSlackSettings, setAgentSlackSetting, lookupAgentSlack, settingGroups, pickerItems, isVisible,
     peopleChoice, peopleValues, accessSummary, isOpenToWorkspace, hiddenPeople, accessDimension, OPTION_LABEL,
-    type SlackSettingField, type PickerItem, type PeopleChoice,
+    type SlackSettingField, type PickerItem, type PeopleChoice, type AgentListenInfo,
   } from "../../slackAccess.js";
+  import { delayText } from "../../api/listen.js";
 
   type Props = { base: string; agent: AgentItem; onSummary?: (summary: string, open: boolean) => void };
   let { base, agent, onSummary }: Props = $props();
@@ -29,13 +30,15 @@
   let ownerID = $state("");
   let ownerName = $state("");
   let ownerHandle = $state("");
+  let listen = $state<AgentListenInfo | null>(null);
   let loadError = $state("");
   let saveState = $state<"" | "saving" | "saved" | "error">("");
   let customPeople = $state(false);
   let queries = $state<Record<string, string>>({});
   let results = $state<Record<string, PickerItem[]>>({});
 
-  function apply(s: { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string }) {
+  function apply(s: { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string; listen?: AgentListenInfo }) {
+    listen = s.listen ?? null;
     fields = s.fields;
     values = Object.fromEntries(s.fields.map((f) => [f.key, f.value]));
     ownerID = s.owner_slack_id ?? "";
@@ -144,6 +147,7 @@
             </section>
           {/each}
         {:else}
+          {#if g.title === "Reaction Auto-Reply" && listen}{@render listenInfo(listen)}{/if}
           {#each g.fields as f (f.key)}
             {#if shown(f)}{@render field(f)}{/if}
           {/each}
@@ -152,6 +156,23 @@
     </details>
   {/each}
 </div>
+
+{#snippet listenInfo(l: AgentListenInfo)}
+  <section class="space-y-1 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="listen-info">
+    <p class={legend}>Listen mode in effect</p>
+    <p class="text-xs text-black-900 dark:text-white-100" data-testid="listen-effective">Delay {delayText(l.delay_sec)} · scope {l.scope} · when someone else answers: {l.on_team_reply}</p>
+    <p class={muted}>
+      @{agent.handle}'s LISTEN.md:
+      {#if l.agent_path}<code class="break-all">{l.agent_path}</code>{l.agent_exists ? "" : " (not created yet: the wick default applies alone)"}{:else}no project folder{/if}
+    </p>
+    <p class={muted}>Wick default: {#if l.wick_exists}<code class="break-all">{l.wick_path}</code>{:else}built-in (put a LISTEN.md at <code class="break-all">{l.wick_path}</code> to replace it){/if}</p>
+    <p class={muted}>Frontmatter keys: delay, scope (thread | channel | all), on_team_reply (review | skip), replace_default; the text below them is the instructions. Read again on every message, so an edit applies at once.</p>
+    <details>
+      <summary class="cursor-pointer {muted}">Instructions in effect</summary>
+      <p class="mt-1 whitespace-pre-line {muted}" data-testid="listen-info-instructions">{l.instructions}</p>
+    </details>
+  </section>
+{/snippet}
 
 {#snippet field(f: SlackSettingField)}
   <div data-field={f.key}>

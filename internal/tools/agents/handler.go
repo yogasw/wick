@@ -344,6 +344,8 @@ func Register(r tool.Router) {
 	r.GET("/api/sessions/{id}/todos", apiSessionTodos)
 	// Context meter for the composer ring + its panel.
 	r.GET("/api/sessions/{id}/context", apiSessionContext)
+	r.GET("/api/sessions/{id}/listen", apiSessionListen)
+	r.POST("/api/sessions/{id}/listen", apiSessionListen)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)

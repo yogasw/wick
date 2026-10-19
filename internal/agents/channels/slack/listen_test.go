@@ -223,3 +223,13 @@ func TestListenNote(t *testing.T) {
 		t.Fatalf("note must open with the marker the [silent] rule names: %s", n)
 	}
 }
+
+func TestEffectiveListen(t *testing.T) {
+	got := EffectiveListen("", "---\ndelay: 2m\n---\nYelan rules.")
+	if got.DelaySec != 120 || got.Scope != "thread" || got.OnTeamReply != "review" {
+		t.Fatalf("effective = %+v", got)
+	}
+	if !strings.Contains(got.Instructions, "inquiry/main thread") || !strings.HasSuffix(got.Instructions, "Yelan rules.") {
+		t.Fatalf("instructions = %q", got.Instructions)
+	}
+}
