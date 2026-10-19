@@ -47,13 +47,14 @@ Flags
   --bump-plugins   bump each built plugin's VERSION patch first
   --restart        install with stop / swap / start instead of the zero-downtime reload
                    (a daemon started without WICK_GRACEFUL_UPGRADE=1; has a short downtime)
+  --no-install     build only: leave the result in bin/ and install nothing
   --dry-run        print what would run, change nothing
 EOF
 }
 
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
 DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"
-UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; KEYS=()
+UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0; KEYS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
@@ -64,6 +65,7 @@ while [ $# -gt 0 ]; do
     --app) APP="$2"; shift 2 ;;
     --wick) WICK_DIR="$(cd "$2" && pwd)"; shift 2 ;;
     --restart) RESTART=1; shift ;;
+    --no-install) NOINSTALL=1; shift ;;
     --no-upgrade) UPGRADE=0; shift ;;
     --no-pull) PULL=0; shift ;;
     --no-bump) BUMP=0; shift ;;
@@ -84,13 +86,13 @@ SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
 # heavy runs a build/test through buildq when the host has one (a shared-host build
 # queue), else at low priority.
 heavy() { local label=$1; shift
-  if command -v buildq >/dev/null 2>&1; then run buildq -n "$label" -- "$@"; else run nice -n 10 "$@"; fi; }
+  if command -v buildq >/dev/null 2>&1; then run buildq -n "$label" -m 2100M -- "$@"; else run nice -n 10 "$@"; fi; }
 
 case "$(uname -m)" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) die "unsupported arch $(uname -m)" ;; esac
 case "$(uname -s)" in Linux) OS=linux ;; Darwin) OS=darwin ;; *) die "unsupported OS $(uname -s) — on Windows use deploy-from-source.ps1" ;; esac
 TARGET="$OS/$ARCH"
 sedi() { local f=${*: -1}; sed -i.bak "$@" && rm -f "$f.bak"; }   # sed -i on GNU and BSD (macOS)
-export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+export PATH="/usr/local/go/bin:/usr/local/node/bin:$HOME/go/bin:$PATH"
 
 # git with TOKEN as a header, so the token never lands in .git/config or the process list.
 git_auth() {
@@ -152,8 +154,16 @@ ver_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]; }   
 
 setup_go() { # GOMOD
   local want have=""; want="$(go_wanted "$1")"
-  command -v go >/dev/null 2>&1 && have="$(go env GOVERSION | sed 's/^go//')"
-  if [ -z "$have" ] || ! ver_ge "$have" "$want"; then
+  command -v go >/dev/null 2>&1 && have="$(GOTOOLCHAIN=local go env GOVERSION | sed 's/^go//')"
+  # An existing Go is never replaced: other projects on the machine use it. Go 1.21+
+  # fetches the toolchain a go.mod asks for by itself (GOTOOLCHAIN=auto), so an older
+  # one only needs that switch left on. Install only when there is no Go, or one too
+  # old to auto-switch.
+  if [ -n "$have" ] && ! ver_ge "$have" "$want" && ver_ge "$have" 1.21; then
+    echo "   Go $have, go.mod asks $want: Go downloads that toolchain itself (GOTOOLCHAIN=auto)"
+    [ "$(go env GOTOOLCHAIN)" != local ] || export GOTOOLCHAIN=auto
+  elif [ -z "$have" ] || ! ver_ge "$have" "$want"; then
+    [ -z "$have" ] || [ -n "${FORCE_GO:-}" ] || die "Go $have is too old to auto-switch (< 1.21) and is not replaced on its own. Upgrade it, or rerun with FORCE_GO=1 to replace /usr/local/go with Go $want."
     say "install Go $want (have: ${have:-none}) -> /usr/local/go"
     local tgz="go$want.$OS-$ARCH.tar.gz" tmp; tmp="$(mktemp -d)"
     run curl -fsSL -o "$tmp/$tgz" "https://go.dev/dl/$tgz"
@@ -167,7 +177,7 @@ setup_go() { # GOMOD
   fi
   # go install puts tools (wick, templ from `wick setup`) in GOPATH/bin: it must be on PATH
   # for the rest of this run, or `wick build` fails on "templ: executable file not found".
-  command -v go >/dev/null 2>&1 && export PATH="$(go env GOPATH)/bin:$PATH"
+  command -v go >/dev/null 2>&1 && export PATH="${GOBIN:+$GOBIN:}$(go env GOPATH)/bin:$PATH"
 }
 
 setup() {
@@ -227,6 +237,7 @@ core() {
 install_build() {
   local installed=$1 bin="bin/$APP-$OS-$ARCH"
   [ "$DRY" = 1 ] || [ -f "$bin" ] || die "build produced no $bin"
+  if [ "$NOINSTALL" = 1 ]; then say "built $PWD/$bin (--no-install: nothing installed)"; return 0; fi
   if [ "$installed" = 0 ]; then
     local deb; deb="$(ls -t bin/"$APP"-*-linux-"$ARCH".deb 2>/dev/null | head -1 || true)"
     if [ "$OS" = linux ] && command -v dpkg >/dev/null && { [ -n "$deb" ] || [ "$DRY" = 1 ]; }; then
@@ -256,6 +267,40 @@ install_build() {
 }
 
 # ---------------------------------------------------------------- wick itself
+setup_node() { # Node 20+ for the FE build (the release CI uses 20)
+  local have=""; command -v node >/dev/null 2>&1 && have="$(node -v | sed 's/^v//')"
+  if [ -n "$have" ] && ver_ge "$have" 20.0.0; then echo "   Node $have ok"; return 0; fi
+  local na=x64; [ "$ARCH" = arm64 ] && na=arm64
+  local tgz; tgz="$(curl -fsSL https://nodejs.org/dist/latest-v20.x/SHASUMS256.txt | grep -o "node-v[0-9.]*-$OS-$na\.tar\.gz" | head -1)"
+  [ -n "$tgz" ] || die "could not resolve a Node 20 download for $OS-$na"
+  say "install Node ${tgz%%-$OS*} (have: ${have:-none}) -> /usr/local/node"
+  local tmp; tmp="$(mktemp -d)"
+  run curl -fsSL -o "$tmp/$tgz" "https://nodejs.org/dist/latest-v20.x/$tgz"
+  run $SUDO rm -rf /usr/local/node
+  run $SUDO mkdir -p /usr/local/node
+  run $SUDO tar -C /usr/local/node --strip-components=1 -xzf "$tmp/$tgz"
+  rm -rf "$tmp"
+  export PATH="/usr/local/node/bin:$PATH"
+  grep -qs '/usr/local/node/bin' "$HOME/.profile" || [ "$DRY" = 1 ] || \
+    echo 'export PATH="/usr/local/node/bin:$PATH"' >>"$HOME/.profile"
+}
+
+# prep_wick_source generates what master/develop do not carry in git and a release tag
+# does (release.yml bundles them into the tag commit): templ's *_templ.go, and every
+# Vite SPA under fe/ (embedded from internal/**/dist). Without it the build fails on
+# "no required module provides package …/view".
+prep_wick_source() {
+  (
+    cd "$SRC" 2>/dev/null || exit 0
+    local tv; tv="$(GOWORK=off GOFLAGS= go list -m -f '{{.Version}}' github.com/a-h/templ 2>/dev/null || echo latest)"
+    say "templ $tv: generate"
+    run env GOWORK=off GOFLAGS= go install "github.com/a-h/templ/cmd/templ@$tv"
+    heavy wick-templ templ generate ./...
+    say "FE build (fe/: npm ci + npm run build)"
+    (cd fe && heavy wick-fe-deps npm ci --no-audit --no-fund && heavy wick-fe-build env NODE_OPTIONS=--max-old-space-size=2048 npm run build)
+  )
+}
+
 # wick-agent is what the release ships: `wick init wick-agent` from the wick CLI, built
 # with `wick build`. From source the same app is scaffolded once and built against the
 # checkout at --ref, so a branch with unreleased commits installs like a release.
@@ -271,6 +316,8 @@ wick_self() {
     run git clone --quiet --branch "$REF" https://github.com/yogasw/wick.git "$SRC"
   fi
   setup_go "$SRC/go.mod"
+  setup_node
+  prep_wick_source
   say "wick CLI from source"
   (cd "$SRC" 2>/dev/null || cd "$HOME"; heavy wick-cli env GOWORK=off GOFLAGS= go install .)
   local installed=0 base ver

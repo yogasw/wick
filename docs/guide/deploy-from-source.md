@@ -36,14 +36,17 @@ What it does:
 
 1. Clones `https://github.com/yogasw/wick.git` at `--ref` into `~/wick-src` (later runs fetch
    and check out the ref again).
-2. Installs Go if it is missing or older than the source needs, then the wick CLI from that
-   source (`go install .`).
-3. Scaffolds `~/wick-agent` once with `wick init wick-agent`, the same scaffold the release
+2. Installs Go if it is missing or older than the source needs, and Node 20 if missing
+   (`/usr/local/node`; `%LOCALAPPDATA%\Programs\node` on Windows).
+3. Generates what a branch does not carry in git but a release tag does: `templ generate`
+   for the `*_templ.go` views, and the FE apps under `fe/` (`npm ci && npm run build`).
+   Then the wick CLI from that source (`go install .`).
+4. Scaffolds `~/wick-agent` once with `wick init wick-agent`, the same scaffold the release
    builds, and points its `go.mod` at `~/wick-src`.
-4. `wick setup`, sets the version to the source's next patch plus the build time
+5. `wick setup`, sets the version to the source's next patch plus the build time
    (`1.17.2.202610191030`, so every build is newer than the release before it and than the
    previous build), `wick build`.
-5. Installs it: the first time as a package (`.deb` on Linux, else `/usr/local/bin`;
+6. Installs it: the first time as a package (`.deb` on Linux, else `/usr/local/bin`;
    `%LOCALAPPDATA%\Programs\wick-agent` on Windows), then start it with `wick-agent start`.
    Every later run swaps the new build into the running daemon with a zero-downtime
    `reload` (Linux / macOS) or stop / swap / start (Windows).
@@ -147,6 +150,7 @@ version is left alone.
 | `--all-plugins` | | rebuild every plugin |
 | `--bump-plugins` | | bump each built plugin's `VERSION` patch first |
 | `--restart` | | stop / swap / start instead of `reload` (short downtime) |
+| `--no-install` | | build only, leave the result in `bin/` |
 | `--dry-run` | | print, change nothing |
 
 On Windows the same flags are PowerShell switches: `-Ref`, `-Src`, `-Dir`, `-Git`, `-Branch`, `-App`, `-Wick`,
