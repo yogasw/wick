@@ -213,6 +213,47 @@ function Install-Build($exe, $bin) {
     Say 'now running'; Run $exe @('version')
 }
 
+# Node 20+ for the FE build, per-user zip in %LOCALAPPDATA%\Programs\node (no admin).
+function Setup-Node {
+  $nodeDir = Join-Path $env:LOCALAPPDATA 'Programs\node'
+  if (Test-Path "$nodeDir\node.exe") { Add-UserPath $nodeDir }
+  $have = ''; if (Get-Command node -ErrorAction SilentlyContinue) { $have = (& node -v) -replace '^v', '' }
+  if ($have -and [version]$have -ge [version]'20.0.0') { Write-Host "   Node $have ok"; return }
+  $na = if ($Arch -eq 'arm64') { 'arm64' } else { 'x64' }
+  $sums = (Invoke-WebRequest -UseBasicParsing 'https://nodejs.org/dist/latest-v20.x/SHASUMS256.txt').Content
+  $zip = [regex]::Match($sums, "node-v[\d.]+-win-$na\.zip").Value
+  if (-not $zip) { Die "could not resolve a Node 20 download for win-$na" }
+  Say "install $zip -> $nodeDir"
+  if (-not $DryRun) {
+    $tmp = Join-Path $env:TEMP $zip
+    Invoke-WebRequest -UseBasicParsing "https://nodejs.org/dist/latest-v20.x/$zip" -OutFile $tmp
+    $x = Join-Path $env:TEMP 'node-extract'; if (Test-Path $x) { Remove-Item -Recurse -Force $x }
+    Expand-Archive $tmp -DestinationPath $x -Force
+    if (Test-Path $nodeDir) { Remove-Item -Recurse -Force $nodeDir }
+    Move-Item (Get-ChildItem $x -Directory | Select-Object -First 1).FullName $nodeDir
+    Remove-Item -Recurse -Force $x, $tmp
+  }
+  Add-UserPath $nodeDir
+}
+
+# Prep-WickSource generates what master/develop do not carry in git and a release tag does:
+# templ's *_templ.go and every Vite SPA under fe/ (embedded from internal/**/dist).
+function Prep-WickSource {
+  if ($DryRun -and -not (Test-Path $Src)) { Write-Host '   > templ generate ./... ; (cd fe) npm ci ; npm run build'; return }
+  Push-Location $Src
+  try {
+    $env:GOWORK = 'off'
+    $tv = (& go list -m -f '{{.Version}}' github.com/a-h/templ); if (-not $tv) { $tv = 'latest' }
+    Say "templ $tv: generate"
+    Run go @('install', "github.com/a-h/templ/cmd/templ@$tv")
+    Run templ @('generate', './...')
+    Say 'FE build (fe/: npm ci + npm run build)'
+    Push-Location fe
+    try { $env:NODE_OPTIONS = '--max-old-space-size=2048'; Run npm @('ci', '--no-audit', '--no-fund'); Run npm @('run', 'build') }
+    finally { Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue; Pop-Location }
+  } finally { Remove-Item Env:GOWORK -ErrorAction SilentlyContinue; Pop-Location }
+}
+
 # Wick-Self builds wick itself at -Ref: the wick CLI from the source, then the wick-agent app
 # (what the release ships: `wick init wick-agent`), scaffolded once and built against it.
 function Wick-Self {
@@ -228,6 +269,8 @@ function Wick-Self {
     Run git @('clone', '--quiet', '--branch', $Ref, 'https://github.com/yogasw/wick.git', $Src)
   }
   Setup-Go (Join-Path $Src 'go.mod')
+  Setup-Node
+  Prep-WickSource
   Say 'wick CLI from source'
   if (-not $DryRun) { Push-Location $Src; try { $env:GOWORK = 'off'; Run go @('install', '.') } finally { Remove-Item Env:GOWORK -ErrorAction SilentlyContinue; Pop-Location } }
   else { Write-Host "   > (cd $Src) go install ." }

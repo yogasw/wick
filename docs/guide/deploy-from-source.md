@@ -46,10 +46,18 @@ What it does:
 5. `wick setup`, sets the version to the source's next patch plus the build time
    (`1.17.2.202610191030`, so every build is newer than the release before it and than the
    previous build), `wick build`.
-6. Installs it: the first time as a package (`.deb` on Linux, else `/usr/local/bin`;
-   `%LOCALAPPDATA%\Programs\wick-agent` on Windows), then start it with `wick-agent start`.
+6. Installs it the first time as a package (`.deb` on Linux, else `/usr/local/bin`;
+   `%LOCALAPPDATA%\Programs\wick-agent` on Windows) and starts it (`wick-agent start`).
    Every later run swaps the new build into the running daemon with a zero-downtime
    `reload` (Linux / macOS) or stop / swap / start (Windows).
+
+::: tip `wick-agent` is the server, `wick` is the dev CLI
+After the install, manage the server with `wick-agent start | stop | status`, and
+`wick-agent service install` to start it at boot. The web UI is on port `9425`; the first
+admin login is in `~/.wick-agent/INITIAL_CREDENTIALS.txt`. The `wick` command the script also
+installs is the developer CLI (`wick build`, `wick init`, …): `wick server` there means "run
+the project in the current folder" and fails outside one.
+:::
 
 `--src DIR`, `--dir DIR` and `--app NAME` (`-Src`, `-Dir`, `-App`) change those locations.
 

@@ -235,17 +235,23 @@ core() {
 # install_build INSTALLED — put bin/<app>-<os>-<arch> (cwd = the app) in place: a first
 # install, a stop/swap/start with --restart, else the zero-downtime reload.
 install_build() {
-  local installed=$1 bin="bin/$APP-$OS-$ARCH"
+  # the build is named after wick.yml's name:, which --app (the installed command) may differ from
+  local installed=$1 name bin
+  name="$(awk '/^name:/{print $2; exit}' wick.yml 2>/dev/null)"; bin="bin/${name:-$APP}-$OS-$ARCH"
   [ "$DRY" = 1 ] || [ -f "$bin" ] || die "build produced no $bin"
   if [ "$NOINSTALL" = 1 ]; then say "built $PWD/$bin (--no-install: nothing installed)"; return 0; fi
   if [ "$installed" = 0 ]; then
-    local deb; deb="$(ls -t bin/"$APP"-*-linux-"$ARCH".deb 2>/dev/null | head -1 || true)"
+    local deb; deb="$(ls -t bin/"${name:-$APP}"-*-linux-"$ARCH".deb 2>/dev/null | head -1 || true)"
     if [ "$OS" = linux ] && command -v dpkg >/dev/null && { [ -n "$deb" ] || [ "$DRY" = 1 ]; }; then
       say "first install (.deb)"; run $SUDO dpkg -i "${deb:-bin/$APP-<version>-linux-$ARCH.deb}"
     else
       say "first install (/usr/local/bin/$APP)"; run $SUDO install -m 755 "$bin" "/usr/local/bin/$APP"
     fi
-    echo "   installed. Start it with: $APP start   (or: $APP --help)"
+    # start it, as install.sh does: the app is a daemon (`start`), not the `wick` dev CLI
+    say "start $APP"
+    run "$APP" start || echo "   start failed — run '$APP start' by hand (or '$APP server' in the foreground)"
+    echo "   web UI: http://<this-host>:9425 · first-boot admin login: ~/.$APP/INITIAL_CREDENTIALS.txt"
+    echo "   later: $APP status · $APP stop · $APP start · $APP service install (boot start)   (the 'wick' command is the dev CLI, not the server)"
     return 0
   fi
   if [ "$RESTART" = 1 ]; then
