@@ -45,8 +45,8 @@ Flags
   --no-test        skip go test before building
   --all-plugins    rebuild every plugin, not only the newer ones
   --bump-plugins   bump each built plugin's VERSION patch first
-  --restart        install with stop / swap / start instead of the zero-downtime reload
-                   (a daemon started without WICK_GRACEFUL_UPGRADE=1; has a short downtime)
+  --restart        update with stop / swap / start even when a zero-downtime reload is
+                   possible (picked automatically when the daemon cannot reload)
   --no-install     build only: leave the result in bin/ and install nothing
   --dry-run        print what would run, change nothing
 EOF
@@ -234,9 +234,40 @@ core() {
 
 # install_build INSTALLED — put bin/<app>-<os>-<arch> (cwd = the app) in place: a first
 # install, a stop/swap/start with --restart, else the zero-downtime reload.
+# start_app: as a systemd user service when the machine has one — the packaged unit runs
+# with WICK_GRACEFUL_UPGRADE=1, which is what makes every later update a zero-downtime
+# reload, and it survives a reboot — else as a plain daemon (`<app> start`).
+start_app() {
+  # a unit that already exists (system-wide, or the user one from an earlier run) is reused
+  if [ "$OS" = linux ] && systemctl cat "$APP.service" >/dev/null 2>&1; then
+    say "restart system service $APP"; run $SUDO systemctl restart "$APP.service"
+  elif [ "$OS" = linux ] && systemctl --user cat "$APP.service" >/dev/null 2>&1; then
+    say "restart user service $APP"; run systemctl --user restart "$APP.service"
+  elif [ "$OS" = linux ] && systemctl --user show-environment >/dev/null 2>&1; then
+    say "start $APP as a systemd user service (boot start + zero-downtime updates)"
+    run "$APP" service install
+    run systemctl --user restart "$APP.service"
+  else
+    say "start $APP"
+    run "$APP" start || echo "   start failed — run '$APP start' by hand (or '$APP server' in the foreground)"
+  fi
+}
+
+# graceful: is the running daemon able to take a zero-downtime reload? Only one started with
+# WICK_GRACEFUL_UPGRADE=1 (the systemd unit) acts on it; a plain `<app> start` ignores it.
+# Prints running/graceful/stopped.
+daemon_mode() {
+  local pid env; pid="$(pgrep -x "$APP" 2>/dev/null | head -1 || true)"
+  [ -n "$pid" ] || { echo stopped; return; }
+  env="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || $SUDO tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || true)"
+  if printf '%s\n' "$env" | grep -qx 'WICK_GRACEFUL_UPGRADE=1'; then echo graceful; else echo running; fi
+}
+
+# install_build INSTALLED — put the build (cwd = the app) in place: a first install + start,
+# else the zero-downtime reload when the daemon supports it, else stop / swap / start.
 install_build() {
   # the build is named after wick.yml's name:, which --app (the installed command) may differ from
-  local installed=$1 name bin
+  local installed=$1 name bin mode target
   name="$(awk '/^name:/{print $2; exit}' wick.yml 2>/dev/null)"; bin="bin/${name:-$APP}-$OS-$ARCH"
   [ "$DRY" = 1 ] || [ -f "$bin" ] || die "build produced no $bin"
   if [ "$NOINSTALL" = 1 ]; then say "built $PWD/$bin (--no-install: nothing installed)"; return 0; fi
@@ -247,28 +278,34 @@ install_build() {
     else
       say "first install (/usr/local/bin/$APP)"; run $SUDO install -m 755 "$bin" "/usr/local/bin/$APP"
     fi
-    # start it, as install.sh does: the app is a daemon (`start`), not the `wick` dev CLI
-    say "start $APP"
-    run "$APP" start || echo "   start failed — run '$APP start' by hand (or '$APP server' in the foreground)"
+    start_app
     echo "   web UI: http://<this-host>:9425 · first-boot admin login: ~/.$APP/INITIAL_CREDENTIALS.txt"
-    echo "   later: $APP status · $APP stop · $APP start · $APP service install (boot start)   (the 'wick' command is the dev CLI, not the server)"
+    echo "   update later: run this same command again   (the 'wick' command is the dev CLI, not the server)"
     return 0
   fi
-  if [ "$RESTART" = 1 ]; then
-    local target; target="$(command -v "$APP")"
-    say "install with restart (short downtime) -> $target"
-    run "$APP" stop || true
-    run $SUDO install -m 755 "$PWD/$bin" "$target"
-    run "$APP" start
-    say "now running"; run "$APP" version
-    return 0
-  fi
-  say "swap + zero-downtime reload"
-  # reload checks the candidate (wick module, app, arch, version direction), swaps it
-  # in atomically, hands the socket over and rolls back if the successor never serves.
-  # --sudo only when not root: a root shell on a fresh server often has no sudo at all.
-  run "$APP" reload --binary "$PWD/$bin" ${SUDO:+--sudo} -y --wait || \
-    die "reload refused or failed — the running binary is unchanged (reason above). If the daemon runs without WICK_GRACEFUL_UPGRADE=1, rerun with --restart (short downtime)."
+  mode="$(daemon_mode)"; [ "$RESTART" = 1 ] && [ "$mode" != stopped ] && mode=running
+  target="$(command -v "$APP")"
+  case "$mode" in
+    graceful)
+      say "swap + zero-downtime reload"
+      # reload checks the candidate (wick module, app, arch, version direction), swaps it
+      # in atomically, hands the socket over and rolls back if the successor never serves.
+      # --sudo only when not root: a root shell on a fresh server often has no sudo at all.
+      run "$APP" reload --binary "$PWD/$bin" ${SUDO:+--sudo} -y --wait || \
+        die "reload refused or failed — the running binary is unchanged (reason above)."
+      ;;
+    running)
+      say "update with stop / swap / start (short downtime: $APP was started without graceful upgrade)"
+      run "$APP" stop || true
+      run $SUDO install -m 755 "$PWD/$bin" "$target"
+      start_app
+      ;;
+    stopped)
+      say "update $target ($APP is not running)"
+      run $SUDO install -m 755 "$PWD/$bin" "$target"
+      start_app
+      ;;
+  esac
   say "now running"; run "$APP" version
 }
 
@@ -316,7 +353,7 @@ wick_self() {
   if [ -d "$SRC/.git" ]; then
     say "wick source $SRC -> $REF"
     run git -C "$SRC" fetch --quiet origin "$REF"
-    run git -C "$SRC" checkout --quiet --detach FETCH_HEAD
+    run git -C "$SRC" checkout --quiet --force --detach FETCH_HEAD   # a build dir: local edits are not kept
   else
     say "clone wick ($REF) -> $SRC"
     run git clone --quiet --branch "$REF" https://github.com/yogasw/wick.git "$SRC"

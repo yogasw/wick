@@ -47,9 +47,15 @@ What it does:
    (`1.17.2.202610191030`, so every build is newer than the release before it and than the
    previous build), `wick build`.
 6. Installs it the first time as a package (`.deb` on Linux, else `/usr/local/bin`;
-   `%LOCALAPPDATA%\Programs\wick-agent` on Windows) and starts it (`wick-agent start`).
-   Every later run swaps the new build into the running daemon with a zero-downtime
-   `reload` (Linux / macOS) or stop / swap / start (Windows).
+   `%LOCALAPPDATA%\Programs\wick-agent` on Windows) and starts it. On Linux with systemd it
+   becomes a user service (`wick-agent service install`): it starts at boot, and its unit runs
+   with `WICK_GRACEFUL_UPGRADE=1`, which every later update needs for a zero-downtime reload.
+
+**To update, run the same command again.** It fetches the newest commit of `--ref`,
+rebuilds, and swaps the build in: a zero-downtime `reload` when the daemon supports it,
+otherwise (a daemon started with a plain `wick-agent start`) stop / swap / start, which also
+moves it onto the service so the next update is zero-downtime. Windows always uses stop /
+swap / start.
 
 ::: tip `wick-agent` is the server, `wick` is the dev CLI
 After the install, manage the server with `wick-agent start | stop | status`, and
@@ -157,7 +163,7 @@ version is left alone.
 | `--no-pull` / `--no-bump` / `--no-test` | | skip that step |
 | `--all-plugins` | | rebuild every plugin |
 | `--bump-plugins` | | bump each built plugin's `VERSION` patch first |
-| `--restart` | | stop / swap / start instead of `reload` (short downtime) |
+| `--restart` | | force stop / swap / start even when a zero-downtime `reload` is possible |
 | `--no-install` | | build only, leave the result in `bin/` |
 | `--dry-run` | | print, change nothing |
 
