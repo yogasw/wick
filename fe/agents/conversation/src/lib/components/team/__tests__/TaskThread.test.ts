@@ -225,13 +225,21 @@ describe("TaskThread", () => {
     expect(screen.getByTestId("task-thread-you").textContent).toBe("You");
   });
 
-  test("s20a N1: inline code in a message is a bordered chip", async () => {
+  test("s20a N1: a message renders with the chat's own markdown (code, lists)", async () => {
     const load = vi.fn().mockResolvedValue([{ ...log[1], text: "38 × `401 invalid signature`" }]);
     render(TaskThread, { props: { task: task({ state: "completed" }), load } });
     await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(1));
     const code = screen.getAllByTestId("task-thread-msg")[0].querySelector("code")!;
     expect(code.textContent).toBe("401 invalid signature");
-    expect(code.className).toContain("rounded-sm border");
-    expect(code.className).toContain("text-[11px]");
+    expect(code.className).toContain("font-mono");
+  });
+
+  test("a teammate's nested list and starred code read as in its own chat", async () => {
+    const load = vi.fn().mockResolvedValue([{ ...log[1], text: "Checked:\n- route\n  - `BAKE_ROUTE=*=oven`" }]);
+    render(TaskThread, { props: { task: task({ state: "completed" }), load } });
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(1));
+    const msg = screen.getAllByTestId("task-thread-msg")[0];
+    expect(msg.querySelector("ul ul code")!.textContent).toBe("BAKE_ROUTE=*=oven");
+    expect(msg.querySelector("em")).toBeNull();
   });
 });

@@ -129,8 +129,8 @@ describe("TraceBody renders a SKILL.md read as a skill card", () => {
     expect(q("[data-skill-managed]")?.textContent).toBe("Managed by wick — read-only");
     expect(q("[data-skill-partial]")).toBeNull();
     const md = q('[data-trace-kind="markdown"]');
-    // The chat renderer draws headings as styled <p>, never as raw "# ".
-    expect(md?.querySelector("p.font-semibold")?.textContent).toBe("Demo skill");
+    // The chat renderer draws headings as real heading tags, never as raw "# ".
+    expect(md?.querySelector("h1")?.textContent).toBe("Demo skill");
     expect(md?.textContent).not.toContain("# Demo");
     expect(md?.querySelectorAll("li").length).toBe(2);
     expect(container.textContent).not.toContain("MANAGED BY WICK");

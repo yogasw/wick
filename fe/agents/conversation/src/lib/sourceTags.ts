@@ -17,10 +17,11 @@ const HANDLE = "@[A-Za-z0-9][A-Za-z0-9._-]*";
    every position, so a long run of spaces stays linear. */
 const TAIL_RE = new RegExp(`^\\[from:[ \\t]*(${HANDLE}(?:[ \\t]*,[ \\t]*${HANDLE})*)[ \\t]*\\][ \\t]*$`);
 /* The renderer's own block rules (common/md renderMarkdown): a fence is
-   a line of exactly ``` plus an optional language, and a line of "$$"
-   opens or closes display math. Mirrored so the pre-pass skips the same
-   lines the renderer keeps verbatim. */
-const FENCE_RE = /^\s*```\w*\s*$/;
+   a line of 3+ backticks or tildes plus an optional language, closed only
+   by the same character at least as long, and a line of "$$" opens or
+   closes display math. Mirrored so the pre-pass skips the same lines the
+   renderer keeps verbatim. */
+const FENCE_RE = /^\s*(`{3,}|~{3,})([\w+-]*)\s*$/;
 
 /* Each tag becomes a private-use sentinel before markdown and is
    resolved after it, on the parsed DOM: only a text node outside code,
@@ -68,14 +69,19 @@ export function extractSourceTags(
   const byHandle = new Map<string, TeamTaskItem>();
   for (const t of tasks) if (t.to_handle) byHandle.set(t.to_handle.toLowerCase(), t);
 
-  let inCode = false;
+  let fence = "";
   let inMath = false;
   const out = clean.split("\n").map((line) => {
-    if (FENCE_RE.test(line)) {
-      inCode = !inCode;
+    const f = FENCE_RE.exec(line);
+    if (f && !fence) {
+      fence = f[1];
       return line;
     }
-    if (inCode) return line;
+    if (f && !f[2] && f[1][0] === fence[0] && f[1].length >= fence.length) {
+      fence = "";
+      return line;
+    }
+    if (fence) return line;
     if (line.trim() === "$$") {
       inMath = !inMath;
       return line;
