@@ -2423,6 +2423,18 @@
     agentLifecycle.state === "queued" ||
       liveProcesses.some((p) => p.session_id === sessionId && p.lifecycle === "queued"),
   );
+  /* Where a queued turn stands, for the composer's spinner: its place in
+     the queue and how full the pool is. */
+  const composerQueueLabel = $derived.by(() => {
+    const w = waitState;
+    if (!composerQueued || !w) return "";
+    const parts: string[] = [];
+    if (w.queue_pos > 0) parts.push(w.queue_len > 0 ? `#${w.queue_pos} of ${w.queue_len}` : `#${w.queue_pos}`);
+    if (w.global_max > 0) parts.push(`${w.global_used}/${w.global_max} running`);
+    else if (w.provider && w.max > 0) parts.push(`${w.used}/${w.max} running`);
+    if (w.hold) parts.push("host busy");
+    return parts.join(" · ");
+  });
   const composerRunning = $derived(
     !composerQueued &&
       (typing.active || live !== null || agentLifecycle.state === "working" || agentLifecycle.state === "spawning"),
@@ -3477,6 +3489,7 @@
             caption={agentMode?.agent?.caption}
             running={composerRunning}
             queued={composerQueued}
+            queueLabel={composerQueueLabel}
             onStop={handleStopFromComposer}
             toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
           />

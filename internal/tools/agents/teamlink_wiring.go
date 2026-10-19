@@ -730,6 +730,7 @@ func (d teamDirectory) peer(p entity.AgentPersona) teamlink.Peer {
 		MentionFrom: teamlink.NormalizeMentionFrom(p.MentionFrom), MentionAllow: decodeIDList(p.MentionAllow),
 		MaxHops: p.MaxHops,
 		Remote:  IsRemoteAgent(p), RemoteOwnerOnly: remoteOwnerOnly(p),
+		StopAfterTask: team.StopsAfterTeamTask(p.StopAfterTeamTask),
 	}
 }
 
@@ -1038,8 +1039,36 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 		if end := remoteTurnEnd(a2aremote.LoadState(globalLayout.SessionDir(sessionID)), start, text, failed); end != nil {
 			return sessionID, "", end
 		}
+	} else if agent.StopAfterTask && !asksBack(text) {
+		go releaseAfterTask(sessionID)
 	}
 	return sessionID, text, nil
+}
+
+// asksBack reports whether a teammate's reply asks the asker something
+// ([input-required]): its answer comes into the same chat soon, so the
+// process stays warm for it.
+func asksBack(reply string) bool {
+	reply, _ = teamlink.StripSilent(reply)
+	return strings.HasPrefix(strings.TrimSpace(reply), teamlink.InputRequiredToken)
+}
+
+// releaseAfterTask stops the process of a chat that just answered a team
+// task (Peer.StopAfterTask), instead of letting it idle out the idle
+// timeout while it holds a pool slot and its memory. The turn's Done can
+// reach the task a moment before the process is between turns, so it
+// retries briefly; a process that took more work, or launched a
+// background task, is left running (Pool.ReleaseDone). Swapped in tests.
+var releaseAfterTask = func(sessionID string) {
+	for range 40 {
+		if globalPool == nil || !poolHasSession(sessionID) {
+			return
+		}
+		if globalPool.ReleaseDone(sessionID, "team task answered") > 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // remoteTurnEnd is how a remote agent's turn ends a team task when that

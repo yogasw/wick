@@ -13,7 +13,7 @@
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
-  import { foldSystemEvents } from "../systemEvents.js";
+  import { foldSystemEvents, isHiddenSystemEvent } from "../systemEvents.js";
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
@@ -177,6 +177,7 @@
   const shownTurns = $derived(foldTeamResults(withRemoteLinks(
     foldSystemEvents(
       foldReplaced(turns).filter((t, i, all) => {
+        if (t.role === "system" && isHiddenSystemEvent(t.kind)) return false;
         if (!t.interrupted || t.role !== "assistant") return true;
         const next = all[i + 1];
         return !next || next.role !== "assistant";

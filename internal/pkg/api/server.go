@@ -1028,6 +1028,10 @@ func NewServer() *Server {
 		// not killed on the short idle window, only after this much silence.
 		TurnIdleTimeout: agentpool.DefaultTurnIdleTimeout,
 		PreemptIdle:     preemptIdle,
+		// Read live, so the switch applies without a restart.
+		StopAfterMachineTurn: func() bool {
+			return configsSvc.GetOwned("agents", "stop_after_machine_turn") != "false"
+		},
 		// Per-user identity plumbing. A subprocess carries the MCP credential
 		// of whoever spawned it (baked into its argv), so the pool needs to
 		// know who each message is from to decide whether that process can be

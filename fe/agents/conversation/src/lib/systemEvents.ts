@@ -36,6 +36,9 @@ export type SystemEventRenderer = {
   tone?: SystemEventTone;
   /** What the chip says. Defaults to the turn's own text. */
   parts?: (turn: SystemEventTurn, ctx: SystemEventCtx) => SystemEventPart[];
+  /** Kept in history (the server reads it back) but not drawn: something
+      else in the thread already shows it. */
+  hidden?: boolean;
 };
 
 const renderers = new Map<string, SystemEventRenderer>();
@@ -53,6 +56,11 @@ export function getSystemEvent(kind: string | undefined): SystemEventRenderer {
     card — input_request / approval_request — or a legacy notice). */
 export function isSystemEventKind(kind: string | undefined): boolean {
   return !!kind && renderers.has(kind);
+}
+
+/** isHiddenSystemEvent reports whether kind is stored but never drawn. */
+export function isHiddenSystemEvent(kind: string | undefined): boolean {
+  return !!kind && renderers.get(kind)?.hidden === true;
 }
 
 /** systemEventParts resolves what a chip says for turn. */
@@ -73,9 +81,10 @@ registerSystemEvent("group_member_removed", { icon: "ban" });
 // A ticket room's first line: nobody joined, so no user-plus.
 registerSystemEvent("ticket_room_opened", { icon: "info" });
 registerSystemEvent("ticket_status", { icon: "info" });
-registerSystemEvent("scheduled_fired", { icon: "clock" });
+// The schedule's own message card above it already says it ran.
+registerSystemEvent("scheduled_fired", { icon: "clock", hidden: true });
 // The old name of scheduled_fired, still in stored history.
-registerSystemEvent("routine_fired", { icon: "clock" });
+registerSystemEvent("routine_fired", { icon: "clock", hidden: true });
 registerSystemEvent("connection_changed", { icon: "plug" });
 registerSystemEvent("a2a_context", { icon: "link" });
 registerSystemEvent("mention_handoff", {

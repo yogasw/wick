@@ -14,7 +14,10 @@ type GeneralConfig struct {
 	IdleTimeoutSec   int    `wick:"number;group=Concurrency & Lifecycle;desc=Seconds of inactivity before subprocess is killed. Default: 120."`
 	KillAfterIdleSec int    `wick:"number;group=Concurrency & Lifecycle;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PreemptIdle      bool   `wick:"bool;group=Concurrency & Lifecycle;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
-	AutoRescan       bool   `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
+	// StopAfterMachineTurn: a turn no person asked for (schedule, workflow,
+	// watch, sub-agent, CLI) stops its process as soon as it ends.
+	StopAfterMachineTurn bool `wick:"bool;key=stop_after_machine_turn;group=Concurrency & Lifecycle;desc=Stop an agent's process as soon as a turn no person asked for ends (a schedule, a workflow, a watch, a sub-agent, the CLI), instead of letting it idle until the idle timeout while it holds a slot and memory. A turn a person sends from the web, Slack or Telegram idles as usual. A teammate's task follows that agent's own 'Stop after answering a teammate' setting. The session resumes where it left off on its next message."`
+	AutoRescan           bool `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
 	// A2ARemoteAllowedHosts limits which hosts an A2A remote agent may be
 	// connected to (package a2aremote). Empty = any public host.
 	A2ARemoteAllowedHosts string `wick:"textarea;key=a2a_remote_allowed_hosts;group=A2A Remote Agents|Agents of other systems that people add to their Team over A2A.;desc=Hosts an A2A remote agent may be connected to, separated by commas or new lines, *.example.com matches every subdomain. Empty = any public host, while loopback, link-local and cloud metadata addresses are always refused. A host listed here is allowed even when it resolves to one of those, for an agent running beside wick."`
@@ -183,6 +186,9 @@ func DefaultGeneralConfig() GeneralConfig {
 		// doesn't pin a provider the operator never chose.
 		AutoRescan:  true,
 		PreemptIdle: true,
+		// Ships ON: machine turns (a schedule every 5 minutes, workflow
+		// runs) idling 2 minutes each filled the pool on a 2-core host.
+		StopAfterMachineTurn: true,
 		// Ships ON: off, a person joining someone else's running session has
 		// their turn served with that owner's connectors — on an admin's
 		// session that is privilege escalation. A single-user session never

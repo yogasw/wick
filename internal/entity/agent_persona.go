@@ -122,6 +122,11 @@ type AgentPersona struct {
 	// work (after team_message) stays out of its channels; the final
 	// answer always posts. nil = never set: on (team.HidesInterimInChannels).
 	ChannelHideInterim *bool `json:"channel_hide_interim"`
+	// StopAfterTeamTask: once this agent answered a task another agent
+	// handed it, its process stops right away instead of idling until the
+	// idle timeout, so team exchanges do not pile up processes. nil = never
+	// set: on (team.StopsAfterTeamTask).
+	StopAfterTeamTask *bool `json:"stop_after_team_task"`
 	// LastReadAt is when the owner last opened the agent's chat in the
 	// Team app; activity on the main session after it reads as unread.
 	// nil = never opened. Only the owner chats an agent from the app, so

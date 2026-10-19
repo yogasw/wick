@@ -90,6 +90,17 @@ func TestDeriveMemoryDefaults_ScalesWithRAM(t *testing.T) {
 	}
 }
 
+// The suggestion must pass the very check its save runs: an 8 GB host
+// (7623 MB) once got 6623 MB, refused because the floor was left out.
+func TestDeriveMemoryDefaults_PassesBudgetValidation(t *testing.T) {
+	for _, mb := range []uint64{3072, 7623, 8192, 16384, 32768} {
+		d := DeriveMemoryDefaults(mb*1024*1024, 4)
+		if err := ValidateMemoryBudget(d.AgentsTotalMB, d.MinFreeMB, int(mb)); err != nil {
+			t.Fatalf("%d MB: suggested %+v refused: %v", mb, d, err)
+		}
+	}
+}
+
 // A machine too small to host an agent must yield a floor, never a
 // negative or zero budget that would read as "unlimited".
 func TestDeriveMemoryDefaults_TinyMachineFloors(t *testing.T) {

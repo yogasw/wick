@@ -105,8 +105,10 @@ type TeamAgentItem struct {
 	// ChannelShowTeammates is the effective value (default on).
 	ChannelShowTeammates bool `json:"channel_show_teammates"`
 	// ChannelHideInterim is the effective value (default on).
-	ChannelHideInterim bool                   `json:"channel_hide_interim"`
-	SuggestedPrompts   []team.SuggestedPrompt `json:"suggested_prompts"`
+	ChannelHideInterim bool `json:"channel_hide_interim"`
+	// StopAfterTeamTask is the effective value (default on).
+	StopAfterTeamTask bool                   `json:"stop_after_team_task"`
+	SuggestedPrompts  []team.SuggestedPrompt `json:"suggested_prompts"`
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
@@ -284,6 +286,7 @@ type teamAgentWriteReq struct {
 	AllowProviderSwitch  *bool                   `json:"allow_provider_switch"`
 	ChannelShowTeammates *bool                   `json:"channel_show_teammates"`
 	ChannelHideInterim   *bool                   `json:"channel_hide_interim"`
+	StopAfterTeamTask    *bool                   `json:"stop_after_team_task"`
 	IsCaptain            *bool                   `json:"is_captain"`
 	UseGlobalPrompt      *bool                   `json:"use_global_prompt"`
 	MentionFrom          *string                 `json:"mention_from"`
@@ -1080,6 +1083,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
 		ChannelShowTeammates: team.ShowsTeammatesInChannels(p.ChannelShowTeammates),
 		ChannelHideInterim:   team.HidesInterimInChannels(p.ChannelHideInterim),
+		StopAfterTeamTask:    team.StopsAfterTeamTask(p.StopAfterTeamTask),
 		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
@@ -1606,6 +1610,10 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if req.ChannelHideInterim != nil {
 		v := *req.ChannelHideInterim
 		p.ChannelHideInterim = &v
+	}
+	if req.StopAfterTeamTask != nil {
+		v := *req.StopAfterTeamTask
+		p.StopAfterTeamTask = &v
 	}
 	if req.Features != nil {
 		p.Features = team.EncodeFeatures(*req.Features)

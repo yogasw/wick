@@ -88,6 +88,8 @@ export type AgentItem = {
   channel_show_teammates?: boolean;
   /** "Hide in-between messages in channels" (default on). Older servers omit it. */
   channel_hide_interim?: boolean;
+  /** "Stop after answering a teammate" (default on). Older servers omit it. */
+  stop_after_team_task?: boolean;
   /** "Manage other agents" (agents.* ops), default applied: on for the
       Captain, off for the rest. Older servers omit it. */
   manage_agents?: boolean;
@@ -263,6 +265,7 @@ export type AgentWrite = Partial<{
   allow_provider_switch: boolean;
   channel_show_teammates: boolean;
   channel_hide_interim: boolean;
+  stop_after_team_task: boolean;
   is_captain: boolean;
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;

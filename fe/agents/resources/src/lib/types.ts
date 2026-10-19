@@ -47,6 +47,9 @@ export interface WickSessionRow {
   project_id?: string;
   project?: string;
   detected: boolean;
+  /** The Team agent the session belongs to ("@handle"); absent for a
+      session of no Team agent. Older servers omit it. */
+  agent?: string;
 }
 
 export interface ProcessRow {

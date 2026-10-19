@@ -443,6 +443,25 @@
                           {a.user}
                         </span>
                       {/if}
+                      <!-- Which agent and chat this is: two "claude" rows
+                           otherwise read the same. -->
+                      {#if a.wick_session?.agent}
+                        <span
+                          class="rounded border border-green-600/30 px-1 py-px text-[10px] text-green-700 dark:text-green-400"
+                          title="Team agent this session belongs to."
+                        >
+                          {a.wick_session.agent}
+                        </span>
+                      {/if}
+                      {#if a.wick_session?.title && a.wick_session.session_id}
+                        <a
+                          class="max-w-[16rem] truncate text-[10px] text-blue-600 hover:underline dark:text-blue-400"
+                          href={sessionHref(a.wick_session.session_id)}
+                          title={a.wick_session.title}
+                        >
+                          {a.wick_session.title}
+                        </a>
+                      {/if}
                     {:else if agentOrigin(a) !== "outside"}
                       <!-- Not in this wick's pool, but the process carries
                            a wick MCP token — usually an agent the previous
@@ -461,6 +480,14 @@
                           title={unresolvedTitle(a)}
                         >
                           !
+                        </span>
+                      {/if}
+                      {#if a.wick_session?.agent}
+                        <span
+                          class="rounded border border-green-600/30 px-1 py-px text-[10px] text-green-700 dark:text-green-400"
+                          title="Team agent this session belongs to."
+                        >
+                          {a.wick_session.agent}
                         </span>
                       {/if}
                       {#if a.wick_session?.project}

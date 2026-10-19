@@ -631,13 +631,26 @@ func (a *Agent) wickStopCause(pid int) string {
 // so a message racing it lands in the pool's buffer, never in a process
 // on its way out.
 func (a *Agent) StopIfIdle() bool {
+	return a.stopBetweenTurns("idle reap (StopIfIdle)", false)
+}
+
+// StopIfDone is StopIfIdle for a process whose work is over (a teammate's
+// task was answered) rather than one that went quiet: it also refuses
+// while a background task the last turn launched is still pending, since
+// that task reports back into this very process.
+func (a *Agent) StopIfDone(cause string) bool {
+	return a.stopBetweenTurns(cause, true)
+}
+
+func (a *Agent) stopBetweenTurns(cause string, waitBackground bool) bool {
 	a.mu.Lock()
-	if a.turnOpen || a.turnActive || a.respawning || len(a.pendingQueue) > 0 || a.turnWaitLocked() > 0 {
+	if a.turnOpen || a.turnActive || a.respawning || len(a.pendingQueue) > 0 || a.turnWaitLocked() > 0 ||
+		(waitBackground && a.bgPending) {
 		a.mu.Unlock()
 		return false
 	}
 	a.stopped = true
-	a.noteStopCauseLocked("idle reap (StopIfIdle)")
+	a.noteStopCauseLocked(cause)
 	a.mu.Unlock()
 	_ = a.Stop()
 	return true

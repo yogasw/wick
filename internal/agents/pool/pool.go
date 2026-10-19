@@ -79,6 +79,13 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+
+	// keepTurn marks a session+agent whose current turn carries a message
+	// a person sent, or a teammate's task (released per agent instead):
+	// anything but a machine source. Read and cleared when the turn ends,
+	// see afterTurn.
+	keepTurn map[string]bool
+
 	// leases are slots held by work that is not a session subprocess
 	// (one-shot LLM helpers, see lease.go). Lazily created; guarded by mu.
 	leases map[string]leaseEntry
@@ -162,6 +169,14 @@ type PoolConfig struct {
 	// back because memory is FALLING toward the floor — the trend a static
 	// MinFreeMemoryLoader floor cannot see. nil = no trend gate.
 	SpawnHold func() bool
+
+	// StopAfterMachineTurn reports whether a process whose turn no person
+	// asked for (a schedule, a workflow, a watch, a sub-agent, the CLI…)
+	// is stopped as soon as that turn ends, instead of idling until
+	// IdleTimeout while it holds a slot and its memory. A person's turn
+	// (web, Slack, Telegram…) always idles as usual. Read live; nil = off.
+	// Team turns are decided per agent instead (StopAfterTeamTask).
+	StopAfterMachineTurn func() bool
 	// CallerUserID resolves the wick user behind a Send from its context.
 	// The pool stays decoupled from the auth packages: the server injects
 	// this. nil (or empty result) = no resolved caller, which disables
@@ -857,6 +872,14 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// process. It spawned a second, nameless track instead and every
 	// name-keyed write after it landed on a row nobody reads.
 	agentName = p.resolveAgentName(sessionID, agentName)
+	if !MachineSource(source) && source != "failover" {
+		p.mu.Lock()
+		if p.keepTurn == nil {
+			p.keepTurn = map[string]bool{}
+		}
+		p.keepTurn[sessionKey(sessionID, agentName)] = true
+		p.mu.Unlock()
+	}
 	if p.cfg.OnSend != nil {
 		done, err := p.cfg.OnSend(ctx, sessionID, role)
 		if err != nil {
@@ -1262,6 +1285,96 @@ func (p *Pool) preemptIdleSlot() bool {
 	return true
 }
 
+// ReleaseDone stops sessionID's processes whose work is over, so their
+// slots and memory return to the pool now instead of after the idle TTL.
+// A process mid-turn, mid-spawn, holding queued messages or waiting on a
+// background task is left alone (Agent.StopIfDone). The session keeps its
+// CLI session ID and resumes via --resume on its next message. Returns
+// how many processes were stopped. Stop blocks, so call it off any lock.
+func (p *Pool) ReleaseDone(sessionID, cause string) int {
+	prefix := sessionID + "::"
+	p.mu.Lock()
+	var entries []*runEntry
+	for k, e := range p.active {
+		if _, spawning := p.spawningKeys[k]; spawning || !strings.HasPrefix(k, prefix) || e.agent == nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	p.mu.Unlock()
+	n := 0
+	for _, e := range entries {
+		if e.agent.StopIfDone(cause) {
+			n++
+		}
+	}
+	if n > 0 {
+		log.Info().Str("component", "pool").Str("session", sessionID).Int("stopped", n).Str("cause", cause).
+			Msg("pool: released finished session")
+	}
+	return n
+}
+
+// machineSources are the Send sources no person stands behind: wick
+// itself sends them (see drainRefused) or a crash recovery does. "team"
+// is left out on purpose: a teammate's task is released per agent
+// (StopAfterTeamTask), so an agent can keep its process warm for them.
+var machineSources = map[string]bool{
+	"subagent": true, "schedule": true, "watch": true, "agent": true,
+	"agentctl": true, "cli": true, "workflow": true, "recover": true,
+}
+
+// MachineSource reports whether a Send source is one no person typed and
+// no teammate asked for (StopAfterMachineTurn). "failover" re-sends a turn
+// whatever started it, so send leaves the turn's mark as it was for it.
+func MachineSource(source string) bool {
+	return machineSources[source]
+}
+
+// afterTurn runs when a session's turn ends (working → idle). A turn only
+// machine sources fed releases the process right away when
+// StopAfterMachineTurn says so; a person's turn idles as usual, and a
+// teammate's is left to the team path (StopAfterTeamTask).
+func (p *Pool) afterTurn(sessionID, agentName string) {
+	key := sessionKey(sessionID, agentName)
+	p.mu.Lock()
+	keep := p.keepTurn[key]
+	delete(p.keepTurn, key)
+	closed := p.closed
+	p.mu.Unlock()
+	if keep || closed || p.cfg.StopAfterMachineTurn == nil || !p.cfg.StopAfterMachineTurn() {
+		return
+	}
+	go p.releaseWhenSettled(sessionID, "machine turn done")
+}
+
+// releaseWhenSettled retries ReleaseDone briefly: the lifecycle flips to
+// idle a moment before the agent itself is between turns. It gives up
+// once the session is gone, a person sends into it, or ~10s pass (a
+// process that took more work or launched a background task stays).
+func (p *Pool) releaseWhenSettled(sessionID, cause string) {
+	prefix := sessionID + "::"
+	for range 40 {
+		p.mu.Lock()
+		alive, keep := false, false
+		for k := range p.active {
+			if strings.HasPrefix(k, prefix) {
+				alive = true
+				keep = keep || p.keepTurn[k]
+			}
+		}
+		closed := p.closed
+		p.mu.Unlock()
+		if !alive || keep || closed {
+			return
+		}
+		if p.ReleaseDone(sessionID, cause) > 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // spawn allocates a slot, builds an agent via the factory, drains the
 // buffer into one combined input, and starts it. Caller must NOT hold
 // p.mu (we acquire and release it ourselves so the spawn can take
@@ -1504,8 +1617,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	// OnLifecycle callback so working↔idle transitions reach SSE the
 	// same path as spawning/killed. BE becomes the source of truth;
 	// the FE just listens to "lifecycle" events.
-	if p.cfg.OnLifecycle != nil {
-		st.SetLifecycleHook(func(from, to state.Lifecycle) {
+	st.SetLifecycleHook(func(from, to state.Lifecycle) {
+		if p.cfg.OnLifecycle != nil {
 			p.cfg.OnLifecycle(LifecycleEvent{
 				SessionID:    sessionID,
 				AgentName:    agentName,
@@ -1516,8 +1629,11 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 				ProviderType: pType,
 				ProviderName: pName,
 			})
-		})
-	}
+		}
+		if from == state.LifecycleWorking && to == state.LifecycleIdle {
+			p.afterTurn(sessionID, agentName)
+		}
+	})
 	// Every spawn drains the session's buffer, so the buffer must exist for
 	// every spawn — not only for sessions that entered through send().
 	//

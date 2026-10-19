@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { foldSystemEvents, systemEventParts, getSystemEvent, isSystemEventKind, registerSystemEvent } from "../systemEvents.js";
+import { foldSystemEvents, systemEventParts, getSystemEvent, isSystemEventKind, registerSystemEvent, isHiddenSystemEvent } from "../systemEvents.js";
 
 describe("system event registry", () => {
   test("known kinds have their own icon; unknown kinds fall back to the server text", () => {
@@ -7,6 +7,10 @@ describe("system event registry", () => {
     expect(getSystemEvent("hop_limit").tone).toBe("warn");
     expect(getSystemEvent("scheduled_fired").icon).toBe("clock");
     expect(getSystemEvent("routine_fired").icon).toBe("clock");
+    // The schedule's message card already says it ran: the chip is not drawn.
+    expect(isHiddenSystemEvent("scheduled_fired")).toBe(true);
+    expect(isHiddenSystemEvent("routine_fired")).toBe(true);
+    expect(isHiddenSystemEvent("agent_created")).toBe(false);
     // A room opening is not someone joining.
     expect(getSystemEvent("ticket_room_opened").icon).toBe("info");
     expect(isSystemEventKind("ticket_status")).toBe(true);
