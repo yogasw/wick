@@ -143,6 +143,7 @@ export default withMermaid(defineConfig({
               { text: 'Desktop Tray', link: '/guide/desktop-tray' },
               { text: 'Headless Server', link: '/guide/headless' },
               { text: 'Docker', link: '/guide/docker' },
+              { text: 'Build & Deploy from Source', link: '/guide/deploy-from-source' },
               { text: 'Termux / Android', link: '/guide/termux-android' },
             ],
           },
