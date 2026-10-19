@@ -1308,7 +1308,12 @@ describe("DetailView — live delegation block (P48-s9)", () => {
       threadBus.live.set({ text, blocks: liveBlocks });
       await tick();
     }
-    await waitFor(() => expect(container.textContent).toContain("Waiting on alpha"));
+    // While a teammate works the live text is in-between text (P60 S2): it
+    // goes into the turn's collapsed trace, so the bubble shows the working
+    // line rather than the tokens. What this test guards is that the tokens
+    // streaming in do not regroup the tasks.
+    await waitFor(() => expect(container.textContent).toContain("working"));
+    expect(container.textContent).not.toContain("Waiting on alpha");
     expect(vi.mocked(tasksByTurn).mock.calls.length).toBe(calls);
     expect(vi.mocked(heldForLiveTurn).mock.calls.length).toBe(held);
     expect(k1Owners(container)).toEqual(["live"]);
