@@ -245,7 +245,9 @@ start_app() {
     say "restart user service $APP"; run systemctl --user restart "$APP.service"
   elif [ "$OS" = linux ] && systemctl --user show-environment >/dev/null 2>&1; then
     say "start $APP as a systemd user service (boot start + zero-downtime updates)"
-    run "$APP" service install
+    # DISPLAY/WAYLAND_DISPLAY unset: with them `service install` picks the desktop autostart
+    # entry (a tray app at login) instead of the systemd user unit a server needs.
+    run env -u DISPLAY -u WAYLAND_DISPLAY "$APP" service install
     run systemctl --user restart "$APP.service"
   else
     say "start $APP"
