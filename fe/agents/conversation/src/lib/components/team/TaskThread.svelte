@@ -17,7 +17,7 @@
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
   import { clockTime, taskProgress, taskProgressShown, taskStatus } from "../../delegations.js";
-  import { questionHtml, THREAD_CODE_CLASS } from "../../questionText.js";
+  import { renderMarkdown } from "../../markdown.js";
 
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
@@ -120,7 +120,9 @@
           {/if}
           <span>{clockTime(Date.parse(e.at))}</span>
         </div>
-        <div class={["whitespace-pre-wrap break-words text-[12.5px] leading-[1.5]", live ? "text-green-600 dark:text-green-400" : "text-black-900 dark:text-white-100"]}>{@html questionHtml(e.text, THREAD_CODE_CLASS)}{#if live}<Dots />{/if}</div>
+        <!-- Same renderer as the chat itself (common/md), so a teammate's
+             list, code or table reads the same here as in its own chat. -->
+        <div data-testid="task-thread-text" class={["min-w-0 break-words text-[12.5px] leading-[1.5]", live ? "text-green-600 dark:text-green-400" : "text-black-900 dark:text-white-100"]}>{@html renderMarkdown(e.text ?? "")}{#if live}<Dots />{/if}</div>
       </div>
     </div>
   {/each}

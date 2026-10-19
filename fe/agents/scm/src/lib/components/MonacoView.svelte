@@ -124,6 +124,11 @@
 
   // Options applied to each inner editor of the diff editor (original + modified).
   // createDiffEditor opts don't propagate fully to inner editors.
+  // In the inline view Monaco cuts the original editor off right after its
+  // line numbers (its decoration gap is clipped), so the modified editor's
+  // numbers start flush against them: "1221" and "1223" read as "12211223".
+  // The gap therefore has to come from the modified editor's own number
+  // column — see gutterChars().
   const innerEditorOpts = {
     fontSize: 12,
     fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace",
@@ -131,12 +136,23 @@
     minimap: { enabled: false },
     lineNumbers: "on" as const,
     lineNumbersMinChars: 3,
-    lineDecorationsWidth: 0,
+    lineDecorationsWidth: 10,
     glyphMargin: false,
     renderLineHighlight: "all" as const,
     folding: true,
     showFoldingControls: "always" as const,
   } as const;
+
+  // Number-column widths for the diff's two editors. The original column
+  // fits the longest line number of either side; the modified one is one
+  // character wider, and since numbers are right-aligned that spare
+  // character is the gap between the two columns in the inline view, for a
+  // 99-line file and a 12 000-line one alike. Side by side it is just one
+  // character of padding.
+  function gutterChars(lines: number): { original: number; modified: number } {
+    const digits = Math.max(3, String(lines).length);
+    return { original: digits, modified: digits + 1 };
+  }
 
   async function build() {
     const m = await ensureMonaco();
@@ -154,15 +170,23 @@
         ...sharedEditorOpts,
       });
       const modModel = m.editor.createModel(modified, language);
+      const origModel = m.editor.createModel(original, language);
+      const de = diffEditor;
+      let gutter = gutterChars(Math.max(origModel.getLineCount(), modModel.getLineCount()));
       modModel.onDidChangeContent(() => {
         onDirty?.(modModel.getValue());
+        // An edit that crosses a power of ten (999 → 1000 lines) needs the
+        // wider columns, or the two run together again.
+        const next = gutterChars(Math.max(origModel.getLineCount(), modModel.getLineCount()));
+        if (next.modified !== gutter.modified) {
+          gutter = next;
+          de.getOriginalEditor().updateOptions({ lineNumbersMinChars: gutter.original });
+          de.getModifiedEditor().updateOptions({ lineNumbersMinChars: gutter.modified });
+        }
       });
-      diffEditor.setModel({
-        original: m.editor.createModel(original, language),
-        modified: modModel,
-      });
-      diffEditor.getOriginalEditor().updateOptions(innerEditorOpts);
-      diffEditor.getModifiedEditor().updateOptions(innerEditorOpts);
+      diffEditor.setModel({ original: origModel, modified: modModel });
+      diffEditor.getOriginalEditor().updateOptions({ ...innerEditorOpts, lineNumbersMinChars: gutter.original });
+      diffEditor.getModifiedEditor().updateOptions({ ...innerEditorOpts, lineNumbersMinChars: gutter.modified });
     } else {
       editor = m.editor.create(host, {
         value: modified,

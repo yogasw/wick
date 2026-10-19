@@ -10,6 +10,17 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.17.1](https://github.com/yogasw/wick/compare/v1.17.0...v1.17.1) — Maintenance
+
+_Released on 2026-10-19_
+
+### Fixed
+-   Corrected spacing for inline diff line-number columns to prevent overlap with 4-digit or longer line numbers.
+-   Ensured CommonMark compliance for chat markdown rendering and standardized on a single markdown renderer for both Team and Agent views.
+
+---
+
+
 ## [v1.17.0](https://github.com/yogasw/wick/compare/v1.16.0...v1.17.0) — Team & Agents
 
 _Released on 2026-10-18_

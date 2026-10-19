@@ -107,9 +107,39 @@ function mathSpan(tex: string, display: boolean): string {
   return `<span data-math${display ? ' data-math-display=""' : ""} data-math-src="${esc(tex)}">${esc(delim + tex + delim)}</span>`;
 }
 
+/* Classes for inline code, shared by every surface that renders markdown. No
+   horizontal margin and a small padding, so "(`a`/`b`)" reads as one run
+   instead of the brackets drifting off the code. */
+const CODE_CLASS =
+  "font-mono text-xs bg-white-300 dark:bg-navy-600 px-1 py-px rounded text-black-900 dark:text-white-100 [overflow-wrap:anywhere]";
+const LINK_CLASS = "text-green-600 dark:text-green-400 underline";
+
+/* Characters a backslash may escape (CommonMark: ASCII punctuation). */
+const ESCAPABLE_RE = /\\([!-/:-@[-`{-~])/g;
+
+/* A run of backticks closed by a run of the same length. "``a ` b``" holds a
+   literal backtick; an unclosed run stays as text, which is also what a
+   half-streamed reply shows until the closing backtick arrives. */
+const CODE_SPAN_RE = /(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g;
+
+/* Inline order matters, and is the CommonMark one: code spans first (their
+   content is literal, so `*` or `_` inside never starts emphasis), then math,
+   backslash escapes, links, and only then emphasis on what is left. Each
+   protected piece is parked behind a NUL sentinel and expanded at the end, so
+   no later pass can reach into it — a link's href is never italicised, a `*`
+   in code never opens <em>. */
 function inlineMarkdown(s: string): string {
   const slackLinks: { url: string; label: string }[] = [];
   s = slackLinkCapture(s, slackLinks);
+
+  const codes: string[] = [];
+  s = s.replace(CODE_SPAN_RE, (_m, _ticks, body: string) => {
+    let c = body.replace(/\n/g, " ");
+    /* One space either side is stripped so `` `x` `` can wrap a backtick. */
+    if (c.length > 2 && c.startsWith(" ") && c.endsWith(" ") && c.trim() !== "") c = c.slice(1, -1);
+    return `\x00C${codes.push(c) - 1}\x00`;
+  });
+
   /* Protect math before escaping: capture the raw TeX (which may contain
      <, >, & that esc would mangle) behind a sentinel, then reinsert as a
      placeholder span after the inline markdown passes. */
@@ -117,23 +147,50 @@ function inlineMarkdown(s: string): string {
   s = s.replace(/\$\$([^\n$]+?)\$\$/g, (_m, tex) => `\x00M${math.push({ tex, display: true }) - 1}\x00`);
   s = s.replace(/(^|[^\\$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\d)/g, (_m, pre, tex) => `${pre}\x00M${math.push({ tex, display: false }) - 1}\x00`);
 
-  s = esc(s);
-  s = s.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
-  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  s = s.replace(/(^|\W)__(\S(?:.*?\S)?)__(?=\W|$)/g, "$1<strong>$2</strong>");
-  s = s.replace(/(^|\W)_(\S(?:.*?\S)?)_(?=\W|$)/g, "$1<em>$2</em>");
-  s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
-  s = s.replace(/`([^`]+)`/g, '<code class="font-mono text-xs bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 rounded text-black-900 dark:text-white-100">$1</code>');
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-green-600 dark:text-green-400 underline" target="_blank" rel="noopener">$1</a>');
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, href) => {
-    return `<a href="#" data-chat-path="${href}" class="text-green-600 dark:text-green-400 underline">${label}</a>`;
-  });
-  s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="text-green-600 dark:text-green-400 underline break-all" target="_blank" rel="noopener">$2</a>');
+  const escaped: string[] = [];
+  s = s.replace(ESCAPABLE_RE, (_m, ch: string) => `\x00E${escaped.push(ch) - 1}\x00`);
 
-  s = s.replace(/\x00M(\d+)\x00/g, (_m, i) => mathSpan(math[+i].tex, math[+i].display));
+  s = esc(s);
+
+  /* Links: the opening tag is parked, the label stays in the text so it can
+     still carry emphasis or code. */
+  const anchors: string[] = [];
+  const park = (html: string) => `\x00A${anchors.push(html) - 1}\x00`;
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label, href) =>
+    park(`<a href="${href}" class="${LINK_CLASS}" target="_blank" rel="noopener">`) + label + park("</a>"));
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, href: string) => {
+    /* Any other scheme (javascript:, data:) stays inert text; only a
+       session-relative path becomes an in-app file link. */
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return m;
+    return park(`<a href="#" data-chat-path="${href}" class="${LINK_CLASS}">`) + label + park("</a>");
+  });
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<>"'\x00]+)/g, (_m, pre, url: string) => {
+    /* Sentence punctuation after a URL is not part of it, nor is a closing
+       bracket the URL never opened. */
+    let tail = "";
+    const t = url.match(/[.,;:!?]+$/);
+    if (t) { tail = t[0]; url = url.slice(0, -tail.length); }
+    if (url.endsWith(")") && !url.includes("(")) { tail = ")" + tail; url = url.slice(0, -1); }
+    return pre + park(`<a href="${url}" class="${LINK_CLASS} break-all" target="_blank" rel="noopener">${url}</a>`) + tail;
+  });
+
+  /* `*` emphasis must hug its text: "2 * 3 * 4" is arithmetic, not italics.
+     `_` only counts at a word boundary, so snake_case_names stay intact. */
+  s = s.replace(/\*\*\*(?!\s)(.+?)(?<!\s)\*\*\*/g, "<strong><em>$1</em></strong>");
+  s = s.replace(/\*\*(?!\s)(.+?)(?<!\s)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\*(?![\s*])(.+?)(?<![\s*])\*/g, "<em>$1</em>");
+  s = s.replace(/(^|[^\w\x00])__(\S(?:.*?\S)?)__(?=[^\w\x00]|$)/g, "$1<strong>$2</strong>");
+  s = s.replace(/(^|[^\w\x00])_(\S(?:.*?\S)?)_(?=[^\w\x00]|$)/g, "$1<em>$2</em>");
+  s = s.replace(/~~(?!\s)(.+?)(?<!\s)~~/g, "<del>$1</del>");
+
+  /* Emoji before code and links come back, so `:x:` inside code stays as
+     typed. */
   s = emojiShortcodes(s);
-  return slackLinkExpand(s, slackLinks, "text-green-600 dark:text-green-400 underline break-all");
+  s = s.replace(/\x00A(\d+)\x00/g, (_m, i) => anchors[+i]);
+  s = s.replace(/\x00E(\d+)\x00/g, (_m, i) => esc(escaped[+i]));
+  s = s.replace(/\x00M(\d+)\x00/g, (_m, i) => mathSpan(math[+i].tex, math[+i].display));
+  s = s.replace(/\x00C(\d+)\x00/g, (_m, i) => `<code class="${CODE_CLASS}">${esc(codes[+i])}</code>`);
+  return slackLinkExpand(s, slackLinks, `${LINK_CLASS} break-all`);
 }
 
 /* Matches up to `n` leading spaces (or a tab counted as one), for stripping a
@@ -151,11 +208,18 @@ export function renderMarkdown(text: string): string {
   /* How far the open fence was indented, so its contents can be shifted back
      to column 0 rather than carrying the list item's padding into the code. */
   let codeIndent = 0;
+  /* The fence that opened the block: it closes only on the same character
+     repeated at least as many times, so a ``` line inside a ~~~~ block (a
+     markdown sample, say) stays content. */
+  let fenceChar = "", fenceLen = 0;
   let inMath = false, mathLines: string[] = [];
   let inSvg = false, svgLines: string[] = [];
-  let inList = false, listOl = false;
+  /* Open lists, outermost first. A list item indented past its parent's
+     marker is a child list inside that item, so this is a stack rather than
+     one flat list: "- A\n  - a1" nests, with 2 spaces as good as 4. */
+  type ListFrame = { ordered: boolean; indent: number; start: number; items: { text: string[]; children: string }[] };
+  const lists: ListFrame[] = [];
   let inTable = false, tableHeader = false;
-  let listItems: string[] = [];
   /* Prose lines waiting to be joined into one paragraph. */
   let paraLines: string[] = [];
 
@@ -176,8 +240,7 @@ export function renderMarkdown(text: string): string {
     const html = inlineMarkdown(joined).split(BR + " ").join("<br/>").split(BR).join("<br/>");
     out.push(`<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">${html}</p>`);
   }
-  /* Where the ordered list currently being built starts, and the number the
-     last one reached.
+  /* The number the next item of the outermost ordered list takes.
 
      A "loose" list — items separated by blank lines, or with a code block or
      quote under an item — is flushed and reopened per item, because a blank
@@ -185,25 +248,41 @@ export function renderMarkdown(text: string): string {
      three-step list rendered as "1. 1. 1.". Carrying the count across the
      break fixes that without merging genuinely separate lists: the counter is
      reset by any content that is not part of a list. */
-  let olStart = 1;
   let olNext = 1;
 
+  /* Close the innermost open list: its HTML goes into the parent item, or
+     out to the page when it was the outermost one. */
+  function closeList() {
+    const f = lists.pop();
+    if (!f) return;
+    const tag = f.ordered ? "ol" : "ul";
+    const marker = f.ordered ? "list-decimal" : lists.length > 0 ? "list-[circle]" : "list-disc";
+    const cls = `class="${marker} list-outside pl-6 space-y-0.5 ${lists.length > 0 ? "mt-0.5" : "my-1"}"`;
+    const start = f.ordered && f.start !== 1 ? ` start="${f.start}"` : "";
+    const items = f.items
+      .map((it) => `<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(it.text.join(" "))}${it.children}</li>`)
+      .join("");
+    const html = `<${tag}${start} ${cls}>${items}</${tag}>`;
+    const parent = lists[lists.length - 1];
+    if (parent) parent.items[parent.items.length - 1].children += html;
+    else out.push(html);
+  }
+
   function flushList() {
-    if (!inList) return;
-    const tag = listOl ? "ol" : "ul";
-    const cls = listOl
-      ? 'class="list-decimal list-inside space-y-0.5 my-1"'
-      : 'class="list-disc list-inside space-y-0.5 my-1"';
-    const start = listOl && olStart !== 1 ? ` start="${olStart}"` : "";
-    out.push(`<${tag}${start} ${cls}>${listItems.join("")}</${tag}>`);
-    inList = false; listOl = false; listItems = [];
+    while (lists.length > 0) closeList();
+  }
+
+  /* Leading whitespace as columns, a tab counting to the next multiple of 4. */
+  function indentWidth(ws: string): number {
+    let n = 0;
+    for (const c of ws) n = c === "\t" ? n + 4 - (n % 4) : n + 1;
+    return n;
   }
 
   /* Anything that is not a list item or a blank line ends the numbering run:
      two lists with a paragraph between them are two lists, and the second
      starts at 1 again. */
   function resetOl() {
-    olStart = 1;
     olNext = 1;
   }
 
@@ -320,16 +399,20 @@ export function renderMarkdown(text: string): string {
        indent is captured so the block's own lines can be un-indented by the
        same amount — otherwise every line arrives with the item's padding
        baked into the code. */
-    const fenceMatch = line.match(/^(\s*)```(\w*)\s*$/);
-    if (fenceMatch) {
-      if (!inCode) {
-        flushPara(); flushList();
-        inCode = true; codeLang = fenceMatch[2]; codeLines = [];
-        codeIndent = fenceMatch[1].length;
-      } else {
+    if (inCode) {
+      const close = line.match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === fenceChar && close[1].length >= fenceLen) {
         emitCodeBlock(codeLang, codeLines.join("\n"));
         inCode = false; codeLang = ""; codeLines = []; codeIndent = 0;
+        continue;
       }
+    }
+    const fenceMatch = inCode ? null : line.match(/^(\s*)(`{3,}|~{3,})([\w+-]*)\s*$/);
+    if (fenceMatch) {
+      flushPara(); flushList(); flushTable();
+      inCode = true; codeLang = fenceMatch[3]; codeLines = [];
+      codeIndent = fenceMatch[1].length;
+      fenceChar = fenceMatch[2][0]; fenceLen = fenceMatch[2].length;
       continue;
     }
     if (inCode) {
@@ -378,16 +461,16 @@ export function renderMarkdown(text: string): string {
 
     if (line.trim() === "") { flushPara(); flushList(); flushTable(); out.push('<div class="h-2"></div>'); continue; }
 
-    const h = line.match(/^(#{1,3})\s+(.+)$/);
+    const h = line.match(/^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/);
     if (h) {
-      flushPara(); flushList(); resetOl();
+      flushPara(); flushList(); flushTable(); resetOl();
       const lvl = h[1].length;
       const cls = lvl === 1
         ? "text-base font-semibold text-black-900 dark:text-white-100 mt-3 mb-1"
         : lvl === 2
           ? "text-sm font-semibold text-black-900 dark:text-white-100 mt-2 mb-1"
           : "text-sm font-medium text-black-800 dark:text-black-600 mt-2 mb-0.5";
-      out.push(`<p class="${cls}">${inlineMarkdown(h[2])}</p>`);
+      out.push(`<h${lvl} class="${cls}">${inlineMarkdown(h[2])}</h${lvl}>`);
       continue;
     }
 
@@ -419,7 +502,7 @@ export function renderMarkdown(text: string): string {
        each one goes through the normal bullet path below and nests, inline
        formatting, and list flushing all behave identically. */
     if (
-      !inList && !inTable && !line.trim().startsWith("|") &&
+      lists.length === 0 && !inTable && !line.trim().startsWith("|") &&
       / •\s/.test(line) && (line.match(/(?:^|\s)•\s/g) || []).length >= 2
     ) {
       const parts = line.split(/\s*(?:^|\s)•\s+/).filter((p) => p.trim() !== "");
@@ -432,37 +515,54 @@ export function renderMarkdown(text: string): string {
       }
     }
 
+    /* Thematic break: a line of only ---, ***, or ___ (3+, spaces allowed
+       between, so "* * *" too). Render an <hr> instead of leaking the
+       dashes/asterisks into a paragraph or a list item. */
+    if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) {
+      flushPara();
+      flushList();
+      flushTable();
+      resetOl();
+      out.push('<hr class="my-3 border-0 border-t border-white-300 dark:border-navy-600"/>');
+      continue;
+    }
+
     /* "•" counts as a bullet marker alongside the ASCII ones. Agents relaying text
        from Slack (and people pasting from chat) write bullets that way, and
        without this the whole run collapsed into one long paragraph with
        literal dots in it — the least readable possible outcome for exactly
-       the content that needed the structure most. */
-    const ul = line.match(/^[-*+•]\s+(.+)$/);
-    if (ul) {
-      flushPara();
-      /* A bullet run is its own list, so it ends any ordered count — whether
-         or not an <ol> is still open at this point (a blank line will have
-         closed it already). */
-      if (inList && listOl) flushList();
-      resetOl();
-      inList = true; listOl = false;
-      listItems.push(`<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(ul[1])}</li>`);
-      continue;
-    }
+       the content that needed the structure most.
 
-    const ol = line.match(/^(\d+)\.\s+(.+)$/);
-    if (ol) {
-      flushPara();
-      if (inList && !listOl) flushList();
-      if (!inList) {
-        /* Reopening after a break continues the count. A list that opens
-           fresh takes its number from the source, so "5." starts at five. */
-        olStart = olNext > 1 ? olNext : Number(ol[1]) || 1;
-        olNext = olStart;
+       The item's indent decides where it goes: deeper than the open list's
+       marker opens a child list inside the last item, shallower closes
+       lists until one matches. */
+    const li = line.match(/^([ \t]*)([-*+•]|\d{1,9}[.)])\s+(.+)$/);
+    if (li) {
+      flushPara(); flushTable();
+      const indent = indentWidth(li[1]);
+      const ordered = /\d/.test(li[2]);
+      while (lists.length > 0 && indent < lists[lists.length - 1].indent) closeList();
+      let top = lists[lists.length - 1];
+      if (top && indent <= top.indent && top.ordered !== ordered) {
+        /* Same level, other kind: a bullet run after a numbered one (or the
+           reverse) is a new list. */
+        closeList();
+        top = lists[lists.length - 1];
       }
-      inList = true; listOl = true;
-      olNext++;
-      listItems.push(`<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(ol[2])}</li>`);
+      if (!top || indent > top.indent) {
+        let start = ordered ? Number.parseInt(li[2], 10) || 1 : 1;
+        if (lists.length === 0) {
+          /* Reopening a numbered list after a break continues the count; a
+             list that opens fresh takes its number from the source, so "5."
+             starts at five. Any bullet list ends the run. */
+          if (ordered) { start = olNext > 1 ? olNext : start; olNext = start; }
+          else resetOl();
+        }
+        lists.push({ ordered, indent, start, items: [] });
+        top = lists[lists.length - 1];
+      }
+      if (lists.length === 1 && ordered) olNext++;
+      top.items.push({ text: [li[3]], children: "" });
       continue;
     }
 
@@ -484,20 +584,17 @@ export function renderMarkdown(text: string): string {
       continue;
     }
 
-    /* Thematic break: a line of only ---, ***, or ___ (3+). Render an
-       <hr> instead of leaking the dashes/asterisks into a paragraph. */
-    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
-      flushPara();
-      flushList();
-      flushTable();
-      resetOl();
-      out.push('<hr class="my-3 border-0 border-t border-white-300 dark:border-navy-600"/>');
-      continue;
-    }
-
     /* A lone bullet marker (just "*" or "-" with no content) is noise —
        skip it rather than printing a stray asterisk. */
     if (/^\s*[-*+]\s*$/.test(line)) {
+      continue;
+    }
+
+    /* A plain line right under a list item continues that item's text (no
+       blank line between them), as in CommonMark. */
+    if (lists.length > 0 && !inTable) {
+      const top = lists[lists.length - 1];
+      top.items[top.items.length - 1].text.push(line.trim());
       continue;
     }
 
