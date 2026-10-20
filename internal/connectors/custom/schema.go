@@ -122,6 +122,20 @@ type OpRequest struct {
 	Headers      map[string]string `json:"headers,omitempty"`
 	BodyTemplate string            `json:"body_template,omitempty"`
 	ContentType  string            `json:"content_type,omitempty"`
+	// Multipart, when set, sends a multipart/form-data body instead of
+	// BodyTemplate (the two are mutually exclusive). See MultipartSpec.
+	Multipart *MultipartSpec `json:"multipart,omitempty"`
+}
+
+// MultipartSpec describes a multipart/form-data body. Fields maps a form
+// field name to a template rendered as its text value; Files maps a form
+// field name to a template that must render to an absolute path of a
+// local file inside wick's agents dir — the file's bytes are sent under
+// that field with the file's base name. An empty rendered value skips the
+// part, so optional inputs can be left out.
+type MultipartSpec struct {
+	Fields map[string]string `json:"fields,omitempty"`
+	Files  map[string]string `json:"files,omitempty"`
 }
 
 var allowedMethods = map[string]bool{
@@ -136,6 +150,27 @@ func (r OpRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.URLTemplate) == "" {
 		return fmt.Errorf("url_template is required")
+	}
+	if r.Multipart != nil {
+		if r.BodyTemplate != "" {
+			return fmt.Errorf("multipart and body_template are mutually exclusive")
+		}
+		if len(r.Multipart.Fields)+len(r.Multipart.Files) == 0 {
+			return fmt.Errorf("multipart needs at least one field or file")
+		}
+		for name := range r.Multipart.Fields {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("multipart field name is empty")
+			}
+		}
+		for name := range r.Multipart.Files {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("multipart file field name is empty")
+			}
+			if _, dup := r.Multipart.Fields[name]; dup {
+				return fmt.Errorf("multipart name %q is used by both fields and files", name)
+			}
+		}
 	}
 	return nil
 }
