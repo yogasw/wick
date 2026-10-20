@@ -260,8 +260,12 @@ func shapeOneMessage(in any) map[string]any {
 		return map[string]any{}
 	}
 	text := m["text"]
+	// rich_text only replaces a fallback that was clipped to a preview; any
+	// other rich_text message (people, workflow posts) already has exact text.
+	topText, _ := m["text"].(string)
 	_, isBot := m["bot_id"]
-	if bt := blockText(m["blocks"], isBot); bt != "" {
+	clipped := isBot && strings.HasSuffix(strings.TrimSpace(topText), "…")
+	if bt := blockText(m["blocks"], clipped); bt != "" {
 		text = bt
 	}
 	out := map[string]any{
@@ -304,10 +308,11 @@ func shapeOneMessage(in any) map[string]any {
 // blocks with blank lines collapsed, and a markdown reply clips it to a
 // preview, so reading it back makes a paragraphed message look like one
 // run-on block. Slack also stores a posted markdown block as rich_text, so
-// for a bot message rich_text is rendered back to mrkdwn too. A person's
-// rich_text is skipped (their `text` is already exact), as are context
-// blocks (the "Sent using" footer); "" means keep the top-level text.
-func blockText(raw any, isBot bool) string {
+// when the fallback was clipped (useRichText) rich_text is rendered back to
+// mrkdwn too. Otherwise rich_text is skipped (its `text` is already exact),
+// as are context blocks (the "Sent using" footer); "" means keep the
+// top-level text.
+func blockText(raw any, useRichText bool) string {
 	blocks, _ := raw.([]any)
 	var parts []string
 	for _, b := range blocks {
@@ -327,7 +332,7 @@ func blockText(raw any, isBot bool) string {
 				parts = append(parts, s)
 			}
 		case "rich_text":
-			if isBot {
+			if useRichText {
 				if s := richText(bm["elements"]); s != "" {
 					parts = append(parts, s)
 				}

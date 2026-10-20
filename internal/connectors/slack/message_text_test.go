@@ -64,3 +64,16 @@ func TestShapeOneMessage_BotRichTextRenderedInFull(t *testing.T) {
 		t.Fatalf("text = %q\nwant %q", got, want)
 	}
 }
+
+func TestShapeOneMessage_BotRichTextWithExactFallbackKept(t *testing.T) {
+	msg := map[string]any{
+		"bot_id": "B01TESTFLOW",
+		"text":   "Form posted by _acme_\n\nbody",
+		"blocks": []any{map[string]any{"type": "rich_text", "elements": []any{
+			map[string]any{"type": "rich_text_section", "elements": []any{map[string]any{"type": "text", "text": "Form posted by "}}},
+		}}},
+	}
+	if got := shapeOneMessage(msg)["text"]; got != "Form posted by _acme_\n\nbody" {
+		t.Fatalf("text = %q", got)
+	}
+}
