@@ -107,6 +107,11 @@
   const label = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
   /* Reply-mode block: see REPLY_MODE_KEYS. */
+  const MODE_TONE: Record<ReplyMode, string> = {
+    listen: "!border-green-500 !text-green-600 dark:!text-green-400",
+    auto_reply: "!border-blue-500 !text-blue-600 dark:!text-blue-400",
+    manual: "!border-amber-500 !text-amber-600 dark:!text-amber-400",
+  };
   const rules = $derived(replyRules(values.channel_reply_rules));
   const defaultMode = $derived<ReplyMode>(values.reply_mode === "auto_reply" ? "auto_reply" : "listen");
   let ruleQuery = $state("");
@@ -249,7 +254,7 @@
               <td class="py-1.5 pr-2 text-black-900 dark:text-white-100">{r.name}</td>
               <td class="py-1.5">
                 <div class="flex items-center gap-1.5 whitespace-nowrap">
-                  <select class="{input} w-auto" value={r.mode} onchange={(e) => setRule(r.id, { mode: e.currentTarget.value as ReplyMode })} aria-label="Mode for {r.name}">
+                  <select class="{input} !w-auto min-w-[8.5rem] shrink-0 font-medium {MODE_TONE[r.mode]}" value={r.mode} onchange={(e) => setRule(r.id, { mode: e.currentTarget.value as ReplyMode })} aria-label="Mode for {r.name}">
                     {#each ["listen", "auto_reply", "manual"] as m (m)}<option value={m}>{REPLY_MODE_LABEL[m as ReplyMode]}</option>{/each}
                   </select>
                   {@render delayBox("rule-" + r.id, r.delay, r.mode === "auto_reply" ? (values.auto_reply_delay_sec || "3") : (values.listen_delay_sec || listenDefaultHint.replace(/s$/, "")), (v) => setRule(r.id, { delay: v }))}

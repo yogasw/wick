@@ -1585,8 +1585,9 @@
     from { opacity: 0; transform: translate(-50%, calc(-50% + 12px)) scale(0.98); }
   }
   .agent-scrim {
-    background: rgb(10 12 16 / 0.28);
-    backdrop-filter: blur(1.5px);
+    /* No backdrop-filter: blurring the whole chat behind the drawer is
+       recomputed on every scroll inside it, which made scrolling lag. */
+    background: rgb(10 12 16 / 0.36);
     animation: agent-fade 0.2s;
   }
   @keyframes agent-drawer-in {
