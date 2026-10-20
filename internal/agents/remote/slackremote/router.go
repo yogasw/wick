@@ -1,6 +1,7 @@
 package slackremote
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,11 @@ type Router struct {
 	// past keeps each ended turn's tracker until pastTTL, so the remote's
 	// late messages in its thread are still known as its own (Owns).
 	past map[*tracker]time.Time
+	// targets reads the saved remote agents (SetTargets); cached holds
+	// the last read, taken at targetsAt.
+	targets   func() ([]Config, error)
+	cached    []Config
+	targetsAt time.Time
 }
 
 // pastTTL is how long a thread a remote turn ran in stays known after it.
@@ -125,6 +131,54 @@ func (r *Router) Owns(m Message) bool {
 			if t.owns(m) {
 				return true
 			}
+		}
+	}
+	return r.fromTarget(m)
+}
+
+// targetsTTL is how long the saved remote targets are cached.
+var targetsTTL = 30 * time.Second
+
+// SetTargets wires where the saved Slack remote agents are read from. A
+// turn's tracker lives in the process that sent it: across a restart or
+// an upgrade, while two generations share the Slack socket, the other
+// process gets the remote's reply without knowing the turn. The saved
+// targets let it still tell the reply is a remote's, never a new message
+// to an agent here (two bots answering each other's mentions).
+func (r *Router) SetTargets(list func() ([]Config, error)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.targets, r.targetsAt, r.cached = list, time.Time{}, nil
+}
+
+// fromTarget reports whether m is a bot message from a saved Slack remote
+// agent's target, in the place its turns go (its channel, or a DM).
+// Callers hold r.mu.
+func (r *Router) fromTarget(m Message) bool {
+	if r.targets == nil || m.BotID == "" {
+		return false
+	}
+	if time.Since(r.targetsAt) > targetsTTL {
+		list, err := r.targets()
+		if err != nil {
+			log.Debug().Err(err).Msg("slackremote: saved targets read failed")
+		} else {
+			r.cached, r.targetsAt = list, time.Now()
+		}
+	}
+	for _, c := range r.cached {
+		id := c.TargetID()
+		if id == "" || (m.User != id && m.BotID != id) {
+			continue
+		}
+		if c.Target == TargetDM {
+			if strings.HasPrefix(m.Channel, "D") {
+				return true
+			}
+			continue
+		}
+		if m.Channel == c.Channel {
+			return true
 		}
 	}
 	return false

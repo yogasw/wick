@@ -275,3 +275,35 @@ func TestRouterTakesOlderEditedMessage(t *testing.T) {
 		})
 	}
 }
+
+// A process that never ran the turn (another generation during an
+// upgrade, or after a restart) still knows a saved target's reply as the
+// remote's, so it is not dispatched as a mention to an agent here.
+func TestRouterOwnsSavedTargetWithoutTurn(t *testing.T) {
+	r := NewRouter()
+	reply := Message{Channel: "C01TESTCHAN", TS: "20.0", ThreadTS: "10.0", User: "UREMOTE", BotID: "BREMOTE"}
+	if r.Owns(reply) {
+		t.Fatal("no targets wired: not owned")
+	}
+	r.SetTargets(func() ([]Config, error) {
+		return []Config{
+			{Target: TargetChannel, Channel: "C01TESTCHAN", MentionID: "UREMOTE"},
+			{Target: TargetDM, User: "UDMBOT"},
+		}, nil
+	})
+	if !r.Owns(reply) {
+		t.Fatal("saved target's bot reply in its channel must be owned")
+	}
+	for name, m := range map[string]Message{
+		"other channel": {Channel: "C02OTHER", TS: "20.0", ThreadTS: "10.0", User: "UREMOTE", BotID: "BREMOTE"},
+		"other bot":     {Channel: "C01TESTCHAN", TS: "20.0", ThreadTS: "10.0", User: "UOTHER", BotID: "BOTHER"},
+		"a person":      {Channel: "C01TESTCHAN", TS: "20.0", ThreadTS: "10.0", User: "UREMOTE"},
+	} {
+		if r.Owns(m) {
+			t.Fatalf("%s: must not be owned", name)
+		}
+	}
+	if !r.Owns(Message{Channel: "D01TEST", TS: "1.0", User: "UDMBOT", BotID: "BDM"}) {
+		t.Fatal("DM target's bot reply must be owned")
+	}
+}

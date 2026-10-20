@@ -33,6 +33,7 @@ import (
 	wick "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -205,6 +206,7 @@ func SetDB(db *gorm.DB) {
 	globalDB = db
 	if db != nil {
 		globalSchedule = schedule.NewStore(db)
+		slackremote.Shared.SetTargets(slackremote.NewStore(db).List)
 	}
 }
 
