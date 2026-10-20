@@ -274,3 +274,28 @@ export interface WrapperAction {
   commands?: string[];
   message: string;
 }
+
+// One process's Properties dialog — a fresh read made when it is opened,
+// never part of the polled list.
+export interface ProcessProps {
+  pid: number;
+  ppid: number;
+  name: string;
+  state?: string;
+  exe?: string;
+  // The file it was started from has since been replaced: the old process
+  // of an upgrade.
+  exe_deleted?: boolean;
+  cmdline?: string;
+  cwd?: string;
+  os_user?: string;
+  threads?: number;
+  rss_bytes: number;
+  started_at?: string;
+  // Read from the running binary or the script's package.json, never by
+  // executing it. Absent when it cannot be known.
+  version?: string;
+  version_source?: string;
+  // This wick server — the one answering the page.
+  self: boolean;
+}

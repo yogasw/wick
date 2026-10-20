@@ -684,6 +684,7 @@ func Register(r tool.Router) {
 	r.GET("/api/memory/series", memorySeriesHandler)
 	r.GET("/api/processes", processesHandler)
 	r.POST("/api/processes/kill", killProcessHandler)
+	r.GET("/api/processes/props", processPropsHandler)
 	r.POST("/api/memory/apply-suggested", applySuggestedMemoryHandler)
 	r.GET("/api/wrapper/status", wrapperStatusHandler)
 	r.POST("/api/wrapper/install", wrapperInstallHandler)

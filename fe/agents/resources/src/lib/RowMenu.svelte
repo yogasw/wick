@@ -27,10 +27,13 @@
     // option leaves the operator wondering where it went, while a stated
     // reason answers the question before it is asked.
     protectedReason?: string;
+    // Set for a single process: offers its Properties. A group has no one
+    // process to describe, so its menu leaves the entry out.
+    onProps?: () => void;
     onKill: () => void;
   }
 
-  let { cmd = "", label, count = 1, protectedReason = "", onKill }: Props = $props();
+  let { cmd = "", label, count = 1, protectedReason = "", onProps, onKill }: Props = $props();
 
   let open = $state(false);
   let confirming = $state(false);
@@ -117,6 +120,19 @@
     use:portal={anchor}
     class="min-w-44 rounded-lg border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800"
   >
+    {#if onProps}
+      <button
+        type="button"
+        class="block w-full px-3 py-1.5 text-left text-xs text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700"
+        onclick={() => {
+          close();
+          onProps?.();
+        }}
+      >
+        Properties
+      </button>
+    {/if}
+
     {#if cmd}
       <button
         type="button"
