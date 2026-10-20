@@ -259,10 +259,14 @@ func shapeOneMessage(in any) map[string]any {
 	if !ok {
 		return map[string]any{}
 	}
+	text := m["text"]
+	if bt := blockText(m["blocks"]); bt != "" {
+		text = bt
+	}
 	out := map[string]any{
 		"ts":   m["ts"],
 		"user": m["user"],
-		"text": m["text"],
+		"text": text,
 		"type": m["type"],
 	}
 	if v, ok := m["bot_id"]; ok {
@@ -291,6 +295,38 @@ func shapeOneMessage(in any) map[string]any {
 		out["reactions"] = shapedReacts
 	}
 	return out
+}
+
+// blockText returns the text a message actually renders when it was posted
+// as section / markdown / header blocks. The top-level `text` of such a
+// message is only the notification fallback: Slack derives it from the
+// blocks with blank lines collapsed, and a markdown reply clips it to a
+// preview, so reading it back makes a paragraphed message look like one
+// run-on block. Context blocks (the "Sent using" footer) and rich_text
+// (messages typed by people, whose `text` is already exact) are skipped;
+// "" means keep the top-level text.
+func blockText(raw any) string {
+	blocks, _ := raw.([]any)
+	var parts []string
+	for _, b := range blocks {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch bm["type"] {
+		case "section", "header":
+			if t, ok := bm["text"].(map[string]any); ok {
+				if s, _ := t["text"].(string); s != "" {
+					parts = append(parts, s)
+				}
+			}
+		case "markdown":
+			if s, _ := bm["text"].(string); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func shapeUserList(raw any, includeDeleted bool) any {
