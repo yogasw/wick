@@ -221,12 +221,12 @@
 {/snippet}
 
 {#snippet replyModes()}
-  <section class="space-y-3" data-testid="reply-modes">
+  <section class="min-w-0 space-y-3" data-testid="reply-modes">
     <div data-field="reply_mode">
       <p class={legend}>Default mode</p>
-      <div class="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div class="mt-1 flex flex-wrap gap-2">
         {#each [["listen", "Held for the delay, then the agent answers only what is meant for it ([silent] otherwise). For client groups and card threads."], ["auto_reply", "Always answered, like a mention. Waits only to merge a burst of replies into one turn. For debug threads."]] as [m, hint] (m)}
-          <div class="rounded-lg border px-3 py-2 {defaultMode === m ? 'border-green-500 ring-1 ring-green-500' : 'border-white-300 dark:border-navy-600'}" data-testid="mode-card" data-mode={m}>
+          <div class="min-w-0 flex-1 basis-56 rounded-lg border px-3 py-2 {defaultMode === m ? 'border-green-500 ring-1 ring-green-500' : 'border-white-300 dark:border-navy-600'}" data-testid="mode-card" data-mode={m}>
             <label class="flex items-center gap-2 text-xs font-semibold text-black-900 dark:text-white-100">
               <input type="radio" name="reply-mode-{agent.id}" checked={defaultMode === m} onchange={() => save([["reply_mode", m]])} />
               {REPLY_MODE_LABEL[m as ReplyMode]}
@@ -246,27 +246,25 @@
     </div>
     <div data-field="channel_reply_rules">
       <p class={legend}>Channel rules <span class="font-normal {muted}">— over the default mode and delay; an empty delay uses the default</span></p>
-      <table class="mt-1 w-full text-xs" data-testid="reply-rules">
-        <thead><tr><th class="py-1 text-left font-medium {muted}">Channel</th><th class="w-px whitespace-nowrap py-1 text-left font-medium {muted}">Mode</th></tr></thead>
-        <tbody>
-          {#each rules as r (r.id)}
-            <tr class="border-t border-white-300 dark:border-navy-600" data-testid="reply-rule" data-channel={r.id}>
-              <td class="py-1.5 pr-2 text-black-900 dark:text-white-100">{r.name}</td>
-              <td class="py-1.5">
-                <div class="flex items-center gap-1.5 whitespace-nowrap">
-                  <select class="{input} !w-auto min-w-[8.5rem] shrink-0 font-medium {MODE_TONE[r.mode]}" value={r.mode} onchange={(e) => setRule(r.id, { mode: e.currentTarget.value as ReplyMode })} aria-label="Mode for {r.name}">
-                    {#each ["listen", "auto_reply", "manual"] as m (m)}<option value={m}>{REPLY_MODE_LABEL[m as ReplyMode]}</option>{/each}
-                  </select>
-                  {@render delayBox("rule-" + r.id, r.delay, r.mode === "auto_reply" ? (values.auto_reply_delay_sec || "3") : (values.listen_delay_sec || listenDefaultHint.replace(/s$/, "")), (v) => setRule(r.id, { delay: v }))}
-                  <button type="button" class="rounded-md p-1 text-black-700 hover:bg-neg-400/10 hover:text-neg-400 dark:text-black-600" aria-label="Remove rule for {r.name}" title="Remove rule" onclick={() => saveRules(rules.filter((x) => x.id !== r.id))}>
-                    <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5.5 5.5l.8 10.2a1.5 1.5 0 0 0 1.5 1.3h4.4a1.5 1.5 0 0 0 1.5-1.3l.8-10.2M8.5 9v5M11.5 9v5" /></svg>
-                  </button>
-                </div>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+      <!-- A wrapping list, not a table: the name may shrink (truncated, full
+           name in the tooltip) and, when the drawer is too narrow for one
+           line, the controls drop below it instead of widening the drawer. -->
+      <div class="mt-1 min-w-0 text-xs" data-testid="reply-rules">
+        {#each rules as r (r.id)}
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-white-300 py-1.5 dark:border-navy-600" data-testid="reply-rule" data-channel={r.id}>
+            <span class="min-w-0 flex-1 basis-40 truncate text-black-900 dark:text-white-100" title={r.name}>{r.name}</span>
+            <div class="ml-auto flex shrink-0 items-center gap-1.5">
+              <select class="{input} !w-[7.5rem] font-medium {MODE_TONE[r.mode]}" value={r.mode} onchange={(e) => setRule(r.id, { mode: e.currentTarget.value as ReplyMode })} aria-label="Mode for {r.name}">
+                {#each ["listen", "auto_reply", "manual"] as m (m)}<option value={m}>{REPLY_MODE_LABEL[m as ReplyMode]}</option>{/each}
+              </select>
+              {@render delayBox("rule-" + r.id, r.delay, r.mode === "auto_reply" ? (values.auto_reply_delay_sec || "3") : (values.listen_delay_sec || listenDefaultHint.replace(/s$/, "")), (v) => setRule(r.id, { delay: v }))}
+              <button type="button" class="rounded-md p-1 text-black-700 hover:bg-neg-400/10 hover:text-neg-400 dark:text-black-600" aria-label="Remove rule for {r.name}" title="Remove rule" onclick={() => saveRules(rules.filter((x) => x.id !== r.id))}>
+                <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5.5 5.5l.8 10.2a1.5 1.5 0 0 0 1.5 1.3h4.4a1.5 1.5 0 0 0 1.5-1.3l.8-10.2M8.5 9v5M11.5 9v5" /></svg>
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
       <input class="mt-1 {input}" placeholder="+ Add channel… (search)" value={ruleQuery} oninput={(e) => searchRuleChannel(e.currentTarget.value)} data-testid="reply-rule-search" />
       {#if ruleResults.length}
         <ul class="mt-1 rounded-lg border border-white-300 dark:border-navy-600">
