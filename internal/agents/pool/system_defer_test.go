@@ -32,7 +32,7 @@ func TestSystemTurnDoesNotSpawnAlone(t *testing.T) {
 	}
 
 	// 2. User turn — now spawn exactly once, with BOTH context and message.
-	if err := p.Send(context.Background(), "S1", "default", "slack", "user", "bantu cek cpp-japfa"); err != nil {
+	if err := p.Send(context.Background(), "S1", "default", "slack", "user", "bantu cek cpp-client"); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return p.Active() == 0 }, 3*time.Second)
@@ -41,7 +41,7 @@ func TestSystemTurnDoesNotSpawnAlone(t *testing.T) {
 		t.Fatalf("expected exactly 1 spawn, got %d", n)
 	}
 	stdin := sp.procAt(0).recordedStdin()
-	if !contains(stdin, "thread context") || !contains(stdin, "bantu cek cpp-japfa") {
+	if !contains(stdin, "thread context") || !contains(stdin, "bantu cek cpp-client") {
 		t.Fatalf("combined prompt missing context or message: %q", stdin)
 	}
 }

@@ -99,7 +99,7 @@ type Repo struct {
 // be: the enclosing repo reports such a folder as one opaque change and
 // cannot show what is inside it, so unless the nested repo appears here
 // there is nowhere in the UI to see its files at all. A nested repo is
-// named by its path ("erha-store/integration-helm") to keep it apart
+// named by its path ("client-store/integration-helm") to keep it apart
 // from a same-named repo at the top level.
 //
 // Returns an empty slice when root has no repos.

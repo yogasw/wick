@@ -25,7 +25,7 @@ func TestParseReviewers(t *testing.T) {
 }
 
 func TestParseReviewers_RefusesEmailAndBrokenUUID(t *testing.T) {
-	for _, raw := range []string{"taufik@qiscus.com", "{broken"} {
+	for _, raw := range []string{"dev@example.com", "{broken"} {
 		if _, err := parseReviewers(raw); err == nil {
 			t.Fatalf("expected error for %q", raw)
 		}

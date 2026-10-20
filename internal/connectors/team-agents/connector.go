@@ -202,7 +202,7 @@ type foldersInput struct {
 
 type deleteInput struct {
 	Agent      string `wick:"required;desc=The agent's @handle or id."`
-	Confirm    string `wick:"required;desc=The agent's handle again (e.g. @client-dermies), as a confirmation."`
+	Confirm    string `wick:"required;desc=The agent's handle again (e.g. @client-alpha), as a confirmation."`
 	Mode       string `wick:"dropdown=delete|disable;desc=delete (default): the agent is removed for good. disable: it stays, turned off (the owner can turn it on again)."`
 	PurgeChats bool   `wick:"desc=delete only: also delete the agent's project with its chats and files. false (default) keeps them as an ordinary project."`
 }
