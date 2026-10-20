@@ -3589,7 +3589,7 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, resyncSessions: agentsMgr.Registry().ResyncFromDisk, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
 }
 
 type Server struct {
@@ -3608,6 +3608,10 @@ type Server struct {
 	// registry + broadcaster are in scope) and reused by Run to wire
 	// the agentctl refresh_session handler. nil before agents boot.
 	syncSessionMeta func(sessionID string)
+	// resyncSessions takes session meta the draining predecessor wrote
+	// after this process loaded its registry (Registry.ResyncFromDisk).
+	// Run calls it once the intake baton is held. nil before agents boot.
+	resyncSessions func() int
 	// customConn learns the listen port in Run, so SSO JWTs a custom MCP
 	// connector mints for wick's loopback address are recognised.
 	customConn *customconn.Service
@@ -4129,6 +4133,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		}
 		batonCh <- baton
 		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
+		if s.resyncSessions != nil && upg.IsChild() {
+			// The predecessor is gone now; whatever turns it ran since our
+			// boot read only reached disk.
+			go s.resyncSessions()
+		}
 		s.startChannels(ctx)
 		if s.teamHub != nil {
 			// Off the intake path: reading the task store back is disk I/O.

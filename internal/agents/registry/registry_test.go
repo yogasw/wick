@@ -403,3 +403,70 @@ func TestProjectAdoptsFolderCreatedByAnotherProcess(t *testing.T) {
 		t.Fatal("Project() invented a project with no folder on disk")
 	}
 }
+
+// TestResyncTakesNewerMetaFromPredecessor: a session known at boot that the
+// draining predecessor then runs a turn in. The meta write reaches disk
+// only; ordinary reads keep the boot copy, ResyncFromDisk takes the newer.
+func TestResyncTakesNewerMetaFromPredecessor(t *testing.T) {
+	layout := newLayout(t)
+	for _, id := range []string{"S-turned", "S-quiet"} {
+		if _, err := session.Create(context.Background(), layout, session.CreateOptions{ID: id, Origin: session.OriginUI}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := New(layout)
+	if err := r.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	boot := r.Sessions()["S-turned"].Meta.LastActive
+
+	// Stands in for the predecessor answering a teammate's task.
+	sess, err := session.Load(layout, "S-turned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Meta.LastActive = boot.Add(48 * time.Hour)
+	if err := session.SaveMeta(layout, "S-turned", sess.Meta); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.lastDiskScan = time.Time{}
+	r.mu.Unlock()
+	if got := r.Sessions()["S-turned"].Meta.LastActive; !got.Equal(boot) {
+		t.Fatalf("precondition: expected the cache to still hold the boot copy, got %v", got)
+	}
+
+	if n := r.ResyncFromDisk(); n != 1 {
+		t.Fatalf("ResyncFromDisk moved %d sessions, want 1", n)
+	}
+	if got := r.Sessions()["S-turned"].Meta.LastActive; !got.Equal(sess.Meta.LastActive) {
+		t.Fatalf("last_active = %v, want the predecessor's %v", got, sess.Meta.LastActive)
+	}
+	if ids := r.SessionIDs(); len(ids) == 0 || ids[0] != "S-turned" {
+		t.Fatalf("SessionIDs order = %v, want S-turned first", ids)
+	}
+}
+
+// TestResyncNeverRollsBackOwnWrite: a disk copy older than the cache (this
+// process wrote after the read) must not replace it.
+func TestResyncNeverRollsBackOwnWrite(t *testing.T) {
+	layout := newLayout(t)
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{ID: "S-own", Origin: session.OriginUI}); err != nil {
+		t.Fatal(err)
+	}
+	r := New(layout)
+	if err := r.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	cached := r.Sessions()["S-own"]
+	cached.Meta.LastActive = cached.Meta.LastActive.Add(time.Hour)
+	cached.Meta.Label = "newer in memory"
+	r.upsertSession(cached)
+
+	if n := r.ResyncFromDisk(); n != 0 {
+		t.Fatalf("ResyncFromDisk moved %d sessions, want 0", n)
+	}
+	if got := r.Sessions()["S-own"].Meta.Label; got != "newer in memory" {
+		t.Fatalf("label rolled back to %q", got)
+	}
+}
