@@ -27,6 +27,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/remote"
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionlink"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
@@ -1240,6 +1241,14 @@ func (poolTurns) Link(_ context.Context, agent teamlink.Peer, chat, callerSessio
 			return err
 		}
 		_ = globalMgr.RefreshSession(s.ID)
+		if want {
+			// Both sides of a Team pairing know the other (sessionlink):
+			// the asker sees the chat it messaged, not only the reverse.
+			if err := sessionlink.Link(globalLayout, s.ID, callerSession, "team message"); err == nil {
+				_ = globalMgr.RefreshSession(s.ID)
+				_ = globalMgr.RefreshSession(callerSession)
+			}
+		}
 	}
 	return nil
 }

@@ -241,6 +241,20 @@ type Meta struct {
 	// messages from that conversation land here instead of the agent's
 	// main chat. Kept on disk so the pair outlives a restart.
 	LinkedFromSession string `json:"linked_from_session,omitempty"`
+	// Links are the other sessions handling the same matter (the
+	// sessionlink package): each knows the others exist, what they are
+	// doing now, and can read their latest turns. Written to both sides.
+	Links []SessionLink `json:"links,omitempty"`
+}
+
+// SessionLink is one entry of Meta.Links.
+type SessionLink struct {
+	// Session is the linked session's id.
+	Session string `json:"session"`
+	// Why says what ties the two together, for people and agents alike
+	// ("same ticket T-1", "thread opened from this session", "manual: …").
+	Why string    `json:"why,omitempty"`
+	At  time.Time `json:"at"`
 }
 
 // AgentGroup is a group chat's settings (Meta.AgentGroup).

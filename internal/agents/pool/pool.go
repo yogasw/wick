@@ -267,6 +267,10 @@ type PoolConfig struct {
 	// new title broadcasts over SSE — otherwise the sidebar/list would
 	// only catch up on the next page load. Optional; nil = no callback.
 	OnSessionMeta func(sessionID string)
+	// TurnNote, when set, returns a block put in front of the agent-facing
+	// text of a user turn ("" for none): the [linked] line of sessions
+	// working on the same matter right now. Never stored in the history.
+	TurnNote func(sessionID string) string
 	// OnFirstUserMessage fires once per session, right after the first
 	// user message has been persisted and the auto-label derived. Wired
 	// to the ticket auto-create evaluator: its rules can key off the
@@ -1001,7 +1005,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 
 	// The agent is being moved to another provider: the message waits in
 	// the buffer and goes out after the turn it interrupted.
-	if held, err := p.holdForFailover(key, sessionID, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); held {
+	if held, err := p.holdForFailover(key, sessionID, p.withTurnNote(sessionID, role, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))); held {
 		if err != nil {
 			return err
 		}
@@ -1036,7 +1040,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))
+		err := entry.agent.Send(p.withTurnNote(sessionID, role, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)))
 		delivered = err == nil
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
@@ -1103,7 +1107,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// before the subprocess exists, and drain concatenates them into one
 	// prompt. Stamping at drain would label every one of them with whoever
 	// happened to send last.
-	if err := buf.Append(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); err != nil {
+	if err := buf.Append(p.withTurnNote(sessionID, role, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))); err != nil {
 		return err
 	}
 	delivered = true
@@ -3574,4 +3578,17 @@ func dropForeignModelPin(providerRef, modelID string) bool {
 		return !grouped
 	}
 	return true
+}
+
+// withTurnNote puts cfg.TurnNote's block in front of a user turn's
+// agent-facing text. Other roles (context blocks, sub-agent results) go
+// through untouched.
+func (p *Pool) withTurnNote(sessionID, role, text string) string {
+	if role != "user" || p.cfg.TurnNote == nil {
+		return text
+	}
+	if note := p.cfg.TurnNote(sessionID); note != "" {
+		return note + "\n\n" + text
+	}
+	return text
 }

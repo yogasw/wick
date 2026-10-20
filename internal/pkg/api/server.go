@@ -53,6 +53,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionlink"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
@@ -1116,6 +1117,9 @@ func NewServer() *Server {
 			_ = agentsMgr.RefreshSession(sessionID)
 		},
 		OnSessionMeta: syncSessionMeta,
+		// Sessions linked to this one that are working right now, in front
+		// of each user turn (sessionlink).
+		TurnNote: func(sessionID string) string { return sessionlink.Note(agentsLayout, sessionID, time.Now()) },
 		// Ticket auto-join, then auto-create: both can key off the opening
 		// text, which is only knowable here — not when the session was
 		// created. A project with no rules costs one meta read.
@@ -1160,6 +1164,14 @@ func NewServer() *Server {
 			if joined.Joined {
 				log.Info().Str("session", sessionID).Str("ticket", joined.Ticket.ID).
 					Str("rule", joined.Rule).Msg("session auto-joined its thread's ticket")
+				// The ticket's owner session and this one now work the same
+				// matter: link them so each knows the other is there.
+				if owner := strings.TrimSpace(joined.Ticket.Fields[ticket.OwnerSessionField]); owner != "" && owner != sessionID {
+					if lerr := sessionlink.Link(agentsLayout, sessionID, owner, "same ticket "+joined.Ticket.ID); lerr == nil {
+						syncSessionMeta(sessionID)
+						syncSessionMeta(owner)
+					}
+				}
 				return
 			}
 			if len(joined.Ambiguous) > 0 {
@@ -2062,6 +2074,7 @@ func NewServer() *Server {
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
 	agentsFactory.ListenPromptLoader = channelReg.ListenPrompt
+	agentsFactory.LinkedSessionsLoader = func(sessionID string) string { return sessionlink.Prompt(agentsLayout, sessionID) }
 	// team_* tools only in a Team agent's session with a reachable teammate.
 	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
 		h := hub()

@@ -669,6 +669,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 			},
 		},
 		SlackListenDescriptor(),
+		SessionLinkDescriptor(),
 		{
 			Name: "wick_set_title",
 			Description: "Set the session's title (the label shown in the sidebar). " +

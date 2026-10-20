@@ -122,6 +122,10 @@ type ClaudeFactory struct {
 	// name the chat paired with sessionID at each Team teammate, "" for
 	// none (nothing is appended).
 	LinkedChatsLoader func(sessionID string) string
+	// LinkedSessionsLoader (optional) returns the "Linked sessions"
+	// section: the sessions linked to this one when its process starts
+	// (sessionlink), "" for none. Live state rides on each turn instead.
+	LinkedSessionsLoader func(sessionID string) string
 
 	// ListenPromptLoader (optional) returns the channel's listen-mode
 	// section for sessionID (Slack: the listen rules and LISTEN.md), ""
@@ -1079,6 +1083,9 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 
 	if f.ListenPromptLoader != nil && !opt.IsSubAgent {
 		add(f.ListenPromptLoader(opt.SessionID))
+	}
+	if f.LinkedSessionsLoader != nil && !opt.IsSubAgent {
+		add(f.LinkedSessionsLoader(opt.SessionID))
 	}
 
 	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
