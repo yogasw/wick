@@ -899,7 +899,7 @@
                   <button type="button" data-testid="listen-note-chip" title={preamble.listen} aria-expanded={preambleOpen === "listen"}
                     onclick={() => (preambleOpen = preambleOpen === "listen" ? "" : "listen")}
                     class="inline-flex items-center gap-1 rounded-full border border-teal-500/60 bg-teal-100 px-2 py-0.5 text-[11px] text-teal-600 dark:bg-teal-800/30 dark:text-teal-500"
-                  >👂 listen{preamble.listenLabel ? " · " + preamble.listenLabel : ""}</button>
+                  >{preamble.listenMode === "auto" ? "⚡ auto-reply" : "👂 listen"}{preamble.listenLabel ? " · " + preamble.listenLabel : ""}</button>
                 {/if}
                 {#if preamble.catchUp}
                   <button type="button" data-testid="catchup-chip" aria-expanded={preambleOpen === "catchup"}

@@ -87,6 +87,17 @@ registerSystemEvent("scheduled_fired", { icon: "clock", hidden: true });
 registerSystemEvent("routine_fired", { icon: "clock", hidden: true });
 registerSystemEvent("connection_changed", { icon: "plug" });
 registerSystemEvent("a2a_context", { icon: "link" });
+// A Slack reply listen mode / auto-reply is holding, then where it went.
+// One row per hold (folded on hold_id); the server writes the text.
+registerSystemEvent("listen_held", {
+  icon: "clock",
+  parts: (turn) => {
+    const e = turn.extras ?? {};
+    const mark = e.mode === "auto_reply" ? "⚡" : "👂";
+    const state = e.state === "held" ? "⏳ " : e.state === "sent" ? "✓ " : "";
+    return [`${mark} ${state}${turn.text}`];
+  },
+});
 registerSystemEvent("mention_handoff", {
   icon: "arrow",
   // Who handed what to whom and how it ended. The target is a handle so the
@@ -106,6 +117,7 @@ const FOLD_KEY: Record<string, string> = {
   input_request: "ask_id",
   approval_request: "approval_id",
   remote_queue: "queue_id",
+  listen_held: "hold_id",
 };
 
 /** foldSystemEvents folds the system turns that share a fold key into one

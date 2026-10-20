@@ -30,3 +30,15 @@ describe("splitWickPreamble", () => {
     expect(p.body).toBe("<@U1> cek ini");
   });
 });
+
+describe("splitWickPreamble auto-reply", () => {
+  test("an auto-reply note becomes the chip, marked auto", () => {
+    const p = splitWickPreamble("[auto-reply · held 3s] Not a mention, but this thread auto-replies: answer it as you would a mention, never [silent].\n\ncek lagi dong");
+    expect(p.listenMode).toBe("auto");
+    expect(p.listenLabel).toBe("held 3s");
+    expect(p.body).toBe("cek lagi dong");
+  });
+  test("a listen note stays listen", () => {
+    expect(splitWickPreamble("[listen mode · held 15s] Not a mention.\n\nhalo").listenMode).toBe("listen");
+  });
+});

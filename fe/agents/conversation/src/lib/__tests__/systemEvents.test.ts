@@ -77,3 +77,19 @@ describe("foldSystemEvents", () => {
     expect(foldSystemEvents(turns)).toEqual(turns);
   });
 });
+
+describe("listen_held", () => {
+  const t = (state: string, text: string, turn_id: string) =>
+    ({ role: "system", kind: "listen_held", turn_id, text, extras: { hold_id: "S/1", state, mode: "listen" } });
+  test("one hold folds into one row carrying its latest state", () => {
+    const rows = foldSystemEvents([t("held", "Listen · holding a reply for 15s", "1"), t("sent", "Listen · passed to the agent after 15s", "2")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].extras?.state).toBe("sent");
+    expect(systemEventParts(rows[0])[0]).toBe("👂 ✓ Listen · passed to the agent after 15s");
+  });
+  test("a held row shows it is waiting, an auto-reply one its own mark", () => {
+    expect(systemEventParts(t("held", "x", "1"))[0]).toBe("👂 ⏳ x");
+    expect(systemEventParts({ ...t("held", "y", "1"), extras: { hold_id: "S/1", state: "held", mode: "auto_reply" } })[0]).toBe("⚡ ⏳ y");
+    expect(isHiddenSystemEvent("listen_held")).toBe(false);
+  });
+});

@@ -53,7 +53,16 @@ type SlackChannelConfig struct {
 	ReactionChannels       string `wick:"picker=slack.channels;hidden;key=reaction_channels;visible_when=reaction_channels_mode:whitelist;group=Reaction Auto-Reply;desc=Channels where the 🤖 switch is active. Independent of the access whitelist."`
 	// ListenManualChannels: client-facing channels where listening is only
 	// ever switched on by a person, thread by thread.
-	ListenManualChannels string `wick:"picker=slack.channels;hidden;key=listen_manual_channels;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Channels where a new thread does NOT start listening on its own and an agent's channel/all listen scope never applies: someone has to put 🤖 on the thread or ask the agent to listen. Use it for client-facing channels."`
+	ListenManualChannels string `wick:"picker=slack.channels;hidden;key=listen_manual_channels;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Channels where a new thread does NOT start listening on its own and an agent's channel/all listen scope never applies: someone has to put 🤖 on the thread or ask the agent to listen. Use it for client-facing channels. A channel rule with mode manual does the same."`
+	// ReplyMode is what a 🤖 thread does with a reply that does not mention
+	// the agent. Empty (every row saved before the field existed) = listen.
+	ReplyMode string `wick:"dropdown=listen|auto_reply;default=listen;hidden;key=reply_mode;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=What a 🤖 thread does with a reply that does not mention the agent. listen = held for the listen delay, then the agent answers only what is meant for it. auto_reply = held only for the merge delay, then always answered, like a mention. A channel rule below wins over it."`
+	// ListenDelaySec: empty = the wick LISTEN.md decides.
+	ListenDelaySec    string `wick:"hidden;key=listen_delay_sec;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Default listen delay in seconds. Empty = the delay in the wick LISTEN.md. An agent's LISTEN.md, a channel rule and a thread's own listen request win over it."`
+	AutoReplyDelaySec string `wick:"hidden;key=auto_reply_delay_sec;default=3;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Auto-reply merge delay in seconds: replies posted within it reach the agent as one turn, each new one restarting it, never longer than 30 seconds in all. 0 = at once."`
+	// ChannelReplyRules: a JSON list of {id, name, mode, delay}, mode one of
+	// listen | auto_reply | manual, delay in seconds ("" = the default).
+	ChannelReplyRules string `wick:"kvlist=id|name|mode|delay;hidden;key=channel_reply_rules;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Per-channel mode and delay over the defaults above. mode is listen, auto_reply or manual (a new thread never starts on its own, like Listen manual channels). delay is in seconds, empty = the default for that mode."`
 
 	GateApprovers      string `wick:"dropdown=trigger_users|admins|custom;default=trigger_users;hidden;key=gate_approvers;group=Approval Gates|Who may resolve interactive approval gate buttons. trigger_users = anyone who passed the access checks.;desc=Who may resolve approval gates."`
 	GateApproverUsers  string `wick:"picker=slack.users;hidden;key=gate_approver_users;visible_when=gate_approvers:custom;group=Approval Gates;desc=Custom approver users."`

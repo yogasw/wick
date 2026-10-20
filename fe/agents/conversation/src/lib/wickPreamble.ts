@@ -12,6 +12,8 @@ export type WickPreamble = {
   listen: string;
   /** "held 15s · someone else replied meanwhile", for the chip. */
   listenLabel: string;
+  /** Which marker opened the note: listen mode, or an auto-reply thread. */
+  listenMode: "listen" | "auto";
   /** The catch-up block without its header, "" for none. */
   catchUp: string;
   /** How many thread messages the catch-up block carries. */
@@ -21,9 +23,11 @@ export type WickPreamble = {
 };
 
 export function splitWickPreamble(text: string): WickPreamble {
-  const out: WickPreamble = { listen: "", listenLabel: "", catchUp: "", catchUpCount: 0, body: text };
+  const out: WickPreamble = { listen: "", listenLabel: "", listenMode: "listen", catchUp: "", catchUpCount: 0, body: text };
   let rest = text;
-  if (rest.startsWith("[listen mode")) {
+  const auto = rest.startsWith("[auto-reply");
+  if (rest.startsWith("[listen mode") || auto) {
+    out.listenMode = auto ? "auto" : "listen";
     const hdr = rest.indexOf(CATCHUP_HEADER);
     if (hdr > 0) {
       out.listen = rest.slice(0, hdr).trimEnd();
@@ -39,7 +43,7 @@ export function splitWickPreamble(text: string): WickPreamble {
       out.listen = at > 0 ? rest.slice(0, at) : rest;
       rest = at > 0 ? rest.slice(at + 2) : "";
     }
-    const m = /^\[listen mode([^\]]*)\]/.exec(out.listen);
+    const m = /^\[(?:listen mode|auto-reply)([^\]]*)\]/.exec(out.listen);
     const held = /held it (\S+?) before/.exec(out.listen);
     out.listenLabel = m && m[1].trim()
       ? m[1].replace(/^\s*·\s*/, "").trim()

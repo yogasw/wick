@@ -2252,6 +2252,11 @@ func NewServer() *Server {
 			// web UI's "Sent to Slack" status on the bubble.
 			slackCh.SetDeliveryFn(agentstool.RecordChannelDelivery)
 
+			// Show a reply listen mode is holding the moment it arrives.
+			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
+				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
+			})
+
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)

@@ -379,6 +379,8 @@ type Channel struct {
 	listenPromptSeen map[string]string
 	// listenDispatchHook replaces the turn a held reply starts (tests).
 	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
+	// heldFn records where a held reply stands for the web UI (SetHeldFn).
+	heldFn HeldFn
 
 	// userTokenCache maps Slack user ID → resolved xoxp token.
 	// Avoids repeated connectorToken lookups on every send call.
@@ -1879,7 +1881,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 					files = ev.Message.Files
 				}
 				if isStopCommand(ev.Text) {
-					s.dispatchListen(sid, ev, files, listenSettings{}, 0, false)
+					s.dispatchListen(sid, ev, files, listenSettings{}, 0, false, false)
 				} else {
 					s.queueListenMessage(ctx, sid, ev, files)
 				}
