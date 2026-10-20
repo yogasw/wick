@@ -3096,7 +3096,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	// options line still streaming in is held back until it closes.
 	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw))))
 
-	if body == "" || body == lastSent {
+	if body == "" || body == lastSent || reactPending(body) {
 		return
 	}
 	// While streaming, only the first chunk is shown in the live message;
@@ -3274,6 +3274,10 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
+	if name, ok := reactOnlyReply(text); ok {
+		s.reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name)
+		return
+	}
 	// Source tags become plain "(from Name)"; the raw tag never reaches
 	// the thread.
 	text = s.rewriteSources(sessionKey, text)

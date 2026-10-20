@@ -38,13 +38,15 @@ import (
 
 // defaultListenDoc is used when the agents root has no LISTEN.md.
 const defaultListenDoc = `---
-delay: 60s
+delay: 15s
 scope: thread
 on_team_reply: review
 ---
 Answer only when the message is a question or request that is really meant for you and fits your role.
-Stay out ([silent]) when: a person or another bot already answered it fully, the client is talking to someone on our team, it is a thank-you, internal chatter, or you are unsure.
+Stay out ([silent]) when: a person or another bot already answered it fully, the client is talking to someone on our team, it is internal chatter, or you are unsure.
+A thank-you, "ok" or similar acknowledgement meant for you: react with an emoji ([react :pray:], [react :+1:]…), no text.
 When another answer falls short, add ONLY the missing part; do not repeat it.
+Write like a teammate in chat: short, warm and natural, no stiff or formal phrasing, no headers for a one-line answer.
 Never answer a client in an inquiry/main thread except through your agent's checkpoint flow.`
 
 const (
@@ -512,7 +514,7 @@ func listenNote(lt listenTurn) string {
 	if lt.othersReplied {
 		b.WriteString(" Someone else (a person or another bot) replied meanwhile: read that first and answer only what is still missing.")
 	}
-	b.WriteString(" Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. A reply that is just \"stop\" is handled by wick.")
+	b.WriteString(" Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just \"stop\" is handled by wick.")
 	if lt.st.Instructions != "" {
 		b.WriteString("\nListen instructions (LISTEN.md):\n")
 		b.WriteString(lt.st.Instructions)

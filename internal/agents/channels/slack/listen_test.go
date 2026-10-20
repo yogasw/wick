@@ -79,7 +79,7 @@ func TestParseListenDoc(t *testing.T) {
 // comes last.
 func TestResolveListenLayers(t *testing.T) {
 	st := resolveListen("", "", agentchannels.ListenThread{})
-	if st.Delay != 60*time.Second || st.Scope != "thread" || st.OnTeamReply != "review" || !strings.Contains(st.Instructions, "[silent]") {
+	if st.Delay != 15*time.Second || st.Scope != "thread" || st.OnTeamReply != "review" || !strings.Contains(st.Instructions, "[silent]") {
 		t.Fatalf("built-in default = %+v", st)
 	}
 	st = resolveListen("", "---\ndelay: 120s\non_team_reply: skip\n---\nYelan reviews Franky.", agentchannels.ListenThread{})
