@@ -2232,9 +2232,9 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		reply = r
-		// Nor may anyone but its owner leave files in an ordinary ticket
-		// session: refused before they touch the disk.
-		if c.R.MultipartForm != nil && len(c.R.MultipartForm.File) > 0 && ticketSessionRefusesFiles(c, id) {
+		// Nor may files go with a message an ordinary ticket session hands
+		// to the sender's own agent: refused before they touch the disk.
+		if c.R.MultipartForm != nil && len(c.R.MultipartForm.File) > 0 && ticketSessionRefusesFiles(c, id, req.Text) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": errTicketSessionFiles})
 			return
 		}
@@ -2732,8 +2732,8 @@ func killAgent(c *tool.Ctx) {
 	// A ticket room never runs a provider: the caller's own members run in
 	// their backing sessions, so stopping the room stops those — and only
 	// those, never another member's.
-	// An ordinary ticket session is the same for anyone but its owner:
-	// their Stop never reaches the owner's own run.
+	// An ordinary ticket session stops the caller's backing runs too, and
+	// its own run for anyone who may talk to it.
 	if sess.Meta.TicketRoom != nil || isTicketSession(sess) {
 		// Runs of the caller's still waiting behind the room's lock have
 		// no backing turn yet to stop: cancel them first.
