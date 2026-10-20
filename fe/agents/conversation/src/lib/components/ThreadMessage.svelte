@@ -41,6 +41,7 @@
   import { teammatesHiddenNote, TEAMMATES_HIDDEN_TIP } from "../teammatesBusy.js";
   import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
   import { renderWithSourceTags } from "../sourceTags.js";
+  import { splitWickPreamble } from "../wickPreamble.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -207,6 +208,12 @@
     return { text: body(raw.slice(0, at)), note: raw.slice(at + 2) };
   });
   const routedHandles = $derived(routed.note.match(/@[a-z0-9-]+/g) ?? []);
+  /* A Slack reply's [listen mode] note and thread catch-up block are for
+     the agent: the bubble keeps the person's words, the rest folds into
+     chips above it. */
+  const preamble = $derived(isUser && !teamFrom ? splitWickPreamble(routed.text) : null);
+  const bubbleText = $derived(preamble ? preamble.body : routed.text);
+  let preambleOpen = $state<"" | "listen" | "catchup">("");
 
   /* Whether this user turn came from somebody other than the person reading.
      A session can be written into by several people — a colleague on the same
@@ -885,6 +892,27 @@
               <span class="max-w-full truncate">{replyPreview(q.excerpt)}</span>
             </button>
           {/if}
+          {#if preamble && (preamble.listen || preamble.catchUp)}
+            <div class="flex max-w-full flex-col items-end gap-1" data-testid="wick-preamble">
+              <div class="flex flex-wrap justify-end gap-1">
+                {#if preamble.listen}
+                  <button type="button" data-testid="listen-note-chip" title={preamble.listen} aria-expanded={preambleOpen === "listen"}
+                    onclick={() => (preambleOpen = preambleOpen === "listen" ? "" : "listen")}
+                    class="inline-flex items-center gap-1 rounded-full border border-teal-500/60 bg-teal-100 px-2 py-0.5 text-[11px] text-teal-600 dark:bg-teal-800/30 dark:text-teal-500"
+                  >👂 listen{preamble.listenLabel ? " · " + preamble.listenLabel : ""}</button>
+                {/if}
+                {#if preamble.catchUp}
+                  <button type="button" data-testid="catchup-chip" aria-expanded={preambleOpen === "catchup"}
+                    onclick={() => (preambleOpen = preambleOpen === "catchup" ? "" : "catchup")}
+                    class="inline-flex items-center gap-1 rounded-full border border-white-400 bg-white-200 px-2 py-0.5 text-[11px] text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600"
+                  >🧵 {preamble.catchUpCount || ""} {preamble.catchUpCount === 1 ? "message" : "messages"} in the thread</button>
+                {/if}
+              </div>
+              {#if preambleOpen}
+                <div data-testid="wick-preamble-detail" class="max-h-60 max-w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-left text-xs text-black-800 [overflow-wrap:anywhere] dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{preambleOpen === "listen" ? preamble.listen : preamble.catchUp}</div>
+              {/if}
+            </div>
+          {/if}
           {#if command}
             <!-- A command, not a line of chat: monospace on a quiet surface
                  with a prompt caret, so it reads as something that was RUN.
@@ -900,7 +928,7 @@
               </svg>
               /{command}
             </span>
-          {:else}
+          {:else if bubbleText}
           <!-- Green is "you". Someone else writing into this session gets a
                neutral surface instead, so the two are distinguishable at a
                glance rather than only by reading the name above them. -->
@@ -911,7 +939,7 @@
                 ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
                 : "bg-green-500 text-white-100")}
           >
-            {@html linkifyText(routed.text)}
+            {@html linkifyText(bubbleText)}
           </div>
           {/if}
         </div>

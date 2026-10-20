@@ -483,6 +483,12 @@ type listenTurn struct {
 	st            listenSettings
 	waited        time.Duration
 	othersReplied bool
+	// threadPrompt is this thread's own "listen" instructions.
+	threadPrompt string
+	// docsChanged: LISTEN.md differs from what the process was spawned
+	// with, so docInstructions go along in the note.
+	docsChanged     bool
+	docInstructions string
 }
 
 type listenTurnKey struct{}
@@ -500,24 +506,83 @@ func (s *Channel) dispatchListen(sessionID string, ev *slackevents.MessageEvent,
 	}
 	log.Info().Str("channel", "slack").Str("session", sessionID).Dur("waited", waited).
 		Bool("others_replied", others).Msg("listen: passing the reply to the agent")
-	ctx := context.WithValue(context.Background(), listenTurnKey{}, listenTurn{st: st, waited: waited, othersReplied: others})
+	lt := listenTurn{st: st, waited: waited, othersReplied: others}
+	if ls, ok := s.listenStore(); ok {
+		lt.threadPrompt = ls.ListenThread(sessionID).Prompt
+		wickDoc, agentDoc := ls.ListenDocs(sessionID)
+		lt.docInstructions = resolveListen(wickDoc, agentDoc, agentchannels.ListenThread{}).Instructions
+		lt.docsChanged = s.listenDocsChanged(sessionID, lt.docInstructions)
+	}
+	ctx := context.WithValue(context.Background(), listenTurnKey{}, lt)
 	s.handleMessage(ctx, ev, files)
 }
 
-// listenNote is the [listen mode] header a listening turn opens with.
+// listenRules is what every listening agent is told once, in its system
+// prompt (ListenPrompt); a listening turn itself only carries listenNote.
+const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message without the marker (a mention, a DM) is answered as usual.`
+
+// ListenPrompt is the "Slack listen mode" section of sessionID's system
+// prompt: the rules and its LISTEN.md instructions. The instructions are
+// remembered so a turn after a LISTEN.md edit carries the new ones itself.
+func (s *Channel) ListenPrompt(sessionID string) string {
+	ls, ok := s.listenStore()
+	if !ok {
+		return ""
+	}
+	wickDoc, agentDoc := ls.ListenDocs(sessionID)
+	instr := resolveListen(wickDoc, agentDoc, agentchannels.ListenThread{}).Instructions
+	s.listenPromptMu.Lock()
+	if s.listenPromptSeen == nil {
+		s.listenPromptSeen = map[string]string{}
+	}
+	s.listenPromptSeen[sessionID] = instr
+	s.listenPromptMu.Unlock()
+	var b strings.Builder
+	b.WriteString("## Slack listen mode\n\n")
+	b.WriteString(listenRules)
+	if instr != "" {
+		b.WriteString("\n\nListen instructions (LISTEN.md):\n")
+		b.WriteString(instr)
+	}
+	return b.String()
+}
+
+// listenDocsChanged reports whether sessionID's LISTEN.md instructions
+// differ from the ones its running process got in its system prompt, and
+// records the current ones as delivered.
+func (s *Channel) listenDocsChanged(sessionID, instr string) bool {
+	s.listenPromptMu.Lock()
+	defer s.listenPromptMu.Unlock()
+	if s.listenPromptSeen == nil {
+		s.listenPromptSeen = map[string]string{}
+	}
+	prev, known := s.listenPromptSeen[sessionID]
+	s.listenPromptSeen[sessionID] = instr
+	// Unknown: no process yet, so the spawn this turn starts reads the
+	// current file in its system prompt.
+	return known && prev != instr
+}
+
+// listenNote is the one-line [listen mode] marker a listening turn opens
+// with; the rules sit in the system prompt. The thread's own instructions
+// ride along, and so do the LISTEN.md ones when they changed since spawn.
 func listenNote(lt listenTurn) string {
 	var b strings.Builder
-	b.WriteString("[listen mode] This reply in a thread you listen to did not mention you.")
+	b.WriteString("[listen mode")
 	if lt.waited > 0 {
-		fmt.Fprintf(&b, " wick held it %s before passing it on; the thread block below also shows what was said after it.", lt.waited.Round(time.Second))
+		fmt.Fprintf(&b, " · held %s", lt.waited.Round(time.Second))
 	}
 	if lt.othersReplied {
-		b.WriteString(" Someone else (a person or another bot) replied meanwhile: read that first and answer only what is still missing.")
+		b.WriteString(" · someone else replied meanwhile")
 	}
-	b.WriteString(" Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just \"stop\" is handled by wick.")
-	if lt.st.Instructions != "" {
-		b.WriteString("\nListen instructions (LISTEN.md):\n")
-		b.WriteString(lt.st.Instructions)
+	b.WriteString("] Not a mention: answer only if it is meant for you, else [silent]; a thank-you gets [react :pray:].")
+	if lt.threadPrompt != "" {
+		b.WriteString("\nFor this thread: ")
+		b.WriteString(lt.threadPrompt)
+	}
+	if lt.docsChanged && lt.docInstructions != "" {
+		b.WriteString("\nLISTEN.md changed, these replace the ones in your system prompt:\n")
+		b.WriteString(lt.docInstructions)
 	}
 	return b.String()
 }

@@ -123,6 +123,11 @@ type ClaudeFactory struct {
 	// none (nothing is appended).
 	LinkedChatsLoader func(sessionID string) string
 
+	// ListenPromptLoader (optional) returns the channel's listen-mode
+	// section for sessionID (Slack: the listen rules and LISTEN.md), ""
+	// for none.
+	ListenPromptLoader func(sessionID string) string
+
 	// TeamPromptLoader (optional) returns the Team part of the prompt for
 	// sessionID: the Team overlay plus "Who you are" for a Team agent's
 	// own session, one line for a sub-agent working under one, "" for an
@@ -1071,6 +1076,10 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		}
 	}
 	addRaw(identity)
+
+	if f.ListenPromptLoader != nil && !opt.IsSubAgent {
+		add(f.ListenPromptLoader(opt.SessionID))
+	}
 
 	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
 	// A ticket accumulates notes for as long as the work lasts, so

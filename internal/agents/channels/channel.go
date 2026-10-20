@@ -284,6 +284,9 @@ type ListenResult struct {
 type ThreadListener interface {
 	OwnsSession(sessionID string) bool
 	ThreadListen(sessionID string, req ListenRequest) (ListenResult, error)
+	// ListenPrompt is the system-prompt section a spawn of sessionID gets:
+	// the listen rules and the agent's LISTEN.md, "" when it has none.
+	ListenPrompt(sessionID string) string
 }
 
 // ThreadBinding is the chat location a session's replies belong to.

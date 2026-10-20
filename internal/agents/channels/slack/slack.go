@@ -373,6 +373,10 @@ type Channel struct {
 	// listenWaits holds, per session key, the reply a listening thread is
 	// waiting out its delay on (listen.go). Lazily created; guarded by mu.
 	listenWaits map[string]*listenWait
+	// listenPromptSeen: per session key, the LISTEN.md instructions its
+	// process got in its system prompt (ListenPrompt).
+	listenPromptMu   sync.Mutex
+	listenPromptSeen map[string]string
 	// listenDispatchHook replaces the turn a held reply starts (tests).
 	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
 

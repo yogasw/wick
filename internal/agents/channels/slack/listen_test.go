@@ -213,14 +213,39 @@ func TestCatchUpEntriesUntil(t *testing.T) {
 }
 
 func TestListenNote(t *testing.T) {
-	n := listenNote(listenTurn{st: listenSettings{Instructions: "Only WABA."}, waited: 61 * time.Second, othersReplied: true})
-	for _, want := range []string{"[listen mode]", "held it 1m1s", "Someone else", "[silent]", "Only WABA."} {
-		if !strings.Contains(n, want) {
-			t.Errorf("note lacks %q: %s", want, n)
+	n := listenNote(listenTurn{waited: 61 * time.Second, othersReplied: true, threadPrompt: "only WABA"})
+	if !strings.HasPrefix(n, "[listen mode · held 1m1s · someone else replied meanwhile]") || !strings.Contains(n, "For this thread: only WABA") {
+		t.Fatalf("note = %s", n)
+	}
+	if strings.Contains(n, "LISTEN.md") {
+		t.Fatalf("unchanged docs must stay in the system prompt: %s", n)
+	}
+	n = listenNote(listenTurn{docsChanged: true, docInstructions: "New rule."})
+	if !strings.HasSuffix(n, "New rule.") {
+		t.Fatalf("changed docs must ride along: %s", n)
+	}
+}
+
+// The system prompt carries the rules and LISTEN.md; an edit afterwards
+// is noticed once.
+func TestListenPromptAndDocChange(t *testing.T) {
+	ch, fake, _ := listenChannel(t, "Franky rules.")
+	p := ch.ListenPrompt("S")
+	for _, want := range []string{"## Slack listen mode", "[react :pray:]", "Franky rules."} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt lacks %q: %s", want, p)
 		}
 	}
-	if !strings.HasPrefix(n, "[listen mode]") {
-		t.Fatalf("note must open with the marker the [silent] rule names: %s", n)
+	instr := resolveListen("", "Franky rules.", agentchannels.ListenThread{}).Instructions
+	if ch.listenDocsChanged("S", instr) {
+		t.Fatal("unchanged docs reported as changed")
+	}
+	fake.agentDoc = "Franky rules v2."
+	if !ch.listenDocsChanged("S", resolveListen("", fake.agentDoc, agentchannels.ListenThread{}).Instructions) {
+		t.Fatal("edited docs not noticed")
+	}
+	if ch.listenDocsChanged("NEW", instr) {
+		t.Fatal("a session with no process yet gets the docs from its spawn")
 	}
 }
 

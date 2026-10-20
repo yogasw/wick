@@ -166,7 +166,7 @@
       {#if l.agent_path}<code class="break-all">{l.agent_path}</code>{l.agent_exists ? "" : " (not created yet: the wick default applies alone)"}{:else}no project folder{/if}
     </p>
     <p class={muted}>Wick default: {#if l.wick_exists}<code class="break-all">{l.wick_path}</code>{:else}built-in (put a LISTEN.md at <code class="break-all">{l.wick_path}</code> to replace it){/if}</p>
-    <p class={muted}>Frontmatter keys: delay, scope (thread | channel | all), on_team_reply (review | skip), replace_default; the text below them is the instructions. Read again on every message, so an edit applies at once.</p>
+    <p class={muted}>Frontmatter keys: delay, scope (thread | channel | all), on_team_reply (review | skip), replace_default; the text below them is the instructions. It goes into the agent's system prompt when its process starts; an edit made while it runs rides along with its next listen message.</p>
     <details>
       <summary class="cursor-pointer {muted}">Instructions in effect</summary>
       <p class="mt-1 whitespace-pre-line {muted}" data-testid="listen-info-instructions">{l.instructions}</p>
