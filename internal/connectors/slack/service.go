@@ -260,7 +260,8 @@ func shapeOneMessage(in any) map[string]any {
 		return map[string]any{}
 	}
 	text := m["text"]
-	if bt := blockText(m["blocks"]); bt != "" {
+	_, isBot := m["bot_id"]
+	if bt := blockText(m["blocks"], isBot); bt != "" {
 		text = bt
 	}
 	out := map[string]any{
@@ -302,10 +303,11 @@ func shapeOneMessage(in any) map[string]any {
 // message is only the notification fallback: Slack derives it from the
 // blocks with blank lines collapsed, and a markdown reply clips it to a
 // preview, so reading it back makes a paragraphed message look like one
-// run-on block. Context blocks (the "Sent using" footer) and rich_text
-// (messages typed by people, whose `text` is already exact) are skipped;
-// "" means keep the top-level text.
-func blockText(raw any) string {
+// run-on block. Slack also stores a posted markdown block as rich_text, so
+// for a bot message rich_text is rendered back to mrkdwn too. A person's
+// rich_text is skipped (their `text` is already exact), as are context
+// blocks (the "Sent using" footer); "" means keep the top-level text.
+func blockText(raw any, isBot bool) string {
 	blocks, _ := raw.([]any)
 	var parts []string
 	for _, b := range blocks {
@@ -324,9 +326,108 @@ func blockText(raw any) string {
 			if s, _ := bm["text"].(string); s != "" {
 				parts = append(parts, s)
 			}
+		case "rich_text":
+			if isBot {
+				if s := richText(bm["elements"]); s != "" {
+					parts = append(parts, s)
+				}
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// richText renders the elements of a rich_text block back to mrkdwn:
+// sections, bullet/ordered lists, code blocks and quotes.
+func richText(raw any) string {
+	elems, _ := raw.([]any)
+	var b strings.Builder
+	for _, e := range elems {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch em["type"] {
+		case "rich_text_section":
+			b.WriteString(richInline(em["elements"]))
+		case "rich_text_preformatted":
+			ensureNewline(&b)
+			b.WriteString("```\n" + richInline(em["elements"]) + "\n```\n")
+		case "rich_text_quote":
+			ensureNewline(&b)
+			for _, line := range strings.Split(richInline(em["elements"]), "\n") {
+				b.WriteString("> " + line + "\n")
+			}
+		case "rich_text_list":
+			ensureNewline(&b)
+			indent, _ := em["indent"].(float64)
+			pad := strings.Repeat("  ", int(indent))
+			items, _ := em["elements"].([]any)
+			for i, it := range items {
+				im, _ := it.(map[string]any)
+				marker := "•"
+				if em["style"] == "ordered" {
+					marker = fmt.Sprintf("%d.", i+1)
+				}
+				b.WriteString(pad + marker + " " + richInline(im["elements"]) + "\n")
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func ensureNewline(b *strings.Builder) {
+	if s := b.String(); s != "" && !strings.HasSuffix(s, "\n") {
+		b.WriteString("\n")
+	}
+}
+
+func richInline(raw any) string {
+	elems, _ := raw.([]any)
+	var b strings.Builder
+	for _, e := range elems {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		str := func(k string) string { s, _ := em[k].(string); return s }
+		switch em["type"] {
+		case "text":
+			t := str("text")
+			if st, ok := em["style"].(map[string]any); ok && strings.TrimSpace(t) != "" {
+				if st["code"] == true {
+					t = "`" + t + "`"
+				}
+				if st["bold"] == true {
+					t = "*" + t + "*"
+				}
+				if st["italic"] == true {
+					t = "_" + t + "_"
+				}
+				if st["strike"] == true {
+					t = "~" + t + "~"
+				}
+			}
+			b.WriteString(t)
+		case "link":
+			if label := str("text"); label != "" {
+				b.WriteString("<" + str("url") + "|" + label + ">")
+			} else {
+				b.WriteString("<" + str("url") + ">")
+			}
+		case "user":
+			b.WriteString("<@" + str("user_id") + ">")
+		case "usergroup":
+			b.WriteString("<!subteam^" + str("usergroup_id") + ">")
+		case "channel":
+			b.WriteString("<#" + str("channel_id") + ">")
+		case "broadcast":
+			b.WriteString("<!" + str("range") + ">")
+		case "emoji":
+			b.WriteString(":" + str("name") + ":")
+		}
+	}
+	return b.String()
 }
 
 func shapeUserList(raw any, includeDeleted bool) any {
