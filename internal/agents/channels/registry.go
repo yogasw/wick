@@ -74,9 +74,8 @@ type Registry struct {
 
 	// turnFallback, when set, is told about the end of every turn: when
 	// it started (its first event here) and whether it gave the channels
-	// nothing (empty or silent). A line it returns for a quiet turn goes
-	// out as a Notice before the turn's terminal event, while the thread
-	// is still open. See WithTurnFallback.
+	// nothing (empty or silent). What it returns is never posted. See
+	// turnEndNotice.
 	turnFallback TurnFallback
 }
 
@@ -165,27 +164,25 @@ func looksSilent(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimLeft(s, " \t\r\n")), SilentMarker)
 }
 
-// WithTurnFallback attaches the check run at every turn end; for a turn
-// with nothing for the channels (no text, or a [silent] reply) the line
-// fn returns is posted instead. A Team agent woken with its teammates'
-// results that writes no answer is the case it exists for: the results
-// still reach the thread.
+// WithTurnFallback attaches the hook told about every turn end. Its line
+// is no longer posted (turnEndNotice): a quiet turn gives the channels
+// nothing.
 func (r *Registry) WithTurnFallback(fn TurnFallback) *Registry {
 	r.turnFallback = fn
 	return r
 }
 
-// turnEndNotice tells turnFallback a turn ended and, for a quiet one,
-// returns its line wrapped as the Notice to forward; ok false when none.
+// turnEndNotice tells turnFallback a turn ended, so it can settle its own
+// bookkeeping (the Team wake marks the turn answered). A quiet turn stays
+// quiet: whatever line the hook builds never reaches a channel — a Team
+// agent that answers its teammates' results with [silent] or nothing meant
+// to say nothing, and the results are already in the web UI. ok is always
+// false; the event is kept for the call sites' shape.
 func (r *Registry) turnEndNotice(sessionID string, start time.Time, quiet bool) (event.AgentEvent, bool) {
-	if r.turnFallback == nil {
-		return event.AgentEvent{}, false
+	if r.turnFallback != nil {
+		_, _ = r.turnFallback(sessionID, start, quiet)
 	}
-	text, ok := r.turnFallback(sessionID, start, quiet)
-	if !quiet || !ok || strings.TrimSpace(text) == "" {
-		return event.AgentEvent{}, false
-	}
-	return event.AgentEvent{Type: event.Notice, Text: text}, true
+	return event.AgentEvent{}, false
 }
 
 // withoutText is evs minus their reply text: what a quiet turn still
@@ -487,6 +484,17 @@ func (r *Registry) ThreadListen(sessionID string, req ListenRequest) (ListenResu
 		}
 	}
 	return ListenResult{}, fmt.Errorf("this session is not a Slack channel thread, so there is nothing to listen to")
+}
+
+// ListenPrompt is the listen-mode section of sessionID's system prompt,
+// from the channel that owns it; "" for every other session.
+func (r *Registry) ListenPrompt(sessionID string) string {
+	for _, c := range r.Channels() {
+		if tl, ok := c.(ThreadListener); ok && tl.OwnsSession(sessionID) {
+			return tl.ListenPrompt(sessionID)
+		}
+	}
+	return ""
 }
 
 func (r *Registry) Channels() []Channel {

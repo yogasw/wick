@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,19 +166,22 @@ func TestSilentIsPerSession(t *testing.T) {
 	}
 }
 
-// A turn that ends giving the channels nothing (empty or [silent]) gets the
-// fallback line first, then its terminal event; a turn with text gets none.
-func TestQuietTurnFallbackNotice(t *testing.T) {
-	fallback := func(string, time.Time, bool) (string, bool) { return "Team results (no summary from the agent)", true }
+// A Team agent woken with its teammates' results that answers with
+// [silent] or nothing posts nothing: the hook's "Results came in…" line
+// never reaches a channel. An answer goes out as usual.
+func TestQuietTurnNeverPostsFallback(t *testing.T) {
+	fallback := func(string, time.Time, bool) (string, bool) {
+		return "Results came in, but the agent gave no summary:\n• Result 1 — completed: x", true
+	}
 	for _, tc := range []struct {
 		name   string
 		deltas []string
-		notice bool
+		texts  int
 	}{
-		{"empty", nil, true},
-		{"silent short", []string{"[silent]"}, true},
-		{"silent long", []string{"[silent] nothing to add\nreally"}, true},
-		{"answer", []string{"Here is the summary of all three"}, false},
+		{"empty", nil, 0},
+		{"silent short", []string{"[silent]"}, 0},
+		{"silent long", []string{"[silent] notes for client A updated, nothing to send to the thread"}, 0},
+		{"answer", []string{"Here is the summary of all three"}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg, rec := setup()
@@ -186,26 +190,19 @@ func TestQuietTurnFallbackNotice(t *testing.T) {
 				reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: d})
 			}
 			reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
-			var notices int
-			for i, e := range rec.got {
-				if e.Type == event.Notice {
-					notices++
-					if i+1 >= len(rec.got) || rec.got[i+1].Type != event.Done {
-						t.Fatalf("notice must come right before Done, got %+v", rec.got)
-					}
+			for _, e := range rec.got {
+				if e.Type == event.Notice || strings.Contains(e.Text, "Results came in") {
+					t.Fatalf("the fallback reached the channel: %+v", rec.got)
 				}
 			}
-			if (notices == 1) != tc.notice || notices > 1 {
-				t.Fatalf("notices = %d, want notice=%v (%+v)", notices, tc.notice, rec.got)
-			}
-			if tc.notice && len(rec.texts()) != 0 {
-				t.Fatalf("a quiet turn's own text must stay off the channel, got %v", rec.texts())
+			if got := len(rec.texts()); (got > 0) != (tc.texts > 0) {
+				t.Fatalf("texts = %v, want %d", rec.texts(), tc.texts)
 			}
 		})
 	}
 }
 
-// No fallback for the session = today's behaviour: nothing reaches the channel.
+// Silent without a hook: nothing reaches the channel.
 func TestQuietTurnNoFallback(t *testing.T) {
 	reg, rec := setup()
 	reg.WithTurnFallback(func(string, time.Time, bool) (string, bool) { return "", false })
@@ -216,9 +213,9 @@ func TestQuietTurnNoFallback(t *testing.T) {
 	}
 }
 
-// The hook hears every turn end, with the turn's start and whether it was
-// quiet; an empty turn's other held events (a compaction) still go out
-// with the fallback line.
+// The hook still hears every turn end, with the turn's start and whether
+// it was quiet (the Team wake marks are settled there); an empty turn's
+// other held events (a warning) still go out, without any fallback line.
 func TestQuietTurnKeepsHeldEventsAndReportsStart(t *testing.T) {
 	reg, rec := setup()
 	type call struct {
@@ -233,17 +230,17 @@ func TestQuietTurnKeepsHeldEventsAndReportsStart(t *testing.T) {
 	before := time.Now()
 	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Warning, ErrorMsg: "w"})
 	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
-	if len(rec.got) != 3 || rec.got[0].Type != event.Warning || rec.got[1].Type != event.Notice || rec.got[2].Type != event.Done {
-		t.Fatalf("want warning, notice, done; got %+v", rec.got)
+	if len(rec.got) != 2 || rec.got[0].Type != event.Warning || rec.got[1].Type != event.Done {
+		t.Fatalf("want warning, done; got %+v", rec.got)
 	}
 	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "a real answer here"})
 	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
 	if len(calls) != 2 || !calls[0].quiet || calls[1].quiet || calls[0].start.Before(before) || !calls[1].start.After(calls[0].start) {
 		t.Fatalf("hook calls = %+v", calls)
 	}
-	for _, e := range rec.got[3:] {
+	for _, e := range rec.got {
 		if e.Type == event.Notice {
-			t.Fatal("a turn with text gets no notice")
+			t.Fatal("no turn gets a fallback notice")
 		}
 	}
 }
