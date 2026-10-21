@@ -46,6 +46,14 @@ type Configs struct {
 	// PermissionStatus is a read-only widget: the per-operation allowed/denied
 	// checklist from the token's scopes and its role in default_project. Not a
 	// stored value — the html op renders it.
+	// RulesEditor is the only place merge_rules is edited: mode as a dropdown
+	// and approvers found by name among the GitLab users.
+	RulesEditor string `wick:"html=rules_editor;group=Merge rules|Checked by merge_merge_request before every merge. A project no row matches merges without checks, so keep a * row as the default.|collapsed;desc=Edit the merge rules. Every button saves."`
+	MergeRules  string `wick:"kvlist=repo|mode|min_approvals|required_approvers;hidden;default=[{\"repo\":\"*\",\"mode\":\"allow\",\"min_approvals\":\"1\",\"required_approvers\":\"\"},{\"repo\":\"*helm*\",\"mode\":\"deny\",\"min_approvals\":\"\",\"required_approvers\":\"\"}];desc=Managed by the Merge rules editor. One row per project: repo is a path (group/repo) or its last part, globs allowed, and the most specific row wins. mode allow or deny (deny refuses every merge). min_approvals: approvals the MR needs. required_approvers: comma-separated GitLab usernames. Each one who is on the MR must have approved."`
+	// RulesTest checks a real merge request against the saved rules, without merging.
+	RulesTest string `wick:"html=rules_test_panel;group=Test merge rules|Paste a merge request and see the checklist merge_merge_request would apply.|collapsed;desc=Test a merge request against the saved rules. Nothing is merged."`
+	// The test panel's last input, persisted so a re-mount of the widget does not wipe it.
+	RulesTestMR      string `wick:"hidden;desc=Last merge request tested in the merge rules panel."`
 	PermissionStatus string `wick:"html=permission_status;group=Permission status|Which operations this token can run.|collapsed;desc=Live checklist of which operations this token can run: scopes and expiry of the token, and its role in default_project. Fill token and default_project first."`
 }
 
@@ -272,8 +280,8 @@ func Operations() []connector.Category {
 			connector.OpDestructive("update_merge_request", "Update Merge Request", "Edit title/description/target, or close/reopen.", UpdateMRInput{}, updateMR, wickdocs.Docs{}),
 			connector.OpDestructive("add_mr_note", "Comment on MR", "Post a comment on an MR.", MRNoteInput{}, addMRNote, wickdocs.Docs{}),
 			connector.OpDestructive("approve_merge_request", "Approve MR", "Approve an MR as the token's user.", MRInput{}, approveMR, wickdocs.Docs{}),
-			connector.OpDestructive("merge_merge_request", "Merge MR", "Merge an MR now, or set auto-merge with when_pipeline_succeeds.", MergeMRInput{}, mergeMR,
-				wickdocs.Docs{Quirks: []string{"405/406 from GitLab = not mergeable yet (conflicts, pipeline, approvals). Read detailed_merge_status from get_merge_request."}}),
+			connector.OpDestructive("merge_merge_request", "Merge MR", "Merge an MR now, or set auto-merge with when_pipeline_succeeds. Checked against merge_rules first (approvals, required approvers, denied projects); a refusal lists every unmet rule.", MergeMRInput{}, mergeMR,
+				wickdocs.Docs{Quirks: []string{"Refused by merge_rules = a project denied there (e.g. helm repos) or missing approvals; do not retry, tell the user what is missing.", "405/406 from GitLab = not mergeable yet (conflicts, pipeline, approvals). Read detailed_merge_status from get_merge_request."}}),
 		),
 		connector.Cat("Pipelines", "CI/CD pipelines, jobs and job logs.",
 			connector.Op("list_pipelines", "List Pipelines", "Pipelines of a project, newest first.", ListPipelinesInput{}, listPipelines, wickdocs.Docs{}),
@@ -283,7 +291,16 @@ func Operations() []connector.Category {
 			connector.OpDestructive("retry_pipeline", "Retry Pipeline", "Retry the failed jobs of a pipeline.", PipelineInput{}, pipelineAction("retry"), wickdocs.Docs{}),
 			connector.OpDestructive("cancel_pipeline", "Cancel Pipeline", "Cancel a running pipeline.", PipelineInput{}, pipelineAction("cancel"), wickdocs.Docs{}),
 		),
-		connector.Cat("Maintenance", "Backs the manager's config widget (permission status); not meant for agent use.",
+		connector.Cat("Maintenance", "Backs the manager's config widgets (permission status, merge rules); not meant for agent use.",
+			connector.OpConfigOnly("rules_editor", "Merge Rules Editor", "Render the merge rules editor in the config page. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditor, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_editor_save", "Save Merge Rules", "Save the merge rules from the editor. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditorSave, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_editor_add_row", "Add Merge Rule", "Add an empty merge rule row. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditorAddRow, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_editor_delete_row", "Delete Merge Rule", "Delete one merge rule row and save. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditorDeleteRow, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_editor_search", "Search Approver", "Search GitLab users by name for a required approver. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditorSearch, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_editor_add_approver", "Add Required Approver", "Add a required approver to one merge rule and save. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditorAddApprover, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_editor_remove_approver", "Remove Required Approver", "Remove a required approver from one merge rule and save. Backs the config form only; never called by an agent.", RulesEditorInput{}, rulesEditorRemoveApprover, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_test_panel", "Merge Rules Test Panel", "Render the merge rules test form in the config page. Backs the config form only; never called by an agent.", RulesTestInput{}, rulesTestPanel, wickdocs.Docs{}),
+			connector.OpConfigOnly("rules_test_run", "Run Merge Rules Test", "Check one merge request against the saved merge_rules and render the checklist. Read-only, never merges. Backs the config form only; never called by an agent.", RulesTestInput{}, rulesTestRun, wickdocs.Docs{}),
 			connector.OpConfigOnly("permission_status", "Permission Status",
 				"Render the allowed/denied checklist of operations for the configured token. Read-only; used by the manager UI's permission-status widget.",
 				PermissionStatusInput{}, permissionStatus, wickdocs.Docs{}),

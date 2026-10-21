@@ -386,10 +386,23 @@ func updateMR(c *connector.Ctx) (any, error) {
 	return pick(v, mrKeys...), nil
 }
 
+// mergeMR checks merge_rules before merging, from the MR as it is right now,
+// so an approval withdrawn a minute ago counts as withdrawn.
 func mergeMR(c *connector.Ctx) (any, error) {
 	mp, err := mrPath(c)
 	if err != nil {
 		return nil, err
+	}
+	project := strings.Trim(strings.TrimSpace(c.Input("project")), "/")
+	if project == "" {
+		project = strings.Trim(strings.TrimSpace(c.Cfg("default_project")), "/")
+	}
+	verdict, _, err := checkMergeRules(c, project, c.InputInt("mr_iid"))
+	if err != nil {
+		return nil, err
+	}
+	if !verdict.Allowed {
+		return nil, errMergeRefused(verdict)
 	}
 	body := map[string]any{}
 	if c.InputBool("squash") {
