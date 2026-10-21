@@ -12,28 +12,47 @@ import (
 )
 
 // fakeGitLab answers the calls the permission check makes. scopes nil =
-// a GitLab too old to describe its token.
-func fakeGitLab(t *testing.T, scopes []string, role int) *httptest.Server {
+// a token that does not describe itself (fine-grained or old GitLab);
+// denied lists paths answered 403 like a fine-grained token would.
+func fakeGitLab(t *testing.T, scopes []string, role int, denied ...string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch p := r.URL.EscapedPath(); {
+		p := r.URL.EscapedPath()
+		for _, d := range denied {
+			if p == d {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"insufficient_granular_scope"}`))
+				return
+			}
+		}
+		const pid = "/api/v4/projects/acme%2Fweb"
+		switch {
 		case p == "/api/v4/user":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "username": "dev"})
+		case p == "/api/v4/projects":
+			_, _ = w.Write([]byte(`[]`))
 		case p == "/api/v4/personal_access_tokens/self":
 			if scopes == nil {
-				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(`{"message":"404 Not Found"}`))
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"insufficient_granular_scope"}`))
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"name": "bot", "scopes": scopes, "expires_at": "2099-01-01"})
-		case p == "/api/v4/projects/acme%2Fweb":
+		case p == pid:
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "visibility": "private"})
-		case p == "/api/v4/projects/acme%2Fweb/members/all/7":
+		case p == pid+"/members/all/7":
 			if role == 0 {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_level": role})
+		case strings.HasPrefix(p, pid+"/"):
+			if role == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"404 Project Not Found"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`[]`))
 		default:
 			t.Errorf("unexpected call %s", p)
 			w.WriteHeader(http.StatusNotFound)
@@ -91,6 +110,19 @@ func TestPermissionsNotMemberOfPrivateProject(t *testing.T) {
 	}
 }
 
+func TestPermissionsFineGrainedTokenProbesReads(t *testing.T) {
+	srv := fakeGitLab(t, nil, roleDeveloper, "/api/v4/user", "/api/v4/projects/acme%2Fweb/pipelines")
+	defer srv.Close()
+	rep, err := evaluatePermissions(newCtx(t, srv.URL, nil), "acme/web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := marks(rep)
+	if m["get_me"] != "❌" || m["get_file"] != "✅" || m["get_pipeline"] != "❌" || m["retry_pipeline"] != "❌" || m["create_merge_request"] != "❔" {
+		t.Fatalf("unexpected marks: %v", m)
+	}
+}
+
 func TestPermissionsOldGitLabLeavesWritesUnknown(t *testing.T) {
 	srv := fakeGitLab(t, nil, roleDeveloper)
 	defer srv.Close()
@@ -117,6 +149,17 @@ func TestPermissionStatusRendersCard(t *testing.T) {
 		if !strings.Contains(h, want) {
 			t.Fatalf("html missing %q: %s", want, h)
 		}
+	}
+}
+
+func TestPermissionsRejectedToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"401 Unauthorized"}`))
+	}))
+	defer srv.Close()
+	if _, err := evaluatePermissions(newCtx(t, srv.URL, nil), ""); err == nil {
+		t.Fatal("a rejected token must fail")
 	}
 }
 

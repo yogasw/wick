@@ -36,45 +36,54 @@ func roleName(level int) string {
 	return fmt.Sprintf("level %d", level)
 }
 
-// opNeeds maps every operation to whether it writes (scope api, else
-// read_api is enough) and the lowest project role it needs. Role 0 = the op
-// is not project-scoped. Read ops on a public/internal project need no role.
+// opNeeds maps every operation to the probe family that shows whether the
+// token can read that kind of resource, whether it writes (scope api, else
+// read_api is enough) and the lowest project role it needs (0 = not
+// project-scoped; reads on a public/internal project need no role).
 var opNeeds = []struct {
-	Op    string
-	Write bool
-	Role  int
+	Op     string
+	Family string
+	Write  bool
+	Role   int
 }{
-	{"get_me", false, roleNone},
-	{"list_projects", false, roleNone},
-	{"get_project", false, roleNone},
-	{"list_branches", false, roleReporter},
-	{"create_branch", true, roleDeveloper},
-	{"list_commits", false, roleReporter},
-	{"get_commit", false, roleReporter},
-	{"compare", false, roleReporter},
-	{"get_file", false, roleReporter},
-	{"list_tree", false, roleReporter},
-	{"list_tags", false, roleReporter},
-	{"list_merge_requests", false, roleReporter},
-	{"get_merge_request", false, roleReporter},
-	{"get_merge_request_changes", false, roleReporter},
-	{"list_mr_notes", false, roleReporter},
-	{"list_mr_pipelines", false, roleReporter},
-	{"create_merge_request", true, roleDeveloper},
-	{"update_merge_request", true, roleDeveloper},
-	{"add_mr_note", true, roleReporter},
-	{"approve_merge_request", true, roleDeveloper},
-	{"merge_merge_request", true, roleDeveloper},
-	{"list_pipelines", false, roleReporter},
-	{"get_pipeline", false, roleReporter},
-	{"list_pipeline_jobs", false, roleReporter},
-	{"get_job_log", false, roleReporter},
-	{"retry_pipeline", true, roleDeveloper},
-	{"cancel_pipeline", true, roleDeveloper},
-	{"list_issues", false, roleGuest},
-	{"get_issue", false, roleGuest},
-	{"create_issue", true, roleGuest},
-	{"add_issue_note", true, roleGuest},
+	{"get_me", "user", false, roleNone},
+	{"list_projects", "projects", false, roleNone},
+	{"get_project", "project", false, roleNone},
+	{"list_branches", "branches", false, roleReporter},
+	{"create_branch", "branches", true, roleDeveloper},
+	{"list_commits", "commits", false, roleReporter},
+	{"get_commit", "commits", false, roleReporter},
+	{"compare", "commits", false, roleReporter},
+	{"get_file", "tree", false, roleReporter},
+	{"list_tree", "tree", false, roleReporter},
+	{"list_tags", "tags", false, roleReporter},
+	{"list_merge_requests", "merge requests", false, roleReporter},
+	{"get_merge_request", "merge requests", false, roleReporter},
+	{"get_merge_request_changes", "merge requests", false, roleReporter},
+	{"list_mr_notes", "merge requests", false, roleReporter},
+	{"list_mr_pipelines", "merge requests", false, roleReporter},
+	{"create_merge_request", "merge requests", true, roleDeveloper},
+	{"update_merge_request", "merge requests", true, roleDeveloper},
+	{"add_mr_note", "merge requests", true, roleReporter},
+	{"approve_merge_request", "merge requests", true, roleDeveloper},
+	{"merge_merge_request", "merge requests", true, roleDeveloper},
+	{"list_pipelines", "pipelines", false, roleReporter},
+	{"get_pipeline", "pipelines", false, roleReporter},
+	{"list_pipeline_jobs", "pipelines", false, roleReporter},
+	{"get_job_log", "pipelines", false, roleReporter},
+	{"retry_pipeline", "pipelines", true, roleDeveloper},
+	{"cancel_pipeline", "pipelines", true, roleDeveloper},
+	{"list_issues", "issues", false, roleGuest},
+	{"get_issue", "issues", false, roleGuest},
+	{"create_issue", "issues", true, roleGuest},
+	{"add_issue_note", "issues", true, roleGuest},
+}
+
+type probe struct {
+	Name   string `json:"name"`
+	Status int    `json:"status"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
 }
 
 type opPermission struct {
@@ -86,7 +95,7 @@ type opPermission struct {
 
 // PermissionReport is what the config page's checklist is drawn from.
 type PermissionReport struct {
-	User       string         `json:"user"`
+	User       string         `json:"user,omitempty"`
 	TokenName  string         `json:"token_name,omitempty"`
 	Scopes     []string       `json:"scopes"`
 	ScopeInfo  string         `json:"scope_info"`
@@ -95,21 +104,53 @@ type PermissionReport struct {
 	Visibility string         `json:"visibility,omitempty"`
 	Role       string         `json:"role,omitempty"`
 	RoleInfo   string         `json:"role_info"`
+	Probes     []probe        `json:"probes"`
 	Ops        []opPermission `json:"ops"`
 	Summary    string         `json:"summary"`
 }
 
-func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, error) {
-	me, err := doJSON(c, http.MethodGet, apiURL(c, "/user", nil), nil)
-	if err != nil {
-		return nil, err
+// probeGET is one read-only call; a non-2xx answer is a result, not an error.
+func probeGET(c *connector.Ctx, name, path string, q url.Values) (probe, any) {
+	v, err := doJSON(c, http.MethodGet, apiURL(c, path, q), nil)
+	if err == nil {
+		return probe{Name: name, Status: http.StatusOK, OK: true}, v
 	}
-	user, _ := me.(map[string]any)
-	rep := &PermissionReport{Scopes: []string{}, User: str(user["username"])}
-	isAdmin, _ := user["is_admin"].(bool)
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return probe{Name: name, Status: ae.Status, Error: ae.Message}, nil
+	}
+	return probe{Name: name, Error: err.Error()}, nil
+}
 
-	// The token describes itself (GitLab 15.5+); older hosts answer 404 and
-	// the scopes stay unknown.
+// evaluatePermissions reads what the token can do. Reads are probed live
+// (one GET per resource family, so fine-grained tokens, whose permissions
+// do not map to scopes, are judged by what GitLab actually answers). Writes
+// are never performed: they are judged from the scopes and the role.
+func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, error) {
+	rep := &PermissionReport{Scopes: []string{}}
+	probes := map[string]probe{}
+	add := func(p probe) {
+		probes[p.Name] = p
+		rep.Probes = append(rep.Probes, p)
+	}
+	one := url.Values{"per_page": {"1"}}
+
+	up, me := probeGET(c, "user", "/user", nil)
+	add(up)
+	user, _ := me.(map[string]any)
+	rep.User = str(user["username"])
+	isAdmin, _ := user["is_admin"].(bool)
+	if up.Status == 0 {
+		return nil, fmt.Errorf("gitlab unreachable: %s", up.Error)
+	}
+	if up.Status == http.StatusUnauthorized {
+		return nil, fmt.Errorf("token rejected (401): %s", up.Error)
+	}
+	pp, _ := probeGET(c, "projects", "/projects", url.Values{"membership": {"true"}, "per_page": {"1"}})
+	add(pp)
+
+	// The token describes itself (GitLab 15.5+). Fine-grained tokens and
+	// older hosts refuse; the scopes then stay unknown.
 	granted := map[string]bool{}
 	if v, err := doJSON(c, http.MethodGet, apiURL(c, "/personal_access_tokens/self", nil), nil); err == nil {
 		tok, _ := v.(map[string]any)
@@ -126,51 +167,67 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 		sort.Strings(rep.Scopes)
 		rep.ScopeInfo = "scopes read from /personal_access_tokens/self"
 	} else {
-		rep.ScopeInfo = "this GitLab does not describe the token (" + err.Error() + "); read ops pass because /user answered, write ops cannot be verified without performing them"
+		rep.ScopeInfo = "token does not describe itself (" + err.Error() + "); likely a fine-grained token. Reads are probed live, writes cannot be verified without performing them"
 	}
 	hasScopes := len(rep.Scopes) > 0
 
-	// Role in the project: members/all includes the ones inherited from
-	// parent groups, which permissions.project_access leaves out.
 	role, roleKnown, public := roleNone, false, false
 	if project != "" {
 		rep.Project = project
 		pid := "/projects/" + url.PathEscape(project)
-		p, err := doJSON(c, http.MethodGet, apiURL(c, pid, nil), nil)
-		if err != nil {
-			rep.RoleInfo = "project cannot be read: " + err.Error()
-			roleKnown = true
-		} else {
+		pr, p := probeGET(c, "project", pid, nil)
+		add(pr)
+		if pr.OK {
 			pm, _ := p.(map[string]any)
 			rep.Visibility = str(pm["visibility"])
 			public = rep.Visibility == "public" || rep.Visibility == "internal"
-			switch {
-			case isAdmin:
-				role, roleKnown = roleOwner, true
-				rep.RoleInfo = "the token's user is an instance admin"
-			default:
-				id := fmt.Sprint(user["id"])
-				m, err := doJSON(c, http.MethodGet, apiURL(c, pid+"/members/all/"+url.PathEscape(id), nil), nil)
-				var ae *apiError
-				switch {
-				case err == nil:
-					mm, _ := m.(map[string]any)
-					if f, ok := mm["access_level"].(float64); ok {
-						role = int(f)
-					}
-					roleKnown = true
-					rep.RoleInfo = "role read from the project's members (inherited included)"
-				case errors.As(err, &ae) && ae.Status == http.StatusNotFound:
-					roleKnown = true
-					rep.RoleInfo = "the token's user is not a member of this project"
-				default:
-					rep.RoleInfo = "role cannot be read: " + err.Error()
-				}
+			for _, f := range []struct{ name, path string }{
+				{"branches", "/repository/branches"},
+				{"commits", "/repository/commits"},
+				{"tree", "/repository/tree"},
+				{"tags", "/repository/tags"},
+				{"merge requests", "/merge_requests"},
+				{"pipelines", "/pipelines"},
+				{"issues", "/issues"},
+			} {
+				r, _ := probeGET(c, f.name, pid+f.path, one)
+				add(r)
 			}
 		}
-		rep.Role = roleName(role)
+		// Role: members/all includes the ones inherited from parent groups,
+		// which permissions.project_access leaves out.
+		switch {
+		case !pr.OK:
+			rep.RoleInfo = fmt.Sprintf("project cannot be read (%d %s)", pr.Status, pr.Error)
+		case isAdmin:
+			role, roleKnown = roleOwner, true
+			rep.RoleInfo = "the token's user is an instance admin"
+		case user == nil:
+			rep.RoleInfo = "role unknown: the token may not read /user"
+		default:
+			id := fmt.Sprint(user["id"])
+			m, err := doJSON(c, http.MethodGet, apiURL(c, pid+"/members/all/"+url.PathEscape(id), nil), nil)
+			var ae *apiError
+			switch {
+			case err == nil:
+				mm, _ := m.(map[string]any)
+				if f, ok := mm["access_level"].(float64); ok {
+					role = int(f)
+				}
+				roleKnown = true
+				rep.RoleInfo = "read from the project's members (inherited included)"
+			case errors.As(err, &ae) && ae.Status == http.StatusNotFound:
+				roleKnown = true
+				rep.RoleInfo = "the token's user is not a member of this project"
+			default:
+				rep.RoleInfo = "role cannot be read: " + err.Error()
+			}
+		}
+		if roleKnown {
+			rep.Role = roleName(role)
+		}
 	} else {
-		rep.RoleInfo = "fill default_project to check the role in a project"
+		rep.RoleInfo = "fill default_project to probe a project and check the role"
 	}
 
 	allowed, denied, unknown := 0, 0, 0
@@ -189,26 +246,27 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 			need = append(need, "role "+roleName(roleNeeded)+"+")
 		}
 		p.Needs = strings.Join(need, ", ")
+		pr, probed := probes[n.Family]
 
-		scopeOK, scopeKnown := scopeCovers(granted, n.Write) || (n.Op == "get_me" && granted["read_user"]), hasScopes
-		if !hasScopes && !n.Write {
-			scopeOK, scopeKnown = true, true // /user answered, so the token reads
-		}
 		switch {
-		case scopeKnown && !scopeOK:
-			p.Mark, p.Reason = "❌", "token has no "+scope+" scope"
-		case roleNeeded == roleNone && scopeKnown:
-			p.Mark, p.Reason = "✅", "scope granted"
-		case roleNeeded == roleNone:
-			p.Mark, p.Reason = "❔", "write op, scopes unknown on this GitLab"
-		case project == "" || !roleKnown:
+		case !n.Write && probed && pr.OK:
+			p.Mark, p.Reason = "✅", "live read of "+n.Family+" succeeded"
+		case !n.Write && probed:
+			p.Mark, p.Reason = "❌", fmt.Sprintf("live read of %s refused: %d %s", n.Family, pr.Status, pr.Error)
+		case !n.Write:
 			p.Mark, p.Reason = "❔", rep.RoleInfo
+		case probed && !pr.OK:
+			p.Mark, p.Reason = "❌", "the token cannot even read "+n.Family
+		case hasScopes && !scopeCovers(granted, true):
+			p.Mark, p.Reason = "❌", "token has no api scope"
+		case project == "" || !roleKnown:
+			p.Mark, p.Reason = "❔", "write op; "+rep.RoleInfo
 		case role < roleNeeded:
 			p.Mark, p.Reason = "❌", "role "+roleName(role)+" in "+project+", needs "+roleName(roleNeeded)
-		case !scopeKnown:
-			p.Mark, p.Reason = "❔", "role ok, write scope unknown on this GitLab"
+		case !hasScopes:
+			p.Mark, p.Reason = "❔", "role ok; fine-grained/unknown token, write permission not verifiable without performing it"
 		default:
-			p.Mark, p.Reason = "✅", "scope and role ok"
+			p.Mark, p.Reason = "✅", "api scope and role ok"
 		}
 		if n.Op == "merge_merge_request" && p.Mark == "✅" && role < roleMaintainer {
 			p.Reason += "; a protected target branch may still need Maintainer"
@@ -227,8 +285,7 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 	return rep, nil
 }
 
-// scopeCovers: api grants everything, read_api only reads. read_user is
-// only enough for get_me, which the caller handles.
+// scopeCovers: api grants everything, read_api only reads.
 func scopeCovers(granted map[string]bool, write bool) bool {
 	if write {
 		return granted["api"]
@@ -277,6 +334,9 @@ func permissionStatus(c *connector.Ctx) (any, error) {
 func tokenFacts(rep *PermissionReport, now time.Time) []string {
 	var out []string
 	who := "user <b>" + html.EscapeString(rep.User) + "</b>"
+	if rep.User == "" {
+		who = "user: unknown (token may not read /user)"
+	}
 	if rep.TokenName != "" {
 		who += " · token <b>" + html.EscapeString(rep.TokenName) + "</b>"
 	}
@@ -306,7 +366,11 @@ func tokenFacts(rep *PermissionReport, now time.Time) []string {
 		if rep.Visibility != "" {
 			line += " (" + html.EscapeString(rep.Visibility) + ")"
 		}
-		line += ": role <b>" + html.EscapeString(rep.Role) + "</b> — " + html.EscapeString(rep.RoleInfo)
+		if rep.Role != "" {
+			line += ": role <b>" + html.EscapeString(rep.Role) + "</b> — " + html.EscapeString(rep.RoleInfo)
+		} else {
+			line += ": " + html.EscapeString(rep.RoleInfo)
+		}
 		out = append(out, line)
 	} else {
 		out = append(out, html.EscapeString(rep.RoleInfo))
