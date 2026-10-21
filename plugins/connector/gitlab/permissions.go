@@ -247,8 +247,12 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 		}
 		p.Needs = strings.Join(need, ", ")
 		pr, probed := probes[n.Family]
+		projPr, projProbed := probes["project"]
+		scoped := n.Family != "user" && n.Family != "projects"
 
 		switch {
+		case scoped && projProbed && !projPr.OK:
+			p.Mark, p.Reason = "❌", fmt.Sprintf("project %s cannot be read: %d %s", project, projPr.Status, projPr.Error)
 		case !n.Write && probed && pr.OK:
 			p.Mark, p.Reason = "✅", "live read of "+n.Family+" succeeded"
 		case !n.Write && probed:

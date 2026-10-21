@@ -123,6 +123,19 @@ func TestPermissionsFineGrainedTokenProbesReads(t *testing.T) {
 	}
 }
 
+func TestPermissionsUnreadableProjectDeniesProjectOps(t *testing.T) {
+	srv := fakeGitLab(t, nil, roleDeveloper, "/api/v4/user", "/api/v4/projects/acme%2Fweb")
+	defer srv.Close()
+	rep, err := evaluatePermissions(newCtx(t, srv.URL, nil), "acme/web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := marks(rep)
+	if m["list_projects"] != "✅" || m["get_project"] != "❌" || m["create_issue"] != "❌" || m["get_file"] != "❌" {
+		t.Fatalf("unexpected marks: %v", m)
+	}
+}
+
 func TestPermissionsOldGitLabLeavesWritesUnknown(t *testing.T) {
 	srv := fakeGitLab(t, nil, roleDeveloper)
 	defer srv.Close()
