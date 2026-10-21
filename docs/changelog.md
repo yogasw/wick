@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+-   **GitLab connector plugin** (`gitlab`, gitlab.com or self-managed): projects, repository, merge requests, pipelines and job logs, issues. A **Permission status** panel probes reads live and names the missing fine-grained permissions as GitLab's token form shows them; **↻ Recheck** and a **Test project** box. **Merge rules** like Bitbucket's, checked by `merge_merge_request`: one approval by default, `*helm*` denied, and a fixed **Else** row so no project merges unchecked. A **Test merge rules** panel judges a pasted MR without merging. See [GitLab](/connectors/gitlab).
+-   **`data-op-input`** for `html=` widgets: an op that runs while the operator types, debounced. The Bitbucket and GitLab approver search use it and lose their Search button.
+
+### Fixed
+-   `html=` widgets: hidden inputs now follow each re-render, so the next click no longer posts stale state (an "Add rule" that showed two rows, an approver list missing the one just added).
+-   `html=` widgets no longer re-fetch in a loop when their markup changes between renders, and a widget in a collapsed config group renders only when the group is opened.
 
 ---
 
