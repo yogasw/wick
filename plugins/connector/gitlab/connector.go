@@ -43,6 +43,16 @@ type Configs struct {
 	BaseURL        string `wick:"url;desc=GitLab host, e.g. https://gitlab.example.com (no /api/v4). Empty = https://gitlab.com."`
 	Token          string `wick:"secret;required;desc=Personal or project access token. Scope api for writes, read_api for read-only use."`
 	DefaultProject string `wick:"desc=group/repo path used when an op gets no project. Optional."`
+	// PermissionStatus is a read-only widget: the per-operation allowed/denied
+	// checklist from the token's scopes and its role in default_project. Not a
+	// stored value — the html op renders it.
+	PermissionStatus string `wick:"html=permission_status;group=Permission status|Which operations this token can run.|collapsed;desc=Live checklist of which operations this token can run: scopes and expiry of the token, and its role in default_project. Fill token and default_project first."`
+}
+
+// PermissionStatusInput: the manager's html widget always passes the current
+// field value as "browser"; it is unused here.
+type PermissionStatusInput struct {
+	Browser string `wick:"desc=Unused."`
 }
 
 // ── inputs ───────────────────────────────────────────────────────────
@@ -271,6 +281,11 @@ func Operations() []connector.Category {
 			connector.Op("get_job_log", "Get Job Log", "Tail of a job's log.", JobLogInput{}, getJobLog, wickdocs.Docs{}),
 			connector.OpDestructive("retry_pipeline", "Retry Pipeline", "Retry the failed jobs of a pipeline.", PipelineInput{}, pipelineAction("retry"), wickdocs.Docs{}),
 			connector.OpDestructive("cancel_pipeline", "Cancel Pipeline", "Cancel a running pipeline.", PipelineInput{}, pipelineAction("cancel"), wickdocs.Docs{}),
+		),
+		connector.Cat("Maintenance", "Backs the manager's config widget (permission status); not meant for agent use.",
+			connector.OpConfigOnly("permission_status", "Permission Status",
+				"Render the allowed/denied checklist of operations for the configured token. Read-only; used by the manager UI's permission-status widget.",
+				PermissionStatusInput{}, permissionStatus, wickdocs.Docs{}),
 		),
 		connector.Cat("Issues", "Project issues and their comments.",
 			connector.Op("list_issues", "List Issues", "Issues of a project, open ones by default.", ListIssuesInput{}, listIssues, wickdocs.Docs{}),
