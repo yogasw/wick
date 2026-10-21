@@ -21,6 +21,16 @@ import (
 // repository (deploy config is only watched, never merged from here).
 const defaultMergeRules = `[{"repo":"*","mode":"allow","min_approvals":"1","required_approvers":""},{"repo":"*helm*","mode":"deny","min_approvals":"","required_approvers":""}]`
 
+// savedRules is merge_rules, or the defaults when the instance has never
+// saved any: an instance created before merge rules existed still gets the
+// guard rail instead of merging unchecked.
+func savedRules(c *connector.Ctx) string {
+	if raw := strings.TrimSpace(c.Cfg("merge_rules")); raw != "" {
+		return raw
+	}
+	return defaultMergeRules
+}
+
 // mergeRule is one row of the merge_rules config. Repo is a project path
 // (group/sub/repo) or its last segment, either of which may be a glob.
 type mergeRule struct {
@@ -235,7 +245,7 @@ func mrProjectPath(mr map[string]any, fallback string) string {
 // checkMergeRules reads the MR and judges it against merge_rules. matched is
 // false when no row covers the project: the merge then runs unchecked.
 func checkMergeRules(c *connector.Ctx, project string, iid int) (v mergeVerdict, matched bool, err error) {
-	rules, err := parseMergeRules(c.Cfg("merge_rules"))
+	rules, err := parseMergeRules(savedRules(c))
 	if err != nil {
 		return mergeVerdict{}, false, err
 	}

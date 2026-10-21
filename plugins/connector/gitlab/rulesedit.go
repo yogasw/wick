@@ -150,7 +150,7 @@ func saveRows(rows []editorRow, st editorState, okMsg string) (any, error) {
 }
 
 func rulesEditor(c *connector.Ctx) (any, error) {
-	rows := rowsFromConfig(c.Cfg("merge_rules"))
+	rows := rowsFromConfig(savedRules(c))
 	fillNames(c, rows)
 	return map[string]any{"html": renderRulesEditor(rows, editorState{Search: -1})}, nil
 }

@@ -198,3 +198,14 @@ func TestEditorRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyMergeRulesFallBackToDefaults(t *testing.T) {
+	merged := false
+	srv := fakeMR(t, "ops/deploy-helm", []string{"lead"}, &merged)
+	defer srv.Close()
+	c := connector.NewCtx(t.Context(), "test", map[string]string{"base_url": srv.URL, "token": "tok"},
+		map[string]string{"project": "ops/deploy-helm", "mr_iid": "9"}, http.DefaultClient, nil, nil)
+	if _, err := mergeMR(c); err == nil || merged {
+		t.Fatalf("an instance without saved rules must still deny helm, got %v merged=%v", err, merged)
+	}
+}
