@@ -182,18 +182,21 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 			pm, _ := p.(map[string]any)
 			rep.Visibility = str(pm["visibility"])
 			public = rep.Visibility == "public" || rep.Visibility == "internal"
-			for _, f := range []struct{ name, path string }{
-				{"branches", "/repository/branches"},
-				{"commits", "/repository/commits"},
-				{"tree", "/repository/tree"},
-				{"tags", "/repository/tags"},
-				{"merge requests", "/merge_requests"},
-				{"pipelines", "/pipelines"},
-				{"issues", "/issues"},
-			} {
-				r, _ := probeGET(c, f.name, pid+f.path, one)
-				add(r)
-			}
+		}
+		// Probe every family even when the project itself is refused: a
+		// fine-grained token can read files and commits without being
+		// allowed to read the project's metadata.
+		for _, f := range []struct{ name, path string }{
+			{"branches", "/repository/branches"},
+			{"commits", "/repository/commits"},
+			{"tree", "/repository/tree"},
+			{"tags", "/repository/tags"},
+			{"merge requests", "/merge_requests"},
+			{"pipelines", "/pipelines"},
+			{"issues", "/issues"},
+		} {
+			r, _ := probeGET(c, f.name, pid+f.path, one)
+			add(r)
 		}
 		// Role: members/all includes the ones inherited from parent groups,
 		// which permissions.project_access leaves out.
@@ -248,12 +251,8 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 		}
 		p.Needs = strings.Join(need, ", ")
 		pr, probed := probes[n.Family]
-		projPr, projProbed := probes["project"]
-		scoped := n.Family != "user" && n.Family != "projects"
 
 		switch {
-		case scoped && projProbed && !projPr.OK:
-			p.Mark, p.Reason = "❌", "project "+project+" cannot be read: "+probeText(projPr)
 		case !n.Write && probed && pr.OK:
 			p.Mark, p.Reason = "✅", "live read of "+n.Family+" succeeded"
 		case !n.Write && probed:
