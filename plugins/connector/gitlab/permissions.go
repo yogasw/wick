@@ -387,7 +387,6 @@ func permissionStatus(c *connector.Ctx) (any, error) {
 	if unknown > 0 {
 		head += fmt.Sprintf(" · %d unknown", unknown)
 	}
-	head += " · checked " + time.Now().Format("15:04:05")
 	return map[string]any{"html": permCard(denied == 0, head, bar, tokenFacts(rep, time.Now()), rep.Ops)}, nil
 }
 

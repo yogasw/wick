@@ -22,7 +22,7 @@
      All layout, buttons, badges, and per-item logic live in the connector's
      HTML — never here. So the same widget serves a browser picker, a model
      list, a region chooser, etc., with zero widget changes. */
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { runConnectorTest } from "$lib/api.js";
   import { toastError } from "@wick-fe/common-stores";
 
@@ -429,6 +429,7 @@
   onDestroy(() => {
     if (pollTimer) clearTimeout(pollTimer);
     if (inputTimer) clearTimeout(inputTimer);
+    detailsEl?.removeEventListener("toggle", onToggle);
   });
 
   /* Re-fetch when the selected value changes (so a picker's highlight follows the
@@ -449,8 +450,34 @@
   $effect(() => {
     void value; // track
     if (Date.now() - selfWriteAt < SELF_WRITE_WINDOW_MS) return;
-    fetchHtml();
+    /* untrack: fetchHtml reads `html` before its first await, which made this
+       effect depend on the markup. Any op whose HTML differs between renders
+       (a "checked at 10:10:57" stamp) then re-fetched forever — a request
+       every round trip for as long as the page stayed open. Only `value`
+       should trigger a render. */
+    untrack(() => fetchWhenVisible());
   });
+
+  /* Lazy render inside a collapsed group. A config group closed by default
+     is a native <details>; rendering its widgets on page load runs every
+     op (live probes, API calls) for panels nobody opened. Wait for the group
+     to open, and render again each time it is re-opened, so a status panel
+     shows the state as of the moment it is looked at. */
+  let detailsEl: HTMLDetailsElement | null = null;
+  function onToggle(): void {
+    if (detailsEl?.open) fetchHtml();
+  }
+  function fetchWhenVisible(): void {
+    if (!detailsEl && rootEl) {
+      detailsEl = rootEl.closest("details");
+      detailsEl?.addEventListener("toggle", onToggle);
+    }
+    if (detailsEl && !detailsEl.open) {
+      loading = false; // the toggle handler renders on open
+      return;
+    }
+    fetchHtml();
+  }
 
   // Auto-select when the fetched markup offers exactly ONE selectable option and
   // nothing is chosen yet — so a single-choice picker (e.g. one Grafana org)

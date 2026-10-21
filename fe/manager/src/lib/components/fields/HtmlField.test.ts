@@ -284,3 +284,34 @@ test("data-op-input runs its op once, debounced, with the typed value", async ()
   expect(searches[0][3]).toMatchObject({ browser: "0", q_0: "tau" });
   expect((document.querySelector('[name="q_0"]') as HTMLInputElement).value).toBe("tau");
 });
+
+test("markup that changes on every render is fetched once, not in a loop", async () => {
+  let n = 0;
+  const spy = vi.spyOn(api, "runConnectorTest").mockImplementation(() => {
+    n++;
+    return Promise.resolve({ error: "", response: { html: `<p>checked #${n}</p>` } } as never);
+  });
+  render(HtmlField, {
+    props: { connectorKey: "k", connectorId: "id1", op: "status", value: "", onChange: vi.fn() },
+  });
+  await screen.findByText(/checked #/);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
+});
+
+test("a widget inside a closed group renders only when the group opens", async () => {
+  const spy = mockByOp({ status: { html: `<p>probed</p>` } });
+  const details = document.createElement("details");
+  document.body.appendChild(details);
+  render(HtmlField, {
+    target: details,
+    props: { connectorKey: "k", connectorId: "id1", op: "status", value: "", onChange: vi.fn() },
+  });
+  await new Promise((r) => setTimeout(r, 100));
+  expect(spy).not.toHaveBeenCalled();
+  details.open = true;
+  details.dispatchEvent(new Event("toggle"));
+  await screen.findByText("probed");
+  expect(spy).toHaveBeenCalledTimes(1);
+  details.remove();
+});
