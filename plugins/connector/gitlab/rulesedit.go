@@ -73,6 +73,31 @@ func rowsFromInput(c *connector.Ctx) []editorRow {
 	return out
 }
 
+// withElse makes sure the fallback "*" row exists, so every project is
+// covered by some rule and "no rule matched" never means "merge unchecked".
+func withElse(rows []editorRow) []editorRow {
+	for _, r := range rows {
+		if strings.TrimSpace(r.Repo) == "*" {
+			return rows
+		}
+	}
+	return append(rows, editorRow{Repo: "*", Mode: "allow", Min: "1"})
+}
+
+// renderOrder lists the specific rows first and the Else row last, keeping
+// each row's index (the controls are named by it).
+func renderOrder(rows []editorRow) []int {
+	var specific, fallback []int
+	for i, r := range rows {
+		if strings.TrimSpace(r.Repo) == "*" {
+			fallback = append(fallback, i)
+		} else {
+			specific = append(specific, i)
+		}
+	}
+	return append(specific, fallback...)
+}
+
 func defaultString(s, def string) string {
 	if strings.TrimSpace(s) == "" {
 		return def
@@ -135,6 +160,7 @@ type editorState struct {
 // save stores rows and re-renders. An invalid set is not written, so a typo
 // cannot replace a working rule set.
 func saveRows(rows []editorRow, st editorState, okMsg string) (any, error) {
+	rows = withElse(rows)
 	encoded, err := encodeRows(rows)
 	if err != nil {
 		st.Notice, st.NoticeOK = "Not saved: "+err.Error(), false
@@ -150,7 +176,7 @@ func saveRows(rows []editorRow, st editorState, okMsg string) (any, error) {
 }
 
 func rulesEditor(c *connector.Ctx) (any, error) {
-	rows := rowsFromConfig(savedRules(c))
+	rows := withElse(rowsFromConfig(savedRules(c)))
 	fillNames(c, rows)
 	return map[string]any{"html": renderRulesEditor(rows, editorState{Search: -1})}, nil
 }
@@ -196,6 +222,9 @@ func rulesEditorDeleteRow(c *connector.Ctx) (any, error) {
 	if err != nil || i < 0 || i >= len(rows) {
 		return map[string]any{"html": renderRulesEditor(rows, editorState{Search: -1, Notice: "Row not found.", NoticeOK: false})}, nil
 	}
+	if strings.TrimSpace(rows[i].Repo) == "*" {
+		return map[string]any{"html": renderRulesEditor(rows, editorState{Search: -1, Notice: "The Else row cannot be deleted; set its mode or approvals instead.", NoticeOK: false})}, nil
+	}
 	rows = append(rows[:i], rows[i+1:]...)
 	return saveRows(rows, editorState{Search: -1}, "Rule deleted.")
 }
@@ -207,8 +236,8 @@ func rulesEditorSearch(c *connector.Ctx) (any, error) {
 	q := strings.TrimSpace(c.Input("q_" + strconv.Itoa(i)))
 	st := editorState{Search: i, Query: q}
 	if q == "" {
-		st.Notice = "Type part of a name first."
-		return map[string]any{"html": renderRulesEditor(rows, st)}, nil
+		// Cleared while typing: just drop the results, no nagging.
+		return map[string]any{"html": renderRulesEditor(rows, editorState{Search: -1})}, nil
 	}
 	users, source, err := searchUsers(c, q)
 	switch {
@@ -339,17 +368,32 @@ func renderRulesEditor(rows []editorRow, st editorState) string {
 	}
 	fmt.Fprintf(&b, `<input type="hidden" name="row_count" value="%d"/>`, len(rows))
 
-	for i, r := range rows {
+	for _, i := range renderOrder(rows) {
+		r := rows[i]
 		k := strconv.Itoa(i)
-		fmt.Fprintf(&b, `<div class="%s-card"><div class="%s-grid">`, p, p)
-		fmt.Fprintf(&b, `<div><label class="%[1]s-l">Repo</label><input class="%[1]s-in %[1]s-mono" name="r_repo_%[2]s" value="%[3]s" placeholder="* or repo or group/repo, globs ok (*helm*)"/></div>`, p, k, esc(r.Repo))
+		isElse := r.Repo == "*"
+		fmt.Fprintf(&b, `<div class="%s-card">`, p)
+		if isElse {
+			fmt.Fprintf(&b, `<div class="%[1]s-l" style="margin-bottom:8px">Else: every other project</div>`, p)
+		}
+		fmt.Fprintf(&b, `<div class="%s-grid">`, p)
+		if isElse {
+			// The fallback row: its pattern is fixed, only mode and approvals change.
+			fmt.Fprintf(&b, `<div><label class="%[1]s-l">Repo</label><input class="%[1]s-in %[1]s-mono" name="r_repo_%[2]s" value="*" readonly title="Fallback for every project no other row matches"/></div>`, p, k)
+		} else {
+			fmt.Fprintf(&b, `<div><label class="%[1]s-l">Repo</label><input class="%[1]s-in %[1]s-mono" name="r_repo_%[2]s" value="%[3]s" placeholder="repo or group/repo, globs ok (*helm*)"/></div>`, p, k, esc(r.Repo))
+		}
 		allowSel, denySel := " selected", ""
 		if r.Mode == "deny" {
 			allowSel, denySel = "", " selected"
 		}
 		fmt.Fprintf(&b, `<div><label class="%[1]s-l">Mode</label><select class="%[1]s-in" name="r_mode_%[2]s"><option value="allow"%[3]s>allow</option><option value="deny"%[4]s>deny</option></select></div>`, p, k, allowSel, denySel)
 		fmt.Fprintf(&b, `<div><label class="%[1]s-l">Min approvals</label><input class="%[1]s-in" type="number" min="0" name="r_min_%[2]s" value="%[3]s" placeholder="0"/></div>`, p, k, esc(r.Min))
-		fmt.Fprintf(&b, `<div><button type="button" class="%s-del" data-op="rules_editor_delete_row" data-arg="%s">Delete</button></div>`, p, k)
+		if isElse {
+			b.WriteString(`<div></div>`)
+		} else {
+			fmt.Fprintf(&b, `<div><button type="button" class="%s-del" data-op="rules_editor_delete_row" data-arg="%s">Delete</button></div>`, p, k)
+		}
 		b.WriteString(`</div>`)
 
 		// Approvers: the ids travel in a hidden input so every click posts them back.
@@ -382,7 +426,8 @@ func renderRulesEditor(rows []editorRow, st editorState) string {
 		if st.Search == i {
 			q = st.Query
 		}
-		fmt.Fprintf(&b, `<div class="%[1]s-search"><input class="%[1]s-in" name="q_%[2]s" value="%[3]s" placeholder="Search GitLab user by name or username"/><button type="button" class="%[1]s-btn2" data-op="rules_editor_search" data-arg="%[2]s">Search</button></div>`, p, k, esc(q))
+		// No Search button: data-op-input runs the search as the operator types (debounced by the widget).
+		fmt.Fprintf(&b, `<div class="%[1]s-search"><input class="%[1]s-in" name="q_%[2]s" value="%[3]s" autocomplete="off" data-op-input="rules_editor_search" data-arg="%[2]s" placeholder="Search GitLab user by name or username (results appear as you type)"/></div>`, p, k, esc(q))
 		if st.Search == i && len(st.Results) > 0 {
 			fmt.Fprintf(&b, `<div class="%s-res">`, p)
 			for _, u := range st.Results {
@@ -396,7 +441,7 @@ func renderRulesEditor(rows []editorRow, st editorState) string {
 
 	fmt.Fprintf(&b, `<div class="%[1]s-bar"><button type="button" class="%[1]s-btn" data-op="rules_editor_save" data-arg="">Save rules</button>`+
 		`<button type="button" class="%[1]s-btn2" data-op="rules_editor_add_row" data-arg="">+ Add rule</button></div>`, p)
-	fmt.Fprintf(&b, `<div class="%s-mut" style="margin-top:6px">Repo: project path (group/repo) or its last part, * is a wildcard. The most specific row wins (more literal characters), so *helm* beats *. A project no row matches merges without checks. Adding or removing an approver saves right away.</div>`, p)
+	fmt.Fprintf(&b, `<div class="%s-mut" style="margin-top:6px">Repo: project path (group/repo) or its last part, * is a wildcard. The most specific row wins (more literal characters), so *helm* beats the Else row. Else covers every project no other row matches; it cannot be deleted. Adding or removing an approver saves right away.</div>`, p)
 	b.WriteString(`</div>`)
 	return b.String()
 }

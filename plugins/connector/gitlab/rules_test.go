@@ -209,3 +209,27 @@ func TestEmptyMergeRulesFallBackToDefaults(t *testing.T) {
 		t.Fatalf("an instance without saved rules must still deny helm, got %v merged=%v", err, merged)
 	}
 }
+
+func TestEditorElseRowIsLastAndKept(t *testing.T) {
+	rows := withElse([]editorRow{{Repo: "*helm*", Mode: "deny"}})
+	if len(rows) != 2 || rows[1].Repo != "*" || rows[1].Min != "1" {
+		t.Fatalf("Else row not added: %+v", rows)
+	}
+	if got := renderOrder([]editorRow{{Repo: "*"}, {Repo: "a"}, {Repo: "b"}}); got[0] != 1 || got[2] != 0 {
+		t.Fatalf("Else must render last, got %v", got)
+	}
+	h := renderRulesEditor(rows, editorState{Search: -1})
+	if !strings.Contains(h, "Else: every other project") || strings.Count(h, `data-op="rules_editor_delete_row"`) != 1 {
+		t.Fatalf("Else row must show and have no Delete: %s", h)
+	}
+	if !strings.Contains(h, `data-op-input="rules_editor_search"`) || strings.Contains(h, ">Search</button>") {
+		t.Fatal("search must run as you type, without a Search button")
+	}
+	c := connector.NewCtx(t.Context(), "test", map[string]string{}, map[string]string{
+		"row_count": "2", "r_repo_0": "*helm*", "r_mode_0": "deny", "r_repo_1": "*", "r_mode_1": "allow", "r_min_1": "1", "browser": "1",
+	}, http.DefaultClient, nil, nil)
+	got, _ := rulesEditorDeleteRow(c)
+	if _, saved := got.(map[string]any)["fields"]; saved {
+		t.Fatal("deleting the Else row must not save")
+	}
+}

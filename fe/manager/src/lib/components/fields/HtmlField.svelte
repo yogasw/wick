@@ -9,6 +9,9 @@
          → run that op via the manager /test path, then re-fetch this HTML
        data-op="__select" data-arg="<value>"
          → store <value> as this field's value (reserved, no op call)
+       <input data-op-input="<opKey>" data-arg="<value>">
+         → run that op while the operator types, debounced (a search box
+           with no Search button); the input keeps focus and its text
 
      An op may ALSO return { fields: { key: value } } alongside (or instead of)
      { html }. When present, those key/value pairs are written to sibling config
@@ -177,7 +180,21 @@
     // Sync attributes, but never clobber what the operator is typing.
     const isField = have instanceof HTMLInputElement || have instanceof HTMLTextAreaElement;
     for (const attr of Array.from(want.attributes)) {
-      if (isField && attr.name === "value") continue;
+      if (isField && attr.name === "value") {
+        /* The server's new value wins unless the operator changed this field.
+           A hidden input is never typed into, so it always follows the markup:
+           keeping its old value made the next click post stale state (a row
+           count one behind, an approver list without the one just added), and
+           the connector then rebuilt the wrong rows from it. A visible field
+           still showing the value it was rendered with is untouched too. */
+        const el = have as HTMLInputElement;
+        const old = el.getAttribute("value") ?? "";
+        if (el.type === "hidden" || el.value === old) {
+          if (old !== attr.value) el.setAttribute("value", attr.value);
+          if (el.value !== attr.value) el.value = attr.value;
+        }
+        continue;
+      }
       if (have.getAttribute(attr.name) !== attr.value) have.setAttribute(attr.name, attr.value);
     }
     for (const attr of Array.from(have.attributes)) {
@@ -373,8 +390,45 @@
     }
   }
 
+  /* data-op-input: run an op while the operator types, debounced, e.g. a
+     user search with no Search button. Unlike a click it never marks the
+     input busy or disables it — that would steal the keystrokes — and the
+     morph keeps the typed text and the caret when the answer arrives. A
+     response that lands after newer typing is dropped, so a slow answer for
+     "ta" cannot overwrite the one for "tau". */
+  const INPUT_DEBOUNCE_MS = 400;
+  let inputTimer: ReturnType<typeof setTimeout> | undefined;
+  let inputSeq = 0;
+
+  function onInput(ev: Event): void {
+    if (disabled) return;
+    const el = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-op-input]");
+    if (!el) return;
+    const opName = el.dataset.opInput ?? "";
+    if (!opName) return;
+    const arg = el.dataset.arg ?? "";
+    if (inputTimer) clearTimeout(inputTimer);
+    const seq = ++inputSeq;
+    inputTimer = setTimeout(async () => {
+      try {
+        const res = await runConnectorTest(connectorKey, connectorId, opName, { browser: arg, ...collectInputs() }, "");
+        if (seq !== inputSeq) return; // newer typing already asked again
+        if (res.error) throw new Error(res.error);
+        const r = res.response as { html?: string; fields?: unknown } | undefined;
+        applyFields(r);
+        if (r?.html !== undefined) {
+          actionAt = Date.now();
+          html = r.html;
+        }
+      } catch (e) {
+        if (seq === inputSeq) toastError("Action failed", e instanceof Error ? e.message : String(e));
+      }
+    }, INPUT_DEBOUNCE_MS);
+  }
+
   onDestroy(() => {
     if (pollTimer) clearTimeout(pollTimer);
+    if (inputTimer) clearTimeout(inputTimer);
   });
 
   /* Re-fetch when the selected value changes (so a picker's highlight follows the
@@ -456,6 +510,7 @@
     bind:this={rootEl}
     class="contents"
     onclick={onClick}
+    oninput={onInput}
     role="presentation"
     aria-busy={busyOp ? "true" : "false"}
   ></div>
