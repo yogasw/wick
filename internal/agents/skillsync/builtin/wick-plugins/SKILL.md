@@ -178,6 +178,7 @@ Scopes, with their default (OFF ones need an admin to allow them):
 | `rest.write` | **OFF** | declared write paths — destructive |
 | `db.read` | **OFF** | read-only SQL on declared tables |
 | `db.write` | **OFF** | SQL that changes declared tables — destructive |
+| `events.publish` | allow | wake the watches subscribed to its events (`wake_on`); they run as their owners |
 | `datadir` | allow | declarative only, nothing to toggle |
 | `net.listen` | allow | declarative only, nothing to toggle |
 
