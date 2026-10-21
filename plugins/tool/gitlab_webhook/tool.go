@@ -35,7 +35,7 @@ const Key = "gitlab_webhook"
 
 // Config is the receiver's settings.
 type Config struct {
-	WebhookSecret string `wick:"secret;required;desc=Secret token GitLab sends in X-Gitlab-Token; put the same value in the GitLab webhook's Secret token field. Empty = every webhook is refused."`
+	WebhookSecret string `wick:"secret;required;desc=Secret token GitLab sends in X-Gitlab-Token, put the same value in the GitLab webhook's Secret token field. Empty = every webhook is refused."`
 }
 
 func Module() tool.Module {
