@@ -184,6 +184,35 @@ func TestPermissionStatusNeedsToken(t *testing.T) {
 	}
 }
 
+func TestPermissionStatusTestBoxOverridesProject(t *testing.T) {
+	srv := fakeGitLab(t, []string{"api"}, roleDeveloper)
+	defer srv.Close()
+	c := connector.NewCtx(t.Context(), "test", map[string]string{"base_url": srv.URL, "token": "tok", "default_project": "dev"}, map[string]string{"project": "acme/web"}, http.DefaultClient, nil, nil)
+	got, err := permissionStatus(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := got.(map[string]any)["html"].(string)
+	for _, want := range []string{"Developer", `value="acme/web"`, "Recheck", `data-op="permission_status"`} {
+		if !strings.Contains(h, want) {
+			t.Fatalf("html missing %q: %s", want, h)
+		}
+	}
+}
+
+func TestProjectHintOnNamespaceOnly(t *testing.T) {
+	p := probe{Name: "project", Status: http.StatusNotFound, Error: "404 Not Found"}
+	if got := probeText(p); got != "404 Not Found" {
+		t.Fatalf("status repeated: %q", got)
+	}
+	if !strings.Contains(projectHint("dev", p), "namespace") {
+		t.Fatal("expected a namespace hint")
+	}
+	if strings.Contains(projectHint("acme/web", p), "namespace") {
+		t.Fatal("a group/repo path is not a namespace")
+	}
+}
+
 func TestTokenFactsWarnsNearExpiry(t *testing.T) {
 	now := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	facts := tokenFacts(&PermissionReport{User: "dev", TokenName: "bot", Scopes: []string{"api"}, ExpiresAt: "2026-01-06"}, now)

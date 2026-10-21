@@ -53,6 +53,7 @@ type Configs struct {
 // field value as "browser"; it is unused here.
 type PermissionStatusInput struct {
 	Browser string `wick:"desc=Unused."`
+	Project string `wick:"desc=Project to check instead of default_project (the panel's test box). Not saved."`
 }
 
 // ── inputs ───────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -198,7 +199,7 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 		// which permissions.project_access leaves out.
 		switch {
 		case !pr.OK:
-			rep.RoleInfo = fmt.Sprintf("project cannot be read (%d %s)", pr.Status, pr.Error)
+			rep.RoleInfo = "project cannot be read (" + probeText(pr) + ")" + projectHint(project, pr)
 		case isAdmin:
 			role, roleKnown = roleOwner, true
 			rep.RoleInfo = "the token's user is an instance admin"
@@ -252,11 +253,11 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 
 		switch {
 		case scoped && projProbed && !projPr.OK:
-			p.Mark, p.Reason = "❌", fmt.Sprintf("project %s cannot be read: %d %s", project, projPr.Status, projPr.Error)
+			p.Mark, p.Reason = "❌", "project "+project+" cannot be read: "+probeText(projPr)
 		case !n.Write && probed && pr.OK:
 			p.Mark, p.Reason = "✅", "live read of "+n.Family+" succeeded"
 		case !n.Write && probed:
-			p.Mark, p.Reason = "❌", fmt.Sprintf("live read of %s refused: %d %s", n.Family, pr.Status, pr.Error)
+			p.Mark, p.Reason = "❌", "live read of "+n.Family+" refused: "+probeText(pr)
 		case !n.Write:
 			p.Mark, p.Reason = "❔", rep.RoleInfo
 		case probed && !pr.OK:
@@ -289,6 +290,28 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 	return rep, nil
 }
 
+// probeText is "<status> <message>" without repeating the status GitLab
+// already puts in its message ("404 Not Found").
+func probeText(p probe) string {
+	code := strconv.Itoa(p.Status)
+	if p.Status == 0 || strings.HasPrefix(p.Error, code) {
+		return p.Error
+	}
+	return code + " " + p.Error
+}
+
+// projectHint explains a 404 on the project: GitLab answers 404 both for a
+// path that does not exist and for a project the token may not see.
+func projectHint(project string, p probe) string {
+	if p.Status != http.StatusNotFound {
+		return ""
+	}
+	if _, err := strconv.Atoi(project); err != nil && !strings.Contains(project, "/") {
+		return ". \"" + project + "\" is only a namespace: use the full group/repo path"
+	}
+	return ". GitLab answers 404 for a wrong path and for a project this token may not see: check the path, then the token's access to it"
+}
+
 // scopeCovers: api grants everything, read_api only reads.
 func scopeCovers(granted map[string]bool, write bool) bool {
 	if write {
@@ -307,13 +330,18 @@ func str(v any) string {
 // permissionStatus renders the checklist widget shown on the connector
 // config page (same html-field mechanism as the Bitbucket connector).
 func permissionStatus(c *connector.Ctx) (any, error) {
-	if strings.TrimSpace(c.Cfg("token")) == "" {
-		return map[string]any{"html": permCard(false, "Isi token dulu untuk mengecek permission.", nil, nil)}, nil
+	// The test box overrides default_project for one check without saving it.
+	project := strings.Trim(strings.TrimSpace(c.Input("project")), "/")
+	if project == "" {
+		project = strings.Trim(strings.TrimSpace(c.Cfg("default_project")), "/")
 	}
-	project := strings.Trim(strings.TrimSpace(c.Cfg("default_project")), "/")
+	bar := permToolbar(project)
+	if strings.TrimSpace(c.Cfg("token")) == "" {
+		return map[string]any{"html": permCard(false, "Isi token dulu untuk mengecek permission.", bar, nil, nil)}, nil
+	}
 	rep, err := evaluatePermissions(c, project)
 	if err != nil {
-		return map[string]any{"html": permCard(false, html.EscapeString(err.Error()), nil, nil)}, nil
+		return map[string]any{"html": permCard(false, html.EscapeString(err.Error()), bar, nil, nil)}, nil
 	}
 	allowed, denied, unknown := 0, 0, 0
 	for _, o := range rep.Ops {
@@ -330,7 +358,21 @@ func permissionStatus(c *connector.Ctx) (any, error) {
 	if unknown > 0 {
 		head += fmt.Sprintf(" · %d unknown", unknown)
 	}
-	return map[string]any{"html": permCard(denied == 0, head, tokenFacts(rep, time.Now()), rep.Ops)}, nil
+	head += " · checked " + time.Now().Format("15:04:05")
+	return map[string]any{"html": permCard(denied == 0, head, bar, tokenFacts(rep, time.Now()), rep.Ops)}, nil
+}
+
+// permToolbar: a project box to test any path without saving it, and a
+// recheck that runs the probes again (after a token or permission change).
+// type="button": a bare <button> submits the surrounding config form.
+func permToolbar(project string) string {
+	const btn = `cursor:pointer;font-size:12px;font-weight:500;height:28px;padding:0 12px;border-radius:8px;border:1px solid currentColor;background:transparent`
+	return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">` +
+		`<input name="project" value="` + html.EscapeString(project) + `" placeholder="group/repo" ` +
+		`style="flex:1 1 240px;height:28px;padding:0 8px;font-size:12px;font-family:ui-monospace,monospace;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;opacity:.9"/>` +
+		`<button type="button" data-op="permission_status" style="` + btn + `">Test project</button>` +
+		`<button type="button" data-op="permission_status" style="` + btn + `">↻ Recheck</button></div>` +
+		`<div class="text-xs opacity-70" style="margin-top:4px">Test project checks the path typed here without saving it; Recheck runs every probe again with the saved token.</div>`
 }
 
 // tokenFacts are the lines above the checklist: who, which scopes, until
@@ -382,7 +424,7 @@ func tokenFacts(rep *PermissionReport, now time.Time) []string {
 	return out
 }
 
-func permCard(ok bool, head string, facts []string, ops []opPermission) string {
+func permCard(ok bool, head, toolbar string, facts []string, ops []opPermission) string {
 	ring, text, dot := "border-neg-300 bg-neg-100 dark:bg-navy-800", "text-neg-400", "bg-neg-400"
 	if ok {
 		ring, text, dot = "border-pos-300 bg-pos-100 dark:bg-navy-800", "text-pos-400", "bg-pos-400"
@@ -391,6 +433,7 @@ func permCard(ok bool, head string, facts []string, ops []opPermission) string {
 	b.WriteString(`<div class="rounded-lg border ` + ring + ` px-4 py-2.5">`)
 	b.WriteString(`<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full ` + dot + `"></span>`)
 	b.WriteString(`<span class="text-xs font-medium ` + text + `">` + head + `</span></div>`)
+	b.WriteString(toolbar)
 	if len(facts) > 0 {
 		b.WriteString(`<ul class="mt-2 space-y-0.5">`)
 		for _, f := range facts {
