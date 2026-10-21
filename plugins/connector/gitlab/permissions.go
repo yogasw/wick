@@ -41,43 +41,49 @@ func roleName(level int) string {
 // token can read that kind of resource, whether it writes (scope api, else
 // read_api is enough) and the lowest project role it needs (0 = not
 // project-scoped; reads on a public/internal project need no role).
+//
+// Granular is the permission a fine-grained token needs for it, named as
+// GitLab's token form shows it: "[User ›] Category › Resource: Action"
+// (from GitLab's config/authz assignable permissions; no "User ›" prefix =
+// the "Group and project" tab).
 var opNeeds = []struct {
-	Op     string
-	Family string
-	Write  bool
-	Role   int
+	Op       string
+	Family   string
+	Write    bool
+	Role     int
+	Granular string
 }{
-	{"get_me", "user", false, roleNone},
-	{"list_projects", "projects", false, roleNone},
-	{"get_project", "project", false, roleNone},
-	{"list_branches", "branches", false, roleReporter},
-	{"create_branch", "branches", true, roleDeveloper},
-	{"list_commits", "commits", false, roleReporter},
-	{"get_commit", "commits", false, roleReporter},
-	{"compare", "commits", false, roleReporter},
-	{"get_file", "tree", false, roleReporter},
-	{"list_tree", "tree", false, roleReporter},
-	{"list_tags", "tags", false, roleReporter},
-	{"list_merge_requests", "merge requests", false, roleReporter},
-	{"get_merge_request", "merge requests", false, roleReporter},
-	{"get_merge_request_changes", "merge requests", false, roleReporter},
-	{"list_mr_notes", "merge requests", false, roleReporter},
-	{"list_mr_pipelines", "merge requests", false, roleReporter},
-	{"create_merge_request", "merge requests", true, roleDeveloper},
-	{"update_merge_request", "merge requests", true, roleDeveloper},
-	{"add_mr_note", "merge requests", true, roleReporter},
-	{"approve_merge_request", "merge requests", true, roleDeveloper},
-	{"merge_merge_request", "merge requests", true, roleDeveloper},
-	{"list_pipelines", "pipelines", false, roleReporter},
-	{"get_pipeline", "pipelines", false, roleReporter},
-	{"list_pipeline_jobs", "pipelines", false, roleReporter},
-	{"get_job_log", "pipelines", false, roleReporter},
-	{"retry_pipeline", "pipelines", true, roleDeveloper},
-	{"cancel_pipeline", "pipelines", true, roleDeveloper},
-	{"list_issues", "issues", false, roleGuest},
-	{"get_issue", "issues", false, roleGuest},
-	{"create_issue", "issues", true, roleGuest},
-	{"add_issue_note", "issues", true, roleGuest},
+	{"get_me", "user", false, roleNone, "User › System Access › User: Read"},
+	{"list_projects", "projects", false, roleNone, "User › Projects › Project: Read"},
+	{"get_project", "project", false, roleNone, "Projects › Project: Read"},
+	{"list_branches", "branches", false, roleReporter, "Repository › Branch: Read"},
+	{"create_branch", "branches", true, roleDeveloper, "Repository › Branch: Create"},
+	{"list_commits", "commits", false, roleReporter, "Repository › Commit: Read"},
+	{"get_commit", "commits", false, roleReporter, "Repository › Commit: Read"},
+	{"compare", "commits", false, roleReporter, "Repository › Repository: Read"},
+	{"get_file", "tree", false, roleReporter, "Repository › Repository: Read"},
+	{"list_tree", "tree", false, roleReporter, "Repository › Repository: Read"},
+	{"list_tags", "tags", false, roleReporter, "Repository › Repository Tag: Read"},
+	{"list_merge_requests", "merge requests", false, roleReporter, "Repository › Merge Request: Read"},
+	{"get_merge_request", "merge requests", false, roleReporter, "Repository › Merge Request: Read"},
+	{"get_merge_request_changes", "merge requests", false, roleReporter, "Repository › Merge Request: Read"},
+	{"list_mr_notes", "merge requests", false, roleReporter, "Project Planning › Work Item: Read"},
+	{"list_mr_pipelines", "merge requests", false, roleReporter, "Repository › Merge Request: Read"},
+	{"create_merge_request", "merge requests", true, roleDeveloper, "Repository › Merge Request: Create"},
+	{"update_merge_request", "merge requests", true, roleDeveloper, "Repository › Merge Request: Update"},
+	{"add_mr_note", "merge requests", true, roleReporter, "Project Planning › Work Item: Create"},
+	{"approve_merge_request", "merge requests", true, roleDeveloper, "Repository › Merge Request: Approve"},
+	{"merge_merge_request", "merge requests", true, roleDeveloper, "Repository › Merge Request: Merge"},
+	{"list_pipelines", "pipelines", false, roleReporter, "CI/CD › Pipeline: Read"},
+	{"get_pipeline", "pipelines", false, roleReporter, "CI/CD › Pipeline: Read"},
+	{"list_pipeline_jobs", "pipelines", false, roleReporter, "CI/CD › Pipeline: Read"},
+	{"get_job_log", "pipelines", false, roleReporter, "CI/CD › Job: Read"},
+	{"retry_pipeline", "pipelines", true, roleDeveloper, "CI/CD › Pipeline: Update"},
+	{"cancel_pipeline", "pipelines", true, roleDeveloper, "CI/CD › Pipeline: Update"},
+	{"list_issues", "issues", false, roleGuest, "Project Planning › Work Item: Read"},
+	{"get_issue", "issues", false, roleGuest, "Project Planning › Work Item: Read"},
+	{"create_issue", "issues", true, roleGuest, "Project Planning › Work Item: Create"},
+	{"add_issue_note", "issues", true, roleGuest, "Project Planning › Work Item: Create"},
 }
 
 type probe struct {
@@ -108,6 +114,19 @@ type PermissionReport struct {
 	Probes     []probe        `json:"probes"`
 	Ops        []opPermission `json:"ops"`
 	Summary    string         `json:"summary"`
+	// MissingRead / MissingWrite: fine-grained permissions to add in
+	// GitLab, deduped, for the denied read and write ops.
+	MissingRead  []string `json:"missing_read,omitempty"`
+	MissingWrite []string `json:"missing_write,omitempty"`
+}
+
+func addOnce(list *[]string, v string) {
+	for _, x := range *list {
+		if x == v {
+			return
+		}
+	}
+	*list = append(*list, v)
 }
 
 // probeGET is one read-only call; a non-2xx answer is a result, not an error.
@@ -249,6 +268,10 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 		if roleNeeded > roleNone {
 			need = append(need, "role "+roleName(roleNeeded)+"+")
 		}
+		if !hasScopes {
+			// A fine-grained token: name the permission as GitLab's form does.
+			need[0] = n.Granular
+		}
 		p.Needs = strings.Join(need, ", ")
 		pr, probed := probes[n.Family]
 
@@ -280,6 +303,13 @@ func evaluatePermissions(c *connector.Ctx, project string) (*PermissionReport, e
 			allowed++
 		case "❌":
 			denied++
+			if !hasScopes && n.Granular != "" {
+				if n.Write {
+					addOnce(&rep.MissingWrite, n.Granular)
+				} else {
+					addOnce(&rep.MissingRead, n.Granular)
+				}
+			}
 		default:
 			unknown++
 		}
@@ -419,6 +449,12 @@ func tokenFacts(rep *PermissionReport, now time.Time) []string {
 		out = append(out, line)
 	} else {
 		out = append(out, html.EscapeString(rep.RoleInfo))
+	}
+	if len(rep.MissingRead) > 0 {
+		out = append(out, "<b>Add to the token in GitLab (read):</b> "+html.EscapeString(strings.Join(rep.MissingRead, " · ")))
+	}
+	if len(rep.MissingWrite) > 0 {
+		out = append(out, "<b>Only if wick should also write:</b> "+html.EscapeString(strings.Join(rep.MissingWrite, " · ")))
 	}
 	return out
 }

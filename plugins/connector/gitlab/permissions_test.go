@@ -121,6 +121,13 @@ func TestPermissionsFineGrainedTokenProbesReads(t *testing.T) {
 	if m["get_me"] != "❌" || m["get_file"] != "✅" || m["get_pipeline"] != "❌" || m["retry_pipeline"] != "❌" || m["create_merge_request"] != "❔" {
 		t.Fatalf("unexpected marks: %v", m)
 	}
+	read := strings.Join(rep.MissingRead, "|")
+	if !strings.Contains(read, "CI/CD › Pipeline: Read") || !strings.Contains(read, "User › System Access › User: Read") || strings.Contains(read, "Repository: Read") {
+		t.Fatalf("unexpected missing read list: %v", rep.MissingRead)
+	}
+	if strings.Join(rep.MissingWrite, "|") != "CI/CD › Pipeline: Update" {
+		t.Fatalf("unexpected missing write list: %v", rep.MissingWrite)
+	}
 }
 
 func TestPermissionsRepoReadWithoutProjectRead(t *testing.T) {
