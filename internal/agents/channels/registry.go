@@ -732,6 +732,22 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 	}
 	start := ts.start
 
+	// A failover took the turn elsewhere: the failed provider's text (its
+	// limit line, a cut answer) never reaches a channel. What is held here
+	// goes and the next provider's reply is decided afresh; channels shown
+	// some of it get the Warning, to drop theirs.
+	if ev.Type == event.Warning && ev.FailedOver {
+		shown := ts.decided && !ts.silent
+		ts.buf.Reset()
+		ts.pending = withoutText(ts.pending)
+		ts.decided, ts.silent = false, false
+		r.mu.Unlock()
+		if shown {
+			r.forward(sessionID, []event.AgentEvent{ev})
+		}
+		return
+	}
+
 	terminal := ev.Type == event.Done || ev.Type == event.Error
 
 	// Pre-decision: accumulate text, hold events, decide when we can.
@@ -801,7 +817,7 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 // notice (event.Notice), outside any turn: it is not buffered with a
 // reply, does not open the turn state the next reply is decided on, and
 // is not dropped with a silent one. For wick's own notes that can come
-// between turns (a provider failover or its return). Sub-agent sessions
+// between turns. Sub-agent sessions
 // have no thread; nothing is sent for them.
 func (r *Registry) DispatchNotice(sessionID, text string) {
 	if text == "" || agentconfig.ParentOfSubSession(sessionID) != "" {

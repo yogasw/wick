@@ -229,3 +229,22 @@ func TestCarryOverKeepsInterim(t *testing.T) {
 		t.Fatal("the carried-over turn lost the hold")
 	}
 }
+
+// A failover's Warning deletes the live message the failed provider's
+// text was shown in; the next provider's answer is posted on its own.
+func TestFailedOverDropsTheLiveMessage(t *testing.T) {
+	f := newLiveFake(t, false)
+	c := f.channel()
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "You've hit your limit"})
+	c.flushLiveMessage("slack-t1")
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Warning, ErrorMsg: "a stopped", FailedOver: true})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "the answer on b"})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Done})
+	calls := f.got()
+	if len(calls) != 3 || calls[0].method != "post" || calls[1].method != "delete" || calls[2].method != "post" {
+		t.Fatalf("want post, delete, post, got %+v", calls)
+	}
+	if got := callText(calls[2]); !strings.Contains(got, "the answer on b") || strings.Contains(got, "limit") {
+		t.Fatalf("answer posted %q", got)
+	}
+}

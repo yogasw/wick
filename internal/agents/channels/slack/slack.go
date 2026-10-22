@@ -3597,6 +3597,25 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		}
 		s.mu.Unlock()
 
+	case event.Warning:
+		// A failover took the turn elsewhere: the failed provider's text
+		// leaves the thread, its live message too (dropLiveReply). The
+		// next provider's reply starts a live message of its own.
+		if !ev.FailedOver {
+			return
+		}
+		s.mu.Lock()
+		t := s.turns[sessionKey]
+		if t == nil {
+			s.mu.Unlock()
+			return
+		}
+		s.stopEditTicker(t)
+		t.buf.Reset()
+		t.hasStarted = false
+		s.mu.Unlock()
+		s.dropLiveReply(sessionKey, "")
+
 	case event.Compaction, event.Notice:
 		// Something happened TO the session rather than in the reply. The
 		// web UI has a row for it; a thread has nothing unless we post it,

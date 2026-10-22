@@ -779,7 +779,7 @@ func (a *Agent) askFailover(ev event.AgentEvent, text string) (event.AgentEvent,
 	if notice == "" {
 		notice = "Provider failed over to " + v.Target
 	}
-	return event.AgentEvent{Type: event.Warning, ErrorMsg: notice, ErrKind: ev.ErrKind, ResetAt: ev.ResetAt}, true
+	return event.AgentEvent{Type: event.Warning, ErrorMsg: notice, ErrKind: ev.ErrKind, ResetAt: ev.ResetAt, FailedOver: true}, true
 }
 
 // respawnWithMessage stops the current process (if any) and spawns a new one

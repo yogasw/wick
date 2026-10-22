@@ -1001,10 +1001,9 @@ func NewServer() *Server {
 	var teamSvc *team.Service
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent: maxConc,
-		// An automatic provider failover tells the same surfaces a manual
-		// switch does: the web UI gets the system turn, a channel thread
-		// (which shows no system turns) a line ahead of the continued
-		// reply — no Done, the turn is still running.
+		// An automatic provider failover (and its return) shows in the web
+		// UI as a system turn. A channel thread gets no notice: the turn
+		// just goes on there, on the next provider.
 		OnFailoverNotify: func(sid, name, chip string, steps []string) {
 			agentsBcast.PublishSystemTurn(sid, name, chip, steps)
 		},
@@ -1017,11 +1016,6 @@ func NewServer() *Server {
 				channelReg.DispatchAgentEventFrom(sid, name, ev)
 				turnObserver.OnEvent(sid, name, ev)
 			}
-		},
-		// Its own message on the thread, not text folded into a reply: a
-		// return happens between turns, before the next reply starts.
-		OnFailoverReply: func(sid, name string, text string) {
-			channelReg.DispatchNotice(sid, "⚠️ "+text)
 		},
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
 		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,

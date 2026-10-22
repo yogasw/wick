@@ -284,12 +284,11 @@ type PoolConfig struct {
 	// want every transition should subscribe to AgentEvent via
 	// the factory's OnEvent. Optional; nil = no callback.
 	OnLifecycle func(LifecycleEvent)
-	// OnFailoverNotify / OnFailoverReply carry an automatic provider
-	// failover's notice out, like SwitchOptions.Notify / Reply of a manual
-	// switch: the system turn's chip and steps for the web UI, the
-	// sentence for channels that show no system turn. Optional.
+	// OnFailoverNotify carries an automatic provider failover's notice
+	// out, like SwitchOptions.Notify of a manual switch: the system turn's
+	// chip and steps for the web UI. Channels get no notice (no Reply): to
+	// a thread the turn just goes on, on the next provider. Optional.
 	OnFailoverNotify func(sessionID, agentName, chip string, steps []string)
-	OnFailoverReply  func(sessionID, agentName, text string)
 	// OnFailoverAbort publishes the end of a turn a failover took over
 	// but could not carry on (switch refused, re-send failed, session
 	// stopped): the original Error when there is one, then Done. Optional.

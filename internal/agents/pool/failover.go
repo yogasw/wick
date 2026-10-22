@@ -399,11 +399,6 @@ func (p *Pool) runFailover(j failoverJob) {
 				p.cfg.OnFailoverNotify(sid, name, provider.FailoverChipText(tag, j.target.ModelID), steps)
 			}
 		},
-		Reply: func(text string) {
-			if p.cfg.OnFailoverReply != nil {
-				p.cfg.OnFailoverReply(sid, name, text)
-			}
-		},
 	})
 	cont := ""
 	switch {
@@ -767,11 +762,6 @@ func (p *Pool) maybeReturnHome(sessionID, agentName string) bool {
 		Notify: func(tag string, steps []string) {
 			if p.cfg.OnFailoverNotify != nil {
 				p.cfg.OnFailoverNotify(sessionID, agentName, provider.ReturnChipText(tag, t.ModelID), steps)
-			}
-		},
-		Reply: func(text string) {
-			if p.cfg.OnFailoverReply != nil {
-				p.cfg.OnFailoverReply(sessionID, agentName, text)
 			}
 		},
 	})

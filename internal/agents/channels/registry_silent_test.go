@@ -265,3 +265,45 @@ func TestDispatchNoticeOutsideTurn(t *testing.T) {
 		t.Fatalf("sub-agent / empty notice must not be sent: %+v", rec.got)
 	}
 }
+
+// A failover's Warning drops the failed provider's text: held text never
+// goes out, and channels already shown some get the Warning to drop it.
+// The next provider's reply goes out as usual.
+func TestFailedOverDropsTheFailedText(t *testing.T) {
+	failedOver := event.AgentEvent{Type: event.Warning, ErrorMsg: "a stopped", FailedOver: true}
+
+	// Held: short text, not decided yet.
+	reg, rec := setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "limit"})
+	reg.DispatchAgentEvent("s1", failedOver)
+	if len(rec.got) != 0 {
+		t.Fatalf("held text reached the channel: %+v", rec.got)
+	}
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "the answer on b"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if got := strings.Join(rec.texts(), ""); got != "the answer on b" {
+		t.Fatalf("texts = %q", got)
+	}
+
+	// Shown: the channel got the text, then the Warning.
+	reg, rec = setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "You've hit your limit\n"})
+	reg.DispatchAgentEvent("s1", failedOver)
+	if n := len(rec.got); n != 2 || !rec.got[1].FailedOver {
+		t.Fatalf("want the text then the Warning, got %+v", rec.got)
+	}
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "the answer on b"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if last := rec.got[len(rec.got)-1]; last.Type != event.Done || rec.got[len(rec.got)-2].Text != "the answer on b" {
+		t.Fatalf("got %+v", rec.got)
+	}
+
+	// A plain Warning (an unparsable line) keeps the text.
+	reg, rec = setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "hello there"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Warning, ErrorMsg: "w"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if got := strings.Join(rec.texts(), ""); got != "hello there" {
+		t.Fatalf("texts = %q", got)
+	}
+}
