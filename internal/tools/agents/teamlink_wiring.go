@@ -1499,6 +1499,12 @@ func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remot
 			case event.TextReplace:
 				b.Reset()
 				b.WriteString(ev.Text)
+			case event.Warning:
+				// A failover took the turn: what came so far is the
+				// failed provider's (its limit line), not the reply.
+				if ev.FailedOver {
+					b.Reset()
+				}
 			case event.Done:
 				// The process died and is being restarted with the turn
 				// (a crash restart, an idle-kill retry): its answer is

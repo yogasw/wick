@@ -68,6 +68,9 @@ type StreamEvent struct {
 	// read from here because the normalized event carries no usage field
 	// and providers report it in their own shapes.
 	Raw string
+	// FailedOver: a Warning standing for a turn a provider failover took
+	// over. The text so far is the failed provider's (its limit line).
+	FailedOver bool
 }
 
 // Runner drives one session as a sub-agent. Implemented by the pool
@@ -1004,6 +1007,12 @@ func (s *Service) await(
 			switch ev.Type {
 			case event.TextDelta:
 				text.WriteString(ev.Text)
+			case event.Warning:
+				// The failed provider's text never reaches the result;
+				// the next provider's answer follows on this stream.
+				if ev.FailedOver {
+					text.Reset()
+				}
 			case event.Error:
 				// The provider killed the run itself (claude's
 				// error_max_turns rides this path as is_error=true on its

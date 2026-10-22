@@ -34,7 +34,7 @@ func (d *DelegationStream) SubscribeSession(sessionID string) (<-chan delegation
 			// (num_turns) exist ONLY there, and this hop dropping it was
 			// why delegations billed turns_used:0 and tokens_used:0 no
 			// matter how much a run actually spent.
-			se := delegation.StreamEvent{Type: eventTypeFromString(ev.Type), Text: ev.Data, Raw: ev.Raw}
+			se := delegation.StreamEvent{Type: eventTypeFromString(ev.Type), Text: ev.Data, Raw: ev.Raw, FailedOver: ev.FailedOver}
 			select {
 			case out <- se:
 			default:
