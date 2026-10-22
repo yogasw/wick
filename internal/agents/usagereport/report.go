@@ -181,15 +181,26 @@ type Scope struct {
 	// Like Instances, it needs a Tags resolver that fills
 	// SessionTags.Providers.
 	Providers []string
+	// People narrows to sessions any of these wick user ids took part in;
+	// NoPerson selects the ones nobody is attributed to. Models narrows to
+	// sessions run on any of these models, NoProvider for none recorded.
+	People []string
+	Models []string
 }
 
 // NoProvider is the key a session with no provider recorded is filed
-// under, so a filter can select it instead of silently dropping it.
+// under, so a filter can select it instead of silently dropping it. The
+// model filter uses it the same way.
 const NoProvider = "(none)"
+
+// NoPerson is the key for sessions with nobody attributed: machine
+// callers from before ownership was stamped, channels with no account.
+const NoPerson = "(unattributed)"
 
 // Empty reports whether this scope narrows anything.
 func (sc Scope) Empty() bool {
-	return len(sc.Channels) == 0 && len(sc.Instances) == 0 && len(sc.Providers) == 0
+	return len(sc.Channels) == 0 && len(sc.Instances) == 0 && len(sc.Providers) == 0 &&
+		len(sc.People) == 0 && len(sc.Models) == 0
 }
 
 // Keep is the predicate the roll-up applies per session.
@@ -203,6 +214,18 @@ func (sc Scope) Keep(t store.SessionTags) bool {
 	if len(sc.Providers) > 0 && !KeepsProviders(sc.Providers, t.Providers) {
 		return false
 	}
+	if len(sc.Models) > 0 && !MatchesAny(sc.Models, t.Models, NoProvider) {
+		return false
+	}
+	if len(sc.People) > 0 {
+		people := t.People
+		if people == nil && t.UserID != "" {
+			people = []string{t.UserID}
+		}
+		if !MatchesAny(sc.People, people, NoPerson) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -211,8 +234,15 @@ func (sc Scope) Keep(t store.SessionTags) bool {
 // when ANY of its providers is selected, and one with none recorded
 // matches only NoProvider.
 func KeepsProviders(selected, used []string) bool {
+	return MatchesAny(selected, used, NoProvider)
+}
+
+// MatchesAny is the rule every multi-value filter shares: a session
+// passes when ANY of its values is selected, and one with no value passes
+// only when the `none` bucket is.
+func MatchesAny(selected, used []string, none string) bool {
 	if len(used) == 0 {
-		return contains(selected, NoProvider)
+		return contains(selected, none)
 	}
 	for _, k := range used {
 		if contains(selected, k) {
@@ -229,7 +259,8 @@ func (sc Scope) Key() string {
 		return ""
 	}
 	return "|ch:" + strings.Join(sc.Channels, ",") + "|in:" + strings.Join(sc.Instances, ",") +
-		"|pv:" + strings.Join(sc.Providers, ",")
+		"|pv:" + strings.Join(sc.Providers, ",") + "|pp:" + strings.Join(sc.People, ",") +
+		"|md:" + strings.Join(sc.Models, ",")
 }
 
 func contains(list []string, v string) bool {
@@ -410,10 +441,21 @@ func (b *Builder) loadTags(id string) store.SessionTags {
 	if ch == "" {
 		ch = "ui"
 	}
-	var providers []string
+	var providers, models []string
 	for _, a := range s.Agents {
-		if k := strings.TrimSpace(a.Provider); k != "" && !contains(providers, k) {
+		k := strings.TrimSpace(a.Provider)
+		if k == "" {
+			continue
+		}
+		if !contains(providers, k) {
 			providers = append(providers, k)
+		}
+		model := strings.TrimSpace(a.ModelID)
+		if model == "" {
+			model = "(default)"
+		}
+		if !contains(models, model) {
+			models = append(models, model)
 		}
 	}
 	return store.SessionTags{
@@ -422,6 +464,8 @@ func (b *Builder) loadTags(id string) store.SessionTags {
 		Label:     s.Meta.Label,
 		Channel:   ch,
 		Providers: providers,
+		People:    s.Meta.People(),
+		Models:    models,
 	}
 }
 

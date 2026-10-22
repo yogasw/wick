@@ -24,6 +24,10 @@ export async function loadAnalytics(
     instances?: string[];
     /** Provider keys to include ("claude/work", or "(none)"). Empty = all. */
     providers?: string[];
+    /** Wick user ids, or "(unattributed)". Empty = everyone. */
+    people?: string[];
+    /** Models ("opus", "(none)"). Empty = every model. */
+    models?: string[];
     onProgress?: (done: number, total: number) => void;
     fetchImpl?: typeof fetch;
     /** How long the stream may say nothing before it counts as stalled. */
@@ -38,6 +42,8 @@ export async function loadAnalytics(
   if (opts.channels?.length) url.searchParams.set("channels", opts.channels.join(","));
   if (opts.instances?.length) url.searchParams.set("instances", opts.instances.join(","));
   if (opts.providers?.length) url.searchParams.set("providers", opts.providers.join(","));
+  if (opts.people?.length) url.searchParams.set("people", opts.people.join(","));
+  if (opts.models?.length) url.searchParams.set("models", opts.models.join(","));
 
   const streamURL = new URL(url);
   streamURL.searchParams.set("stream", "1");

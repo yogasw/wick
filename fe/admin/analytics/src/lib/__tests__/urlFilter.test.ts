@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterQuery, readFilter, type PageFilter } from "$lib/urlFilter";
 
-const base: PageFilter = { range: 1, from: "", to: "", channels: [], instances: [], providers: [] };
+const base: PageFilter = { range: 1, from: "", to: "", channels: [], instances: [], providers: [], people: [], models: [] };
 
 describe("url filter", () => {
   it("leaves the default view out of the URL", () => {
@@ -15,6 +15,8 @@ describe("url filter", () => {
       range: 30,
       channels: ["ui", "slack"],
       providers: ["claude/acct-a", "(none)"],
+      people: ["user-a", "(unattributed)"],
+      models: ["opus"],
     };
     const q = filterQuery(f);
     expect(q).toContain("providers=");

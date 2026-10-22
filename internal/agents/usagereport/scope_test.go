@@ -49,6 +49,8 @@ func TestScopeKeyDiffersPerProviderSelection(t *testing.T) {
 		"no-prov":  {Providers: []string{NoProvider}},
 		"a+ui":     {Channels: []string{"ui"}, Providers: []string{"claude/acct-a"}},
 		"ui alone": {Channels: []string{"ui"}},
+		"person":   {People: []string{"user-a"}},
+		"model":    {Models: []string{"user-a"}},
 	} {
 		k := sc.Key()
 		if other, dup := keys[k]; dup {
@@ -58,5 +60,30 @@ func TestScopeKeyDiffersPerProviderSelection(t *testing.T) {
 	}
 	if (Scope{Providers: []string{"claude/acct-a"}}).Empty() {
 		t.Error("a provider selection narrows the scope, so it is not empty")
+	}
+}
+
+func TestScopeKeepsByPeopleAndModel(t *testing.T) {
+	both := store.SessionTags{UserID: "user-a", People: []string{"user-a", "user-b"}, Models: []string{"opus", "sonnet"}}
+	ownerOnly := store.SessionTags{UserID: "user-b"}
+	nobody := store.SessionTags{}
+	cases := []struct {
+		name string
+		sc   Scope
+		tags store.SessionTags
+		want bool
+	}{
+		{"joined person", Scope{People: []string{"user-b"}}, both, true},
+		{"owner when people unset", Scope{People: []string{"user-b"}}, ownerOnly, true},
+		{"other person", Scope{People: []string{"user-c"}}, both, false},
+		{"unattributed", Scope{People: []string{NoPerson}}, nobody, true},
+		{"second model", Scope{Models: []string{"sonnet"}}, both, true},
+		{"no model recorded", Scope{Models: []string{NoProvider}}, nobody, true},
+		{"model excludes none", Scope{Models: []string{"opus"}}, nobody, false},
+	}
+	for _, c := range cases {
+		if got := c.sc.Keep(c.tags); got != c.want {
+			t.Errorf("%s: Keep = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

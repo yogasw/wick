@@ -2,6 +2,7 @@ package admin
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,13 +53,27 @@ type sessionFacts struct {
 	// Providers is one entry per distinct provider key the session ran on,
 	// with the model it was pinned to ("(default)" when none).
 	Providers []providerUse
+	// Models is every distinct model across the session's agents. Kept
+	// apart from Providers, which holds one entry per provider: a session
+	// that ran two models on one account still used both.
+	Models []string
 }
 
-type providerUse struct{ Key, Model string }
+// providerUse is one provider a session ran on. Model is the first model
+// it was pinned to, Models every one, so a provider's model breakdown
+// counts a second model on the same account too.
+type providerUse struct {
+	Key, Model string
+	Models     []string
+}
 
 // noProvider files a conversation with no provider recorded, so the
 // provider filter can select it rather than silently dropping it.
 const noProvider = usagereport.NoProvider
+
+// noPerson files a conversation nobody is attributed to, so the people
+// filter can select machine and ownerless callers as well.
+const noPerson = usagereport.NoPerson
 
 // providerKeys is the provider keys alone, in the order they were used.
 func (f sessionFacts) providerKeys() []string {
@@ -157,20 +172,32 @@ func factsFrom(id string, sess session.Session) sessionFacts {
 		LastActive:  m.LastActive,
 		People:      append([]string(nil), m.People()...),
 	}
-	seen := map[string]bool{}
+	seen, seenModel := map[string]bool{}, map[string]bool{}
 	for _, a := range sess.Agents {
 		k := strings.TrimSpace(a.Provider)
-		if k == "" || seen[k] {
+		if k == "" {
 			continue
 		}
-		seen[k] = true
 		model := strings.TrimSpace(a.ModelID)
 		if model == "" {
 			// Not a gap in the record: no pin means the provider picked its
 			// own default, which is a real answer worth showing.
 			model = "(default)"
 		}
-		f.Providers = append(f.Providers, providerUse{Key: k, Model: model})
+		if !seenModel[model] {
+			seenModel[model] = true
+			f.Models = append(f.Models, model)
+		}
+		if seen[k] {
+			for i := range f.Providers {
+				if f.Providers[i].Key == k && !slices.Contains(f.Providers[i].Models, model) {
+					f.Providers[i].Models = append(f.Providers[i].Models, model)
+				}
+			}
+			continue
+		}
+		seen[k] = true
+		f.Providers = append(f.Providers, providerUse{Key: k, Model: model, Models: []string{model}})
 	}
 	return f
 }

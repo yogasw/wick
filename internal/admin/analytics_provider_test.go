@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,10 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 )
 
-// seedForProviders builds two people and five conversations: one per
+// seedForProviders builds two people and seven conversations: one per
 // provider, one that switched provider mid-life, one with no provider
-// recorded, and one outside the week.
+// recorded, one that ran two models on one account, one nobody is
+// attributed to, and one outside the week.
 func seedForProviders(t *testing.T) *Handler {
 	t.Helper()
 	r := newAnalyticsRepo(t)
@@ -44,9 +46,11 @@ func seedForProviders(t *testing.T) *Handler {
 		if err := session.SaveMeta(layout, id, s.Meta); err != nil {
 			t.Fatal(err)
 		}
+		// "provider:model", so one session can run several of either.
 		var agents []session.AgentEntry
 		for i, p := range providers {
-			agents = append(agents, session.AgentEntry{Name: "agent-" + string(rune('a'+i)), Provider: p, CreatedAt: at})
+			key, model, _ := strings.Cut(p, ":")
+			agents = append(agents, session.AgentEntry{Name: "agent-" + string(rune('a'+i)), Provider: key, ModelID: model, CreatedAt: at})
 		}
 		if len(agents) > 0 {
 			if err := session.SaveAgents(layout, id, agents); err != nil {
@@ -54,11 +58,13 @@ func seedForProviders(t *testing.T) *Handler {
 			}
 		}
 	}
-	mk("s-a-ui", "ui", "user-a", now.AddDate(0, 0, -1), "claude/acct-a")
-	mk("s-b-slack", "slack", "user-b", now.AddDate(0, 0, -2), "codex/acct-b")
-	mk("s-switch", "ui", "user-a", now.AddDate(0, 0, -3), "claude/acct-a", "codex/acct-b")
+	mk("s-a-ui", "ui", "user-a", now.AddDate(0, 0, -1), "claude/acct-a:sonnet")
+	mk("s-b-slack", "slack", "user-b", now.AddDate(0, 0, -2), "codex/acct-b:gpt")
+	mk("s-switch", "ui", "user-a", now.AddDate(0, 0, -3), "claude/acct-a:opus", "codex/acct-b:gpt")
 	mk("s-none", "rest", "user-b", now.AddDate(0, 0, -4))
-	mk("s-old", "ui", "user-a", now.AddDate(0, 0, -60), "claude/acct-a")
+	mk("s-two-models", "ui", "user-b", now.AddDate(0, 0, -5), "claude/acct-c:opus", "claude/acct-c:sonnet")
+	mk("s-orphan", "rest", "", now.AddDate(0, 0, -6), "claude/acct-c:opus")
+	mk("s-old", "ui", "user-a", now.AddDate(0, 0, -60), "claude/acct-a:opus")
 	return &Handler{repo: r}
 }
 
@@ -150,7 +156,7 @@ func TestSwitchedConversationMatchesEitherProvider(t *testing.T) {
 func TestNoProviderBucket(t *testing.T) {
 	h := seedForProviders(t)
 	all := build(t, h, providerFilter())
-	want := []string{noProvider, "claude/acct-a", "codex/acct-b"}
+	want := []string{noProvider, "claude/acct-a", "claude/acct-c", "codex/acct-b"}
 	if len(all.KnownProviders) != len(want) {
 		t.Fatalf("known providers = %v, want %v", all.KnownProviders, want)
 	}
@@ -169,7 +175,7 @@ func TestNoProviderBucket(t *testing.T) {
 		t.Errorf("(none) lists %v, want s-none", ids)
 	}
 	// Picking one provider must not take the other chips away.
-	if got := build(t, h, providerFilter("codex/acct-b")).KnownProviders; len(got) != 3 {
+	if got := build(t, h, providerFilter("codex/acct-b")).KnownProviders; len(got) != 4 {
 		t.Errorf("known providers under a filter = %v, want every one in range", got)
 	}
 
@@ -212,5 +218,135 @@ func TestLedgerTagsCarryProviders(t *testing.T) {
 	}
 	if got := ledgerTags("s-none").Providers; len(got) != 0 {
 		t.Errorf("ledger tags providers = %v, want none", got)
+	}
+}
+
+func peopleFilter(ids ...string) analyticsFilter {
+	f := providerFilter()
+	f.Who = map[string]bool{}
+	for _, id := range ids {
+		f.Who[id] = true
+	}
+	return f
+}
+
+func TestPeopleFilter(t *testing.T) {
+	h := seedForProviders(t)
+	out := build(t, h, peopleFilter("user-b"))
+	if out.Sessions != 3 {
+		t.Errorf("user-b = %d conversations, want 3 (s-b-slack, s-none, s-two-models)", out.Sessions)
+	}
+	if ids := recentIDs(out); ids["s-a-ui"] || ids["s-orphan"] {
+		t.Errorf("drill-downs list %v, want only user-b's", ids)
+	}
+	orphans := build(t, h, peopleFilter(noPerson))
+	if orphans.Sessions != 1 || orphans.Unattributed != 1 {
+		t.Errorf("(unattributed) = %d conversations, want the ownerless one", orphans.Sessions)
+	}
+	known := map[string]bool{}
+	for _, k := range build(t, h, peopleFilter("user-a")).KnownPeople {
+		known[k] = true
+	}
+	if !known["user-a"] || !known["user-b"] || !known[noPerson] {
+		t.Errorf("known people = %v, want both people and the unattributed bucket", known)
+	}
+}
+
+func TestProviderAndPeopleCombine(t *testing.T) {
+	h := seedForProviders(t)
+	f := peopleFilter("user-a")
+	f.Prov = map[string]bool{"codex/acct-b": true}
+	out := build(t, h, f)
+	if out.Sessions != 1 {
+		t.Errorf("codex/acct-b AND user-a = %d conversations, want only s-switch", out.Sessions)
+	}
+	if len(out.ProviderUsage) != 1 || out.ProviderUsage[0].Sessions != 1 || out.ProviderUsage[0].TopUserID != "user-a" {
+		t.Errorf("usage = %+v, want one conversation, all user-a's", out.ProviderUsage)
+	}
+}
+
+// "Who used it last, and who used it most" for each picked provider.
+func TestProviderUsageLastAndTopUser(t *testing.T) {
+	h := seedForProviders(t)
+	out := build(t, h, providerFilter("claude/acct-a", "codex/acct-b", noProvider))
+	if len(out.ProviderUsage) != 2 {
+		t.Fatalf("usage rows = %+v, want one per picked provider, (none) excluded", out.ProviderUsage)
+	}
+	a, b := out.ProviderUsage[0], out.ProviderUsage[1]
+	if a.Key != "claude/acct-a" || a.Sessions != 2 || a.People != 1 {
+		t.Errorf("claude/acct-a = %+v, want 2 conversations by 1 person", a)
+	}
+	if a.LastUsedBy != "User A" || a.TopUser != "User A" || a.TopUserSessions != 2 {
+		t.Errorf("claude/acct-a last/top = %q/%q×%d, want User A both, 2", a.LastUsedBy, a.TopUser, a.TopUserSessions)
+	}
+	// One conversation each: the tie goes to whoever used it more recently.
+	if b.Key != "codex/acct-b" || b.TopUser != "User B" || b.TopUserSessions != 1 || b.LastUsedBy != "User B" {
+		t.Errorf("codex/acct-b = %+v, want User B last and top on the tie", b)
+	}
+	if len(b.Models) != 1 || b.Models[0].Key != "gpt" || b.Models[0].Sessions != 2 {
+		t.Errorf("codex/acct-b models = %+v, want gpt×2", b.Models)
+	}
+	if build(t, h, providerFilter()).ProviderUsage != nil {
+		t.Error("no provider picked, but a usage table was sent")
+	}
+}
+
+func modelFilter(models ...string) analyticsFilter {
+	f := providerFilter()
+	f.Model = map[string]bool{}
+	for _, m := range models {
+		f.Model[m] = true
+	}
+	return f
+}
+
+func TestModelFilter(t *testing.T) {
+	h := seedForProviders(t)
+	if got := build(t, h, modelFilter("opus")).Sessions; got != 3 {
+		t.Errorf("opus = %d conversations, want 3 (s-switch, s-two-models, s-orphan)", got)
+	}
+	// A conversation that ran two models matches either.
+	sonnet := build(t, h, modelFilter("sonnet"))
+	if ids := recentIDs(sonnet); sonnet.Sessions != 2 || !ids["s-two-models"] {
+		t.Errorf("sonnet = %d conversations %v, want s-a-ui and s-two-models", sonnet.Sessions, ids)
+	}
+	if got := build(t, h, modelFilter(noProvider)).Sessions; got != 1 {
+		t.Errorf("(none) model = %d conversations, want the one with no agent recorded", got)
+	}
+	want := []string{noProvider, "gpt", "opus", "sonnet"}
+	if got := build(t, h, modelFilter("opus")).KnownModels; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("known models = %v, want %v", got, want)
+	}
+}
+
+func TestModelAndProviderCombine(t *testing.T) {
+	h := seedForProviders(t)
+	f := modelFilter("opus")
+	f.Prov = map[string]bool{"claude/acct-a": true}
+	if got := build(t, h, f).Sessions; got != 1 {
+		t.Errorf("opus AND claude/acct-a = %d conversations, want only s-switch", got)
+	}
+	// Both models on one account show in that account's breakdown.
+	f = providerFilter("claude/acct-c")
+	usage := build(t, h, f).ProviderUsage
+	models := map[string]int{}
+	for _, m := range usage[0].Models {
+		models[m.Key] = m.Sessions
+	}
+	if models["opus"] != 2 || models["sonnet"] != 1 {
+		t.Errorf("claude/acct-c models = %v, want opus×2 and sonnet×1", models)
+	}
+	if usage[0].People != 1 {
+		t.Errorf("claude/acct-c people = %d, want user-b only — the orphan has nobody", usage[0].People)
+	}
+}
+
+func TestParseFilterReadsPeopleAndModels(t *testing.T) {
+	q := url.Values{}
+	q.Set("people", "user-a,(unattributed)")
+	q.Set("models", "opus")
+	f := parseFilter(q)
+	if !f.Who["user-a"] || !f.Who[noPerson] || !f.Model["opus"] {
+		t.Errorf("filter = %+v / %+v, want people and models read", f.Who, f.Model)
 	}
 }

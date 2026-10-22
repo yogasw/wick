@@ -118,6 +118,8 @@ func ledgerTags(id string) store.SessionTags {
 		Channel:   m.Channel,
 		Instance:  m.InstanceKey,
 		Providers: m.providerKeys(),
+		People:    m.People,
+		Models:    m.Models,
 	}
 }
 
@@ -135,6 +137,8 @@ func (h *Handler) analyticsLedgerJSON(w http.ResponseWriter, r *http.Request) {
 		Channels:  csv(q.Get("channels")),
 		Instances: csv(q.Get("instances")),
 		Providers: csv(q.Get("providers")),
+		People:    csv(q.Get("people")),
+		Models:    csv(q.Get("models")),
 	}
 
 	// Everything after /ledger/ is either "usage" (the fleet) or

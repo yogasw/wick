@@ -16,7 +16,6 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/usagereport"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
@@ -226,6 +225,12 @@ type analyticsFilter struct {
 	// A conversation that switched provider passes when ANY of them is
 	// picked. Empty = every provider.
 	Prov map[string]bool
+	// Who narrows to wick user ids — anyone who took part, not only the
+	// creator — with noPerson for conversations nobody is attributed to.
+	Who map[string]bool
+	// Model narrows to models ("opus", "(default)"), noProvider for a
+	// conversation with none recorded. Same ANY rule as providers.
+	Model map[string]bool
 }
 
 func (f analyticsFilter) keepsChannel(ch string) bool {
@@ -242,13 +247,30 @@ func (f analyticsFilter) keepsInstance(key string) bool {
 	return f.Inst[key]
 }
 
-// keepsProviders shares its rule with the ledger's Scope, so the cost
-// figures and the counts can never read the same selection differently.
-func (f analyticsFilter) keepsProviders(used []string) bool {
-	if len(f.Prov) == 0 {
+// keepsAny is usagereport.MatchesAny over a set: the same rule the
+// ledger's Scope applies, so the cost figures and the counts can never
+// read one selection differently. Empty selection keeps everything.
+func keepsAny(sel map[string]bool, used []string, none string) bool {
+	if len(sel) == 0 {
 		return true
 	}
-	return usagereport.KeepsProviders(sortedKeys(f.Prov), used)
+	if len(used) == 0 {
+		return sel[none]
+	}
+	for _, k := range used {
+		if sel[k] {
+			return true
+		}
+	}
+	return false
+}
+
+func (f analyticsFilter) keepsProviders(used []string) bool {
+	return keepsAny(f.Prov, used, noProvider)
+}
+func (f analyticsFilter) keepsPeople(people []string) bool { return keepsAny(f.Who, people, noPerson) }
+func (f analyticsFilter) keepsModels(models []string) bool {
+	return keepsAny(f.Model, models, noProvider)
 }
 
 func (f analyticsFilter) keepsTime(t time.Time) bool {
@@ -271,6 +293,27 @@ type analyticsWindow struct {
 	Channels  []string `json:"channels,omitempty"`
 	Instances []string `json:"instances,omitempty"`
 	Providers []string `json:"providers,omitempty"`
+	People    []string `json:"people,omitempty"`
+	Models    []string `json:"models,omitempty"`
+}
+
+// analyticsProviderUsage answers "provider X, used by these people: how
+// often, who last, who most" for one picked provider, under every other
+// filter on the page.
+type analyticsProviderUsage struct {
+	Key      string `json:"key"`
+	Sessions int    `json:"sessions"`
+	People   int    `json:"people"`
+	// LastUsedBy is who started the newest conversation on it.
+	LastUsedAt   string `json:"last_used_at,omitempty"`
+	LastUsedByID string `json:"last_used_by_id,omitempty"`
+	LastUsedBy   string `json:"last_used_by,omitempty"`
+	// TopUser took part in the most of its conversations; a tie goes to
+	// whoever used it more recently.
+	TopUserID       string              `json:"top_user_id,omitempty"`
+	TopUser         string              `json:"top_user,omitempty"`
+	TopUserSessions int                 `json:"top_user_sessions,omitempty"`
+	Models          []analyticsKeyCount `json:"models,omitempty"`
 }
 
 // analyticsProvider is one provider instance — an account, in practice —
@@ -378,6 +421,12 @@ type analyticsResponse struct {
 	// channel or provider filter, plus noProvider when a conversation in it
 	// has none recorded — the chips the page can filter by.
 	KnownProviders []string `json:"known_providers,omitempty"`
+	// KnownModels and KnownPeople are the same for the model and people
+	// filters: what the range holds, whatever else is picked.
+	KnownModels []string `json:"known_models,omitempty"`
+	KnownPeople []string `json:"known_people,omitempty"`
+	// ProviderUsage has one row per picked provider, empty when none is.
+	ProviderUsage []analyticsProviderUsage `json:"provider_usage,omitempty"`
 }
 
 // Per-project detail caps. Generous enough to answer the question, small
@@ -441,7 +490,10 @@ func windowDays(raw string) (days int, all bool) {
 // 400 the page has to render as an error.
 func parseFilter(q url.Values) analyticsFilter {
 	now := time.Now().UTC()
-	f := analyticsFilter{Chan: map[string]bool{}, Inst: map[string]bool{}, Prov: map[string]bool{}}
+	f := analyticsFilter{
+		Chan: map[string]bool{}, Inst: map[string]bool{}, Prov: map[string]bool{},
+		Who: map[string]bool{}, Model: map[string]bool{},
+	}
 
 	for _, raw := range strings.Split(q.Get("channels"), ",") {
 		ch := strings.TrimSpace(raw)
@@ -458,6 +510,12 @@ func parseFilter(q url.Values) analyticsFilter {
 	}
 	for _, key := range csv(q.Get("providers")) {
 		f.Prov[key] = true
+	}
+	for _, id := range csv(q.Get("people")) {
+		f.Who[id] = true
+	}
+	for _, model := range csv(q.Get("models")) {
+		f.Model[model] = true
 	}
 
 	// A custom range wins over the day count: it is the more specific ask.
@@ -683,6 +741,12 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		row    analyticsProvider
 		users  map[string]bool
 		models map[string]int
+		// For the usage table: conversations per person, when each last
+		// used it, and who started the newest one.
+		byUser   map[string]int
+		userLast map[string]time.Time
+		lastAt   time.Time
+		lastBy   string
 	}
 	provs := map[string]*provAcc{}
 
@@ -691,6 +755,8 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	// must not remove the means of filtering back out of it.
 	allChannels := map[string]bool{}
 	allProviders := map[string]bool{}
+	allModels := map[string]bool{}
+	allPeople := map[string]bool{}
 	var oldest time.Time
 
 	ids, _ := session.List(agentsLayout)
@@ -723,13 +789,26 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 			for _, k := range provKeys {
 				allProviders[k] = true
 			}
+			if len(m.Models) == 0 {
+				allModels[noProvider] = true
+			}
+			for _, k := range m.Models {
+				allModels[k] = true
+			}
+			if len(m.People) == 0 {
+				allPeople[noPerson] = true
+			}
+			for _, uid := range m.People {
+				allPeople[uid] = true
+			}
 		}
 
 		// The filter applies HERE, before anything is counted — so every
 		// number below describes the same slice the chart does. A page
 		// where the chart moved but the totals did not would be reporting
 		// two different things side by side.
-		if !f.keepsChannel(channel) || !f.keepsInstance(instKey) || !f.keepsProviders(provKeys) {
+		if !f.keepsChannel(channel) || !f.keepsInstance(instKey) || !f.keepsProviders(provKeys) ||
+			!f.keepsPeople(m.People) || !f.keepsModels(m.Models) {
 			continue
 		}
 		if !m.CreatedAt.IsZero() && (oldest.IsZero() || m.CreatedAt.Before(oldest)) {
@@ -801,9 +880,11 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 					typ, instance = key[:slash], key[slash+1:]
 				}
 				pv = &provAcc{
-					row:    analyticsProvider{Key: key, Type: typ, Instance: instance},
-					users:  map[string]bool{},
-					models: map[string]int{},
+					row:      analyticsProvider{Key: key, Type: typ, Instance: instance},
+					users:    map[string]bool{},
+					models:   map[string]int{},
+					byUser:   map[string]int{},
+					userLast: map[string]time.Time{},
 				}
 				provs[key] = pv
 			}
@@ -812,13 +893,20 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 				pv.row.LastActiveAt = rfc3339(t)
 			}
 			model := use.Model
-			pv.models[model]++
+			for _, mm := range use.Models {
+				pv.models[mm]++
+			}
 			sessProviders = append(sessProviders, key)
 			sessModels = append(sessModels, model)
 			for _, uid := range m.People {
 				if uid != "" {
 					pv.users[uid] = true
+					pv.byUser[uid]++
+					pv.userLast[uid] = later(pv.userLast[uid], m.LastActive)
 				}
+			}
+			if pv.lastAt.IsZero() || m.LastActive.After(pv.lastAt) {
+				pv.lastAt, pv.lastBy = m.LastActive, firstOf(m.People)
 			}
 			if !m.CreatedAt.Before(from) {
 				day := m.CreatedAt.UTC().Format("2006-01-02")
@@ -945,6 +1033,14 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		allProviders[k] = true
 	}
 	out.KnownProviders = sortedKeys(allProviders)
+	for k := range f.Model {
+		allModels[k] = true
+	}
+	out.KnownModels = sortedKeys(allModels)
+	for k := range f.Who {
+		allPeople[k] = true
+	}
+	out.KnownPeople = sortedKeys(allPeople)
 
 	// Token rows, grouped by owner.
 	byOwner := map[string][]analyticsToken{}
@@ -1113,6 +1209,20 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		sort.Slice(pv.row.Models, func(i, j int) bool { return pv.row.Models[i].Sessions > pv.row.Models[j].Sessions })
 		out.Providers = append(out.Providers, pv.row)
 	}
+	// One usage row per picked provider, in the order of the chips. A pick
+	// with nothing under the other filters still gets its row of zeros: an
+	// absent row would read as "not asked", not "not used".
+	for _, key := range sortedKeys(f.Prov) {
+		if key == noProvider {
+			continue
+		}
+		row := analyticsProviderUsage{Key: key}
+		if pv := provs[key]; pv != nil {
+			row = providerUsageRow(key, pv.row.Sessions, pv.models, pv.byUser, pv.userLast, pv.lastAt, pv.lastBy, names7)
+		}
+		out.ProviderUsage = append(out.ProviderUsage, row)
+	}
+
 	sort.Slice(out.Providers, func(i, j int) bool {
 		if out.Providers[i].Sessions != out.Providers[j].Sessions {
 			return out.Providers[i].Sessions > out.Providers[j].Sessions
@@ -1157,12 +1267,46 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		Channels:  sortedKeys(f.Chan),
 		Instances: sortedKeys(f.Inst),
 		Providers: sortedKeys(f.Prov),
+		People:    sortedKeys(f.Who),
+		Models:    sortedKeys(f.Model),
 	}
 	if !f.To.IsZero() && !f.All {
 		out.Window.To = f.To.Format("2006-01-02")
 	}
 
 	return out, nil
+}
+
+// providerUsageRow fills one usage row. The top user is whoever took part
+// in the most conversations on it; a tie goes to the more recent user,
+// then to the name, so the answer is stable between reloads.
+func providerUsageRow(key string, sessions int, models, byUser map[string]int, userLast map[string]time.Time,
+	lastAt time.Time, lastBy string, names map[string]string) analyticsProviderUsage {
+	name := func(id string) string {
+		if n := names[id]; n != "" {
+			return n
+		}
+		return id
+	}
+	row := analyticsProviderUsage{
+		Key: key, Sessions: sessions, People: len(byUser),
+		LastUsedAt: rfc3339(lastAt), LastUsedByID: lastBy,
+		Models: rankedCounts(models),
+	}
+	if lastBy != "" {
+		row.LastUsedBy = name(lastBy)
+	}
+	for uid, n := range byUser {
+		better := n > row.TopUserSessions
+		if n == row.TopUserSessions && row.TopUserID != "" {
+			a, b := userLast[uid], userLast[row.TopUserID]
+			better = a.After(b) || (a.Equal(b) && name(uid) < row.TopUser)
+		}
+		if better {
+			row.TopUserID, row.TopUser, row.TopUserSessions = uid, name(uid), n
+		}
+	}
+	return row
 }
 
 // pointsFor expands sparse day counts over the full window, so every

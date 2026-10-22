@@ -394,6 +394,11 @@ type SessionTags struct {
 	// page can narrow its token figures by account as well. Filter-only,
 	// so it stays out of the serialised roll-up.
 	Providers []string `json:"-"`
+	// People is everyone who took part, creator first, and Models every
+	// model the session's agents were pinned to — the page's people and
+	// model filters, applied to the token figures too.
+	People []string `json:"-"`
+	Models []string `json:"-"`
 }
 
 // UsageFilter bounds a roll-up: in time, and by which sessions count at

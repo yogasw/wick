@@ -11,6 +11,8 @@ export type PageFilter = {
   channels: string[];
   instances: string[];
   providers: string[];
+  people: string[];
+  models: string[];
 };
 
 /** Today: the page's own default, so it never needs to be in the URL. */
@@ -43,6 +45,8 @@ export function readFilter(search: string): PageFilter {
     channels: list(q, "channels"),
     instances: list(q, "instances"),
     providers: list(q, "providers"),
+    people: list(q, "people"),
+    models: list(q, "models"),
   };
 }
 
@@ -57,6 +61,8 @@ export function filterQuery(f: PageFilter): string {
   if (f.channels.length) q.set("channels", f.channels.join(","));
   if (f.instances.length) q.set("instances", f.instances.join(","));
   if (f.providers.length) q.set("providers", f.providers.join(","));
+  if (f.people.length) q.set("people", f.people.join(","));
+  if (f.models.length) q.set("models", f.models.join(","));
   const s = q.toString();
   return s ? `?${s}` : "";
 }

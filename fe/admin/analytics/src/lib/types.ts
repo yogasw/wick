@@ -28,6 +28,23 @@ export type AnalyticsWindow = {
   channels?: string[];
   instances?: string[];
   providers?: string[];
+  people?: string[];
+  models?: string[];
+};
+
+/** One picked provider under the page's other filters: how often, who
+ *  last, who most, and with which models. */
+export type AnalyticsProviderUsage = {
+  key: string;
+  sessions: number;
+  people: number;
+  last_used_at?: string;
+  last_used_by_id?: string;
+  last_used_by?: string;
+  top_user_id?: string;
+  top_user?: string;
+  top_user_sessions?: number;
+  models?: AnalyticsKeyCount[];
 };
 
 /** One provider instance — an account, in practice — and the models it was
@@ -165,6 +182,11 @@ export type AnalyticsResponse = {
   /** Every provider key seen in the range, plus "(none)" when a
    *  conversation in it has none recorded — the provider chips. */
   known_providers?: string[];
+  /** Same for models and people (ids, plus "(unattributed)"). */
+  known_models?: string[];
+  known_people?: string[];
+  /** One row per picked provider; absent when none is picked. */
+  provider_usage?: AnalyticsProviderUsage[];
 };
 
 /** What the streaming endpoint emits, one JSON object per line. */
