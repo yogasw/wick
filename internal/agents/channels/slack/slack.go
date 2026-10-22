@@ -132,6 +132,12 @@ type turn struct {
 	msgTS      string // ts of the user message — used for reactions
 	buf        strings.Builder
 	hasStarted bool // true after first TextDelta (banner already set)
+	// segStart is where the text after the turn's last tool call starts
+	// in buf, lastSeg the latest non-empty text before it. The reply a
+	// thread gets is that last text (replyText), not the narration the
+	// agent wrote between tools.
+	segStart int
+	lastSeg  string
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -229,6 +235,7 @@ type turn struct {
 func (t *turn) carryOver(old *turn) {
 	t.buf.WriteString(old.buf.String())
 	t.hasStarted = old.hasStarted
+	t.segStart, t.lastSeg = old.segStart, old.lastSeg
 	// Keep pointing at the live message: dropping these makes finalizeReply
 	// post a fresh message and strand the streamed one mid-word.
 	t.liveTS = old.liveTS
@@ -2989,6 +2996,38 @@ func (s *Channel) stopStatusAnimation(t *turn) {
 	t.statusStop = nil
 }
 
+// liveStreamText: a turn's text is live-edited into the thread while it
+// streams. Off: the narration an agent writes between tool calls reached
+// the thread as the reply (the harness's own "say in a few words what you
+// are doing" nudges made it common), so the thread gets the turn's last
+// text once, at Done. Tests of the live-edit path switch it on.
+var liveStreamText = false
+
+// cutSegment closes the text written since the last tool call: a
+// non-empty one becomes lastSeg. Caller holds s.mu.
+func (t *turn) cutSegment() {
+	if seg := t.buf.String()[t.segStart:]; strings.TrimSpace(seg) != "" {
+		t.lastSeg = seg
+	}
+	t.segStart = t.buf.Len()
+}
+
+// replyText is the turn's reply: the text after its last tool call, or
+// the last non-empty text before it when the turn ended on a tool.
+// Caller holds s.mu.
+func (t *turn) replyText() string {
+	if seg := t.buf.String()[t.segStart:]; strings.TrimSpace(seg) != "" {
+		return seg
+	}
+	return t.lastSeg
+}
+
+// resetText empties the turn's text and its segments. Caller holds s.mu.
+func (t *turn) resetText() {
+	t.buf.Reset()
+	t.segStart, t.lastSeg = 0, ""
+}
+
 // startEditTicker launches a goroutine that flushes the accumulated text
 // buffer to the live Slack message every streamEditInterval, so the reply
 // grows in place (chat.update) rather than appearing once at the end. It is
@@ -3093,6 +3132,9 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 		return
 	}
 	raw := t.buf.String()
+	if !liveStreamText {
+		raw = t.replyText()
+	}
 	channelID := t.channelID
 	threadTS := t.threadTS
 	liveTS := t.liveTS
@@ -3394,7 +3436,7 @@ func (s *Channel) moveLiveBelow(sessionKey string) {
 		restart = cur.hasStarted
 	}
 	s.mu.Unlock()
-	if restart {
+	if restart && liveStreamText {
 		// The takeover stopped the old turn's ticker, and hasStarted is
 		// carried, so nothing else would re-post the text.
 		s.startEditTicker(sessionKey)
@@ -3563,7 +3605,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.NotifyState(sessionKey, "running", "")
 			// Begin live-editing the reply: post once now, then chat.update
 			// every streamEditInterval as more text streams in.
-			s.startEditTicker(sessionKey)
+			if liveStreamText {
+				s.startEditTicker(sessionKey)
+			}
 		}
 		// Streaming text → "Thinking" phase. setStatusLabel only repaints on a
 		// real change, so this is cheap on every delta.
@@ -3584,6 +3628,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Lock()
 		if t := s.turns[sessionKey]; t != nil {
 			t.interim.Tool(ev.ToolName, ev.ToolInput, ev.ToolUseID, hide)
+			t.cutSegment()
 		}
 		s.mu.Unlock()
 
@@ -3611,7 +3656,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			return
 		}
 		s.stopEditTicker(t)
-		t.buf.Reset()
+		t.resetText()
 		t.hasStarted = false
 		s.mu.Unlock()
 		s.dropLiveReply(sessionKey, "")
@@ -3643,7 +3688,10 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.stopStatusAnimation(t)
 		s.stopEditTicker(t)
 		text = t.buf.String()
-		t.buf.Reset()
+		if !liveStreamText {
+			text = t.replyText()
+		}
+		t.resetText()
 		t.hasStarted = false
 		t.running = false
 		interim := t.interim

@@ -189,6 +189,7 @@ func TestInterimDropDeletesLiveMessage(t *testing.T) {
 // turn's whole held text.
 func TestInterimDropDeleteFailsCompletesLiveMessage(t *testing.T) {
 	interimHooks(t, true, map[string]bool{"t1": true})
+	withLiveStream(t)
 	f := newLiveFake(t, true)
 	c := f.channel()
 	liveThenDelegate(c)
