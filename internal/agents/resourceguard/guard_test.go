@@ -523,3 +523,25 @@ func TestDefaultCPUPressureLimitIs90(t *testing.T) {
 		t.Fatalf("signals = %v, want the hog killed above 90%%", h.signals)
 	}
 }
+
+// The busiest outside process is read only while the host looks hot, so
+// two reads can be far apart: its ticks are measured against the host
+// ticks of that same gap, not one sample's, or a long-running daemon
+// reads as 100% CPU.
+func TestBusiestOutsideUsesItsOwnWindow(t *testing.T) {
+	h := agentTree()
+	h.outsideTop = &Proc{PID: 900, Comm: "daemon"}
+	g, _ := newTestGuard(h, enforce())
+	g.prevTotal = 1000
+	if got := g.busiestOutside(nil, hostState{totalTicks: 1000}); got != "" {
+		t.Fatalf("first read = %q, want no figure (no window yet)", got)
+	}
+	g.prevTotal += 1000
+	if got := g.busiestOutside(nil, hostState{totalTicks: 1000}); got != "bob/daemon 70% CPU" {
+		t.Fatalf("back-to-back read = %q", got)
+	}
+	g.prevTotal += 70_000
+	if got := g.busiestOutside(nil, hostState{totalTicks: 1000}); got != "bob/daemon 1% CPU" {
+		t.Fatalf("read after a long gap = %q, want the share of the whole gap", got)
+	}
+}

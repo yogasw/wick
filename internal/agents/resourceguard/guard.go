@@ -136,6 +136,9 @@ type Guard struct {
 	prevAgentUsec uint64
 	outside       bool   // an outside-wick episode was already reported
 	topOutside    string // busiest process outside wick, e.g. "bob/compile 70% CPU"
+	// outsideTotal is the host's total CPU ticks at the last
+	// busiestOutside call: the window its process ticks cover.
+	outsideTotal uint64
 }
 
 // New builds a guard over host, reading its config through load.
@@ -411,7 +414,7 @@ func (g *Guard) Tick() {
 			if top == "" {
 				top = "unknown process"
 			}
-			g.emit(Event{Kind: "outside_busy", Detail: fmt.Sprintf("host busy from outside wick: %s (agents use %.0f%% of busy CPU, %.0f%% of used memory), agents left running", top, st.agentCPUPct, memPct)})
+			g.emit(Event{Kind: "outside_busy", Detail: fmt.Sprintf("host busy from outside wick: %s (agents use %.0f%% of busy CPU, %.0f%% of used memory), agents left running; trigger: %s", top, st.agentCPUPct, memPct, look)})
 		}
 		g.setHold(memReason != "")
 		g.incident = false
@@ -500,10 +503,15 @@ func (g *Guard) busiestOutside(procs []agentProc, st hostState) string {
 		skip[p.PID] = true
 	}
 	p, user, t, ok := g.host.BusiestOutside(skip)
-	if !ok || st.totalTicks == 0 {
+	// The process ticks cover the time since the PREVIOUS call, which
+	// only runs while the host looks hot and can be an hour back. Divide
+	// by the host ticks of that same window, not the last sample's.
+	since := g.outsideTotal
+	g.outsideTotal = g.prevTotal
+	if !ok || since == 0 || g.prevTotal <= since {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s %.0f%% CPU", user, p.Comm, min(100, float64(t)*100/float64(st.totalTicks)))
+	return fmt.Sprintf("%s/%s %.0f%% CPU", user, p.Comm, min(100, float64(t)*100/float64(g.prevTotal-since)))
 }
 
 // actOnce stops ONE thing, chosen by what is short: memory → the largest
