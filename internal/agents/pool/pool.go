@@ -169,6 +169,9 @@ type PoolConfig struct {
 	// back because memory is FALLING toward the floor — the trend a static
 	// MinFreeMemoryLoader floor cannot see. nil = no trend gate.
 	SpawnHold func() bool
+	// SpawnHoldReason says what the guard saw when it held a spawn
+	// ("memory pressure full avg10 25%"), for the log. nil = unknown.
+	SpawnHoldReason func() string
 
 	// StopAfterMachineTurn reports whether a process whose turn no person
 	// asked for (a schedule, a workflow, a watch, a sub-agent, the CLI…)

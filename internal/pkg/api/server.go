@@ -1100,7 +1100,8 @@ func NewServer() *Server {
 		},
 		// Trend gate: hold a spawn while free memory is falling toward the
 		// floor, not only once it is under it.
-		SpawnHold: resourceGuard.HoldSpawns,
+		SpawnHold:       resourceGuard.HoldSpawns,
+		SpawnHoldReason: func() string { return resourceGuard.Status().Reason },
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 			// Also fires when the pool binds an unscoped session to a
