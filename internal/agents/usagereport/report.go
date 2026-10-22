@@ -176,10 +176,21 @@ type Scope struct {
 	// must leave this empty rather than get an empty report that reads
 	// like a real answer.
 	Instances []string
+	// Providers narrows to sessions that ran on any of these provider keys
+	// ("claude/work"). NoProvider selects the sessions with none recorded.
+	// Like Instances, it needs a Tags resolver that fills
+	// SessionTags.Providers.
+	Providers []string
 }
 
+// NoProvider is the key a session with no provider recorded is filed
+// under, so a filter can select it instead of silently dropping it.
+const NoProvider = "(none)"
+
 // Empty reports whether this scope narrows anything.
-func (sc Scope) Empty() bool { return len(sc.Channels) == 0 && len(sc.Instances) == 0 }
+func (sc Scope) Empty() bool {
+	return len(sc.Channels) == 0 && len(sc.Instances) == 0 && len(sc.Providers) == 0
+}
 
 // Keep is the predicate the roll-up applies per session.
 func (sc Scope) Keep(t store.SessionTags) bool {
@@ -189,7 +200,26 @@ func (sc Scope) Keep(t store.SessionTags) bool {
 	if len(sc.Instances) > 0 && !contains(sc.Instances, t.Instance) {
 		return false
 	}
+	if len(sc.Providers) > 0 && !KeepsProviders(sc.Providers, t.Providers) {
+		return false
+	}
 	return true
+}
+
+// KeepsProviders reports whether a session that ran on `used` passes a
+// selection of provider keys. A session that switched provider matches
+// when ANY of its providers is selected, and one with none recorded
+// matches only NoProvider.
+func KeepsProviders(selected, used []string) bool {
+	if len(used) == 0 {
+		return contains(selected, NoProvider)
+	}
+	for _, k := range used {
+		if contains(selected, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // Key identifies the scope in the cache, so two different filters cannot
@@ -198,7 +228,8 @@ func (sc Scope) Key() string {
 	if sc.Empty() {
 		return ""
 	}
-	return "|ch:" + strings.Join(sc.Channels, ",") + "|in:" + strings.Join(sc.Instances, ",")
+	return "|ch:" + strings.Join(sc.Channels, ",") + "|in:" + strings.Join(sc.Instances, ",") +
+		"|pv:" + strings.Join(sc.Providers, ",")
 }
 
 func contains(list []string, v string) bool {
@@ -379,11 +410,18 @@ func (b *Builder) loadTags(id string) store.SessionTags {
 	if ch == "" {
 		ch = "ui"
 	}
+	var providers []string
+	for _, a := range s.Agents {
+		if k := strings.TrimSpace(a.Provider); k != "" && !contains(providers, k) {
+			providers = append(providers, k)
+		}
+	}
 	return store.SessionTags{
 		ProjectID: s.Meta.ProjectID,
 		UserID:    s.Meta.UserID,
 		Label:     s.Meta.Label,
 		Channel:   ch,
+		Providers: providers,
 	}
 }
 

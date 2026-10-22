@@ -63,6 +63,7 @@
         to everything else below it. */
     channels?: string[];
     instances?: string[];
+    providers?: string[];
     /** Already-fetched report. A page that needs these numbers for its
         own drill-downs fetches once and hands the result here, instead
         of the card asking for the same thing a second time. */
@@ -83,6 +84,7 @@
     until = "",
     channels,
     instances,
+    providers,
     report: reportProp,
     flush = false,
   }: Props = $props();
@@ -127,10 +129,10 @@
     error = "";
     try {
       if (provider) {
-        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances });
+        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances, providers });
         page = 0;
       } else {
-        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances });
+        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances, providers });
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -145,7 +147,7 @@
      a second request on mount beside onMount's. */
   let lastRange = $state("");
   $effect(() => {
-    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${fed ? "fed" : ""}`;
+    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${(providers ?? []).join()}|${fed ? "fed" : ""}`;
     if (lastRange === "") {
       lastRange = key;
       return;

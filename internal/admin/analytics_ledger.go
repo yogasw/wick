@@ -117,6 +117,7 @@ func ledgerTags(id string) store.SessionTags {
 		Label:     m.Label,
 		Channel:   m.Channel,
 		Instance:  m.InstanceKey,
+		Providers: m.providerKeys(),
 	}
 }
 
@@ -130,7 +131,11 @@ func (h *Handler) analyticsLedgerJSON(w http.ResponseWriter, r *http.Request) {
 	force := q.Get("refresh") == "1"
 	// The page's own filter, applied to the ledger too: one filter bar,
 	// one answer below it.
-	sc := usagereport.Scope{Channels: csv(q.Get("channels")), Instances: csv(q.Get("instances"))}
+	sc := usagereport.Scope{
+		Channels:  csv(q.Get("channels")),
+		Instances: csv(q.Get("instances")),
+		Providers: csv(q.Get("providers")),
+	}
 
 	// Everything after /ledger/ is either "usage" (the fleet) or
 	// "<type>/<name>/usage" (one provider).

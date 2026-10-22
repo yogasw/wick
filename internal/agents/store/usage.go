@@ -390,6 +390,10 @@ type SessionTags struct {
 	// different slices side by side.
 	Channel  string
 	Instance string
+	// Providers is every provider key the session ran on, so the same
+	// page can narrow its token figures by account as well. Filter-only,
+	// so it stays out of the serialised roll-up.
+	Providers []string `json:"-"`
 }
 
 // UsageFilter bounds a roll-up: in time, and by which sessions count at

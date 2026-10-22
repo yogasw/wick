@@ -8,6 +8,7 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/usagereport"
 )
 
 // analytics_cache.go keeps the expensive half of the page in memory.
@@ -54,6 +55,22 @@ type sessionFacts struct {
 }
 
 type providerUse struct{ Key, Model string }
+
+// noProvider files a conversation with no provider recorded, so the
+// provider filter can select it rather than silently dropping it.
+const noProvider = usagereport.NoProvider
+
+// providerKeys is the provider keys alone, in the order they were used.
+func (f sessionFacts) providerKeys() []string {
+	if len(f.Providers) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(f.Providers))
+	for _, use := range f.Providers {
+		out = append(out, use.Key)
+	}
+	return out
+}
 
 type factsCache struct {
 	mu sync.Mutex

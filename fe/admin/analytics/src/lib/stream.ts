@@ -22,6 +22,8 @@ export async function loadAnalytics(
     channels?: string[];
     /** Specific bots to include ("slack:<owner id>"). Empty = all of them. */
     instances?: string[];
+    /** Provider keys to include ("claude/work", or "(none)"). Empty = all. */
+    providers?: string[];
     onProgress?: (done: number, total: number) => void;
     fetchImpl?: typeof fetch;
     /** How long the stream may say nothing before it counts as stalled. */
@@ -35,6 +37,7 @@ export async function loadAnalytics(
   if (opts.to) url.searchParams.set("to", opts.to);
   if (opts.channels?.length) url.searchParams.set("channels", opts.channels.join(","));
   if (opts.instances?.length) url.searchParams.set("instances", opts.instances.join(","));
+  if (opts.providers?.length) url.searchParams.set("providers", opts.providers.join(","));
 
   const streamURL = new URL(url);
   streamURL.searchParams.set("stream", "1");

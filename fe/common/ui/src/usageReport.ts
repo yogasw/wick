@@ -144,13 +144,15 @@ export async function fetchProviderUsage(
 /** LedgerScope narrows the ledger the way a page's filter bar does. A
  *  page that filters its chart by channel has to filter its cost by the
  *  same channel, or the two numbers below one filter disagree. */
-export type LedgerScope = { channels?: string[]; instances?: string[] };
+export type LedgerScope = { channels?: string[]; instances?: string[]; providers?: string[] };
 
 function scopeQuery(scope: LedgerScope): string {
   const parts: string[] = [];
   if (scope.channels?.length) parts.push(`channels=${encodeURIComponent(scope.channels.join(","))}`);
   if (scope.instances?.length)
     parts.push(`instances=${encodeURIComponent(scope.instances.join(","))}`);
+  if (scope.providers?.length)
+    parts.push(`providers=${encodeURIComponent(scope.providers.join(","))}`);
   return parts.length ? `&${parts.join("&")}` : "";
 }
 

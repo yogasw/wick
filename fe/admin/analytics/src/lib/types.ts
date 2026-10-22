@@ -27,6 +27,7 @@ export type AnalyticsWindow = {
   all?: boolean;
   channels?: string[];
   instances?: string[];
+  providers?: string[];
 };
 
 /** One provider instance — an account, in practice — and the models it was
@@ -161,6 +162,9 @@ export type AnalyticsResponse = {
   /** Every channel ever seen, filtered or not — without it, filtering to
    *  one channel would remove the means of filtering back out. */
   known_channels?: string[];
+  /** Every provider key seen in the range, plus "(none)" when a
+   *  conversation in it has none recorded — the provider chips. */
+  known_providers?: string[];
 };
 
 /** What the streaming endpoint emits, one JSON object per line. */

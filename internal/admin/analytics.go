@@ -16,6 +16,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/usagereport"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
@@ -221,6 +222,10 @@ type analyticsFilter struct {
 	// Inst narrows further, to specific bots: "slack:<owner id>". Empty =
 	// every instance of whichever channels passed Chan.
 	Inst map[string]bool
+	// Prov narrows to provider keys ("claude/work"), noProvider included.
+	// A conversation that switched provider passes when ANY of them is
+	// picked. Empty = every provider.
+	Prov map[string]bool
 }
 
 func (f analyticsFilter) keepsChannel(ch string) bool {
@@ -235,6 +240,15 @@ func (f analyticsFilter) keepsInstance(key string) bool {
 		return true
 	}
 	return f.Inst[key]
+}
+
+// keepsProviders shares its rule with the ledger's Scope, so the cost
+// figures and the counts can never read the same selection differently.
+func (f analyticsFilter) keepsProviders(used []string) bool {
+	if len(f.Prov) == 0 {
+		return true
+	}
+	return usagereport.KeepsProviders(sortedKeys(f.Prov), used)
 }
 
 func (f analyticsFilter) keepsTime(t time.Time) bool {
@@ -256,6 +270,7 @@ type analyticsWindow struct {
 	All       bool     `json:"all,omitempty"`
 	Channels  []string `json:"channels,omitempty"`
 	Instances []string `json:"instances,omitempty"`
+	Providers []string `json:"providers,omitempty"`
 }
 
 // analyticsProvider is one provider instance — an account, in practice —
@@ -359,6 +374,10 @@ type analyticsResponse struct {
 	// otherwise filtering to one channel would remove the means of
 	// filtering back out of it.
 	KnownChannels []string `json:"known_channels,omitempty"`
+	// KnownProviders is every provider key seen in the range, whatever the
+	// channel or provider filter, plus noProvider when a conversation in it
+	// has none recorded — the chips the page can filter by.
+	KnownProviders []string `json:"known_providers,omitempty"`
 }
 
 // Per-project detail caps. Generous enough to answer the question, small
@@ -422,7 +441,7 @@ func windowDays(raw string) (days int, all bool) {
 // 400 the page has to render as an error.
 func parseFilter(q url.Values) analyticsFilter {
 	now := time.Now().UTC()
-	f := analyticsFilter{Chan: map[string]bool{}, Inst: map[string]bool{}}
+	f := analyticsFilter{Chan: map[string]bool{}, Inst: map[string]bool{}, Prov: map[string]bool{}}
 
 	for _, raw := range strings.Split(q.Get("channels"), ",") {
 		ch := strings.TrimSpace(raw)
@@ -436,6 +455,9 @@ func parseFilter(q url.Values) analyticsFilter {
 		if key != "" && !strings.EqualFold(key, "all") {
 			f.Inst[key] = true
 		}
+	}
+	for _, key := range csv(q.Get("providers")) {
+		f.Prov[key] = true
 	}
 
 	// A custom range wins over the day count: it is the more specific ask.
@@ -668,6 +690,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	// Every channel ever seen, filtered or not: filtering to one channel
 	// must not remove the means of filtering back out of it.
 	allChannels := map[string]bool{}
+	allProviders := map[string]bool{}
 	var oldest time.Time
 
 	ids, _ := session.List(agentsLayout)
@@ -690,12 +713,23 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		allChannels[channel] = true
 
 		instKey, instOwner := m.InstanceKey, m.InstanceOwn
+		provKeys := m.providerKeys()
+		// The chips are what the range holds, so picking one provider never
+		// takes the others' chips away with it.
+		if f.keepsTime(m.CreatedAt) {
+			if len(provKeys) == 0 {
+				allProviders[noProvider] = true
+			}
+			for _, k := range provKeys {
+				allProviders[k] = true
+			}
+		}
 
 		// The filter applies HERE, before anything is counted — so every
 		// number below describes the same slice the chart does. A page
 		// where the chart moved but the totals did not would be reporting
 		// two different things side by side.
-		if !f.keepsChannel(channel) || !f.keepsInstance(instKey) {
+		if !f.keepsChannel(channel) || !f.keepsInstance(instKey) || !f.keepsProviders(provKeys) {
 			continue
 		}
 		if !m.CreatedAt.IsZero() && (oldest.IsZero() || m.CreatedAt.Before(oldest)) {
@@ -905,6 +939,12 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		LoginsRecordedSince: rfc3339(firstLogin),
 		KnownChannels:       sortedKeys(allChannels),
 	}
+	// A picked provider stays a chip even when the range has none of it,
+	// or the selection could not be undone from the page.
+	for k := range f.Prov {
+		allProviders[k] = true
+	}
+	out.KnownProviders = sortedKeys(allProviders)
 
 	// Token rows, grouped by owner.
 	byOwner := map[string][]analyticsToken{}
@@ -1116,6 +1156,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		All:       all,
 		Channels:  sortedKeys(f.Chan),
 		Instances: sortedKeys(f.Inst),
+		Providers: sortedKeys(f.Prov),
 	}
 	if !f.To.IsZero() && !f.All {
 		out.Window.To = f.To.Format("2006-01-02")

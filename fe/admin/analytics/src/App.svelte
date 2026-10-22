@@ -3,6 +3,7 @@
   import type { AnalyticsPoint, AnalyticsProject, AnalyticsResponse, AnalyticsUser } from "$lib/types";
   import { ago, isDormant, channelClass, channelColor } from "$lib/format";
   import { loadAnalytics } from "$lib/stream";
+  import { filterQuery, readFilter, type Range } from "$lib/urlFilter";
   import Chart from "$lib/Chart.svelte";
   import RecentSessions from "$lib/RecentSessions.svelte";
   import { UsageReport, fetchUsageReport, compactTokens, formatCost } from "@wick-fe/common-ui";
@@ -32,6 +33,7 @@
       ledger = await fetchUsageReport(ledgerEndpoint, false, ledgerWindow, ledgerSince, ledgerUntil, {
         channels: picked,
         instances: pickedInstances,
+        providers: pickedProviders,
       });
     } catch {
       ledger = null; // a missing ledger must not take the page down
@@ -47,8 +49,9 @@
   });
 
   type Tab = "people" | "projects" | "channels" | "providers";
-  /** "all" runs back to the oldest conversation; "custom" uses the dates. */
-  type Range = 1 | 7 | 30 | 90 | 365 | "all" | "custom";
+  /** The filter a shared link carries. Read once: after that the page
+     writes it, so the address bar always reproduces what is on screen. */
+  const initial = readFilter(location.search);
 
   let data = $state<AnalyticsResponse | null>(null);
   let error = $state<string | null>(null);
@@ -58,13 +61,15 @@
      it is given, so a month is the slowest possible first paint — and
      "what is happening now" is the question people open it with. A wider
      window is one click away; the wait for it is not. */
-  let range = $state<Range>(1);
-  let customFrom = $state("");
-  let customTo = $state("");
+  let range = $state<Range>(initial.range);
+  let customFrom = $state(initial.from);
+  let customTo = $state(initial.to);
   /** Channels the whole page is restricted to. Empty = all of them. */
-  let picked = $state<string[]>([]);
+  let picked = $state<string[]>(initial.channels);
   /** Specific bots ("slack:<owner id>"). Empty = every bot of those channels. */
-  let pickedInstances = $state<string[]>([]);
+  let pickedInstances = $state<string[]>(initial.instances);
+  /** Provider keys ("claude/work", "(none)"). Empty = every provider. */
+  let pickedProviders = $state<string[]>(initial.providers);
   let query = $state("");
   let metric = $state<"sessions" | "logins">("sessions");
   /** Series drawn over the total. Empty = just the total. */
@@ -83,6 +88,18 @@
     // channel click cannot leave the cost figures describing the
     // previous selection.
     void loadLedger();
+    history.replaceState(
+      history.state,
+      "",
+      `${location.pathname}${filterQuery({
+        range,
+        from: customFrom,
+        to: customTo,
+        channels: picked,
+        instances: pickedInstances,
+        providers: pickedProviders,
+      })}${location.hash}`,
+    );
     progress = { done: 0, total: 0 };
     try {
       data = await loadAnalytics(endpoint, {
@@ -91,6 +108,7 @@
         to: range === "custom" ? customTo : undefined,
         channels: picked,
         instances: pickedInstances,
+        providers: pickedProviders,
         onProgress: (done, total) => (progress = { done, total }),
       });
     } catch (e) {
@@ -140,6 +158,19 @@
     void load();
   }
 
+  function toggleProvider(key: string) {
+    pickedProviders = pickedProviders.includes(key)
+      ? pickedProviders.filter((k) => k !== key)
+      : [...pickedProviders, key];
+    void load();
+  }
+
+  function clearProviders() {
+    if (pickedProviders.length === 0) return;
+    pickedProviders = [];
+    void load();
+  }
+
   const users = $derived.by<AnalyticsUser[]>(() => {
     const all = data?.users ?? [];
     const q = query.trim().toLowerCase();
@@ -182,6 +213,8 @@
 
   const providers = $derived(data?.providers ?? []);
   const knownChannels = $derived(data?.known_channels ?? data?.channels.map((c) => c.channel) ?? []);
+  const knownProviders = $derived(data?.known_providers ?? providers.map((p) => p.key));
+  const providerRule = "A conversation that switched provider matches when any of its providers is picked.";
 
   // What the window itself says — distinct from the all-time cards above,
   // which do not move when the range changes.
@@ -343,8 +376,42 @@
           </button>
         {/each}
       {/if}
+      {#if knownProviders.length}
+        <span
+          class="ml-2 cursor-help text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600"
+          title={providerRule}
+        >
+          Providers <span class="normal-case text-black-600 dark:text-black-700">ⓘ</span>
+        </span>
+        <button
+          type="button"
+          onclick={clearProviders}
+          disabled={loading}
+          class="rounded-lg border px-2 py-1 text-xs disabled:opacity-50 {pickedProviders.length === 0
+            ? 'border-green-400 bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
+            : 'border-white-300 text-black-700 dark:border-navy-600 dark:text-black-600'}"
+        >
+          All
+        </button>
+        {#each knownProviders as key}
+          <button
+            type="button"
+            onclick={() => toggleProvider(key)}
+            disabled={loading}
+            title={providerRule}
+            class="flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs disabled:opacity-50 {pickedProviders.includes(key)
+              ? 'border-green-400'
+              : 'border-white-300 dark:border-navy-600'}"
+          >
+            <span class="h-2 w-2 rounded-full" style={`background:${key === "(none)" ? "#9ca3af" : channelColor(key)}`}></span>
+            <span class="font-medium text-black-900 dark:text-white-100">{key}</span>
+          </button>
+        {/each}
+      {/if}
       <span class="ml-auto text-xs text-black-600 dark:text-black-700">
-        {data.window.from} → {data.window.to}{picked.length > 0 ? ` · ${picked.join(" + ")}` : ""}
+        {data.window.from} → {data.window.to}{picked.length > 0 ? ` · ${picked.join(" + ")}` : ""}{pickedProviders.length > 0
+          ? ` · ${pickedProviders.join(" + ")}`
+          : ""}
       </span>
     </div>
 
@@ -383,6 +450,7 @@
       until={ledgerUntil}
       channels={picked}
       instances={pickedInstances}
+      providers={pickedProviders}
       report={ledger}
     />
 
