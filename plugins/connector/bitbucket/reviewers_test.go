@@ -99,3 +99,50 @@ func TestAddPullRequestReviewers_KeepsExisting(t *testing.T) {
 		t.Fatalf("reviewers = %v", rs)
 	}
 }
+
+func defaultReviewersCtx(input map[string]string) *connector.Ctx {
+	return connector.NewCtx(context.Background(), "id1",
+		map[string]string{"base_url": "https://api.bitbucket.org/2.0", "default_workspace": "ws", "default_reviewers": "acc-lead"},
+		input, nil, nil, nil)
+}
+
+func TestValidateCreatePullRequest_AddsDefaultReviewers(t *testing.T) {
+	c := defaultReviewersCtx(map[string]string{
+		"repo_slug": "repo", "title": "t", "source_branch": "a", "destination_branch": "main",
+		"reviewers": "acc-other, acc-lead",
+	})
+	_, body, err := validateCreatePullRequest(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rs, _ := body["reviewers"].([]map[string]any)
+	if len(rs) != 2 || rs[0]["account_id"] != "acc-other" || rs[1]["account_id"] != "acc-lead" {
+		t.Fatalf("reviewers = %v, want acc-other + acc-lead once", body["reviewers"])
+	}
+}
+
+func TestValidateCreatePullRequest_DefaultReviewersWithoutInput(t *testing.T) {
+	c := defaultReviewersCtx(map[string]string{"repo_slug": "repo", "title": "t", "source_branch": "a", "destination_branch": "main"})
+	_, body, err := validateCreatePullRequest(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rs, _ := body["reviewers"].([]map[string]any)
+	if len(rs) != 1 || rs[0]["account_id"] != "acc-lead" {
+		t.Fatalf("reviewers = %v, want acc-lead", body["reviewers"])
+	}
+}
+
+func TestValidateCreatePullRequest_SkipDefaultReviewers(t *testing.T) {
+	c := defaultReviewersCtx(map[string]string{
+		"repo_slug": "repo", "title": "t", "source_branch": "a", "destination_branch": "main",
+		"skip_default_reviewers": "true",
+	})
+	_, body, err := validateCreatePullRequest(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := body["reviewers"]; ok {
+		t.Fatalf("reviewers = %v, want none when skip_default_reviewers is set", body["reviewers"])
+	}
+}

@@ -359,11 +359,61 @@ func createMR(c *connector.Ctx) (any, error) {
 	if c.InputBool("squash") {
 		body["squash"] = true
 	}
+	raw := c.Input("reviewers")
+	if !c.InputBool("skip_default_reviewers") {
+		raw += "," + c.Cfg("default_reviewers")
+	}
+	ids, err := reviewerIDs(c, raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) > 0 {
+		body["reviewer_ids"] = ids
+	}
 	v, err := doJSON(c, http.MethodPost, apiURL(c, p+"/merge_requests", nil), body)
 	if err != nil {
 		return nil, err
 	}
-	return pick(v, mrKeys...), nil
+	return pick(v, append(mrKeys, "reviewers")...), nil
+}
+
+// reviewerIDs turns "alice, @bob, 17" into GitLab user ids, the only form
+// reviewer_ids accepts. A username GitLab does not know fails the call: a
+// silent miss would open the MR with nobody to review it.
+func reviewerIDs(c *connector.Ctx, raw string) ([]int, error) {
+	var out []int
+	seen := map[int]bool{}
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' }) {
+		name := strings.TrimPrefix(strings.TrimSpace(part), "@")
+		if name == "" {
+			continue
+		}
+		id, err := strconv.Atoi(name)
+		if err != nil {
+			v, err := doJSON(c, http.MethodGet, apiURL(c, "/users", url.Values{"username": {name}}), nil)
+			if err != nil {
+				return nil, fmt.Errorf("reviewer %q: %w", name, err)
+			}
+			list, _ := v.([]any)
+			f, ok := asMap(firstOf(list))["id"].(float64)
+			if !ok {
+				return nil, fmt.Errorf("reviewer %q: no GitLab user with that username", name)
+			}
+			id = int(f)
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+func firstOf(list []any) any {
+	if len(list) == 0 {
+		return nil
+	}
+	return list[0]
 }
 
 func updateMR(c *connector.Ctx) (any, error) {
