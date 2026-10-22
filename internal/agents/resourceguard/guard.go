@@ -136,6 +136,9 @@ type Guard struct {
 	prevAgentUsec uint64
 	outside       bool   // an outside-wick episode was already reported
 	topOutside    string // busiest process outside wick, e.g. "bob/compile 70% CPU"
+	// outsidePSI: a host-wide memory stall wick does not share was
+	// already reported.
+	outsidePSI bool
 	// outsideTotal is the host's total CPU ticks at the last
 	// busiestOutside call: the window its process ticks cover.
 	outsideTotal uint64
@@ -275,10 +278,14 @@ type hostState struct {
 	eta        float64 // seconds to memory exhaustion at the current slope
 	busyPct    float64
 	psiMemFull float64
-	psiCPU     float64
-	running    int
-	cores      int
-	lagging    bool
+	// psiOwnMemFull is the same pressure inside wick's own cgroup;
+	// psiOwnOK is false when it could not be read.
+	psiOwnMemFull float64
+	psiOwnOK      bool
+	psiCPU        float64
+	running       int
+	cores         int
+	lagging       bool
 	// agentCPUPct is the agents' share of the busy CPU since the last
 	// sample; agentCPUOK is false when it could not be measured.
 	agentCPUPct float64
@@ -313,6 +320,7 @@ func (g *Guard) sample(cfg Config, now time.Time) (hostState, bool) {
 		g.prevAgentUsec = agentUsec
 	}
 	_, st.psiMemFull, _ = g.host.PSI("memory")
+	st.psiOwnMemFull, st.psiOwnOK = g.host.OwnMemPSI()
 	st.psiCPU, _, _ = g.host.PSI("cpu")
 	st.running = g.host.ProcsRunning()
 	st.cores = g.host.NumCPU()
@@ -376,9 +384,17 @@ func (g *Guard) Tick() {
 		memReason = fmt.Sprintf("%d MB free, below the %d MB floor", st.availMB, cfg.MinFreeMB)
 	case horizon > 0 && st.eta < horizon && st.memUsedPct >= safe:
 		memReason = fmt.Sprintf("memory %.0f%% used and falling — out in ~%.0fs", st.memUsedPct, st.eta)
-	case st.psiMemFull > psiMemFullMax:
+	case st.psiMemFull > psiMemFullMax && (!st.psiOwnOK || st.psiOwnMemFull > psiMemFullMax):
 		memReason = fmt.Sprintf("memory pressure full avg10 %.0f%%", st.psiMemFull)
 	}
+	// Host-wide pressure that wick's own cgroup does not share comes from
+	// another service stalling inside its own memory limit: holding
+	// agents would not relieve it, so it is reported, not acted on.
+	outsidePSI := memReason == "" && st.psiOwnOK && st.psiMemFull > psiMemFullMax
+	if outsidePSI && !g.outsidePSI {
+		g.emit(Event{Kind: "outside_busy", Detail: fmt.Sprintf("memory pressure full avg10 %.0f%% from outside wick (wick's own %.0f%%), agents not held", st.psiMemFull, st.psiOwnMemFull)})
+	}
+	g.outsidePSI = outsidePSI
 	// CPU near hang: busy AND tasks queueing. Busy alone is a build using
 	// idle CPU, which is fine.
 	queueing := st.psiCPU > cfg.CPUPSIMax || (st.cores > 0 && st.running > 2*st.cores)

@@ -29,6 +29,9 @@ type fakeHost struct {
 	agentStep  uint64
 	agentUsec  uint64
 	outsideTop *Proc
+	// ownMemFull is wick's own memory pressure; ownOK=false = unreadable.
+	ownMemFull float64
+	ownOK      bool
 }
 
 func (f *fakeHost) MemAvailable() (int, int, bool) { return f.avail, f.totalMB, true }
@@ -38,6 +41,7 @@ func (f *fakeHost) PSI(r string) (float64, float64, bool) {
 	}
 	return f.cpuSome, 0, true
 }
+func (f *fakeHost) OwnMemPSI() (float64, bool) { return f.ownMemFull, f.ownOK }
 func (f *fakeHost) CPUTimes() (uint64, uint64, bool) {
 	f.total += 1000
 	f.busy += uint64(f.busyPct * 10)
@@ -543,5 +547,36 @@ func TestBusiestOutsideUsesItsOwnWindow(t *testing.T) {
 	g.prevTotal += 70_000
 	if got := g.busiestOutside(nil, hostState{totalTicks: 1000}); got != "bob/daemon 1% CPU" {
 		t.Fatalf("read after a long gap = %q, want the share of the whole gap", got)
+	}
+}
+
+// Host-wide memory pressure that wick's own cgroup does not share — a
+// service stalling at its own memory limit — holds nothing and is
+// reported once; the same pressure inside wick still holds spawns.
+func TestOutsideMemoryPressureDoesNotHold(t *testing.T) {
+	h := agentTree()
+	g, c := newTestGuard(h, enforce())
+	h.memFull, h.ownOK, h.ownMemFull = 50, true, 1
+	ticks(g, c, 5)
+	if g.HoldSpawns() {
+		t.Fatal("spawns held for memory pressure outside wick")
+	}
+	if len(h.signals)+len(h.killedScopes)+len(h.frozen) != 0 {
+		t.Fatalf("agents touched for outside pressure: signals=%v killed=%v frozen=%v", h.signals, h.killedScopes, h.frozen)
+	}
+	var outside []Event
+	for _, e := range g.History() {
+		if e.Kind == "outside_busy" {
+			outside = append(outside, e)
+		}
+	}
+	if len(outside) != 1 || !strings.Contains(outside[0].Detail, "from outside wick (wick's own 1%)") {
+		t.Fatalf("outside events = %+v", outside)
+	}
+
+	h.ownMemFull = 40
+	ticks(g, c, 2)
+	if !g.HoldSpawns() {
+		t.Fatal("spawns not held when wick's own cgroup is under memory pressure")
 	}
 }
