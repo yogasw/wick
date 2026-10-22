@@ -150,4 +150,13 @@ func TestProviderTagSwitchGates(t *testing.T) {
 	if err := provider.CheckSwitch(context.Background(), "no-such-session", "claude/other"); err != nil {
 		t.Fatalf("guard, unknown session: %v (Switch reports that itself)", err)
 	}
+
+	// Failover: the owner's chain still runs for an agent that keeps its
+	// provider; only the owner's access refuses a target.
+	if err := provider.CheckFailover(context.Background(), fixedID, "claude/mine"); err != nil {
+		t.Fatalf("failover guard, agent keeps its provider: %v", err)
+	}
+	if err := provider.CheckFailover(context.Background(), fixedID, "claude/other"); err == nil || !strings.Contains(err.Error(), "no access to provider claude/other") {
+		t.Fatalf("failover guard, owner without access: %v", err)
+	}
 }

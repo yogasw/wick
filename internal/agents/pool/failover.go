@@ -222,8 +222,9 @@ func (p *Pool) endFailingOver(ctx context.Context, sessionID, agentName string, 
 //
 // Eligible: the HOME instance has failover on and reacts to the error's
 // kind, and a candidate of its chain survives PickTarget (health, the
-// run's tried set and hop cap, and CheckSwitch — a Team agent that keeps
-// its provider, or an owner without access to the target, refuses it).
+// run's tried set and hop cap, and CheckFailover — an owner without
+// access to the target refuses it; a Team agent that keeps its provider
+// still fails over, since the chain is the owner's own plan).
 // The instance that failed is marked unhealthy either way.
 func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVerdict {
 	var no provider.FailoverVerdict

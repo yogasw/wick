@@ -10,7 +10,10 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-func init() { provider.SwitchGuard = sessionSwitchGuard }
+func init() {
+	provider.SwitchGuard = sessionSwitchGuard
+	provider.FailoverGuard = sessionFailoverGuard
+}
 
 // agentForbidsSwitch reports whether sess is a Team agent's chat whose
 // agent keeps its provider (allow_provider_switch off). Any origin
@@ -42,6 +45,28 @@ func sessionSwitchGuard(ctx context.Context, sessionID, tag string) error {
 	if agentForbidsSwitch(ctx, sess) {
 		return errors.New(errProviderSetByAgent)
 	}
+	return ownerProviderAccess(ctx, sess, tag)
+}
+
+// sessionFailoverGuard is provider.FailoverGuard: only the session
+// owner's provider access. The agent's "keeps its provider" setting is
+// for people picking a provider; a failover runs the chain the owner set
+// on the instance, so a kept-provider agent must not stall on a spent
+// account.
+func sessionFailoverGuard(ctx context.Context, sessionID, tag string) error {
+	if globalMgr == nil {
+		return nil
+	}
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok {
+		return nil
+	}
+	return ownerProviderAccess(ctx, sess, tag)
+}
+
+// ownerProviderAccess refuses tag when the session's owner may not use
+// that provider. A session with no owner is let through.
+func ownerProviderAccess(ctx context.Context, sess session.Session, tag string) error {
 	if sess.Meta.UserID == "" {
 		return nil
 	}
