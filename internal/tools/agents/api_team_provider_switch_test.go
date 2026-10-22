@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -158,5 +159,19 @@ func TestProviderTagSwitchGates(t *testing.T) {
 	}
 	if err := provider.CheckFailover(context.Background(), fixedID, "claude/other"); err == nil || !strings.Contains(err.Error(), "no access to provider claude/other") {
 		t.Fatalf("failover guard, owner without access: %v", err)
+	}
+
+	// A channel chat of the agent opened by someone else: the failover is
+	// held to the agent owner's access, not the sender's.
+	if _, err := globalMgr.CreateSession(context.Background(), session.CreateOptions{
+		ID: "chan-chat", ProjectID: "p1", Origin: session.OriginSlack, UserID: "sender", AgentID: fixed.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.CheckFailover(context.Background(), "chan-chat", "claude/mine"); err != nil {
+		t.Fatalf("failover guard, sender without access in the agent's chat: %v", err)
+	}
+	if err := provider.CheckSwitch(context.Background(), "chan-chat", "claude/mine"); err == nil {
+		t.Fatal("switch guard let a kept-provider agent's channel chat switch")
 	}
 }

@@ -48,11 +48,13 @@ func sessionSwitchGuard(ctx context.Context, sessionID, tag string) error {
 	return ownerProviderAccess(ctx, sess, tag)
 }
 
-// sessionFailoverGuard is provider.FailoverGuard: only the session
-// owner's provider access. The agent's "keeps its provider" setting is
-// for people picking a provider; a failover runs the chain the owner set
-// on the instance, so a kept-provider agent must not stall on a spent
-// account.
+// sessionFailoverGuard is provider.FailoverGuard: only provider access.
+// The agent's "keeps its provider" setting is for people picking a
+// provider; a failover runs the chain the owner set on the instance, so a
+// kept-provider agent must not stall on a spent account. In a Team
+// agent's chat the access checked is the AGENT OWNER's: the agent runs on
+// the owner's providers, so whoever wrote in the channel does not narrow
+// where it may fail over to.
 func sessionFailoverGuard(ctx context.Context, sessionID, tag string) error {
 	if globalMgr == nil {
 		return nil
@@ -61,13 +63,25 @@ func sessionFailoverGuard(ctx context.Context, sessionID, tag string) error {
 	if !ok {
 		return nil
 	}
-	return ownerProviderAccess(ctx, sess, tag)
+	userID := sess.Meta.UserID
+	if globalTeam != nil && sess.Meta.AgentID != "" {
+		if p, err := globalTeam.Get(ctx, sess.Meta.AgentID); err == nil && p.OwnerUserID != "" {
+			userID = p.OwnerUserID
+		}
+	}
+	return userProviderAccess(ctx, userID, tag)
 }
 
 // ownerProviderAccess refuses tag when the session's owner may not use
 // that provider. A session with no owner is let through.
 func ownerProviderAccess(ctx context.Context, sess session.Session, tag string) error {
-	if sess.Meta.UserID == "" {
+	return userProviderAccess(ctx, sess.Meta.UserID, tag)
+}
+
+// userProviderAccess refuses tag when user userID may not use that
+// provider. No user is let through, as an owner-less workflow is.
+func userProviderAccess(ctx context.Context, userID, tag string) error {
+	if userID == "" {
 		return nil
 	}
 	key, _ := splitProviderModel(tag)
@@ -75,7 +89,7 @@ func ownerProviderAccess(ctx context.Context, sess session.Session, tag string) 
 	if !ok {
 		return nil
 	}
-	u, err := lookupWorkflowOwner(ctx, sess.Meta.UserID)
+	u, err := lookupWorkflowOwner(ctx, userID)
 	if err != nil || u == nil || !userCanAccessProvider(ctx, u, t, name) {
 		return errors.New(errNoProviderAccess(tag))
 	}
