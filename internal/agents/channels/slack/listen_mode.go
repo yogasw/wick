@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
+
+	slackgo "github.com/slack-go/slack"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
@@ -203,4 +206,116 @@ func excerpt(text string, n int) string {
 	}
 	r := []rune(t)
 	return string(r[:n]) + "…"
+}
+
+// withChannelRuleMode is rulesJSON with channelID's row set to mode: its
+// name and delay kept, a new row (named name) appended when there is none.
+func withChannelRuleMode(rulesJSON, channelID, name, mode string) (string, error) {
+	var rows []replyRule
+	if strings.TrimSpace(rulesJSON) != "" {
+		if err := json.Unmarshal([]byte(rulesJSON), &rows); err != nil {
+			return "", fmt.Errorf("channel rules are not valid JSON: %w", err)
+		}
+	}
+	found := false
+	for i := range rows {
+		if rows[i].ID == channelID {
+			rows[i].Mode = mode
+			found = true
+		}
+	}
+	if !found {
+		rows = append(rows, replyRule{ID: channelID, Name: name, Mode: mode})
+	}
+	b, err := json.Marshal(rows)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// channelNames caches conversations.info names for the composer's mode
+// button, which re-reads the state every 30s.
+var channelNames sync.Map
+
+// channelName is channelID's name: its rule's, else Slack's, else "".
+func (s *Channel) channelName(cfg agentconfig.SlackChannelConfig, channelID string) string {
+	if r, ok := channelRule(cfg, channelID); ok && r.Name != "" {
+		return strings.TrimPrefix(r.Name, "#")
+	}
+	if v, ok := channelNames.Load(channelID); ok {
+		return v.(string)
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return ""
+	}
+	info, err := api.GetConversationInfo(&slackgo.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil || info == nil || info.Name == "" {
+		return ""
+	}
+	channelNames.Store(channelID, info.Name)
+	return info.Name
+}
+
+// threadReplyMode is how a reply in sessionID's thread is treated:
+// manual when the thread is not listening, else its channel's mode (a
+// manual channel rule only stops new threads, so a listening thread in it
+// listens). holdSec is what a reply is held for in that mode.
+func (s *Channel) threadReplyMode(sessionID, channelID string) (mode string, holdSec int) {
+	cfg := s.snapshot()
+	if !s.listening(sessionID, channelID) {
+		return replyModeManual, 0
+	}
+	if replyModeFor(cfg, channelID) == replyModeAuto {
+		return replyModeAuto, int(autoReplyDelay(cfg, channelID) / time.Second)
+	}
+	return replyModeListen, int(s.listenSettingsIn(sessionID, channelID).Delay / time.Second)
+}
+
+// ReplyModeRules plans the composer's mode switch for sessionID's thread:
+// the channel rules to store when mode needs its channel's mode changed
+// (changed = false: the channel already behaves so, or mode is manual,
+// which only stops this thread). Nothing is applied.
+func (s *Channel) ReplyModeRules(sessionID, mode string) (rules string, changed bool, err error) {
+	mode = normReplyMode(mode)
+	if mode == "" {
+		return "", false, fmt.Errorf("mode must be auto_reply, listen or manual")
+	}
+	b, err := s.threadBinding(sessionID)
+	if err != nil {
+		return "", false, err
+	}
+	if mode == replyModeManual {
+		return "", false, nil
+	}
+	cfg := s.snapshot()
+	if (replyModeFor(cfg, b.ChatID) == replyModeAuto) == (mode == replyModeAuto) {
+		return "", false, nil
+	}
+	rules, err = withChannelRuleMode(cfg.ChannelReplyRules, b.ChatID, s.channelName(cfg, b.ChatID), mode)
+	return rules, err == nil, err
+}
+
+// ApplyReplyMode carries the switch out once the caller stored rules
+// (when changed): the rules take effect at once, then the thread listens
+// (auto_reply, listen) with its own prompt and delay kept, or stops
+// (manual). Nothing reverts on its own.
+func (s *Channel) ApplyReplyMode(sessionID, mode, rules string, changed bool) (ListenResult, error) {
+	if changed {
+		s.cfgMu.Lock()
+		s.cfg.ChannelReplyRules = rules
+		s.cfgMu.Unlock()
+	}
+	req := ListenRequest{Action: "off"}
+	if normReplyMode(mode) != replyModeManual {
+		req = ListenRequest{Action: "on"}
+		if ls, ok := s.listenStore(); ok {
+			lt := ls.ListenThread(sessionID)
+			req.Instructions, req.DelaySec = lt.Prompt, lt.DelaySec
+		}
+	}
+	return s.ThreadListen(sessionID, req)
 }

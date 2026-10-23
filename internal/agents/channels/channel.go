@@ -278,6 +278,15 @@ type ListenResult struct {
 	// ThreadPrompt is the part of Instructions this thread's own "listen"
 	// request added, so a UI can edit it without the LISTEN.md layers.
 	ThreadPrompt string `json:"thread_prompt,omitempty"`
+	// Mode is how a reply in the thread is treated now: auto_reply, listen
+	// or manual (not listening: only a mention is answered). ChannelMode
+	// is the channel's own mode (its rule, else the bot default), the one
+	// a switch to auto_reply / listen changes. HoldSec is what a reply is
+	// held for in Mode.
+	Mode        string `json:"mode,omitempty"`
+	ChannelMode string `json:"channel_mode,omitempty"`
+	ChannelName string `json:"channel_name,omitempty"`
+	HoldSec     int    `json:"hold_sec"`
 }
 
 // ThreadListener is implemented by a channel with listen mode (Slack).

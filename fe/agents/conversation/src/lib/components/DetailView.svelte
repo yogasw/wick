@@ -118,6 +118,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import { cancelRemoteQueued, getSessionOptions, listAgentRoster, recheckRemote, runApi, type SessionOptions } from "../api/team.js";
   import SessionFieldChips from "./SessionFieldChips.svelte";
+  import ListenModeButton from "./ListenModeButton.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
   import { readRosterCache, teamAgentsByHandle as teamAgentsOf } from "../rosterCache.js";
@@ -3210,6 +3211,13 @@
   {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
 {/snippet}
 
+<!-- The Slack reply-mode button (hidden for any session that is no Slack
+     channel thread), then the session's locked fields. -->
+{#snippet composerToolbarExtra()}
+  <ListenModeButton {base} {sessionId} />
+  {#if sessionFields && sessionFields.fields.length > 0}{@render lockedSessionFields()}{/if}
+{/snippet}
+
 {#snippet sessionPanel()}
   <SessionPanel
     info={notesInfo}
@@ -3493,7 +3501,7 @@
             queued={composerQueued}
             queueLabel={composerQueueLabel}
             onStop={handleStopFromComposer}
-            toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
+            toolbarExtra={composerToolbarExtra}
           />
           </div>
         </div>

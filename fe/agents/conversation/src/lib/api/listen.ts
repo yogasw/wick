@@ -13,12 +13,26 @@ export type ListenState = {
   instructions?: string;
   /** What this thread's own "listen" request added to LISTEN.md. */
   thread_prompt?: string;
+  /** How a reply in the thread is treated now; manual = not listening. */
+  mode?: ReplyMode;
+  /** The channel's own mode, the one Auto-reply / Listen changes. */
+  channel_mode?: ReplyMode;
+  channel_name?: string;
+  /** What a reply is held for in mode. */
+  hold_sec?: number;
 };
+
+export type ReplyMode = "auto_reply" | "listen" | "manual";
 
 const path = (base: string, sid: string) => `${base}/api/sessions/${encodeURIComponent(sid)}/listen`;
 export const getListen = (base: string, sid: string) => apiGetE<ListenState>(path(base, sid));
 export const setListen = (base: string, sid: string, action: "on" | "off", instructions?: string) =>
   apiPostE<ListenState>(path(base, sid), { action, instructions: instructions ?? "" });
+
+/** The composer's mode switch: manual stops this thread, auto_reply and
+    listen switch it on and set the channel's rule when it differs. */
+export const setReplyMode = (base: string, sid: string, mode: ReplyMode) =>
+  apiPostE<ListenState>(path(base, sid), { action: "mode", mode });
 
 /** "60s" / "2m" / "1m30s" for a delay in seconds. */
 export function delayText(sec: number): string {

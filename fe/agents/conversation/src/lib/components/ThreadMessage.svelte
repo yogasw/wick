@@ -42,6 +42,9 @@
   import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
   import { renderWithSourceTags } from "../sourceTags.js";
   import { splitWickPreamble } from "../wickPreamble.js";
+  import type { ListenHold } from "../listenHolds.js";
+  import { delayText } from "../api/listen.js";
+  import HoverCard from "./HoverCard.svelte";
 
   type Props = {
     turn: ConversationTurn;
@@ -87,8 +90,10 @@
     jumpPending?: boolean;
     /** A later assistant answer exists in the thread (P60 S2 guard 2). */
     laterAnswer?: boolean;
+    /** The Slack listen / auto-reply hold this user turn came from. */
+    listenHold?: ListenHold;
   };
-  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -213,7 +218,30 @@
      chips above it. */
   const preamble = $derived(isUser && !teamFrom ? splitWickPreamble(routed.text) : null);
   const bubbleText = $derived(preamble ? preamble.body : routed.text);
-  let preambleOpen = $state<"" | "listen" | "catchup">("");
+  let preambleOpen = $state<"" | "catchup">("");
+
+  /* A held Slack reply's detail lives on its timestamp: when wick got it,
+     how long it was held, where it went. The [listen mode] note gives the
+     mode and hold when no listen_held row was linked (older history). */
+  const heldCard = $derived.by(() => {
+    if (!isUser || (!listenHold && !preamble?.listen)) return null;
+    const auto = listenHold ? listenHold.mode === "auto_reply" : preamble?.listenMode === "auto";
+    const held = listenHold?.heldFor || preamble?.listenLabel.match(/held (\S+)/)?.[1] || (listenHold?.delaySec ? delayText(listenHold.delaySec) : "");
+    const at = listenHold?.startedMs ? new Date(listenHold.startedMs) : turn.ts ? new Date(turn.ts) : null;
+    const rows: [string, string][] = [];
+    if (at && !isNaN(at.getTime())) rows.push(["Received", at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })]);
+    rows.push(["Held for", held || "not held"], ["Then", "Passed to the agent"], ["Via", "Slack"]);
+    return { title: (auto ? "Auto-reply" : "Listen") + " · this message", rows };
+  });
+  let stampEl: HTMLSpanElement | undefined = $state();
+  let stampHover = $state(false);
+
+  /* A hold that never reached the agent: the server's reason, short. */
+  const holdProblem = $derived(
+    turn.kind === "listen_held"
+      ? (turn.text ?? "").replace(/^(Auto-reply|Listen) · /, "").replace(/^not passed on: /, "Not passed to the agent: ").replace(/^dropped: /, "Dropped: ")
+      : "",
+  );
 
   /* Whether this user turn came from somebody other than the person reading.
      A session can be written into by several people — a colleague on the same
@@ -625,6 +653,14 @@
         <InputRequestCard {turn} />
       {:else if turn.kind === "provider_failover" || turn.kind === "provider_return"}
         <ProviderFailoverCard {turn} />
+      {:else if turn.kind === "listen_held"}
+        <!-- Only a hold that ended badly reaches here (listenHolds.ts): the
+             reply never got to the agent, so it stays visible, in red. No
+             button: there is no API to hand a dropped reply over again. -->
+        <div data-testid="listen-problem" class="inline-flex items-start gap-1.5 rounded-lg border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
+          <svg viewBox="0 0 16 16" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8.75 1.75 3.25 9.25h4.5l-.5 5 5.5-7.5h-4.5l.5-5z"></path></svg>
+          <span class="whitespace-pre-wrap break-words min-w-0">{turn.extras?.mode === "auto_reply" ? "Auto-reply" : "Listen"}: {holdProblem}</span>
+        </div>
       {:else if isSystemEvent}
         <!-- A server-recorded event (agent created, access changed, a Team
              handoff, a refused mention, …): one chip, drawn from the
@@ -892,15 +928,11 @@
               <span class="max-w-full truncate">{replyPreview(q.excerpt)}</span>
             </button>
           {/if}
-          {#if preamble && (preamble.listen || preamble.catchUp)}
+          <!-- The [listen mode] note has no chip: its detail is on the
+               timestamp below the bubble (heldCard). -->
+          {#if preamble && preamble.catchUp}
             <div class="flex max-w-full flex-col items-end gap-1" data-testid="wick-preamble">
               <div class="flex flex-wrap justify-end gap-1">
-                {#if preamble.listen}
-                  <button type="button" data-testid="listen-note-chip" title={preamble.listen} aria-expanded={preambleOpen === "listen"}
-                    onclick={() => (preambleOpen = preambleOpen === "listen" ? "" : "listen")}
-                    class="inline-flex items-center gap-1 rounded-full border border-teal-500/60 bg-teal-100 px-2 py-0.5 text-[11px] text-teal-600 dark:bg-teal-800/30 dark:text-teal-500"
-                  >{preamble.listenMode === "auto" ? "⚡ auto-reply" : "👂 listen"}{preamble.listenLabel ? " · " + preamble.listenLabel : ""}</button>
-                {/if}
                 {#if preamble.catchUp}
                   <button type="button" data-testid="catchup-chip" aria-expanded={preambleOpen === "catchup"}
                     onclick={() => (preambleOpen = preambleOpen === "catchup" ? "" : "catchup")}
@@ -909,7 +941,7 @@
                 {/if}
               </div>
               {#if preambleOpen}
-                <div data-testid="wick-preamble-detail" class="max-h-60 max-w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-left text-xs text-black-800 [overflow-wrap:anywhere] dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{preambleOpen === "listen" ? preamble.listen : preamble.catchUp}</div>
+                <div data-testid="wick-preamble-detail" class="max-h-60 max-w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-left text-xs text-black-800 [overflow-wrap:anywhere] dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{preamble.catchUp}</div>
               {/if}
             </div>
           {/if}
@@ -957,7 +989,14 @@
         {/if}
         {#if stamp || canReply}
           <span class={"flex items-center gap-1 " + (teamFrom ? "self-start" : "self-end")}>
-          {#if stamp}
+          {#if stamp && heldCard}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <span bind:this={stampEl} data-testid="held-stamp" tabindex="0" role="note" aria-label={heldCard.title}
+            onmouseenter={() => (stampHover = true)} onmouseleave={() => (stampHover = false)}
+            onfocus={() => (stampHover = true)} onblur={() => (stampHover = false)}
+            class="cursor-help border-b border-dashed border-black-500 text-[10px] leading-none text-black-500 hover:border-black-900 hover:text-black-900 dark:border-black-600 dark:text-black-600 dark:hover:border-white-100 dark:hover:text-white-100">{stamp}</span>
+          {#if stampHover}<HoverCard anchor={stampEl} title={heldCard.title} rows={heldCard.rows} testid="held-card" />{/if}
+          {:else if stamp}
           <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
           {/if}
           {#if canReply}

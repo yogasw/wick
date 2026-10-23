@@ -378,18 +378,28 @@ func (s *Channel) removeOwnTrigger(channelID, threadTS string) {
 type ListenRequest = agentchannels.ListenRequest
 type ListenResult = agentchannels.ListenResult
 
-// ThreadListen serves wick_slack_listen for a session this instance owns:
-// on, off or status of the thread the session is bound to.
-func (s *Channel) ThreadListen(sessionID string, req ListenRequest) (ListenResult, error) {
+// threadBinding is the Slack channel thread sessionID is bound to; a DM or
+// an unbound session is an error listen mode reports as is.
+func (s *Channel) threadBinding(sessionID string) (agentchannels.ThreadBinding, error) {
 	if s.sessions == nil {
-		return ListenResult{}, fmt.Errorf("slack channel has no session store")
+		return agentchannels.ThreadBinding{}, fmt.Errorf("slack channel has no session store")
 	}
 	b, ok := s.sessions.ThreadBinding(sessionID)
 	if !ok || b.Channel != "slack" || b.ChatID == "" || b.ThreadID == "" {
-		return ListenResult{}, fmt.Errorf("this session is not bound to a Slack thread")
+		return agentchannels.ThreadBinding{}, fmt.Errorf("this session is not bound to a Slack thread")
 	}
 	if strings.HasPrefix(b.ChatID, "D") {
-		return ListenResult{}, fmt.Errorf("a direct message always gets an answer; listen mode is for channel threads")
+		return agentchannels.ThreadBinding{}, fmt.Errorf("a direct message always gets an answer; listen mode is for channel threads")
+	}
+	return b, nil
+}
+
+// ThreadListen serves wick_slack_listen for a session this instance owns:
+// on, off or status of the thread the session is bound to.
+func (s *Channel) ThreadListen(sessionID string, req ListenRequest) (ListenResult, error) {
+	b, err := s.threadBinding(sessionID)
+	if err != nil {
+		return ListenResult{}, err
 	}
 	switch strings.ToLower(req.Action) {
 	case "on":
@@ -405,7 +415,13 @@ func (s *Channel) ThreadListen(sessionID string, req ListenRequest) (ListenResul
 	if ls, ok := s.listenStore(); ok {
 		threadPrompt = ls.ListenThread(sessionID).Prompt
 	}
+	cfg := s.snapshot()
+	mode, holdSec := s.threadReplyMode(sessionID, b.ChatID)
 	return ListenResult{
+		Mode:         mode,
+		ChannelMode:  replyModeFor(cfg, b.ChatID),
+		ChannelName:  s.channelName(cfg, b.ChatID),
+		HoldSec:      holdSec,
 		ThreadPrompt: threadPrompt,
 		Listening:    s.listening(sessionID, b.ChatID),
 		ChannelID:    b.ChatID,
