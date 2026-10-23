@@ -488,9 +488,11 @@ func Register(r tool.Router) {
 	r.GET("/api/presets/{name}", apiPresetDetail)
 
 	// JSON API — project-settings SPA endpoints.
+	// GET stays member-readable: a Team agent's settings read its project's
+	// persona through it. Every write below is the owner's alone.
 	r.GET("/api/projects/{id}", apiProjectDetail)
 	r.GET("/api/projects/{id}/files/mentions", projectFileMentions)
-	r.POST("/api/projects/{id}", apiProjectUpdate)
+	r.POST("/api/projects/{id}", projectOwnerMW(apiProjectUpdate))
 
 	// JSON API — tickets. A ticket is its own entity holding many
 	// sessions, so the board and creation sit under a project (covered by
@@ -501,7 +503,7 @@ func Register(r tool.Router) {
 	// Who a ticket may be put on, by name — the assignee picker's options.
 	r.GET("/api/projects/{id}/assignees", apiProjectAssignees)
 	r.POST("/api/projects/{id}/tickets", apiTicketCreate)
-	r.PUT("/api/projects/{id}/ticket-config", apiProjectTicketConfig)
+	r.PUT("/api/projects/{id}/ticket-config", projectOwnerMW(apiProjectTicketConfig))
 	r.GET("/api/tickets/{ticketID}", apiTicketDetail)
 	r.PATCH("/api/tickets/{ticketID}", apiTicketUpdate)
 	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
@@ -535,8 +537,8 @@ func Register(r tool.Router) {
 	// code so the settings UI and the docs cannot drift from what actually
 	// fires; the webhook rows themselves are saved through ticket-config.
 	r.GET("/api/ticket-events", apiTicketEvents)
-	r.GET("/api/projects/{id}/ticket-webhooks/{webhookID}/deliveries", apiTicketWebhookDeliveries)
-	r.POST("/api/projects/{id}/ticket-webhooks/{webhookID}/test", apiTicketWebhookTest)
+	r.GET("/api/projects/{id}/ticket-webhooks/{webhookID}/deliveries", projectOwnerMW(apiTicketWebhookDeliveries))
+	r.POST("/api/projects/{id}/ticket-webhooks/{webhookID}/test", projectOwnerMW(apiTicketWebhookTest))
 
 	// JSON API — notes. Scoped by ?ticket_id= or ?session_id=; a session
 	// that belongs to a ticket resolves to the ticket's notes.
@@ -662,12 +664,12 @@ func Register(r tool.Router) {
 	r.GET("/providers/options", providerOptionsJSON)
 	r.GET("/providers/options/{type}/{name}/models", providerOptionModelsJSON)
 	r.GET("/presets/options", presetOptionsJSON)
-	r.GET("/projects/{id}", projectSettingsPage)
+	r.GET("/projects/{id}", projectSettingsPage) // owner-only inside, rendered as a page
 	r.POST("/projects", createProject)
-	r.POST("/projects/{id}", updateProject)
+	r.POST("/projects/{id}", projectOwnerMW(updateProject))
 	r.POST("/projects/{id}/pin", toggleProjectPin)
-	r.GET("/projects/{id}/delete-preview", projectDeletePreviewJSON)
-	r.DELETE("/projects/{id}", deleteProject)
+	r.GET("/projects/{id}/delete-preview", projectOwnerMW(projectDeletePreviewJSON))
+	r.DELETE("/projects/{id}", projectOwnerMW(deleteProject))
 
 	r.GET("/agent-profiles", agentProfilesPage)
 	// Agents app: one shell for every client route under /team, which the
@@ -1507,6 +1509,59 @@ func projectAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
 		}
 		next(c)
 	}
+}
+
+// projectOwnerMW narrows projectAccessMW to the project's owner for the
+// routes that reconfigure or delete a project: the settings page and its
+// API, ticket config and integrations, delete. A tag grant lets a member
+// work in the project every day (board, tickets, sessions, pin) — those
+// routes stay on projectAccessMW alone — but not change or remove it,
+// since a delete takes every session and ticket with it. Ownerless
+// projects stay admin-only (project.CanManage). It wraps single handlers
+// rather than a prefix, so it runs after projectAccessMW has answered 404
+// for an unknown id; no user in context is an internal caller and passes.
+func projectOwnerMW(next tool.HandlerFunc) tool.HandlerFunc {
+	return func(c *tool.Ctx) {
+		id := c.PathValue("id")
+		u := login.GetUser(c.Context())
+		if id == "new" || globalMgr == nil || u == nil {
+			next(c)
+			return
+		}
+		p, ok := globalMgr.Registry().Project(id)
+		if !ok {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+			return
+		}
+		if !callerCanManageProject(c, p.Meta) {
+			logNotProjectOwner(c, id)
+			c.JSON(http.StatusForbidden, map[string]string{"error": team.ErrNotProjectOwner.Error()})
+			return
+		}
+		next(c)
+	}
+}
+
+// callerCanManageProject is projectOwnerMW's rule for a handler that
+// answers the refusal itself. No user in context is an internal caller.
+func callerCanManageProject(c *tool.Ctx, meta project.Meta) bool {
+	u := login.GetUser(c.Context())
+	return u == nil || project.CanManage(meta, u.ID, u.IsAdmin())
+}
+
+// logNotProjectOwner records an owner-gate refusal the way projectAccessMW
+// records its own: debug for a browser, warn for a bearer integration.
+func logNotProjectOwner(c *tool.Ctx, id string) {
+	uid := ""
+	if u := login.GetUser(c.Context()); u != nil {
+		uid = u.ID
+	}
+	ev := log.Ctx(c.Context()).Debug()
+	if bearerToken(c.R) != "" {
+		ev = log.Ctx(c.Context()).Warn()
+	}
+	ev.Str("project", id).Str("user", uid).Str("reason", "caller is not the project owner").
+		Msg("project access denied")
 }
 
 // ensurePersonalProjectForUser auto-creates a personal project for a non-admin
@@ -3079,8 +3134,19 @@ func projectSettingsPage(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	if id != "new" {
-		if _, ok := globalMgr.Registry().Project(id); !ok {
+		p, ok := globalMgr.Registry().Project(id)
+		if !ok {
 			c.NotFound()
+			return
+		}
+		// The page is owner-only like the routes it calls (projectOwnerMW),
+		// but a member following a link gets a page, not a JSON body.
+		if !callerCanManageProject(c, p.Meta) {
+			logNotProjectOwner(c, id)
+			c.W.Header().Set("Content-Type", "text/html; charset=utf-8")
+			c.W.WriteHeader(http.StatusForbidden)
+			c.HTML(view.ProjectSettingsForbidden(sidebarVM(c, "projects", ""), c.Base(), id,
+				team.ErrNotProjectOwner.Error()))
 			return
 		}
 	}
@@ -3128,6 +3194,10 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// through a tag or sharing; OwnerName names that owner.
 		Shared    bool   `json:"shared,omitempty"`
 		OwnerName string `json:"owner_name,omitempty"`
+		// CanManage says whether the caller may open the project's settings
+		// and delete it (project.CanManage) — the owner, or an admin on an
+		// ownerless project. The UI hides "Project settings" when false.
+		CanManage bool `json:"can_manage"`
 	}
 	// No user = internal / MCP caller: unrestricted, as everywhere else.
 	// A person gets the scoped set with no see-all bypass.
@@ -3205,6 +3275,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			TicketEnabled:   p.Meta.Ticket.Enabled,
 			Shared:          isShared(shared, id),
 			OwnerName:       shared[id],
+			CanManage:       callerCanManageProject(c, p.Meta),
 		})
 	}
 	c.JSON(http.StatusOK, opts)

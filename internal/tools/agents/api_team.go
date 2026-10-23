@@ -1773,7 +1773,10 @@ func releaseTeamAgentProject(ctx context.Context, agent entity.AgentPersona, row
 			return nil
 		}
 	}
-	if purge {
+	// Purged only when the agent's owner owns the project too: a delete is
+	// the project owner's call (project.CanManage), so a project someone
+	// else owns is untagged and kept instead.
+	if purge && project.CanManage(pr.Meta, agent.OwnerUserID, false) {
 		return purgeProject(ctx, pr, "user")
 	}
 	meta := pr.Meta

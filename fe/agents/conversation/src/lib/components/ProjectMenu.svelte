@@ -10,12 +10,20 @@
      So the label goes and only the ACTIONS stay, folded behind one 28px
      button that rides in the toolbar that was already there. Leaving is one
      of those actions rather than a permanent link: it is the rarest of the
-     three, and a menu is a fine place for "get me out of here". */
-  import { DeleteProjectDialog } from "@wick-fe/common-ui";
+     three, and a menu is a fine place for "get me out of here".
+
+     Deleting the project is NOT here. On a ticket board or a ticket a red
+     "Delete…" reads as "delete this ticket", and a project delete takes every
+     chat and ticket with it, so it lives only in Project settings › Advanced
+     (the danger zone), reached on purpose. Settings are the owner's alone
+     (the server refuses anyone else), so a member who reaches the project
+     through a share is not offered them at all. */
 
   type Props = {
     base: string;
-    project: { id: string; name: string; path?: string; pinned?: boolean; managed?: boolean };
+    /* can_manage false: the caller is not the owner, so no settings link.
+       Absent (an older server) keeps it — the server still decides. */
+    project: { id: string; name: string; path?: string; pinned?: boolean; managed?: boolean; can_manage?: boolean };
     /* How many chats the project holds — shown in the menu's header, which is
        where the old bar's "491 chats · managed" suffix ended up. */
     chatCount?: number;
@@ -25,16 +33,7 @@
   let { base, project, chatCount, onPin }: Props = $props();
 
   let open = $state(false);
-  let confirmDelete = $state(false);
 </script>
-
-<DeleteProjectDialog
-  open={confirmDelete}
-  {base}
-  projectID={project.id}
-  onDeleted={() => { confirmDelete = false; window.location.href = `${base}/sessions`; }}
-  onCancel={() => { confirmDelete = false; }}
-/>
 
 <div class="relative shrink-0">
   <button
@@ -99,17 +98,20 @@
         {project.pinned ? "Unpin as default" : "Pin as default"}
       </button>
 
-      <a
-        role="menuitem"
-        href={`${base}/projects/${project.id}`}
-        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
-      >
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-          <circle cx="8" cy="8" r="6"></circle>
-          <path d="M8 5v3l2 2" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-        Project settings
-      </a>
+      {#if project.can_manage !== false}
+        <a
+          role="menuitem"
+          data-testid="project-menu-settings"
+          href={`${base}/projects/${project.id}`}
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+        >
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="8" cy="8" r="6"></circle>
+            <path d="M8 5v3l2 2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          Project settings
+        </a>
+      {/if}
 
       <!-- The server refuses a protected, someone else's or already
            converted project; the wizard shows why. -->
@@ -137,20 +139,6 @@
         All chats
       </a>
 
-      <!-- Last and red: the one action here that cannot be taken back. The
-           dialog says what goes and refuses a protected project itself. -->
-      <button
-        type="button"
-        role="menuitem"
-        data-testid="project-menu-delete"
-        onclick={() => { open = false; confirmDelete = true; }}
-        class="flex w-full items-center gap-2 border-t border-white-300 px-3 py-1.5 text-left text-xs text-neg-400 transition-colors hover:bg-neg-100 dark:border-navy-600"
-      >
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-          <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 8.5h6l.5-8.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-        Delete project…
-      </button>
     </div>
   {/if}
 </div>
