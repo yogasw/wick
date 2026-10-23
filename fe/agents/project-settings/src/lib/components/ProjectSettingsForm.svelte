@@ -667,7 +667,7 @@
               <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
                 Deleting removes this project's {data.chat_count} chats, the agents' memory for it and
                 {data.managed ? "its managed files folder" : "its settings — the custom folder stays on disk"}.
-                This cannot be undone.
+                Moves to the deleted list. Its owner or an admin can restore it for 30 days; after that it is removed permanently.
               </p>
             {:else}
               <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">This project can't be deleted (default/personal).</p>

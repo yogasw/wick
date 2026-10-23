@@ -3120,6 +3120,8 @@ func NewServer() *Server {
 	if agentsMgr != nil {
 		adminHandler.SetProjectWriter(agentsMgr)
 	}
+	// /admin/projects?show=deleted — deleted projects and their Restore.
+	adminHandler.SetProjectTrash(agentstool.ProjectTrash{})
 	// /admin/team-agents — share Team agents by tag.
 	adminHandler.SetTeamAgents(teamAgentLister{})
 	// /admin/workflows — same for a workflow's owner. Only the DB-backed

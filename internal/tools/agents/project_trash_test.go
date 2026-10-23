@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,7 +160,7 @@ func TestDeleteCustomPathProjectNeverMovesItsFolder(t *testing.T) {
 	}
 }
 
-func TestProjectTrashListScopedAndPurgeAdminOnly(t *testing.T) {
+func TestProjectTrashListScoped(t *testing.T) {
 	withTeamWorld(t)
 	stubForget(t)
 	seedTeamProject(t, "acme", "user-a")
@@ -180,12 +181,6 @@ func TestProjectTrashListScopedAndPurgeAdminOnly(t *testing.T) {
 	if got := list(&entity.User{ID: "user-b"}); len(got) != 0 {
 		t.Fatalf("stranger sees %+v", got)
 	}
-	m := onlyTrashEntry(t)
-	w, c := teamReq(t, &entity.User{ID: "user-a"}, http.MethodDelete, "/projects-trash/"+m.Key, nil, map[string]string{"key": m.Key})
-	projectTrashPurge(c)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("owner purge status %d, want 403", w.Code)
-	}
 }
 
 func TestSweepProjectTrashPurgesOnlyPastRetention(t *testing.T) {
@@ -204,5 +199,35 @@ func TestSweepProjectTrashPurgesOnlyPastRetention(t *testing.T) {
 	}
 	if all, _ := trash.List(globalLayout.BaseDir); len(all) != 0 {
 		t.Fatalf("trash still holds %v", all)
+	}
+}
+
+// The retention sweep is the only hard delete of a trash entry: no route
+// or other caller may purge one. A new trash.Purge call outside the sweep
+// fails here and needs the owner's say-so first.
+func TestOnlyTheSweepPurgesTrash(t *testing.T) {
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		if strings.Contains(path, filepath.Join("agents", "trash")+string(filepath.Separator)) {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		src := string(b)
+		if strings.Contains(src, "trash.Purge(") {
+			t.Errorf("%s calls trash.Purge: only the retention sweep may purge", path)
+		}
+		if strings.Contains(src, "trash.PurgeOlderThan(") && filepath.Base(path) != "project_trash.go" {
+			t.Errorf("%s calls trash.PurgeOlderThan outside the sweep", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

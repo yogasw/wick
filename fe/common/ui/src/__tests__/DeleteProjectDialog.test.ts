@@ -8,7 +8,7 @@ const managed = { id: "p1", name: "Alpha", chats: 3, protected: false };
 describe("delete-project wording", () => {
   test("managed project names chats, folder and memory", () => {
     expect(deleteProjectBody(managed)).toBe(
-      "This deletes 3 chats, its files folder and the agents' memory for this project. This cannot be undone.",
+      "This deletes 3 chats, its files folder and the agents' memory for this project. Moves to the deleted list. Its owner or an admin can restore it for 30 days; after that it is removed permanently.",
     );
   });
   test("custom path says the folder stays", () => {

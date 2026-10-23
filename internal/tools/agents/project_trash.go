@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -14,8 +15,9 @@ import (
 )
 
 // Deleted projects wait in the trash (internal/agents/trash) for
-// trash.Retention. The routes below list, restore and purge them; the
-// sweeper removes the ones past the window.
+// trash.Retention. The routes below list and restore them; there is no
+// manual purge — the sweeper is the only thing that removes an entry for
+// good, once it is past the window.
 
 // trashSweepEvery is how often the retention sweep looks at the trash.
 // Hourly is plenty for a 30-day window and costs one ReadDir.
@@ -132,28 +134,6 @@ func projectTrashRestore(c *tool.Ctx) {
 	c.JSON(http.StatusOK, res)
 }
 
-// projectTrashPurge handles DELETE /projects-trash/{key}: delete forever,
-// admins only.
-func projectTrashPurge(c *tool.Ctx) {
-	if notReady(c) {
-		return
-	}
-	if !callerIsAdmin(c) {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "only an admin can delete a project forever"})
-		return
-	}
-	m, ok := loadTrashEntry(c)
-	if !ok {
-		return
-	}
-	if _, err := trash.Purge(globalLayout.BaseDir, m.Key); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	log.Ctx(c.Context()).Info().Str("project", m.ID).Str("trash", m.Key).Str("by", actorID(c)).Msg("deleted project purged by hand")
-	c.JSON(http.StatusOK, map[string]string{"status": "purged"})
-}
-
 var errTrashCollision = errors.New("a project with this id already exists")
 
 // restoreProject moves an entry back and adopts it into the registry.
@@ -212,3 +192,39 @@ func startProjectTrashSweeper() {
 		}()
 	})
 }
+
+// ProjectTrash is the deleted-projects source behind the admin Projects
+// table (its Deleted filter and Restore button). The admin page is
+// admin-only, so it sees every entry.
+type ProjectTrash struct{}
+
+// DeletedProjects lists every trash entry, newest first.
+func (ProjectTrash) DeletedProjects(context.Context) ([]trash.Manifest, error) {
+	if globalMgr == nil || globalLayout.BaseDir == "" {
+		return nil, errors.New("agents are not ready")
+	}
+	return trash.List(globalLayout.BaseDir)
+}
+
+// RestoreDeletedProject restores the entry key, refusing like the API
+// does (ErrTrashConflict) when its id or a path is taken.
+func (ProjectTrash) RestoreDeletedProject(ctx context.Context, key string) error {
+	if globalMgr == nil || globalLayout.BaseDir == "" {
+		return errors.New("agents are not ready")
+	}
+	m, err := trash.Load(globalLayout.BaseDir, key)
+	if err != nil {
+		return err
+	}
+	if _, err := restoreProject(ctx, m); err != nil {
+		if errors.Is(err, errTrashCollision) || errors.Is(err, trash.ErrOccupied) {
+			return fmt.Errorf("%w: %s", ErrTrashConflict, err.Error())
+		}
+		return err
+	}
+	return nil
+}
+
+// ErrTrashConflict marks a restore refused because the project id or one
+// of its original paths is in use again.
+var ErrTrashConflict = errors.New("cannot restore")

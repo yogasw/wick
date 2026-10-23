@@ -15,23 +15,28 @@ export function deleteProjectTitle(p: { name: string }): string {
   return `Delete project ${p.name}?`;
 }
 
+/* Days a deleted project stays restorable (trash.Retention). */
+export const TRASH_DAYS = 30;
+
+const RESTORABLE = `Moves to the deleted list. Its owner or an admin can restore it for ${TRASH_DAYS} days; after that it is removed permanently.`;
+
 export function deleteProjectBody(p: DeleteProjectPreview): string {
   const chats = `${p.chats} chat${p.chats === 1 ? "" : "s"}`;
   if (p.custom_path) {
     return (
       `This deletes ${chats} and the agents' memory for this project. ` +
-      `Its folder ${p.custom_path} is yours and stays on disk. This cannot be undone.`
+      `Its folder ${p.custom_path} is yours and stays on disk. ${RESTORABLE}`
     );
   }
-  return `This deletes ${chats}, its files folder and the agents' memory for this project. This cannot be undone.`;
+  return `This deletes ${chats}, its files folder and the agents' memory for this project. ${RESTORABLE}`;
 }
 
-/* A delete takes every chat and ticket with it and cannot be undone, so it
-   is never one click: the name typed out, the consequence acknowledged, and
+/* A delete takes every chat and ticket with it, so it is never one click
+   even though it can be restored for a while: the name typed out, the consequence acknowledged, and
    two small sums answered. The sums make the step deliberate — nobody
    solves them by reflex on a dialog they opened by mistake. */
 export const DELETE_CONSENT =
-  "I understand this permanently deletes this project, all its chats and all its tickets. This cannot be undone.";
+  `I understand this deletes this project, all its chats and all its tickets. After ${TRASH_DAYS} days on the deleted list they are removed permanently.`;
 
 export type Sum = { a: number; b: number };
 

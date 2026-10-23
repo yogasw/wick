@@ -671,11 +671,11 @@ func Register(r tool.Router) {
 	r.POST("/projects/{id}/pin", toggleProjectPin)
 	r.GET("/projects/{id}/delete-preview", projectOwnerMW(projectDeletePreviewJSON))
 	r.DELETE("/projects/{id}", projectOwnerMW(deleteProject))
-	// Recently deleted: owners see their own, admins see all (checked
-	// inside, per entry); delete forever is admin-only.
+	// Deleted projects: owners see their own, admins see all (checked
+	// inside, per entry). No purge route: only the retention sweep
+	// removes an entry for good.
 	r.GET("/projects-trash", projectTrashJSON)
 	r.POST("/projects-trash/{key}/restore", projectTrashRestore)
-	r.DELETE("/projects-trash/{key}", projectTrashPurge)
 
 	r.GET("/agent-profiles", agentProfilesPage)
 	// Agents app: one shell for every client route under /team, which the
