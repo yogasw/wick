@@ -61,3 +61,33 @@ func withLiveStream(t *testing.T) {
 	liveStreamText = true
 	t.Cleanup(func() { liveStreamText = prev })
 }
+
+// playError runs a turn that fails with a limit error in channelID, then
+// the Done that may follow, and returns what was posted.
+func playError(t *testing.T, channelID string) string {
+	t.Helper()
+	f := newFakeSlack(t)
+	c := &Channel{
+		api:   f.client(),
+		turns: map[string]*turn{"slack-t1": {channelID: channelID, threadTS: "1700000000.000100", running: true}},
+	}
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "half an answer"})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Error, ErrorMsg: "usage limit reached"})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Done})
+	return postedText(f)
+}
+
+// A channel thread gets no error text and no text of the failed turn.
+func TestErrorNotPostedInChannelThread(t *testing.T) {
+	if got := playError(t, "C1"); got != "" {
+		t.Fatalf("posted %q", got)
+	}
+}
+
+// A direct message with the bot still says what went wrong.
+func TestErrorPostedInDirectMessage(t *testing.T) {
+	got := playError(t, "D1")
+	if !strings.Contains(got, "usage limit reached") || strings.Contains(got, "half an answer") {
+		t.Fatalf("posted %q", got)
+	}
+}

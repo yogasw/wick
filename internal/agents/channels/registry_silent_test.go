@@ -307,3 +307,14 @@ func TestFailedOverDropsTheFailedText(t *testing.T) {
 		t.Fatalf("texts = %q", got)
 	}
 }
+
+// The CLI's own limit notice never reaches a channel; the agent's text does.
+func TestSyntheticTextNotForwarded(t *testing.T) {
+	reg, rec := setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "You've hit your weekly limit", Synthetic: true})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "the answer"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if got := strings.Join(rec.texts(), ""); got != "the answer" {
+		t.Fatalf("forwarded %q", got)
+	}
+}

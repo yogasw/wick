@@ -3295,6 +3295,14 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	case "error":
 		s.setReaction(reactionError, channelID, msgTS, "")
 		s.setAssistantStatus(channelID, threadTS, "")
+		if !isDirectChannel(channelID) {
+			// A channel thread is the requester's (often a client case):
+			// the agent's error stays on the dashboard, the thread gets
+			// the ❌ on the message that started the turn.
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).Str("error", text).
+				Msg("agent error not posted to the channel thread; see the session")
+			return
+		}
 		msg := "Agent error."
 		if text != "" {
 			msg = fmt.Sprintf("Agent error: %s", text)
@@ -3741,6 +3749,11 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			t.running = false
 			held = t.interim.Holding()
 			t.interim = agentchannels.InterimTurn{}
+			if !held {
+				// The failed turn's text is not posted by a later Done.
+				t.resetText()
+				t.hasStarted = false
+			}
 		}
 		s.mu.Unlock()
 		if t == nil {
@@ -4897,4 +4910,10 @@ func (s *Channel) dashboardURL(sessionID string) string {
 		return "Alamat dashboard belum diatur di Settings (app_url)."
 	}
 	return fmt.Sprintf("<%s/tools/agents/sessions/%s|Open session in the dashboard>", base, url.PathEscape(sessionID))
+}
+
+// isDirectChannel reports whether channelID is a direct message with the
+// bot (a "D…" id), not a channel or a group conversation.
+func isDirectChannel(channelID string) bool {
+	return strings.HasPrefix(channelID, "D")
 }

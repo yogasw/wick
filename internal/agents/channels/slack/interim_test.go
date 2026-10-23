@@ -204,12 +204,13 @@ func TestInterimDropDeleteFailsCompletesLiveMessage(t *testing.T) {
 }
 
 // A turn that fails while holding posts its text, as before the hold.
+// In a direct message: a channel thread gets no error text.
 func TestInterimErrorPostsHeldText(t *testing.T) {
 	interimHooks(t, true, map[string]bool{"t1": true})
 	f := newFakeSlack(t)
 	c := &Channel{
 		api:   f.client(),
-		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
+		turns: map[string]*turn{"slack-t1": {channelID: "D1", threadTS: "1700000000.000100", running: true}},
 	}
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "team_message", ToolInput: `{"to":"@franky"}`, ToolUseID: "u1"})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "u1", Text: `{"task_id":"t1","state":"working"}`})

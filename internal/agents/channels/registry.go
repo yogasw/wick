@@ -711,6 +711,12 @@ func (r *Registry) DispatchAgentEvent(sessionID string, ev event.AgentEvent) {
 // came from, used to label a sub-agent's progress when it is relayed onto its
 // leader's thread. Callers without a name can use DispatchAgentEvent.
 func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.AgentEvent) {
+	// The CLI's own notice ("You've hit your weekly limit · resets …") is
+	// not the agent's reply: no channel ever shows it. The turn's Error
+	// (or the failover that takes it over) says what happened.
+	if ev.Type == event.TextDelta && ev.Synthetic {
+		return
+	}
 	// A sub-agent's session has no thread on any channel, so its events would
 	// be dropped by every receiver. Re-address the ones that carry progress to
 	// the leader's thread instead, and return: the child must not accumulate
