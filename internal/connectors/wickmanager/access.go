@@ -17,6 +17,7 @@ var (
 	errCannotRegenerate  = errors.New("config row cannot be regenerated")
 	errRequiredEmpty     = errors.New("required field cannot be empty")
 	errRequiredClear     = errors.New("required field cannot be cleared — set a new value instead")
+	errManagedPrompt     = errors.New("this operator prompt is not set through tool_set_config: use prompt_set, which waits for an admin to accept it")
 )
 
 // userFromCtx pulls the authenticated user off the request context.

@@ -158,6 +158,12 @@ type ClaudeFactory struct {
 	// (see TeamLimits); false outside the Team.
 	TeamLimitsLoader func(sessionID string) (TeamLimits, bool)
 
+	// SecurityPromptLoader (optional) returns the `system_prompt_security`
+	// config row: admin-managed security rules every spawn carries right
+	// after the immutable rules — project, Team and sub-agent sessions
+	// alike. Empty = no section.
+	SecurityPromptLoader func() string
+
 	// TeamSystemPromptLoader (optional) returns the `system_prompt_team`
 	// config row: the operator prompt of Team agent sessions, in place of
 	// SystemPromptLoader. Empty = no operator prompt at all.
@@ -969,6 +975,7 @@ type TeamSpawn struct {
 // wins on conflict:
 //
 //  1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+//     1b. "## Security rules" (`system_prompt_security`, every session)
 //  2. Team overlay + "Who you are" (Team sessions)
 //  3. connector catalog
 //  4. preset body (per-preset persona)
@@ -980,7 +987,7 @@ type TeamSpawn struct {
 // config below tries to relax.
 //
 // A Team agent's own session is assembled differently: immutable (with
-// its gated sections cut to the agent's access) → Team overlay + "Who
+// its gated sections cut to the agent's access) → security rules → Team overlay + "Who
 // you are" → "Your access" → catalog → preset → `system_prompt_team` →
 // "## Team instructions" (the owner's Team settings, skipped when empty)
 // → "## Your persona" → session block. The operator prompt moves BEFORE
@@ -1005,12 +1012,22 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		b.WriteString(s)
 	}
 	add := func(s string) { addRaw(strings.TrimSpace(s)) }
+	// The admin's security rules come right after wick's own, in every
+	// kind of session, so nothing operator- or persona-written sits
+	// above them.
+	security := ""
+	if f.SecurityPromptLoader != nil {
+		if sp := strings.TrimSpace(f.SecurityPromptLoader()); sp != "" {
+			security = "## Security rules\n\n" + sp
+		}
+	}
 	if isTeam {
 		add(systemprompt.ImmutableForTeam(providerType, systemprompt.TeamGates{
 			Subagents: ts.Subagents,
 			Schedule:  ts.Schedule,
 			Files:     ts.Files,
 		}))
+		add(security)
 		add(ts.Prompt)
 		add(ts.Access)
 	} else {
@@ -1020,6 +1037,7 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		// session's parentage, which the pool read off meta; a role or
 		// preset cannot override it.
 		addRaw(systemprompt.ImmutableFor(providerType, opt.IsSubAgent))
+		add(security)
 		if f.TeamPromptLoader != nil {
 			add(f.TeamPromptLoader(opt.SessionID, opt.IsSubAgent))
 		}

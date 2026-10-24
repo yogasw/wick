@@ -42,6 +42,7 @@ import (
 	agentnotes "github.com/yogasw/wick/internal/agents/notes"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/promptguard"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/managedbin"
 	ompprovider "github.com/yogasw/wick/internal/agents/provider/omp"
@@ -295,6 +296,21 @@ func NewServer() *Server {
 	// module carries its pre-reflected Configs (Owner = meta.Key is
 	// stamped here) so per-module rows are seeded in the same pass.
 	configsSvc := configs.NewService(db)
+	// Operator prompts and Team instructions keep a version history: every
+	// write of a managed row, whichever door it came through, is recorded
+	// with the writer the context carries.
+	promptGuard := promptguard.New(db, configsSvc)
+	configsSvc.SetChangeHook(func(ctx context.Context, owner, key, before, after string) {
+		actor := promptguard.Actor{}
+		if u := login.GetUser(ctx); u != nil {
+			actor.UserID, actor.Name = u.ID, u.Name
+			if actor.Name == "" {
+				actor.Name = u.Email
+			}
+		}
+		promptGuard.OnConfigChange(ctx, owner, key, before, after, actor)
+	})
+	team.SetPromptHook(promptGuard.OnTeamPrompt)
 	toolPlugins.PublicBase = func() string { return strings.TrimRight(configsSvc.AppURL(), "/") }
 	var extraConfigs []entity.Config
 	for _, m := range modules {
@@ -758,6 +774,11 @@ func NewServer() *Server {
 	}
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
+	}
+	// Admin-managed security rules: every spawn, right after the
+	// immutable rules (see ClaudeFactory.composePrompt).
+	agentsFactory.SecurityPromptLoader = func() string {
+		return configsSvc.GetOwned("agents", promptguard.KeySecurity)
 	}
 	// A Team agent's session reads its own operator row instead, never
 	// system_prompt (see ClaudeFactory.composePrompt).
@@ -1360,6 +1381,7 @@ func NewServer() *Server {
 	agentstool.SetAuth(authSvc)
 	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
+	agentstool.SetPromptGuard(promptGuard)
 	// Agents app: the MCP layer narrows an agent session's connector
 	// reach to that agent's checklist through this resolver.
 	teamSvc = team.NewService(db, agentsLayout)
@@ -2016,6 +2038,13 @@ func NewServer() *Server {
 		Tools:      allItems,
 		ToolsFn:    liveToolItems,
 		AppName:    appname.Resolve(),
+		Prompts:    promptGuard,
+		AgentOf: func(sessionID string) string {
+			if p := teamSvc.AgentFor(context.Background(), sessionID); p != nil {
+				return "@" + p.Handle
+			}
+			return ""
+		},
 	}))
 	connectors.Register(notifications.Module(notifications.Deps{
 		DB:   db,

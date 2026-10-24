@@ -150,6 +150,19 @@ func Operations(deps Deps) []connector.Category {
 				// system_* (tray-only + admin)
 				Docs{}),
 
+		connector.Op("prompt_get", "Get Operator Prompt",
+			"Read one operator prompt every agent spawn carries: system_prompt_security (security rules, right after wick's own rules, in EVERY session including sub-agents), system_prompt (project sessions) or system_prompt_team (Team agents). Returns {key, value, version, bytes, pending_proposals}. Access: any signed-in user. UI: <app_url>/tools/agents/settings.",
+			promptKeyInput{}, h.promptGet, wickdocs.Docs{}),
+		connector.Op("prompt_set", "Propose Operator Prompt",
+			"Propose a new full text for an operator prompt. Does NOT apply it: it posts an approval card in this chat and an admin must click Accept in the browser before anything changes. Returns {status: pending_approval, approval_id, changes}. Access: ADMIN ONLY, and only from an agent session.",
+			promptSetInput{}, h.promptSet, wickdocs.Docs{}),
+		connector.Op("prompt_history", "Operator Prompt History",
+			"List the versions of an operator prompt (or your own Team instructions with key=team_instructions), newest first: who changed it, when, how (ui / approval / baseline), and the +/- line diff against the previous version; pending and declined proposals too. Access: any signed-in user.",
+			promptHistoryInput{}, h.promptHistory, wickdocs.Docs{}),
+		connector.Op("prompt_rollback", "Propose Operator Prompt Rollback",
+			"Propose restoring an earlier version of an operator prompt (see prompt_history). Like prompt_set it only posts an approval card; an admin must accept it in the browser. Returns {status: pending_approval, approval_id, changes}. Access: ADMIN ONLY, and only from an agent session.",
+			promptRollbackInput{}, h.promptRollback, wickdocs.Docs{}),
+
 		connector.Op("system_status", "System Status",
 			"Get HTTP server + background worker process status. Only available when wick is launched via the system tray. Returns {server_running, server_port, worker_running, run_mode}. Access: ADMIN + tray-only.",
 			emptyInput{}, h.systemStatus, wickdocs.Docs{}),
