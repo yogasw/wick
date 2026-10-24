@@ -2,6 +2,7 @@ package pool
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -162,6 +163,11 @@ type ClaudeFactory struct {
 	// row: whom the built-in rules tell people to ask for missing access.
 	// Empty = "the wick admin".
 	AdminContactLoader func() string
+
+	// PathGuardLoader (optional) returns the `path_guard` mode ("off" or
+	// "block") and the `path_guard_allow` exceptions, read per spawn.
+	// Nil = no path guard.
+	PathGuardLoader func() (mode, allow string)
 
 	// SecurityPromptLoader (optional) returns the `system_prompt_security`
 	// config row: admin-managed security rules every spawn carries right
@@ -538,6 +544,20 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		}
 	}
 
+	// Path guard: claude spawns get a hook that refuses any tool call
+	// into another agent's project or session (see gate.PathGuardSpec).
+	pathGuardSettings := ""
+	if pType == provider.TypeClaude && gateBin != "" && opt.Workspace != "" && f.PathGuardLoader != nil {
+		if mode, allow := f.PathGuardLoader(); mode != "off" {
+			spec := f.pathGuardSpec(opt, allow)
+			if p, err := gate.WritePathGuard(f.Layout.SessionDir(opt.SessionID), gateBin, spec); err != nil {
+				log.Warn().Err(err).Str("session", opt.SessionID).Msg("agents.spawn: path guard not installed")
+			} else {
+				pathGuardSettings = p
+			}
+		}
+	}
+
 	// Memory guard, resolved per instance: the global ceiling is the
 	// default, and an instance may set its own — higher OR lower. See
 	// config.ResolveAgentLimitMB for why this is not a min().
@@ -583,9 +603,10 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		OnSpawn: func(binary string, argv []string, env []string, pid int, firstMsg string) {
 			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},
-		Instance:   &insCopy,
-		GateBinary: spawnGateBin,
-		Preset:     presetContent,
+		Instance:          &insCopy,
+		GateBinary:        spawnGateBin,
+		PathGuardSettings: pathGuardSettings,
+		Preset:            presetContent,
 		// Only the wick provider reads this (it rebuilds prompts from
 		// conversation.jsonl); the CLI providers resume from their own
 		// transcript and ignore it.
@@ -1122,4 +1143,50 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		contact = f.AdminContactLoader()
 	}
 	return systemprompt.ResolveAdminContact(b.String(), contact)
+}
+
+// pathGuardSpec is the guard of one spawn: the projects and sessions
+// roots are closed except for the spawn's own project and session, and
+// the operator's exceptions. An exception line is "<path>" (every
+// agent) or "<project id> <path>" (that project only); "#" comments.
+func (f *ClaudeFactory) pathGuardSpec(opt FactoryOptions, allow string) gate.PathGuardSpec {
+	real := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	projects := real(f.Layout.ProjectsDir())
+	sessions := real(f.Layout.SessionsDir())
+	spec := gate.PathGuardSpec{
+		Guarded: []string{projects, sessions},
+		Allow:   []string{real(f.Layout.SessionDir(opt.SessionID))},
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		spec.Home = h
+	}
+	ownProject := ""
+	ws := real(opt.Workspace)
+	if rel, err := filepath.Rel(projects, ws); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		ownProject = strings.Split(filepath.ToSlash(rel), "/")[0]
+		spec.Allow = append(spec.Allow, filepath.Join(projects, ownProject))
+	} else {
+		spec.Allow = append(spec.Allow, ws)
+	}
+	for _, line := range strings.Split(allow, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		path := fields[len(fields)-1]
+		if len(fields) > 1 && fields[0] != ownProject {
+			continue
+		}
+		if strings.HasPrefix(path, "~") && spec.Home != "" {
+			path = filepath.Join(spec.Home, strings.TrimPrefix(path, "~"))
+		}
+		spec.Allow = append(spec.Allow, real(path))
+	}
+	return spec
 }

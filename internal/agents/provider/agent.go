@@ -297,6 +297,8 @@ type Options struct {
 	// the factory and threaded through every spawn so the spawner can
 	// write hook configs without re-resolving.
 	GateBinary string
+	// PathGuardSettings is forwarded to SpawnOptions.PathGuardSettings.
+	PathGuardSettings string
 	// Preset is the system prompt content forwarded to the spawner as
 	// --append-system-prompt (or equivalent). Stripped from spawn logs.
 	Preset string
@@ -478,24 +480,25 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:        a.cfg.Workspace,
-		SessionDir:       a.cfg.SessionDir,
-		SessionID:        a.cfg.SessionID,
-		ResumeID:         a.resumeID,
-		ExtraEnv:         a.cfg.ExtraEnv,
-		ExtraArgs:        a.cfg.ExtraArgs,
-		SkipSkills:       a.cfg.SkipSkills,
-		Instance:         a.cfg.Instance,
-		GateBinary:       a.cfg.GateBinary,
-		Preset:           a.cfg.Preset,
-		SenderVisibility: a.cfg.SenderVisibility,
-		MaxTurns:         a.cfg.MaxTurns,
-		IdleTimeout:      a.cfg.IdleTimeout,
-		ThinkingTokens:   a.cfg.ThinkingTokens,
-		ModelID:          a.spawnModelIDLocked(),
-		MemGuard:         a.cfg.MemGuard,
-		SpawnSeq:         nextSpawnSeq(),
-		ToolMemoryMaxMB:  a.cfg.ToolMemoryMaxMB,
+		Workspace:         a.cfg.Workspace,
+		SessionDir:        a.cfg.SessionDir,
+		SessionID:         a.cfg.SessionID,
+		ResumeID:          a.resumeID,
+		ExtraEnv:          a.cfg.ExtraEnv,
+		ExtraArgs:         a.cfg.ExtraArgs,
+		SkipSkills:        a.cfg.SkipSkills,
+		Instance:          a.cfg.Instance,
+		GateBinary:        a.cfg.GateBinary,
+		PathGuardSettings: a.cfg.PathGuardSettings,
+		Preset:            a.cfg.Preset,
+		SenderVisibility:  a.cfg.SenderVisibility,
+		MaxTurns:          a.cfg.MaxTurns,
+		IdleTimeout:       a.cfg.IdleTimeout,
+		ThinkingTokens:    a.cfg.ThinkingTokens,
+		ModelID:           a.spawnModelIDLocked(),
+		MemGuard:          a.cfg.MemGuard,
+		SpawnSeq:          nextSpawnSeq(),
+		ToolMemoryMaxMB:   a.cfg.ToolMemoryMaxMB,
 	})
 	if err != nil {
 		cancel()
@@ -937,25 +940,26 @@ func (a *Agent) respawnWithMessage(text string) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:        a.cfg.Workspace,
-		SessionDir:       a.cfg.SessionDir,
-		SessionID:        a.cfg.SessionID,
-		ResumeID:         resumeID,
-		ExtraEnv:         a.cfg.ExtraEnv,
-		ExtraArgs:        a.cfg.ExtraArgs,
-		SkipSkills:       a.cfg.SkipSkills,
-		Instance:         a.cfg.Instance,
-		GateBinary:       a.cfg.GateBinary,
-		Preset:           a.cfg.Preset,
-		SenderVisibility: a.cfg.SenderVisibility,
-		InitialMessage:   text,
-		MaxTurns:         a.cfg.MaxTurns,
-		IdleTimeout:      a.cfg.IdleTimeout,
-		ThinkingTokens:   a.cfg.ThinkingTokens,
-		ModelID:          a.spawnModelIDLocked(),
-		MemGuard:         a.cfg.MemGuard,
-		SpawnSeq:         nextSpawnSeq(),
-		ToolMemoryMaxMB:  a.cfg.ToolMemoryMaxMB,
+		Workspace:         a.cfg.Workspace,
+		SessionDir:        a.cfg.SessionDir,
+		SessionID:         a.cfg.SessionID,
+		ResumeID:          resumeID,
+		ExtraEnv:          a.cfg.ExtraEnv,
+		ExtraArgs:         a.cfg.ExtraArgs,
+		SkipSkills:        a.cfg.SkipSkills,
+		Instance:          a.cfg.Instance,
+		GateBinary:        a.cfg.GateBinary,
+		PathGuardSettings: a.cfg.PathGuardSettings,
+		Preset:            a.cfg.Preset,
+		SenderVisibility:  a.cfg.SenderVisibility,
+		InitialMessage:    text,
+		MaxTurns:          a.cfg.MaxTurns,
+		IdleTimeout:       a.cfg.IdleTimeout,
+		ThinkingTokens:    a.cfg.ThinkingTokens,
+		ModelID:           a.spawnModelIDLocked(),
+		MemGuard:          a.cfg.MemGuard,
+		SpawnSeq:          nextSpawnSeq(),
+		ToolMemoryMaxMB:   a.cfg.ToolMemoryMaxMB,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.

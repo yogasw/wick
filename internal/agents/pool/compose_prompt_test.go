@@ -1,6 +1,8 @@
 package pool
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -243,5 +245,29 @@ func TestComposePrompt_SecurityRulesEverySession(t *testing.T) {
 				t.Error("an empty security prompt still added a section")
 			}
 		})
+	}
+}
+
+// The path guard of a spawn closes the projects and sessions roots except
+// for its own project and session, plus the exceptions meant for it.
+func TestPathGuardSpec(t *testing.T) {
+	f := &ClaudeFactory{Layout: config.NewLayout(t.TempDir())}
+	ws := filepath.Join(f.Layout.ProjectsDir(), "p-own", "files")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	allow := "# comment\n/srv/shared\np-own /srv/own-extra\np-other /srv/not-mine\n"
+	spec := f.pathGuardSpec(FactoryOptions{SessionID: "s1", Workspace: ws}, allow)
+	joined := strings.Join(spec.Allow, "|")
+	for _, want := range []string{"p-own", "/srv/shared", "/srv/own-extra", "s1"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("allow %q missing %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "/srv/not-mine") {
+		t.Error("another project's exception leaked in")
+	}
+	if len(spec.Guarded) != 2 {
+		t.Errorf("guarded = %v", spec.Guarded)
 	}
 }

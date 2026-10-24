@@ -90,6 +90,8 @@ type GeneralConfig struct {
 	ResourceRetentionMinutes    int    `wick:"number;group=Usage History;desc=How long to keep samples, in minutes. Anything older is discarded automatically. 360 = 6 hours (default), 1440 = one day. Lowering this frees memory immediately."`
 	ResourceHistoryMaxPoints    int    `wick:"number;group=Usage History;desc=Hard ceiling on stored samples, whatever the retention window says. Protects against a very short interval filling memory. Default: 4096."`
 	AdminContact                string `wick:"text;desc=Who agents tell people to ask when an access, connector or project is missing, e.g. a name and where to reach them. Fills the built-in rule. Empty = the wick admin."`
+	PathGuard                   string `wick:"dropdown=block|off;desc=Path guard for claude agents. block (default) = a tool call (file tools or Bash) that reaches into another agent's project folder or another session's folder is refused, in every permission mode, by a hook the agent cannot edit. off = no guard."`
+	PathGuardAllow              string `wick:"textarea;desc=Exceptions to the path guard, one per line: a path every agent may reach, or a project id, a space and a path only that project's agents may reach. Lines starting with # are comments."`
 	SystemPromptSecurity        string `wick:"textarea;desc=Security rules every agent spawn carries right after wick's own rules — project sessions, Team agents and sub-agents alike. Admins edit it here. An agent can only propose a change over MCP, which waits for an admin to accept it on the approval card. Every change is kept in the prompt history. Empty = none."`
 	SystemPrompt                string `wick:"textarea;desc=Base operator prompt for every session — project sessions and Team agents alike. Company-specific rules only: wick's general behaviour is built in, security rules go in system_prompt_security."`
 	SystemPromptTeam            string `wick:"textarea;desc=Addition for Team agents only, placed right after system_prompt. Empty = nothing added."`
@@ -204,6 +206,7 @@ func DefaultGeneralConfig() GeneralConfig {
 		// turn on installs that have no use for one. The dashboard shows the
 		// full sender either way.
 		SenderVisibility:         "name",
+		PathGuard:                "block",
 		SystemPrompt:             systemprompt.DefaultSystemPrompt(),
 		WorkflowGuardMode:        "off",
 		WorkflowRunKeepMax:       50,
