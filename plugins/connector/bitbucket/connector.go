@@ -49,6 +49,10 @@ type Configs struct {
 	// The test panel's last input, persisted so a re-mount of the widget does not wipe it.
 	RulesTestPR string `wick:"hidden;desc=Last pull request tested in the merge rules panel."`
 
+	// DefaultReviewers is added to every PR create_pull_request opens, so a
+	// team's usual reviewer is never left to the caller's memory.
+	DefaultReviewers string `wick:"group=Pull requests|Applied by create_pull_request.|collapsed;desc=Comma-separated Bitbucket account_id or {uuid} added as reviewers to every PR create_pull_request opens, on top of its reviewers input. The skip_default_reviewers input leaves them out for one PR."`
+
 	DefaultPagelen int `wick:"default=20;group=Paging||collapsed;desc=Default Bitbucket page length for list/search operations."`
 	MaxPagelen     int `wick:"default=100;group=Paging;desc=Maximum page length allowed by this connector."`
 }
@@ -128,7 +132,8 @@ type CreatePullRequestInput struct {
 	SourceBranch      string `wick:"required;desc=Source branch name."`
 	DestinationBranch string `wick:"required;desc=Destination branch name. Example: main"`
 	CloseSourceBranch bool   `wick:"default=false;desc=Close source branch after merge."`
-	Reviewers         string `wick:"desc=Optional reviewers, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. The PR author cannot be a reviewer."`
+	Reviewers         string `wick:"desc=Optional reviewers, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. Added on top of the default_reviewers config. The PR author cannot be a reviewer."`
+	SkipDefault       bool   `wick:"key=skip_default_reviewers;desc=true = do not add the default_reviewers config to this PR (e.g. someone asked to drop that reviewer)."`
 }
 
 type AddPullRequestReviewersInput struct {

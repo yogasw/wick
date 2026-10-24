@@ -43,6 +43,9 @@ type Configs struct {
 	BaseURL        string `wick:"url;desc=GitLab host, e.g. https://gitlab.example.com (no /api/v4). Empty = https://gitlab.com."`
 	Token          string `wick:"secret;required;desc=Personal or project access token. Scope api for writes, read_api for read-only use."`
 	DefaultProject string `wick:"desc=group/repo path used when an op gets no project. Optional."`
+	// DefaultReviewers is added to every MR create_merge_request opens, so a
+	// team's usual reviewer is never left to the caller's memory.
+	DefaultReviewers string `wick:"group=Merge requests|Applied by create_merge_request.|collapsed;desc=Comma-separated GitLab usernames added as reviewers to every MR create_merge_request opens, on top of its reviewers input. Resolved to user ids through the API. The skip_default_reviewers input leaves them out for one MR."`
 	// PermissionStatus is a read-only widget: the per-operation allowed/denied
 	// checklist from the token's scopes and its role in default_project. Not a
 	// stored value — the html op renders it.
@@ -164,6 +167,8 @@ type CreateMRInput struct {
 	Draft              bool   `wick:"desc=Open as draft (prefixes Draft:)."`
 	RemoveSourceBranch bool   `wick:"desc=Delete the source branch after merge."`
 	Squash             bool   `wick:"desc=Squash commits on merge."`
+	Reviewers          string `wick:"desc=Optional reviewers, comma-separated GitLab usernames (with or without @) or numeric user ids. Added on top of the default_reviewers config."`
+	SkipDefault        bool   `wick:"key=skip_default_reviewers;desc=true = do not add the default_reviewers config to this MR (e.g. someone asked to drop that reviewer)."`
 }
 
 type UpdateMRInput struct {
