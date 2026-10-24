@@ -123,3 +123,46 @@ func TestFactoryAttachGate_DefaultsTempDir(t *testing.T) {
 		t.Fatalf("default settings path missing: %v", err)
 	}
 }
+
+// TestFactoryPathGuard_WithoutApprovalGate: the path guard is installed
+// from PathGuardBinary even when the approval gate is off, and reaches
+// the spawn as its --settings file.
+func TestFactoryPathGuard_WithoutApprovalGate(t *testing.T) {
+	tmp := t.TempDir()
+	ws := filepath.Join(tmp, "projects", "p1", "files")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cap := &captureSpawner{}
+	f := &ClaudeFactory{
+		Layout:          config.NewLayout(tmp),
+		Spawner:         cap,
+		PathGuardBinary: "/bin/gate",
+		PathGuardLoader: func() (string, string) { return "block", "" },
+	}
+	result, err := f.Build(FactoryOptions{SessionID: "S4", AgentName: "main", Workspace: ws})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	_ = result.Agent.Start(context.Background())
+	want := filepath.Join(f.Layout.SessionDir("S4"), "pathguard-settings.json")
+	if cap.got.PathGuardSettings != want {
+		t.Fatalf("PathGuardSettings = %q, want %q", cap.got.PathGuardSettings, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("settings file missing: %v", err)
+	}
+
+	// Mode off: no guard.
+	cap2 := &captureSpawner{}
+	f.Spawner = cap2
+	f.PathGuardLoader = func() (string, string) { return "off", "" }
+	result, err = f.Build(FactoryOptions{SessionID: "S5", AgentName: "main", Workspace: ws})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	_ = result.Agent.Start(context.Background())
+	if cap2.got.PathGuardSettings != "" {
+		t.Errorf("mode off still installed %q", cap2.got.PathGuardSettings)
+	}
+}

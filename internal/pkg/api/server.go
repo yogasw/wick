@@ -777,6 +777,7 @@ func NewServer() *Server {
 	}
 	// Admin-managed security rules: every spawn, right after the
 	// immutable rules (see ClaudeFactory.composePrompt).
+	agentsFactory.PathGuardBinary = resolvedGateBin
 	agentsFactory.PathGuardLoader = func() (string, string) {
 		return configsSvc.GetOwned("agents", "path_guard"), configsSvc.GetOwned("agents", "path_guard_allow")
 	}

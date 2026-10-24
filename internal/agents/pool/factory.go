@@ -169,6 +169,12 @@ type ClaudeFactory struct {
 	// Nil = no path guard.
 	PathGuardLoader func() (mode, allow string)
 
+	// PathGuardBinary is the gate binary the path guard hook runs. Set on
+	// its own because the guard must hold even when the approval gate is
+	// off (gate_enabled=false or bypass permissions). Empty = fall back to
+	// the approval gate's binary.
+	PathGuardBinary string
+
 	// SecurityPromptLoader (optional) returns the `system_prompt_security`
 	// config row: admin-managed security rules every spawn carries right
 	// after the immutable rules — project, Team and sub-agent sessions
@@ -547,10 +553,14 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// Path guard: claude spawns get a hook that refuses any tool call
 	// into another agent's project or session (see gate.PathGuardSpec).
 	pathGuardSettings := ""
-	if pType == provider.TypeClaude && gateBin != "" && opt.Workspace != "" && f.PathGuardLoader != nil {
+	guardBin := f.PathGuardBinary
+	if guardBin == "" {
+		guardBin = gateBin
+	}
+	if pType == provider.TypeClaude && guardBin != "" && opt.Workspace != "" && f.PathGuardLoader != nil {
 		if mode, allow := f.PathGuardLoader(); mode != "off" {
 			spec := f.pathGuardSpec(opt, allow)
-			if p, err := gate.WritePathGuard(f.Layout.SessionDir(opt.SessionID), gateBin, spec); err != nil {
+			if p, err := gate.WritePathGuard(f.Layout.SessionDir(opt.SessionID), guardBin, spec); err != nil {
 				log.Warn().Err(err).Str("session", opt.SessionID).Msg("agents.spawn: path guard not installed")
 			} else {
 				pathGuardSettings = p
