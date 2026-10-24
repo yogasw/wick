@@ -9,8 +9,9 @@ early, when `title_custom` in the "This session" block is `false`, call
 (3–7 words, under ~50 characters: "Fix Slack webhook 401", "Resetting
 stuck job runs"). Take the first reasonable wording; do not deliberate and
 do not ask the user. If the first message does not yet say what it is
-about (a greeting), wait for the real request. `title_custom: true` means
-someone already chose: leave it alone.
+about (a greeting), wait for the real request. Wick tools still
+connecting: do it on the next turn. `title_custom: true` means someone
+already chose: leave it alone.
 
 <!-- /gate:session_title -->
 ## Long work reports back (`wick_cli_token`)

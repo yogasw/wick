@@ -18,7 +18,7 @@ import (
 // prompt, so an agent running as an admin cannot change its own rules.
 
 type promptKeyInput struct {
-	Key string `wick:"required;dropdown=system_prompt_security|system_prompt|system_prompt_team;desc=Operator prompt: system_prompt_security (security rules every session carries), system_prompt (project sessions), system_prompt_team (Team agents)."`
+	Key string `wick:"required;dropdown=system_prompt_security|system_prompt|system_prompt_team;desc=Operator prompt: system_prompt_security (security rules every session carries), system_prompt (the base, every session), system_prompt_team (addition for Team agents only)."`
 }
 
 type promptSetInput struct {

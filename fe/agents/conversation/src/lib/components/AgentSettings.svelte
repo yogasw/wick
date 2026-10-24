@@ -1020,12 +1020,6 @@
       />
     </div>
     <div>
-      <Toggle checked={draft.use_global_prompt} onChange={(v) => (draft.use_global_prompt = v)} label="Use the global system prompt" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        On: this agent's chats carry the global system prompt (channel rules such as Slack formatting live there) instead of the Team agents prompt. On by default for an agent made from a project.
-      </p>
-    </div>
-    <div>
       <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
         Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.

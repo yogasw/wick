@@ -777,11 +777,14 @@ func NewServer() *Server {
 	}
 	// Admin-managed security rules: every spawn, right after the
 	// immutable rules (see ClaudeFactory.composePrompt).
+	agentsFactory.AdminContactLoader = func() string {
+		return configsSvc.GetOwned("agents", "admin_contact")
+	}
 	agentsFactory.SecurityPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", promptguard.KeySecurity)
 	}
-	// A Team agent's session reads its own operator row instead, never
-	// system_prompt (see ClaudeFactory.composePrompt).
+	// Team agents add their own row right after system_prompt (see
+	// ClaudeFactory.composePrompt).
 	agentsFactory.TeamSystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt_team")
 	}

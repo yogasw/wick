@@ -91,8 +91,8 @@ type TeamAgentItem struct {
 	MentionFrom  string   `json:"mention_from"`
 	MentionAllow []string `json:"mention_allow"`
 	MaxHops      int      `json:"max_hops"`
-	// UseGlobalPrompt: spawns carry the global system_prompt instead of
-	// system_prompt_team (on for agents converted from a project).
+	// UseGlobalPrompt is stored but no longer read (every Team spawn
+	// carries system_prompt); kept for API compatibility.
 	UseGlobalPrompt bool `json:"use_global_prompt"`
 	// OwnProject: the agent's project is its own (Team tag), so
 	// ShowInProjects applies; a project it was pointed at always shows.

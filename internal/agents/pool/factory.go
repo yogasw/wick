@@ -158,6 +158,11 @@ type ClaudeFactory struct {
 	// (see TeamLimits); false outside the Team.
 	TeamLimitsLoader func(sessionID string) (TeamLimits, bool)
 
+	// AdminContactLoader (optional) returns the `admin_contact` config
+	// row: whom the built-in rules tell people to ask for missing access.
+	// Empty = "the wick admin".
+	AdminContactLoader func() string
+
 	// SecurityPromptLoader (optional) returns the `system_prompt_security`
 	// config row: admin-managed security rules every spawn carries right
 	// after the immutable rules — project, Team and sub-agent sessions
@@ -165,8 +170,8 @@ type ClaudeFactory struct {
 	SecurityPromptLoader func() string
 
 	// TeamSystemPromptLoader (optional) returns the `system_prompt_team`
-	// config row: the operator prompt of Team agent sessions, in place of
-	// SystemPromptLoader. Empty = no operator prompt at all.
+	// config row: a Team-only addition placed right after the shared
+	// `system_prompt` in Team agent sessions. Empty = nothing added.
 	TeamSystemPromptLoader func() string
 
 	// SpawnLogger (optional) writes one jsonl per spawn under
@@ -963,8 +968,8 @@ type TeamSpawn struct {
 	Schedule  bool
 	// Files keeps the HTML render formats (systemprompt.TeamGates.Files).
 	Files bool
-	// UseGlobalPrompt swaps system_prompt_team for the global
-	// system_prompt (an agent converted from a project keeps its rules).
+	// UseGlobalPrompt is no longer read: every Team spawn carries
+	// system_prompt. Kept so callers and stored agents still compile.
 	UseGlobalPrompt bool
 	// TeamInstructions is the owner's Team prompt, for every agent in
 	// their Team; "" = no "## Team instructions" section.
@@ -988,11 +993,12 @@ type TeamSpawn struct {
 //
 // A Team agent's own session is assembled differently: immutable (with
 // its gated sections cut to the agent's access) → security rules → Team overlay + "Who
-// you are" → "Your access" → catalog → preset → `system_prompt_team` →
-// "## Team instructions" (the owner's Team settings, skipped when empty)
-// → "## Your persona" → session block. The operator prompt moves BEFORE
-// the persona so it no longer talks over it, and the persona is the last
-// word before the session block.
+// you are" → "Your access" → catalog → preset → `system_prompt` (the
+// shared base) → `system_prompt_team` (Team-only addition, skipped when
+// empty) → "## Team instructions" (the owner's Team settings, skipped
+// when empty) → "## Your persona" → session block. The operator prompts
+// come BEFORE the persona so they do not talk over it, and the persona is
+// the last word before the session block.
 func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) string {
 	var ts TeamSpawn
 	isTeam := false
@@ -1051,18 +1057,13 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		}
 	}
 	if isTeam {
-		// Team sessions never fall back to `system_prompt`: that row holds
-		// the operator's rules for the default support agent (session
-		// titles, Slack identity, file policy), which is exactly what made
-		// a Team agent behave like that agent instead of its persona.
-		// Empty `system_prompt_team` means no operator prompt at all.
-		// An agent converted from a project opts back in to
-		// `system_prompt`, where its channels' rules live.
-		if ts.UseGlobalPrompt {
-			if f.SystemPromptLoader != nil {
-				add(f.SystemPromptLoader())
-			}
-		} else if f.TeamSystemPromptLoader != nil {
+		// `system_prompt` is the base every session shares, Team agents
+		// included; `system_prompt_team` only adds the Team-specific part
+		// right after it (empty = nothing added).
+		if f.SystemPromptLoader != nil {
+			add(f.SystemPromptLoader())
+		}
+		if f.TeamSystemPromptLoader != nil {
 			add(f.TeamSystemPromptLoader())
 		}
 		// The owner's own words for all their agents: after the operator
@@ -1114,5 +1115,11 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 	if f.TicketPointerLoader != nil {
 		add(f.TicketPointerLoader(opt.SessionID))
 	}
-	return b.String()
+	// Who to ask for access is the operator's to name (admin_contact);
+	// the built-in rule only carries the placeholder.
+	contact := ""
+	if f.AdminContactLoader != nil {
+		contact = f.AdminContactLoader()
+	}
+	return systemprompt.ResolveAdminContact(b.String(), contact)
 }

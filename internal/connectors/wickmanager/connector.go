@@ -151,7 +151,7 @@ func Operations(deps Deps) []connector.Category {
 				Docs{}),
 
 		connector.Op("prompt_get", "Get Operator Prompt",
-			"Read one operator prompt every agent spawn carries: system_prompt_security (security rules, right after wick's own rules, in EVERY session including sub-agents), system_prompt (project sessions) or system_prompt_team (Team agents). Returns {key, value, version, bytes, pending_proposals}. Access: any signed-in user. UI: <app_url>/tools/agents/settings.",
+			"Read one operator prompt every agent spawn carries: system_prompt_security (security rules, right after wick's own rules, in EVERY session including sub-agents), system_prompt (the base, every session) or system_prompt_team (addition for Team agents only). Returns {key, value, version, bytes, pending_proposals}. Access: any signed-in user. UI: <app_url>/tools/agents/settings.",
 			promptKeyInput{}, h.promptGet, wickdocs.Docs{}),
 		connector.Op("prompt_set", "Propose Operator Prompt",
 			"Propose a new full text for an operator prompt. Does NOT apply it: it posts an approval card in this chat and an admin must click Accept in the browser before anything changes. Returns {status: pending_approval, approval_id, changes}. Access: ADMIN ONLY, and only from an agent session.",
