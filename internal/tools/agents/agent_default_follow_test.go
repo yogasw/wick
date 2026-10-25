@@ -166,6 +166,40 @@ func TestCaptainUpdatePersonaReportsSessionsSwitched(t *testing.T) {
 	}
 }
 
+// The Captain turns force_default_provider on over update_persona: the
+// setting is stored and the agent's chats move at once.
+func TestCaptainUpdatePersonaForcesDefault(t *testing.T) {
+	w := withCaptainWorld(t)
+	withFollowProviders(t)
+	ctx := context.Background()
+	setProjectDefault(t, w.worker.ProjectID, "claude/new", "")
+	if err := session.AddAgent(globalLayout, "s-worker", "default", "claude/old"); err != nil {
+		t.Fatal(err)
+	}
+	on := "on"
+	out, err := (CaptainOps{}).UpdatePersona(ctx, "s-captain", teamagents.PersonaInput{Agent: "@worker", ForceDefaultProvider: &on})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := out.(map[string]any); res["status"] != "updated" || res["sessions_switched"] != 1 {
+		t.Fatalf("result = %v, want updated with sessions_switched 1", res)
+	}
+	if a := chatAgent(t, "s-worker"); a.Provider != "claude/new" {
+		t.Fatalf("worker chat = %q", a.Provider)
+	}
+	p, err := globalTeam.Get(ctx, w.worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !team.ForcesDefaultProvider(p.SessionPolicy) {
+		t.Fatal("force_default_provider not stored")
+	}
+	bad := "maybe"
+	if _, err := (CaptainOps{}).UpdatePersona(ctx, "s-captain", teamagents.PersonaInput{Agent: "@worker", ForceDefaultProvider: &bad}); err == nil {
+		t.Fatal("want an error for a value that is not on or off")
+	}
+}
+
 func patchAgentForce(t *testing.T, u *entity.User, id string, on bool) {
 	t.Helper()
 	w, c := teamReq(t, u, http.MethodPatch, "/api/team/agents/"+id, map[string]any{"force_default_provider": on}, map[string]string{"id": id})

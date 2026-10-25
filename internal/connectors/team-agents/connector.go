@@ -55,6 +55,9 @@ type PersonaInput struct {
 	Avatar, AvatarImage                      *string
 	// Provider "default" clears the agent's provider (server default).
 	Provider, Model *string
+	// ForceDefaultProvider "on"/"off" holds every chat of the agent on
+	// its default provider (team.SessionPolicy.ForceDefaultProvider).
+	ForceDefaultProvider *string
 }
 
 // AccessInput is agents.set_access's input: the agent's whole proposed
@@ -164,15 +167,16 @@ type createInput struct {
 }
 
 type personaInput struct {
-	Agent        string `wick:"required;desc=The agent's @handle or id."`
-	Name         string `wick:"desc=New display name, empty = unchanged."`
-	Tagline      string `wick:"desc=New tagline, empty = unchanged."`
-	Description  string `wick:"desc=New short description, empty = unchanged."`
-	SystemPrompt string `wick:"textarea;desc=New system prompt, empty = unchanged."`
-	Avatar       string `wick:"desc=New avatar as JSON {kind,shape,color,expression}: kind \"\" (classic: shape circle|squircle|triangle|diamond) or \"blob\" (shape circle|pebble|squircle|capsule|triangle|cloud|droplet|flame|medal|acorn|jellyfish|clover, expression neutral|attentive|surprised|excited|happy|angry|sad|suspicious|curious|proud|shy|unimpressed), color a #rrggbb hex. Empty = unchanged."`
-	Provider     string `wick:"desc=New default provider instance as type/name, e.g. claude/claude_waba (must be one the owner may use), or default to fall back to the server default. Changing it drops the model pin unless model is given. Empty = unchanged."`
-	Model        string `wick:"desc=New default model of the agent's provider, e.g. opus or sonnet. Empty = unchanged."`
-	AvatarImage  string `wick:"desc=Path of a PNG or JPEG (max 2 MiB) inside your working folder, e.g. artifacts/avatar.png, it becomes the agent's picture avatar. Empty = unchanged."`
+	Agent                string `wick:"required;desc=The agent's @handle or id."`
+	Name                 string `wick:"desc=New display name, empty = unchanged."`
+	Tagline              string `wick:"desc=New tagline, empty = unchanged."`
+	Description          string `wick:"desc=New short description, empty = unchanged."`
+	SystemPrompt         string `wick:"textarea;desc=New system prompt, empty = unchanged."`
+	Avatar               string `wick:"desc=New avatar as JSON {kind,shape,color,expression}: kind \"\" (classic: shape circle|squircle|triangle|diamond) or \"blob\" (shape circle|pebble|squircle|capsule|triangle|cloud|droplet|flame|medal|acorn|jellyfish|clover, expression neutral|attentive|surprised|excited|happy|angry|sad|suspicious|curious|proud|shy|unimpressed), color a #rrggbb hex. Empty = unchanged."`
+	Provider             string `wick:"desc=New default provider instance as type/name, e.g. claude/claude_waba (must be one the owner may use), or default to fall back to the server default. Changing it drops the model pin unless model is given. Empty = unchanged."`
+	Model                string `wick:"desc=New default model of the agent's provider, e.g. opus or sonnet. Empty = unchanged."`
+	AvatarImage          string `wick:"desc=Path of a PNG or JPEG (max 2 MiB) inside your working folder, e.g. artifacts/avatar.png, it becomes the agent's picture avatar. Empty = unchanged."`
+	ForceDefaultProvider string `wick:"desc=on or off. on = keep every chat of the agent on its default provider and move the ones that are not (a chat on a failover stand-in is left alone). Empty = unchanged."`
 }
 
 type accessInput struct {
@@ -290,6 +294,7 @@ func (d Deps) updatePersona(c *connector.Ctx) (any, error) {
 		Description: opt("description"), SystemPrompt: opt("system_prompt"),
 		Avatar: opt("avatar"), AvatarImage: opt("avatar_image"),
 		Provider: opt("provider"), Model: opt("model"),
+		ForceDefaultProvider: opt("force_default_provider"),
 	})
 }
 
