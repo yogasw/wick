@@ -102,6 +102,9 @@ type TeamAgentItem struct {
 	ShowInProjects bool `json:"show_in_projects"`
 	// AllowProviderSwitch is the effective value (default applied).
 	AllowProviderSwitch bool `json:"allow_provider_switch"`
+	// ForceDefaultProvider: every chat is held to the default provider
+	// (team.SessionPolicy.ForceDefaultProvider).
+	ForceDefaultProvider bool `json:"force_default_provider"`
 	// ChannelShowTeammates is the effective value (default on).
 	ChannelShowTeammates bool `json:"channel_show_teammates"`
 	// ChannelHideInterim is the effective value (default on).
@@ -284,6 +287,7 @@ type teamAgentWriteReq struct {
 	RunAs                *string                 `json:"run_as"`
 	Disabled             *bool                   `json:"disabled"`
 	AllowProviderSwitch  *bool                   `json:"allow_provider_switch"`
+	ForceDefaultProvider *bool                   `json:"force_default_provider"`
 	ChannelShowTeammates *bool                   `json:"channel_show_teammates"`
 	ChannelHideInterim   *bool                   `json:"channel_hide_interim"`
 	StopAfterTeamTask    *bool                   `json:"stop_after_team_task"`
@@ -1083,6 +1087,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
+		ForceDefaultProvider: team.ForcesDefaultProvider(p.SessionPolicy),
 		ChannelShowTeammates: team.ShowsTeammatesInChannels(p.ChannelShowTeammates),
 		ChannelHideInterim:   team.HidesInterimInChannels(p.ChannelHideInterim),
 		StopAfterTeamTask:    team.StopsAfterTeamTask(p.StopAfterTeamTask),
@@ -1605,6 +1610,14 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		v := *req.AllowProviderSwitch
 		p.AllowProviderSwitch = &v
 	}
+	// Turning it on sweeps the agent's chats once, after the save.
+	forceOn := false
+	if req.ForceDefaultProvider != nil {
+		pol := team.DecodeSessionPolicy(p.SessionPolicy)
+		forceOn = *req.ForceDefaultProvider && !pol.ForceDefaultProvider
+		pol.ForceDefaultProvider = *req.ForceDefaultProvider
+		p.SessionPolicy = team.EncodeSessionPolicy(pol)
+	}
 	if req.ChannelShowTeammates != nil {
 		v := *req.ChannelShowTeammates
 		p.ChannelShowTeammates = &v
@@ -1657,7 +1670,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if p.ProjectID != "" {
 		if proj, ok := globalMgr.Registry().Project(p.ProjectID); ok {
 			meta := proj.Meta
-			oldProv, followDefault = meta.Defaults.Provider, req.Provider != nil || req.Model != nil
+			oldProv, followDefault = meta.Defaults.Provider, req.Provider != nil || req.Model != nil || forceOn
 			if applyProjectFields(&meta, req) {
 				if _, err := globalMgr.UpdateProject(c.Context(), p.ProjectID, meta); err != nil {
 					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})

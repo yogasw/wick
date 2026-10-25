@@ -94,6 +94,9 @@ func TestValidateFailover(t *testing.T) {
 		{Type: TypeOMP, Name: "wick"},
 		{Type: TypeOpencode, Name: "x"},
 		{Type: TypeGemini, Name: "off", Disabled: true},
+		{Type: TypeClaude, Name: "b"},
+		{Type: TypeCodex, Name: "c"},
+		{Type: TypeOMP, Name: "d"},
 	}
 	base := func(chain ...string) FailoverConfig {
 		c := DefaultFailover()
@@ -114,7 +117,8 @@ func TestValidateFailover(t *testing.T) {
 		{"duplicate", base("codex/waba", "codex/waba"), []string{"more than once"}},
 		{"unknown instance", base("codex/nope"), []string{"unknown provider instance codex/nope"}},
 		{"disabled instance", base("gemini/off"), []string{"disabled"}},
-		{"too many targets", base("codex/waba", "omp/wick", "opencode/x", "claude/claude"), []string{"at most 3"}},
+		{"valid six targets", base("codex/waba", "omp/wick", "opencode/x", "claude/claude", "claude/b", "codex/c"), nil},
+		{"too many targets", base("codex/waba", "omp/wick", "opencode/x", "claude/claude", "claude/b", "codex/c", "omp/d"), []string{"at most 6"}},
 		{"unknown trigger", func() FailoverConfig { c := base(); c.Triggers = []string{"limit", "boom"}; return c }(), []string{`unknown trigger "boom"`}},
 		{"no trigger while enabled", func() FailoverConfig { c := base(); c.Triggers = nil; return c }(), []string{"at least one trigger"}},
 		{"recheck 0", func() FailoverConfig { c := base(); c.RecheckMinutes = 0; return c }(), []string{"recheck"}},

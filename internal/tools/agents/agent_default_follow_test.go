@@ -2,12 +2,15 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	teamagents "github.com/yogasw/wick/internal/connectors/team-agents"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -160,5 +163,151 @@ func TestCaptainUpdatePersonaReportsSessionsSwitched(t *testing.T) {
 	}
 	if res := out.(map[string]any); res["status"] != "unchanged" || res["sessions_switched"] != 0 {
 		t.Fatalf("re-save = %v", res)
+	}
+}
+
+func patchAgentForce(t *testing.T, u *entity.User, id string, on bool) {
+	t.Helper()
+	w, c := teamReq(t, u, http.MethodPatch, "/api/team/agents/"+id, map[string]any{"force_default_provider": on}, map[string]string{"id": id})
+	apiTeamAgentUpdate(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", w.Code, w.Body)
+	}
+	if want := fmt.Sprintf(`"force_default_provider":%v`, on); !strings.Contains(w.Body.String(), want) {
+		t.Fatalf("patch body lacks %s: %s", want, w.Body)
+	}
+}
+
+// standInChat puts chat sid on claude/mine as a failover stand-in of
+// claude/old.
+func standInChat(t *testing.T, sid string) {
+	t.Helper()
+	name := chatAgent(t, sid).Name
+	if _, err := provider.ApplySwitch(globalLayout, sid, name, "claude/mine", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetFailoverState(globalLayout, sid, name, session.FailoverState{HomeProvider: "claude/old", StandIns: []string{"claude/old"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An agent that forces its default holds every chat to it, hand picks
+// included: turning it on sweeps them once, a changed default moves them,
+// and the next message puts right one left behind. A chat on a failover
+// stand-in is the failover's and never moves.
+func TestForceDefaultProviderMovesEveryChatButFailover(t *testing.T) {
+	withTeamWorld(t)
+	withFollowProviders(t)
+	owner := &entity.User{ID: "u1", Role: entity.RoleUser, Approved: true}
+	seedTeamProject(t, "p-open", owner.ID)
+	setProjectDefault(t, "p-open", "claude/old", "")
+	open := seedSwitchAgent(t, owner.ID, "open", "p-open", true)
+	ctx := context.Background()
+
+	following := openChat(t, owner, open.ID, false)
+	picked := openChat(t, owner, open.ID, true)
+	failing := openChat(t, owner, open.ID, true)
+	if _, err := provider.ApplySwitch(globalLayout, picked, chatAgent(t, picked).Name, "claude/mine", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	standInChat(t, failing)
+
+	patchAgentForce(t, owner, open.ID, true)
+	if a := chatAgent(t, picked); a.Provider != "claude/old" {
+		t.Fatalf("hand-picked chat after turning force on = %q, want claude/old", a.Provider)
+	}
+	if a := chatAgent(t, failing); a.Provider != "claude/mine" {
+		t.Fatalf("failover chat = %q, want claude/mine kept", a.Provider)
+	}
+
+	patchAgentProvider(t, owner, open.ID, "claude/new", "opus")
+	for _, sid := range []string{following, picked} {
+		if a := chatAgent(t, sid); a.Provider != "claude/new" || a.ModelID != "opus" {
+			t.Fatalf("chat %s = %q/%q, want claude/new/opus", sid, a.Provider, a.ModelID)
+		}
+	}
+	a := chatAgent(t, failing)
+	if a.Provider != "claude/mine" || a.Failover == nil || a.Failover.HomeProvider != "claude/old" {
+		t.Fatalf("failover chat = %+v, want untouched on claude/mine", a)
+	}
+
+	// Lazily: a hand pick made afterwards is held to the default at the
+	// next message; the stand-in is not.
+	if _, err := provider.ApplySwitch(globalLayout, picked, chatAgent(t, picked).Name, "claude/mine", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if prov, model, ok := agentDefaultFor(ctx, picked); !ok || prov != "claude/new" || model != "opus" {
+		t.Fatalf("forced agent: %q %q %v, want claude/new opus true", prov, model, ok)
+	}
+	if _, _, ok := agentDefaultFor(ctx, failing); ok {
+		t.Fatal("a chat on a failover stand-in must be left to the failover")
+	}
+}
+
+// With force off (the default, or turned off again) a hand pick wins as
+// before: no sweep, no lazy hold, a changed default leaves it alone.
+func TestForceDefaultProviderOffKeepsHandPick(t *testing.T) {
+	withTeamWorld(t)
+	withFollowProviders(t)
+	owner := &entity.User{ID: "u1", Role: entity.RoleUser, Approved: true}
+	seedTeamProject(t, "p-open", owner.ID)
+	setProjectDefault(t, "p-open", "claude/old", "")
+	open := seedSwitchAgent(t, owner.ID, "open", "p-open", true)
+	ctx := context.Background()
+
+	patchAgentForce(t, owner, open.ID, true)
+	patchAgentForce(t, owner, open.ID, false)
+	picked := openChat(t, owner, open.ID, true)
+	if _, err := provider.ApplySwitch(globalLayout, picked, chatAgent(t, picked).Name, "claude/mine", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	patchAgentForce(t, owner, open.ID, false)
+	if _, _, ok := agentDefaultFor(ctx, picked); ok {
+		t.Fatal("force off: an agent that lets chats switch must not hold them")
+	}
+	patchAgentProvider(t, owner, open.ID, "claude/new", "")
+	if a := chatAgent(t, picked); a.Provider != "claude/mine" {
+		t.Fatalf("hand-picked chat = %q, want claude/mine kept", a.Provider)
+	}
+}
+
+// A remote agent has no local default to force: nothing moves.
+func TestForceDefaultProviderIgnoresRemoteAgents(t *testing.T) {
+	withTeamWorld(t)
+	withFollowProviders(t)
+	owner := &entity.User{ID: "u1", Role: entity.RoleUser, Approved: true}
+	seedTeamProject(t, "p-open", owner.ID)
+	setProjectDefault(t, "p-open", "claude/old", "")
+	open := seedSwitchAgent(t, owner.ID, "open", "p-open", true)
+	ctx := context.Background()
+
+	picked := openChat(t, owner, open.ID, true)
+	if _, err := provider.ApplySwitch(globalLayout, picked, chatAgent(t, picked).Name, "claude/mine", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	remote := open
+	remote.Kind = a2aremote.Kind
+	remote.SessionPolicy = team.EncodeSessionPolicy(team.SessionPolicy{ForceDefaultProvider: true})
+	if err := globalTeam.Update(ctx, &remote); err != nil {
+		t.Fatal(err)
+	}
+	if n := followAgentDefault(ctx, remote, "claude/old"); n != 0 {
+		t.Fatalf("remote agent moved %d chats, want 0", n)
+	}
+	if a := chatAgent(t, picked); a.Provider != "claude/mine" {
+		t.Fatalf("remote agent's chat = %q, want claude/mine kept", a.Provider)
+	}
+	if _, _, ok := agentDefaultFor(ctx, picked); ok {
+		t.Fatal("a remote agent must not hold its chats to a default")
+	}
+}
+
+func TestForcesDefaultProviderRoundTrip(t *testing.T) {
+	if team.ForcesDefaultProvider("") || team.ForcesDefaultProvider("{}") {
+		t.Fatal("force must default off")
+	}
+	raw := team.EncodeSessionPolicy(team.SessionPolicy{Compact: team.CompactIdle, ForceDefaultProvider: true})
+	if !team.ForcesDefaultProvider(raw) || team.DecodeSessionPolicy(raw).Compact != team.CompactIdle {
+		t.Fatalf("round trip lost a field: %s", raw)
 	}
 }

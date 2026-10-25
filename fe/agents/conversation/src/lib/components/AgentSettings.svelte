@@ -61,7 +61,7 @@
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
-    disabled: boolean; allow_provider_switch: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; stop_after_team_task: boolean; use_global_prompt: boolean; show_in_projects: boolean;
+    disabled: boolean; allow_provider_switch: boolean; force_default_provider: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; stop_after_team_task: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan; captain_policy: CaptainPolicy;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
@@ -74,7 +74,7 @@
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
-      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, stop_after_team_task: a.stop_after_team_task !== false, use_global_prompt: !!a.use_global_prompt,
+      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, force_default_provider: !!a.force_default_provider, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, stop_after_team_task: a.stop_after_team_task !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can), captain_policy: captainPolicyOf(a.captain_policy),
@@ -324,6 +324,7 @@
     if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
+    if (d.force_default_provider !== !!saved.force_default_provider) p.force_default_provider = d.force_default_provider;
     if (d.channel_show_teammates !== (saved.channel_show_teammates !== false)) p.channel_show_teammates = d.channel_show_teammates;
     if (d.channel_hide_interim !== (saved.channel_hide_interim !== false)) p.channel_hide_interim = d.channel_hide_interim;
     if (d.stop_after_team_task !== (saved.stop_after_team_task !== false)) p.stop_after_team_task = d.stop_after_team_task;
@@ -1023,6 +1024,12 @@
       <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
         Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
+      </p>
+    </div>
+    <div data-testid="as-force-default-provider">
+      <Toggle checked={draft.force_default_provider} onChange={(v) => (draft.force_default_provider = v)} label="Keep every chat on the default provider" />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        On: every chat of this agent moves to the provider above, chats that picked another one included, now and whenever the default changes. A chat running on a failover target stays there until failover brings it back.
       </p>
     </div>
     <div data-testid="as-show-teammates">
