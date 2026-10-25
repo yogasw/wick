@@ -1196,6 +1196,12 @@ func (f *ClaudeFactory) pathGuardSpec(opt FactoryOptions, allow string) gate.Pat
 		if strings.HasPrefix(path, "~") && spec.Home != "" {
 			path = filepath.Join(spec.Home, strings.TrimPrefix(path, "~"))
 		}
+		if strings.ContainsAny(path, "*?[") {
+			// A pattern is matched segment by segment (gate.underPattern);
+			// it is not a path to resolve.
+			spec.Allow = append(spec.Allow, filepath.Clean(path))
+			continue
+		}
 		spec.Allow = append(spec.Allow, real(path))
 	}
 	return spec

@@ -95,3 +95,33 @@ func TestWritePathGuard(t *testing.T) {
 		t.Fatalf("spec round trip: %+v %v", spec, err)
 	}
 }
+
+// A pattern exception lets in one folder of every project and nothing
+// else of them; a "*" does not span a "/".
+func TestPathGuardPattern(t *testing.T) {
+	spec, base := guardFixture(t)
+	spec.Allow = append(spec.Allow, filepath.Join(base, "projects/*/files/knowledge"))
+	cwd := filepath.Join(base, "projects/own/files")
+	cases := []struct {
+		path    string
+		blocked bool
+	}{
+		{"projects/other/files/knowledge/corrections.jsonl", false},
+		{"projects/other/files/knowledge", false},
+		{"projects/other/files/CLAUDE.md", true},
+		{"projects/other/files/knowledge-old/x", true},
+		{"projects/other/files/sub/knowledge/x", true},
+		{"projects", true},
+	}
+	for _, c := range cases {
+		got := CheckPathGuard(spec, PathGuardInput{CWD: cwd, ToolInput: map[string]any{"file_path": filepath.Join(base, c.path)}}) != ""
+		if got != c.blocked {
+			t.Errorf("%s: blocked=%v, want %v", c.path, got, c.blocked)
+		}
+	}
+	// A command reaching a matching folder goes through too.
+	cmd := "echo x >> " + filepath.Join(base, "projects/other/files/knowledge/c.jsonl")
+	if p := CheckPathGuard(spec, PathGuardInput{CWD: cwd, ToolInput: map[string]any{"command": cmd}}); p != "" {
+		t.Errorf("command blocked at %s", p)
+	}
+}

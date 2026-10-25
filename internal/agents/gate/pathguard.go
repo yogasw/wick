@@ -147,12 +147,39 @@ func guardedOutsideAllow(spec PathGuardSpec, p string) bool {
 		return false
 	}
 	for _, a := range spec.Allow {
-		if a = strings.TrimSpace(a); a != "" && under(a) {
+		if a = strings.TrimSpace(a); a == "" {
+			continue
+		}
+		if strings.ContainsAny(a, "*?[") {
+			if underPattern(a, p) {
+				return false
+			}
+			continue
+		}
+		if under(a) {
 			return false
 		}
 	}
 	// Listing the guarded root itself (`ls projects/`) reveals the other
 	// projects too, so it is refused like entering one.
+	return true
+}
+
+// underPattern reports whether p is at or under a path matching pattern,
+// whose segments may hold globs: "/x/projects/*/files/knowledge" lets in
+// every project's knowledge folder and nothing else of those projects.
+// A "*" never spans a "/".
+func underPattern(pattern, p string) bool {
+	pat := strings.Split(filepath.Clean(pattern), string(filepath.Separator))
+	got := strings.Split(p, string(filepath.Separator))
+	if len(got) < len(pat) {
+		return false
+	}
+	for i, seg := range pat {
+		if ok, err := filepath.Match(seg, got[i]); err != nil || !ok {
+			return false
+		}
+	}
 	return true
 }
 
