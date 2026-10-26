@@ -1005,10 +1005,13 @@
     </div>
     {#if saved.own_project && draft.project_id === saved.project_id}
       <div data-testid="as-show-in-projects">
-        <Toggle checked={draft.show_in_projects} onChange={(v) => (draft.show_in_projects = v)} label="Keep the project in Agents → Projects" />
-        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          On: the project is listed in Agents → Projects as well as in Team. Off: only in Team (still reachable from this agent).
-        </p>
+        <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">Keep the project in Agents → Projects</span>
+            <span class="block text-xs text-black-800 dark:text-black-600">On: the project is listed in Agents → Projects as well as in Team. Off: only in Team (still reachable from this agent).</span>
+          </span>
+          <Toggle checked={draft.show_in_projects} onChange={(v) => (draft.show_in_projects = v)} label="Keep the project in Agents → Projects" />
+        </div>
       </div>
     {/if}
     <div>
@@ -1021,34 +1024,49 @@
       />
     </div>
     <div>
-      <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Allow provider switch in chat</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.</span>
+        </span>
+        <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
+      </div>
     </div>
     <div data-testid="as-force-default-provider">
-      <Toggle checked={draft.force_default_provider} onChange={(v) => (draft.force_default_provider = v)} label="Keep every chat on the default provider" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        On: every chat of this agent moves to the provider above, chats that picked another one included, now and whenever the default changes. A chat running on a failover target stays there until failover brings it back.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Keep every chat on the default provider</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">On: every chat of this agent moves to the provider above, chats that picked another one included, now and whenever the default changes. A chat running on a failover target stays there until failover brings it back.</span>
+        </span>
+        <Toggle checked={draft.force_default_provider} onChange={(v) => (draft.force_default_provider = v)} label="Keep every chat on the default provider" />
+      </div>
     </div>
     <div data-testid="as-show-teammates">
-      <Toggle checked={draft.channel_show_teammates} onChange={(v) => (draft.channel_show_teammates = v)} label="Show teammates in channels" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        When off, channels see one agent working; teammates and their names stay in the web view only.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Show teammates in channels</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">When off, channels see one agent working; teammates and their names stay in the web view only.</span>
+        </span>
+        <Toggle checked={draft.channel_show_teammates} onChange={(v) => (draft.channel_show_teammates = v)} label="Show teammates in channels" />
+      </div>
     </div>
     <div data-testid="as-hide-interim">
-      <Toggle checked={draft.channel_hide_interim} onChange={(v) => (draft.channel_hide_interim = v)} label="Hide in-between messages in channels" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Status lines the lead writes while teammates work stay out of Slack and Telegram; the final answer always posts.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Hide in-between messages in channels</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">Status lines the lead writes while teammates work stay out of Slack and Telegram; the final answer always posts.</span>
+        </span>
+        <Toggle checked={draft.channel_hide_interim} onChange={(v) => (draft.channel_hide_interim = v)} label="Hide in-between messages in channels" />
+      </div>
     </div>
     <div data-testid="as-stop-after-team-task">
-      <Toggle checked={draft.stop_after_team_task} onChange={(v) => (draft.stop_after_team_task = v)} label="Stop after answering a teammate" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Once this agent answered a task another agent sent it, its process stops right away instead of idling until the idle timeout, so team exchanges do not pile up running agents. The chat resumes where it left off on its next message.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Stop after answering a teammate</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">Once this agent answered a task another agent sent it, its process stops right away instead of idling until the idle timeout, so team exchanges do not pile up running agents. The chat resumes where it left off on its next message.</span>
+        </span>
+        <Toggle checked={draft.stop_after_team_task} onChange={(v) => (draft.stop_after_team_task = v)} label="Stop after answering a teammate" />
+      </div>
     </div>
     {@render dangerZone()}
   {/if}
