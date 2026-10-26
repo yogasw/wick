@@ -26,7 +26,7 @@ func agentForbidsSwitch(ctx context.Context, sess session.Session) bool {
 	if err != nil {
 		return false
 	}
-	return !team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain)
+	return team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy)
 }
 
 // sessionSwitchGuard is provider.SwitchGuard: the gates of the switch

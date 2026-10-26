@@ -29,22 +29,23 @@ const props = (agent: AgentItem) => ({
   base: "/tools/agents", agent, agents: [agent], tab: "advanced", onTab: vi.fn(), onClose: vi.fn(), onSaved: vi.fn(), onDeleted: vi.fn(),
 });
 const lastBody = () => updateAgent.mock.calls.at(-1)?.[2] as Record<string, unknown> | undefined;
-const SW = "Keep every chat on the default provider";
 
-describe("AgentSettings › Advanced › Keep every chat on the default provider", () => {
+describe("AgentSettings › Advanced › Provider in chats", () => {
   beforeEach(() => updateAgent.mockClear());
 
-  test("off by default, with its help text, and autosaves on", async () => {
-    render(AgentSettings, { props: props(own) });
-    const sw = screen.getByRole("switch", { name: SW });
-    expect(sw.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByTestId("as-force-default-provider").textContent).toContain("A chat running on a failover target stays there");
-    await fireEvent.click(sw);
-    await waitFor(() => expect(lastBody()?.force_default_provider).toBe(true));
+  test("one choice replaces the two switches; Locked autosaves both fields", async () => {
+    render(AgentSettings, { props: props({ ...own, allow_provider_switch: true } as unknown as AgentItem) });
+    expect(screen.queryByRole("switch", { name: "Allow provider switch in chat" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Keep every chat on the default provider" })).toBeNull();
+    const pick = screen.getByRole("radio", { name: /Chat may pick/ }) as HTMLInputElement;
+    expect(pick.checked).toBe(true);
+    expect(screen.getByTestId("as-provider-lock").textContent).toContain("A chat running on a failover target stays there");
+    await fireEvent.click(screen.getByRole("radio", { name: /Locked to default/ }));
+    await waitFor(() => expect(lastBody()).toMatchObject({ allow_provider_switch: false, force_default_provider: true }));
   });
 
-  test("reads a stored on", () => {
-    render(AgentSettings, { props: props({ ...own, force_default_provider: true } as unknown as AgentItem) });
-    expect(screen.getByRole("switch", { name: SW }).getAttribute("aria-checked")).toBe("true");
+  test("an agent that may not switch reads as Locked", () => {
+    render(AgentSettings, { props: props({ ...own, allow_provider_switch: false, force_default_provider: true } as unknown as AgentItem) });
+    expect((screen.getByRole("radio", { name: /Locked to default/ }) as HTMLInputElement).checked).toBe(true);
   });
 });

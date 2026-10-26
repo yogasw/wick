@@ -17,18 +17,15 @@ import (
 // model, then keep whatever agents.json names. When the default changes,
 // they follow it by these rules:
 //
-//   - The agent keeps its provider (allow_provider_switch off): nobody
-//     could pick another one, so every chat follows the default. Chats
-//     already out of step (made before the change, or before this rule)
-//     are put right lazily too, at their next message (agentDefaultFor).
-//   - The agent lets chats switch: a chat still on the OLD default was
+//   - The agent locks its provider (Settings "Provider in chats" = Locked
+//     to default, team.LocksProvider): every chat follows the default,
+//     hand picks included, except a chat running on a failover stand-in —
+//     the failover and its return home own it. Chats already out of step
+//     are put right lazily too, at their next message (agentDefaultFor),
+//     and switching to Locked sweeps once.
+//   - The agent lets chats pick: a chat still on the OLD default was
 //     following it and moves; one on another provider was picked by hand,
 //     and the pick wins.
-//   - The agent forces its default (Settings "Keep every chat on the
-//     default provider", team.SessionPolicy.ForceDefaultProvider): every
-//     chat follows the default as when the agent keeps its provider, hand
-//     picks included, except a chat running on a failover stand-in — the
-//     failover and its return home own it. Turning it on sweeps once.
 //
 // No turn is cut short: the switch is only persisted to agents.json here
 // (ApplySwitch), and the pool stops the idle process at the chat's next
@@ -36,9 +33,8 @@ import (
 // turn in flight finishes on the provider it started on.
 func init() { provider.AgentDefault = agentDefaultFor }
 
-// agentDefaultFor is provider.AgentDefault: a chat of an agent that keeps
-// its provider, or forces its default, runs on the agent's default; any
-// other chat picks its own.
+// agentDefaultFor is provider.AgentDefault: a chat of an agent that locks
+// its provider runs on the agent's default; any other chat picks its own.
 func agentDefaultFor(ctx context.Context, sessionID string) (string, string, bool) {
 	if globalMgr == nil || globalTeam == nil {
 		return "", "", false
@@ -51,7 +47,7 @@ func agentDefaultFor(ctx context.Context, sessionID string) (string, string, boo
 	if err != nil {
 		return "", "", false
 	}
-	if team.ForcesDefaultProvider(p.SessionPolicy) {
+	if team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy) {
 		// agents.json from disk: the registry's copy can trail a failover.
 		if globalLayout != (agentconfig.Layout{}) {
 			if fresh, err := session.Load(globalLayout, sessionID); err == nil {
@@ -61,7 +57,7 @@ func agentDefaultFor(ctx context.Context, sessionID string) (string, string, boo
 		if _, a, ok := sessionAgentEntry(sess); ok && onFailover(a) {
 			return "", "", false
 		}
-	} else if team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain) {
+	} else {
 		return "", "", false
 	}
 	prov, model := agentDefaultOf(p)
@@ -101,8 +97,8 @@ func followAgentDefault(ctx context.Context, p entity.AgentPersona, oldProv stri
 	if oldProv = strings.TrimSpace(oldProv); oldProv != "" {
 		oldProv = normalizeProviderKey(oldProv)
 	}
-	forced := team.ForcesDefaultProvider(p.SessionPolicy)
-	handPicks := !forced && team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain)
+	forced := team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy)
+	handPicks := !forced
 	moved := 0
 	for id, s := range globalMgr.Registry().Sessions() {
 		if s.Meta.AgentID != p.ID {

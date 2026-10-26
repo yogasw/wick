@@ -47,6 +47,14 @@ func ForcesDefaultProvider(raw string) bool {
 	return DecodeSessionPolicy(raw).ForceDefaultProvider
 }
 
+// LocksProvider is the agent's one provider setting, "Provider in chats":
+// true = every chat stays on the agent's default provider (switching in
+// chat is off, or ForceDefaultProvider is on), false = a chat may pick
+// its own. Arguments as stored on entity.AgentPersona.
+func LocksProvider(allowSwitch *bool, isCaptain bool, sessionPolicy string) bool {
+	return !AllowsProviderSwitch(allowSwitch, isCaptain) || ForcesDefaultProvider(sessionPolicy)
+}
+
 // NormalizeSessionPolicy clamps p to valid values: an unknown policy is
 // auto, and the idle hours fall within [MinIdleHours, MaxIdleHours].
 func NormalizeSessionPolicy(p SessionPolicy) SessionPolicy {

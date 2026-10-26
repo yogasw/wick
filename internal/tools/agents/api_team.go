@@ -1086,8 +1086,8 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MentionAllow:         nonNilIDs(decodeIDList(p.MentionAllow)),
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
-		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
-		ForceDefaultProvider: team.ForcesDefaultProvider(p.SessionPolicy),
+		AllowProviderSwitch:  !team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy),
+		ForceDefaultProvider: team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy),
 		ChannelShowTeammates: team.ShowsTeammatesInChannels(p.ChannelShowTeammates),
 		ChannelHideInterim:   team.HidesInterimInChannels(p.ChannelHideInterim),
 		StopAfterTeamTask:    team.StopsAfterTeamTask(p.StopAfterTeamTask),
@@ -1606,17 +1606,17 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if req.UseGlobalPrompt != nil {
 		p.UseGlobalPrompt = *req.UseGlobalPrompt
 	}
-	if req.AllowProviderSwitch != nil {
-		v := *req.AllowProviderSwitch
-		p.AllowProviderSwitch = &v
-	}
-	// Turning it on sweeps the agent's chats once, after the save.
+	// allow_provider_switch and force_default_provider are the two faces
+	// of one setting (team.LocksProvider); force wins when both come.
+	// Becoming locked sweeps the agent's chats once, after the save.
 	forceOn := false
-	if req.ForceDefaultProvider != nil {
-		pol := team.DecodeSessionPolicy(p.SessionPolicy)
-		forceOn = *req.ForceDefaultProvider && !pol.ForceDefaultProvider
-		pol.ForceDefaultProvider = *req.ForceDefaultProvider
-		p.SessionPolicy = team.EncodeSessionPolicy(pol)
+	if req.AllowProviderSwitch != nil || req.ForceDefaultProvider != nil {
+		lock := req.AllowProviderSwitch != nil && !*req.AllowProviderSwitch
+		if req.ForceDefaultProvider != nil {
+			lock = *req.ForceDefaultProvider
+		}
+		forceOn = lock && !team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy)
+		setProviderLock(&p, lock)
 	}
 	if req.ChannelShowTeammates != nil {
 		v := *req.ChannelShowTeammates
@@ -2358,4 +2358,14 @@ func apiTeamAgentSkills(c *tool.Ctx) {
 		out = append(out, item{EffectiveSkill: s, Disabled: !s.Required && slices.Contains(off, s.Name)})
 	}
 	c.JSON(http.StatusOK, map[string]any{"items": out, "local_dir": localDir})
+}
+
+// setProviderLock stores agent p's "Provider in chats" setting
+// (team.LocksProvider) in both of its fields, so they never disagree.
+func setProviderLock(p *entity.AgentPersona, lock bool) {
+	allow := !lock
+	p.AllowProviderSwitch = &allow
+	pol := team.DecodeSessionPolicy(p.SessionPolicy)
+	pol.ForceDefaultProvider = lock
+	p.SessionPolicy = team.EncodeSessionPolicy(pol)
 }

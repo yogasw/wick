@@ -503,6 +503,12 @@
   });
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
+  // "Provider in chats": one setting, stored as allow_provider_switch and
+  // force_default_provider (the server keeps them in step).
+  const PROVIDER_LOCK_OPTIONS = [
+    { value: "locked", allow: false, label: "Locked to default", hint: "Every chat uses the provider above, chats that picked another one included, now and whenever the default changes. A chat running on a failover target stays there until failover brings it back." },
+    { value: "pick", allow: true, label: "Chat may pick", hint: "A chat can pick another provider before its first message, and another model of the same provider any time. The pick stays; it never changes the agent's default." },
+  ];
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
 </script>
 
@@ -1023,23 +1029,17 @@
         placeholder="Default project"
       />
     </div>
-    <div>
-      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
-        <span>
-          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Allow provider switch in chat</span>
-          <span class="block text-xs text-black-800 dark:text-black-600">Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.</span>
-        </span>
-        <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
-      </div>
-    </div>
-    <div data-testid="as-force-default-provider">
-      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
-        <span>
-          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Keep every chat on the default provider</span>
-          <span class="block text-xs text-black-800 dark:text-black-600">On: every chat of this agent moves to the provider above, chats that picked another one included, now and whenever the default changes. A chat running on a failover target stays there until failover brings it back.</span>
-        </span>
-        <Toggle checked={draft.force_default_provider} onChange={(v) => (draft.force_default_provider = v)} label="Keep every chat on the default provider" />
-      </div>
+    <div class="space-y-2" role="radiogroup" aria-label="Provider in chats" data-testid="as-provider-lock">
+      <span class={label}>Provider in chats</span>
+      {#each PROVIDER_LOCK_OPTIONS as o (o.value)}
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.allow_provider_switch === o.allow ? 'border-green-500 bg-green-50 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
+          <input type="radio" name="provider-lock" class="mt-1" value={o.value} checked={draft.allow_provider_switch === o.allow} onchange={() => { draft.allow_provider_switch = o.allow; draft.force_default_provider = !o.allow; }} />
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
+            <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
+          </span>
+        </label>
+      {/each}
     </div>
     <div data-testid="as-show-teammates">
       <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">

@@ -345,3 +345,52 @@ func TestForcesDefaultProviderRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost a field: %s", raw)
 	}
 }
+
+// "Provider in chats" is one setting: switching off is the same lock as
+// force on. Turning switching off sweeps hand picks, both fields read
+// locked, and a failover stand-in is left alone like under force.
+func TestProviderLockIsOneSetting(t *testing.T) {
+	withTeamWorld(t)
+	withFollowProviders(t)
+	owner := &entity.User{ID: "u1", Role: entity.RoleUser, Approved: true}
+	seedTeamProject(t, "p-open", owner.ID)
+	setProjectDefault(t, "p-open", "claude/old", "")
+	open := seedSwitchAgent(t, owner.ID, "open", "p-open", true)
+	ctx := context.Background()
+
+	picked := openChat(t, owner, open.ID, true)
+	failing := openChat(t, owner, open.ID, true)
+	if _, err := provider.ApplySwitch(globalLayout, picked, chatAgent(t, picked).Name, "claude/mine", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	standInChat(t, failing)
+
+	w, c := teamReq(t, owner, http.MethodPatch, "/api/team/agents/"+open.ID, map[string]any{"allow_provider_switch": false}, map[string]string{"id": open.ID})
+	apiTeamAgentUpdate(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", w.Code, w.Body)
+	}
+	if b := w.Body.String(); !strings.Contains(b, `"allow_provider_switch":false`) || !strings.Contains(b, `"force_default_provider":true`) {
+		t.Fatalf("locked agent should read allow off and force on: %s", b)
+	}
+	if a := chatAgent(t, picked); a.Provider != "claude/old" {
+		t.Fatalf("hand-picked chat after locking = %q, want claude/old", a.Provider)
+	}
+	if a := chatAgent(t, failing); a.Provider != "claude/mine" {
+		t.Fatalf("failover chat = %q, want claude/mine kept", a.Provider)
+	}
+	if _, _, ok := agentDefaultFor(ctx, failing); ok {
+		t.Fatal("a locked agent must leave a failover stand-in to the failover")
+	}
+
+	// force on also reads as switching off.
+	patchAgentForce(t, owner, open.ID, false)
+	patchAgentForce(t, owner, open.ID, true)
+	p, err := globalTeam.Get(ctx, open.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain) {
+		t.Fatal("force on must store switching off too")
+	}
+}
