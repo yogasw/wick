@@ -234,7 +234,7 @@ type analyticsFilter struct {
 	Model map[string]bool
 	// Text narrows by title or session id: one use case followed across
 	// the range, the same rule the ledger applies.
-	Text usagereport.TextMatch
+	Text usagereport.TextMatches
 }
 
 func (f analyticsFilter) keepsChannel(ch string) bool {
@@ -277,6 +277,19 @@ func (f analyticsFilter) keepsModels(models []string) bool {
 	return keepsAny(f.Model, models, noProvider)
 }
 
+// subjectOf is what the page's conditions read off one conversation —
+// the same fields the ledger's Scope reads from its tags.
+func subjectOf(id string, m sessionFacts, provKeys []string) usagereport.Subject {
+	project := m.ProjectID
+	if project == "(none)" {
+		project = ""
+	}
+	return usagereport.Subject{
+		ID: id, Title: m.Label, Channel: m.Channel, Project: project, Agent: m.Agent,
+		Models: m.Models, Providers: provKeys, People: m.People,
+	}
+}
+
 func (f analyticsFilter) keepsTime(t time.Time) bool {
 	if f.All {
 		return true
@@ -299,9 +312,10 @@ type analyticsWindow struct {
 	Providers []string `json:"providers,omitempty"`
 	People    []string `json:"people,omitempty"`
 	Models    []string `json:"models,omitempty"`
-	Match     string   `json:"match,omitempty"`
-	MatchIn   string   `json:"match_in,omitempty"`
-	MatchMode string   `json:"match_mode,omitempty"`
+	// Match is the title / session id rules, "<in>:<mode>:<pattern>"
+	// each, joined by MatchOp ("and" / "or").
+	Match   []string `json:"match,omitempty"`
+	MatchOp string   `json:"match_op,omitempty"`
 	// MatchError is a regex that did not compile; the page shows it
 	// instead of numbers that look filtered but match nothing.
 	MatchError string `json:"match_error,omitempty"`
@@ -527,7 +541,7 @@ func parseFilter(q url.Values) analyticsFilter {
 	for _, model := range csv(q.Get("models")) {
 		f.Model[model] = true
 	}
-	f.Text = usagereport.ParseTextMatch(q.Get("match"), q.Get("match_in"), q.Get("match_mode"))
+	f.Text = usagereport.ParseTextMatches(q["match"], q.Get("match_in"), q.Get("match_mode"), q.Get("match_op"))
 
 	// A custom range wins over the day count: it is the more specific ask.
 	fromStr, toStr := strings.TrimSpace(q.Get("from")), strings.TrimSpace(q.Get("to"))
@@ -589,6 +603,9 @@ func dayKeys(from time.Time, days int) []string {
 // that has hung.
 func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
 	f := parseFilter(r.URL.Query())
+	if !f.Text.Empty() {
+		f.Text.Alias = h.conditionAlias
+	}
 
 	if r.URL.Query().Get("stream") != "1" {
 		out, err := h.buildAnalytics(r, f, nil)
@@ -819,7 +836,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		// where the chart moved but the totals did not would be reporting
 		// two different things side by side.
 		if !f.keepsChannel(channel) || !f.keepsInstance(instKey) || !f.keepsProviders(provKeys) ||
-			!f.keepsPeople(m.People) || !f.keepsModels(m.Models) || !f.Text.Keep(id, m.Label) {
+			!f.keepsPeople(m.People) || !f.keepsModels(m.Models) || !f.Text.KeepSubject(subjectOf(id, m, provKeys)) {
 			continue
 		}
 		if !m.CreatedAt.IsZero() && (oldest.IsZero() || m.CreatedAt.Before(oldest)) {
@@ -1280,10 +1297,11 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		Providers:  sortedKeys(f.Prov),
 		People:     sortedKeys(f.Who),
 		Models:     sortedKeys(f.Model),
-		Match:      f.Text.Pattern,
-		MatchIn:    f.Text.In,
-		MatchMode:  f.Text.Mode,
-		MatchError: f.Text.Err,
+		Match:      f.Text.Values(),
+		MatchError: f.Text.Err(),
+	}
+	if !f.Text.Empty() {
+		out.Window.MatchOp = f.Text.Op()
 	}
 	if !f.To.IsZero() && !f.All {
 		out.Window.To = f.To.Format("2006-01-02")

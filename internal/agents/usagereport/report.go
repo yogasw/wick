@@ -186,9 +186,9 @@ type Scope struct {
 	// sessions run on any of these models, NoProvider for none recorded.
 	People []string
 	Models []string
-	// Text narrows by title or session id; see TextMatch. It reads
-	// SessionTags.ID and Label, so it works with any Tags resolver.
-	Text TextMatch
+	// Text is the page's conditions (title, session id, model, channel…);
+	// see TextMatches. Instance-free, so it works with any Tags resolver.
+	Text TextMatches
 }
 
 // NoProvider is the key a session with no provider recorded is filed
@@ -208,8 +208,17 @@ func (sc Scope) Empty() bool {
 
 // Keep is the predicate the roll-up applies per session.
 func (sc Scope) Keep(t store.SessionTags) bool {
-	if !sc.Text.Keep(t.ID, t.Label) {
-		return false
+	if !sc.Text.Empty() {
+		people := t.People
+		if people == nil && t.UserID != "" {
+			people = []string{t.UserID}
+		}
+		if !sc.Text.KeepSubject(Subject{
+			ID: t.ID, Title: t.Label, Channel: t.Channel, Project: t.ProjectID, Agent: t.Agent,
+			Models: t.Models, Providers: t.Providers, People: people,
+		}) {
+			return false
+		}
 	}
 	if len(sc.Channels) > 0 && !contains(sc.Channels, t.Channel) {
 		return false
@@ -468,6 +477,7 @@ func (b *Builder) loadTags(id string) store.SessionTags {
 		ProjectID: s.Meta.ProjectID,
 		UserID:    s.Meta.UserID,
 		Label:     s.Meta.Label,
+		Agent:     s.Meta.ActiveAgent,
 		Channel:   ch,
 		Providers: providers,
 		People:    s.Meta.People(),

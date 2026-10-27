@@ -386,6 +386,9 @@ type SessionTags struct {
 	// Label is the session's own title, so a ledger row can name the
 	// conversation instead of printing eight characters of uuid.
 	Label string
+	// Agent is the session's active agent, for the page's conditions.
+	// Filter-only.
+	Agent string `json:"-"`
 	// Channel and Instance are where the conversation came from ("slack",
 	// "ui") and which bot of that channel. They exist so a page that
 	// filters by channel can filter its token figures by the same thing —

@@ -30,9 +30,9 @@ export type AnalyticsWindow = {
   providers?: string[];
   people?: string[];
   models?: string[];
-  match?: string;
-  match_in?: string;
-  match_mode?: string;
+  /** Conditions applied, "<field>:<op>:<value>" each, joined by match_op. */
+  match?: string[];
+  match_op?: string;
   /** The regex did not compile: the numbers below match nothing. */
   match_error?: string;
 };

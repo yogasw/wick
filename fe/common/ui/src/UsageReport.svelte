@@ -66,10 +66,9 @@
     providers?: string[];
     people?: string[];
     models?: string[];
-    /** Title / session id pattern, same as the page's text filter. */
-    match?: string;
-    matchIn?: string;
-    matchMode?: string;
+    /** Condition rows, same as the page's condition builder. */
+    match?: string[];
+    matchOp?: string;
     /** Already-fetched report. A page that needs these numbers for its
         own drill-downs fetches once and hands the result here, instead
         of the card asking for the same thing a second time. */
@@ -93,9 +92,8 @@
     providers,
     people,
     models,
-    match = "",
-    matchIn = "",
-    matchMode = "",
+    match,
+    matchOp = "",
     report: reportProp,
     flush = false,
   }: Props = $props();
@@ -140,10 +138,10 @@
     error = "";
     try {
       if (provider) {
-        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances, providers, people, models, match, matchIn, matchMode });
+        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances, providers, people, models, match, matchOp });
         page = 0;
       } else {
-        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances, providers, people, models, match, matchIn, matchMode });
+        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances, providers, people, models, match, matchOp });
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -158,7 +156,7 @@
      a second request on mount beside onMount's. */
   let lastRange = $state("");
   $effect(() => {
-    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${(providers ?? []).join()}|${(people ?? []).join()}|${(models ?? []).join()}|${matchIn}:${matchMode}:${match}|${fed ? "fed" : ""}`;
+    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${(providers ?? []).join()}|${(people ?? []).join()}|${(models ?? []).join()}|${matchOp}:${(match ?? []).join("\n")}|${fed ? "fed" : ""}`;
     if (lastRange === "") {
       lastRange = key;
       return;

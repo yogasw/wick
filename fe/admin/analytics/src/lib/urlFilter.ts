@@ -4,11 +4,16 @@
 /** "all" runs back to the oldest conversation; "custom" uses the dates. */
 export type Range = 1 | 7 | 30 | 90 | 365 | "all" | "custom";
 
-/** Where the text filter looks, and how it reads the pattern. */
-export type MatchIn = "title" | "session" | "any";
-export type MatchMode = "contains" | "exact" | "regex";
-export type TextFilter = { text: string; in: MatchIn; mode: MatchMode };
-export const emptyText: TextFilter = { text: "", in: "title", mode: "contains" };
+/** One row of the condition builder: a field, an operator, a value. */
+export type CondField = "title" | "session" | "any" | "model" | "provider" | "person" | "channel" | "project" | "agent";
+export type CondOp = "contains" | "not_contains" | "exact" | "not_exact" | "regex" | "not_regex";
+export type Condition = { field: CondField; op: CondOp; value: string };
+/** Rows joined by AND (every one holds) or OR (any one is enough). */
+export type Conditions = { join: "and" | "or"; rules: Condition[] };
+export const emptyConditions: Conditions = { join: "and", rules: [] };
+
+const condFields = new Set<string>(["title", "session", "any", "model", "provider", "person", "channel", "project", "agent"]);
+const condOps = new Set<string>(["contains", "not_contains", "exact", "not_exact", "regex", "not_regex"]);
 
 export type PageFilter = {
   range: Range;
@@ -19,7 +24,7 @@ export type PageFilter = {
   providers: string[];
   people: string[];
   models: string[];
-  match: TextFilter;
+  match: Conditions;
 };
 
 /** Today: the page's own default, so it never needs to be in the URL. */
@@ -54,30 +59,48 @@ export function readFilter(search: string): PageFilter {
     providers: list(q, "providers"),
     people: list(q, "people"),
     models: list(q, "models"),
-    match: readText(q),
+    match: readConditions(q),
   };
 }
 
-function readText(q: URLSearchParams): TextFilter {
-  const text = (q.get("match") ?? "").trim();
-  if (!text) return { ...emptyText };
-  const rawIn = q.get("match_in");
-  const rawMode = q.get("match_mode");
-  return {
-    text,
-    in: rawIn === "session" || rawIn === "any" ? rawIn : "title",
-    mode: rawMode === "exact" || rawMode === "regex" ? rawMode : "contains",
-  };
+/** Each "match" is "<field>:<op>:<value>". A bare value is the older
+ *  single-condition link, read with match_in / match_mode. */
+function readConditions(q: URLSearchParams): Conditions {
+  const legacyIn = q.get("match_in") ?? "title";
+  const legacyOp = q.get("match_mode") ?? "contains";
+  const rules: Condition[] = [];
+  for (const raw of q.getAll("match")) {
+    let field = legacyIn;
+    let op = legacyOp;
+    let value = raw;
+    const [a, b, ...rest] = raw.split(":");
+    if (rest.length && condFields.has(a) && condOps.has(b)) {
+      field = a;
+      op = b;
+      value = rest.join(":");
+    }
+    value = value.trim();
+    if (!value) continue;
+    rules.push({
+      field: (condFields.has(field) ? field : "title") as CondField,
+      op: (condOps.has(op) ? op : "contains") as CondOp,
+      value,
+    });
+  }
+  return { join: q.get("match_op") === "or" ? "or" : "and", rules };
 }
 
-/** The text filter as query pairs, [] when it is off. Shared by the
+/** The rows that say something, in their wire form. */
+export function conditionValues(c: Conditions): string[] {
+  return c.rules.filter((r) => r.value.trim()).map((r) => `${r.field}:${r.op}:${r.value.trim()}`);
+}
+
+/** The conditions as query pairs, [] when there are none. Shared by the
  *  address bar, the page's fetch and the ledger's, so all three agree. */
-export function textParams(t: TextFilter): Array<[string, string]> {
-  const text = t.text.trim();
-  if (!text) return [];
-  const out: Array<[string, string]> = [["match", text]];
-  if (t.in !== "title") out.push(["match_in", t.in]);
-  if (t.mode !== "contains") out.push(["match_mode", t.mode]);
+export function conditionParams(c: Conditions): Array<[string, string]> {
+  const values = conditionValues(c);
+  const out: Array<[string, string]> = values.map((v) => ["match", v]);
+  if (values.length > 1 && c.join === "or") out.push(["match_op", "or"]);
   return out;
 }
 
@@ -94,7 +117,7 @@ export function filterQuery(f: PageFilter): string {
   if (f.providers.length) q.set("providers", f.providers.join(","));
   if (f.people.length) q.set("people", f.people.join(","));
   if (f.models.length) q.set("models", f.models.join(","));
-  for (const [k, v] of textParams(f.match)) q.set(k, v);
+  for (const [k, v] of conditionParams(f.match)) q.append(k, v);
   const s = q.toString();
   return s ? `?${s}` : "";
 }

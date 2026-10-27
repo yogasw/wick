@@ -150,10 +150,10 @@ export type LedgerScope = {
   providers?: string[];
   people?: string[];
   models?: string[];
-  /** Title / session id pattern; see TextMatch on the server. */
-  match?: string;
-  matchIn?: string;
-  matchMode?: string;
+  /** Condition rows, "<field>:<op>:<value>" each; see TextMatches on
+   *  the server. matchOp "or" joins them with OR, otherwise AND. */
+  match?: string[];
+  matchOp?: string;
 };
 
 function scopeQuery(scope: LedgerScope): string {
@@ -165,11 +165,8 @@ function scopeQuery(scope: LedgerScope): string {
     parts.push(`providers=${encodeURIComponent(scope.providers.join(","))}`);
   if (scope.people?.length) parts.push(`people=${encodeURIComponent(scope.people.join(","))}`);
   if (scope.models?.length) parts.push(`models=${encodeURIComponent(scope.models.join(","))}`);
-  if (scope.match) {
-    parts.push(`match=${encodeURIComponent(scope.match)}`);
-    if (scope.matchIn) parts.push(`match_in=${encodeURIComponent(scope.matchIn)}`);
-    if (scope.matchMode) parts.push(`match_mode=${encodeURIComponent(scope.matchMode)}`);
-  }
+  for (const m of scope.match ?? []) parts.push(`match=${encodeURIComponent(m)}`);
+  if (scope.match && scope.match.length > 1 && scope.matchOp === "or") parts.push("match_op=or");
   return parts.length ? `&${parts.join("&")}` : "";
 }
 

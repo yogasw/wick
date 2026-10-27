@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterQuery, readFilter, type PageFilter } from "$lib/urlFilter";
 
-const base: PageFilter = { range: 1, from: "", to: "", channels: [], instances: [], providers: [], people: [], models: [], match: { text: "", in: "title", mode: "contains" } };
+const base: PageFilter = { range: 1, from: "", to: "", channels: [], instances: [], providers: [], people: [], models: [], match: { join: "and", rules: [] } };
 
 describe("url filter", () => {
   it("leaves the default view out of the URL", () => {
@@ -35,16 +35,31 @@ describe("url filter", () => {
     expect(readFilter("?providers=all,,codex/acct-b").providers).toEqual(["codex/acct-b"]);
   });
 
-  it("round-trips the title / session id filter, defaults left out", () => {
-    const f: PageFilter = { ...base, match: { text: "^daily-\\d+", in: "session", mode: "regex" } };
+  it("round-trips conditions, OR only when it matters", () => {
+    const f: PageFilter = {
+      ...base,
+      match: {
+        join: "or",
+        rules: [
+          { field: "title", op: "contains", value: "daily-2026-10" },
+          { field: "model", op: "not_exact", value: "a:b" },
+        ],
+      },
+    };
     const q = filterQuery(f);
-    expect(q).toContain("match_in=session");
+    expect(q).toContain("match_op=or");
     expect(readFilter(q)).toEqual(f);
-    const plain = filterQuery({ ...base, match: { text: "report", in: "title", mode: "contains" } });
-    expect(plain).toBe("?match=report");
+    const one = filterQuery({ ...base, match: { join: "or", rules: [{ field: "title", op: "contains", value: "x" }] } });
+    expect(one).toBe("?match=title%3Acontains%3Ax");
   });
 
-  it("reads an unknown match field or mode as the defaults", () => {
-    expect(readFilter("?match=x&match_in=bogus&match_mode=bogus").match).toEqual({ text: "x", in: "title", mode: "contains" });
+  it("reads the older single-condition link", () => {
+    expect(readFilter("?match=report&match_in=session&match_mode=exact").match).toEqual({
+      join: "and",
+      rules: [{ field: "session", op: "exact", value: "report" }],
+    });
+    expect(readFilter("?match=x&match_in=bogus&match_mode=bogus").match.rules).toEqual([
+      { field: "title", op: "contains", value: "x" },
+    ]);
   });
 });

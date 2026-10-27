@@ -3,10 +3,10 @@
   import type { AnalyticsPoint, AnalyticsProject, AnalyticsResponse, AnalyticsUser } from "$lib/types";
   import { ago, isDormant, channelClass, channelColor } from "$lib/format";
   import { loadAnalytics } from "$lib/stream";
-  import { emptyText, filterQuery, readFilter, type Range, type TextFilter } from "$lib/urlFilter";
+  import { conditionValues, emptyConditions, filterQuery, readFilter, type Conditions, type Range } from "$lib/urlFilter";
   import Chart from "$lib/Chart.svelte";
   import RecentSessions from "$lib/RecentSessions.svelte";
-  import AdvancedFilters, { filterRule, type Advanced } from "$lib/AdvancedFilters.svelte";
+  import AdvancedFilters, { condFieldLabels, condOpLabels, filterRule, type Advanced } from "$lib/AdvancedFilters.svelte";
   import { UsageReport, fetchUsageReport, compactTokens, formatCost } from "@wick-fe/common-ui";
   import type { UsageReportData } from "@wick-fe/common-ui";
 
@@ -37,9 +37,8 @@
         providers: pickedProviders,
         people: pickedPeople,
         models: pickedModels,
-        match: pickedText.text,
-        matchIn: pickedText.in,
-        matchMode: pickedText.mode,
+        match: conditionValues(pickedText),
+        matchOp: pickedText.join,
       });
     } catch {
       ledger = null; // a missing ledger must not take the page down
@@ -80,8 +79,8 @@
   let pickedPeople = $state<string[]>(initial.people);
   /** Models ("opus", "(none)"). Empty = every model. */
   let pickedModels = $state<string[]>(initial.models);
-  /** Title / session id pattern. Empty text = off. */
-  let pickedText = $state<TextFilter>(initial.match);
+  /** The condition builder's rows (title, model, channel…). None = off. */
+  let pickedText = $state<Conditions>(initial.match);
   let advancedOpen = $state(false);
   /** People list order: the server's recency, or busiest first. */
   let peopleSort = $state<"recent" | "count">("recent");
@@ -184,7 +183,8 @@
     pickedPeople = next.people;
     pickedProviders = next.providers;
     pickedModels = next.models;
-    pickedText = next.match;
+    // A row left blank says nothing; keep only the ones that do.
+    pickedText = { join: next.match.join, rules: next.match.rules.filter((r) => r.value.trim()) };
     void load();
   }
 
@@ -197,17 +197,13 @@
 
   function removeAdvanced(kind: "people" | "providers" | "models" | "match", v: string) {
     const now = currentAdvanced();
-    if (kind === "match") applyAdvanced({ ...now, match: { ...emptyText } });
+    if (kind === "match") applyAdvanced({ ...now, match: { ...now.match, rules: now.match.rules.filter((_, i) => String(i) !== v) } });
     else applyAdvanced({ ...now, [kind]: now[kind].filter((x) => x !== v) });
   }
 
   const advancedCount = $derived(
-    pickedPeople.length + pickedProviders.length + pickedModels.length + (pickedText.text.trim() ? 1 : 0),
+    pickedPeople.length + pickedProviders.length + pickedModels.length + pickedText.rules.length,
   );
-  const matchLabel = (t: TextFilter) =>
-    `${t.in === "session" ? "session id" : t.in === "any" ? "title/session" : "title"} ${
-      t.mode === "exact" ? "=" : t.mode === "regex" ? "~" : "contains"
-    } ${t.mode === "regex" ? `/${t.text}/` : `"${t.text}"`}`;
   const personName = (id: string) =>
     id === "(unattributed)" ? "Unattributed / machine" : data?.users.find((u) => u.id === id)?.name || id;
   /* Every account, by name, plus the unattributed bucket when the range
@@ -224,7 +220,11 @@
     ...pickedPeople.map((v) => ({ kind: "people" as const, v, label: personName(v) })),
     ...pickedProviders.map((v) => ({ kind: "providers" as const, v, label: v })),
     ...pickedModels.map((v) => ({ kind: "models" as const, v, label: `model: ${v}` })),
-    ...(pickedText.text.trim() ? [{ kind: "match" as const, v: pickedText.text, label: matchLabel(pickedText) }] : []),
+    ...pickedText.rules.map((r, i) => ({
+      kind: "match" as const,
+      v: String(i),
+      label: `${i > 0 ? `${pickedText.join.toUpperCase()} ` : ""}${condFieldLabels[r.field].toLowerCase()} ${condOpLabels[r.op]} "${r.value}"`,
+    })),
   ]);
   /** Turns per provider come from the ledger, scoped by the same filter. */
   const turnsFor = (key: string) => ledger?.by_provider.find((r) => r.key === key)?.turns;
@@ -438,7 +438,7 @@
         type="button"
         onclick={() => (advancedOpen = true)}
         disabled={loading}
-        title="Title or session id, people, providers and models"
+        title="People, providers, models and conditions"
         data-testid="advanced-filters"
         class="ml-2 flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs disabled:opacity-50 {advancedCount > 0
           ? 'border-green-400 text-green-700 dark:text-green-300'
@@ -464,7 +464,7 @@
         {/each}
         <button
           type="button"
-          onclick={() => applyAdvanced({ people: [], providers: [], models: [], match: { ...emptyText } })}
+          onclick={() => applyAdvanced({ people: [], providers: [], models: [], match: { ...emptyConditions, rules: [] } })}
           disabled={loading}
           class="text-xs text-black-700 underline dark:text-black-600"
         >
@@ -484,6 +484,13 @@
       people={peopleOptions}
       providers={knownProviders}
       models={data.known_models ?? []}
+      suggest={{
+        model: data.known_models ?? [],
+        provider: knownProviders,
+        channel: knownChannels,
+        person: peopleOptions.map((p) => p.name),
+        project: data.projects?.map((p) => p.name) ?? [],
+      }}
       selected={currentAdvanced()}
       onApply={applyAdvanced}
       onClose={() => (advancedOpen = false)}
@@ -527,9 +534,8 @@
       providers={pickedProviders}
       people={pickedPeople}
       models={pickedModels}
-      match={pickedText.text}
-      matchIn={pickedText.in}
-      matchMode={pickedText.mode}
+      match={conditionValues(pickedText)}
+      matchOp={pickedText.join}
       report={ledger}
     />
 

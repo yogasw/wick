@@ -11,7 +11,7 @@ const props = (onApply = vi.fn()) => ({
   ],
   providers: ["claude/acct-a", "codex/acct-b"],
   models: ["(none)", "opus"],
-  selected: { people: ["user-b"], providers: [], models: [], match: { text: "", in: "title" as const, mode: "contains" as const } },
+  selected: { people: ["user-b"], providers: [], models: [], match: { join: "and" as const, rules: [] } },
   onApply,
   onClose: vi.fn(),
 });
@@ -28,7 +28,7 @@ describe("AdvancedFilters", () => {
       people: ["user-b"],
       providers: ["codex/acct-b"],
       models: ["opus"],
-      match: { text: "", in: "title", mode: "contains" },
+      match: { join: "and", rules: [] },
     });
   });
 
@@ -40,25 +40,40 @@ describe("AdvancedFilters", () => {
     expect(screen.getByText("User A")).toBeTruthy();
     await fireEvent.click(screen.getByText("Reset"));
     await fireEvent.click(screen.getByText("Apply"));
-    expect(onApply).toHaveBeenCalledWith({ people: [], providers: [], models: [], match: { text: "", in: "title", mode: "contains" } });
+    expect(onApply).toHaveBeenCalledWith({ people: [], providers: [], models: [], match: { join: "and", rules: [] } });
   });
 
-  it("applies a title / session id pattern with its field and mode", async () => {
+  it("builds conditions at the bottom, joined by AND or OR", async () => {
     const onApply = vi.fn();
     render(AdvancedFilters, { props: props(onApply) });
-    await fireEvent.change(screen.getByTestId("match-in"), { target: { value: "any" } });
-    await fireEvent.change(screen.getByTestId("match-mode"), { target: { value: "regex" } });
-    await fireEvent.input(screen.getByTestId("match-text"), { target: { value: "^daily-\\d+" } });
+    await fireEvent.click(screen.getByTestId("cond-add"));
+    await fireEvent.input(screen.getAllByTestId("cond-value")[0], { target: { value: "daily-2026-10" } });
+    await fireEvent.click(screen.getByTestId("cond-add"));
+    await fireEvent.change(screen.getAllByTestId("cond-field")[1], { target: { value: "model" } });
+    await fireEvent.change(screen.getAllByTestId("cond-op")[1], { target: { value: "not_exact" } });
+    await fireEvent.input(screen.getAllByTestId("cond-value")[1], { target: { value: "haiku" } });
+    await fireEvent.click(screen.getByText("Match any (OR)"));
     await fireEvent.click(screen.getByText("Apply"));
     expect(onApply).toHaveBeenCalledWith(
-      expect.objectContaining({ match: { text: "^daily-\\d+", in: "any", mode: "regex" } }),
+      expect.objectContaining({
+        match: {
+          join: "or",
+          rules: [
+            { field: "title", op: "contains", value: "daily-2026-10" },
+            { field: "model", op: "not_exact", value: "haiku" },
+          ],
+        },
+      }),
     );
   });
 
-  it("flags a regex that does not compile", async () => {
+  it("removes a condition and flags a regex that does not compile", async () => {
     render(AdvancedFilters, { props: props() });
-    await fireEvent.change(screen.getByTestId("match-mode"), { target: { value: "regex" } });
-    await fireEvent.input(screen.getByTestId("match-text"), { target: { value: "daily-(" } });
-    expect(screen.getByTestId("match-regex-error")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("cond-add"));
+    await fireEvent.change(screen.getByTestId("cond-op"), { target: { value: "regex" } });
+    await fireEvent.input(screen.getByTestId("cond-value"), { target: { value: "daily-(" } });
+    expect(screen.getByTestId("cond-regex-error")).toBeTruthy();
+    await fireEvent.click(screen.getByLabelText("Remove condition"));
+    expect(screen.queryAllByTestId("cond-row")).toHaveLength(0);
   });
 });

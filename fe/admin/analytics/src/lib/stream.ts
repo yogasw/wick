@@ -1,5 +1,5 @@
 import type { AnalyticsResponse, AnalyticsStreamLine } from "$lib/types";
-import { textParams, type TextFilter } from "$lib/urlFilter";
+import { conditionParams, type Conditions } from "$lib/urlFilter";
 
 /** Reads the NDJSON analytics stream, reporting progress as it goes.
  *
@@ -29,8 +29,8 @@ export async function loadAnalytics(
     people?: string[];
     /** Models ("opus", "(none)"). Empty = every model. */
     models?: string[];
-    /** Title / session id pattern. Empty text = no text filter. */
-    match?: TextFilter;
+    /** The condition builder's rows. None = no conditions. */
+    match?: Conditions;
     onProgress?: (done: number, total: number) => void;
     fetchImpl?: typeof fetch;
     /** How long the stream may say nothing before it counts as stalled. */
@@ -47,7 +47,7 @@ export async function loadAnalytics(
   if (opts.providers?.length) url.searchParams.set("providers", opts.providers.join(","));
   if (opts.people?.length) url.searchParams.set("people", opts.people.join(","));
   if (opts.models?.length) url.searchParams.set("models", opts.models.join(","));
-  if (opts.match) for (const [k, v] of textParams(opts.match)) url.searchParams.set(k, v);
+  if (opts.match) for (const [k, v] of conditionParams(opts.match)) url.searchParams.append(k, v);
 
   const streamURL = new URL(url);
   streamURL.searchParams.set("stream", "1");
