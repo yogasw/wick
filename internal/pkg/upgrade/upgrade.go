@@ -590,15 +590,21 @@ func (u *Upgrader) AcquireIntake(ctx context.Context) (*IntakeBaton, error) {
 	return acquireIntake(ctx, u.baseDir)
 }
 
-// DrainTimeout is an OPTIONAL hard ceiling on the whole drain, for an
-// unattended deploy that must finish inside a known time. Unset (0) by
-// default, because a ceiling here does not stop work — it kills it: a
-// workflow run cut off mid-node, a cron job cut off mid-write, an agent
-// reply cut off mid-sentence. The drain otherwise waits for the work.
+// defaultDrainTimeout caps a drain that does not settle on its own.
+var defaultDrainTimeout = 10 * time.Minute
+
+// DrainTimeout is the hard ceiling on the whole drain: 10 minutes unless
+// WICK_DRAIN_TIMEOUT says otherwise (any Go duration; "0" = no ceiling).
 //
-// WICK_DRAIN_TIMEOUT sets it (any Go duration).
+// A ceiling does not stop work, it kills it: a workflow run cut off
+// mid-node, a cron job mid-write, an agent reply mid-sentence. It is still
+// on by default because the draining process keeps the intake baton, so
+// Slack events and cron ticks keep landing on the OLD build and starting
+// new work there. On a busy host the drain then never settles, the new
+// build never takes intake, and every message is handled by the code the
+// deploy meant to replace.
 func DrainTimeout() time.Duration {
-	return envDuration("WICK_DRAIN_TIMEOUT", 0)
+	return envDuration("WICK_DRAIN_TIMEOUT", defaultDrainTimeout)
 }
 
 // DrainQuiet is the SETTLE WINDOW the whole drain switches on. It is not a

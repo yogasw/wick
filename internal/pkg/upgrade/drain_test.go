@@ -135,3 +135,22 @@ func TestWaitSettled(t *testing.T) {
 		}
 	})
 }
+
+func TestDrainTimeoutDefaultsToTenMinutes(t *testing.T) {
+	t.Setenv("WICK_DRAIN_TIMEOUT", "")
+	if got := DrainTimeout(); got != 10*time.Minute {
+		t.Fatalf("default = %v, want 10m", got)
+	}
+	t.Setenv("WICK_DRAIN_TIMEOUT", "0")
+	if got := DrainTimeout(); got != 0 {
+		t.Fatalf("\"0\" = %v, want no cap", got)
+	}
+	t.Setenv("WICK_DRAIN_TIMEOUT", "3m")
+	if got := DrainTimeout(); got != 3*time.Minute {
+		t.Fatalf("override = %v, want 3m", got)
+	}
+	t.Setenv("WICK_DRAIN_TIMEOUT", "soon")
+	if got := DrainTimeout(); got != 10*time.Minute {
+		t.Fatalf("invalid = %v, want the 10m default", got)
+	}
+}

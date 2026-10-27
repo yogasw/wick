@@ -223,11 +223,11 @@ back to `restart`.
 |---|---|---|
 | Agent turns, workflow runs, cron jobs, connector calls, plugin requests, delegations, scheduled deliveries | until every subsystem is at zero and has stayed there for `WICK_DRAIN_QUIET` (default `15s`) | Interrupting them loses work, or cuts a reply off mid-sentence |
 
-There is no default deadline, on purpose: a ceiling on a drain does not stop work, it kills it.
-Whatever is running is waited for however long it takes, and the process exits the moment the
-last of it settles. An idle agent subprocess holds nothing and never blocks the handover.
-`WICK_DRAIN_TIMEOUT` adds an optional hard cap for an unattended deploy that must finish inside a
-known time, and is unset by default. It is read at process start, so changing it needs a
+Whatever is running is waited for, and the process exits the moment the last of it settles. An
+idle agent subprocess holds nothing and never blocks the handover. `WICK_DRAIN_TIMEOUT` caps the
+whole drain at **10 minutes** by default (`0` = no cap): the draining process keeps intake until it
+exits, so on a busy host new Slack events and cron ticks keep landing on the old build and the
+drain would otherwise never settle. When the cap fires, whatever is still running is interrupted. It is read at process start, so changing it needs a
 `restart` rather than a `reload` — a successor inherits its parent's environment.
 
 Every 15 seconds a drain logs what is still outstanding, by name, so a long wait reads as
