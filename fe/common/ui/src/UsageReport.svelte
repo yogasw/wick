@@ -15,6 +15,7 @@
    *   - Nothing auto-refreshes. The ledger is history, not a live feed;
    *     a table that reshuffles while you read it is hostile. */
   import { onMount } from "svelte";
+  import TokenTrend from "./TokenTrend.svelte";
   import {
     fetchUsageReport,
     fetchProviderUsage,
@@ -516,6 +517,10 @@
         <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">tokens per turn</p>
       </div>
     </div>
+
+    {#if report.trend?.length}
+      <TokenTrend points={report.trend} unit={report.trend_unit} />
+    {/if}
 
     <div
       class="px-5 pt-3 flex items-center gap-1 border-t border-white-300 dark:border-navy-600"

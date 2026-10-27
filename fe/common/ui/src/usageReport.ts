@@ -84,6 +84,20 @@ export type UsageReport = Windowed & {
   by_model?: UsageSlice[];
   by_project: UsageSlice[];
   by_user: UsageSlice[];
+  /** The window over time, oldest first, quiet buckets as zeros. Absent
+      on an older server. */
+  trend?: TrendPoint[];
+  /** "hour", "day" or "month". */
+  trend_unit?: string;
+};
+
+/** One bucket of the trend. turns and sessions are what "per turn" and
+ *  "per conversation" divide by. */
+export type TrendPoint = {
+  key: string;
+  totals: UsageTotals;
+  turns: number;
+  sessions: number;
 };
 
 export const EMPTY_TOTALS: UsageTotals = {

@@ -107,6 +107,12 @@ type Report struct {
 	ByProject []Slice `json:"by_project"`
 	ByUser    []Slice `json:"by_user"`
 
+	// Trend is the window over time, oldest first, quiet buckets included
+	// as zeros so a gap reads as a gap. TrendUnit is its grain: "hour" for
+	// a window of two days or less, "day" up to a year, "month" beyond.
+	Trend     []TrendPoint `json:"trend,omitempty"`
+	TrendUnit string       `json:"trend_unit,omitempty"`
+
 	// Partial says the window could not be reconstructed in full for
 	// every session — see store.UsageRollup.Partial. Carried into the
 	// DTO so the UI can say "at least" instead of implying a total.
@@ -341,14 +347,138 @@ func (b *Builder) Rollup(w Window, sc Scope, force bool) (store.UsageRollup, err
 	if tags == nil {
 		tags = b.loadTags
 	}
+	unit, loc := trendGrain(w, b.now())
 	roll, err := store.AggregateUsageFiltered(b.Layout, ids, tags, store.UsageFilter{
-		Since: w.Since, Until: w.Until, Keep: sc.Keep,
+		Since: w.Since, Until: w.Until, Keep: sc.Keep, Bucket: trendBucket(unit, loc),
 	})
 	if err != nil {
 		return store.UsageRollup{}, err
 	}
 	b.cache[key] = cacheEntry{at: b.now(), roll: roll}
 	return roll, nil
+}
+
+// TrendPoint is one bucket of Report.Trend. Turns and Sessions are what
+// a "per turn" or "per conversation" view divides the totals by.
+type TrendPoint struct {
+	Key      string `json:"key"`
+	Totals   Totals `json:"totals"`
+	Turns    int    `json:"turns"`
+	Sessions int    `json:"sessions"`
+}
+
+// Trend grains and their bucket key layouts, in the server's timezone —
+// the same one the windows count days in.
+const (
+	trendHour  = "hour"
+	trendDay   = "day"
+	trendMonth = "month"
+
+	hourLayout  = "2006-01-02 15:00"
+	dayLayout   = "2006-01-02"
+	monthLayout = "2006-01"
+
+	// maxTrendDays is where a day-grained trend folds into months: a bar
+	// per day over several years is noise, not a trend.
+	maxTrendDays = 400
+)
+
+// trendGrain picks the grain for a window: hours when the window is two
+// days or less (a day-grained "today" is a single bar), days otherwise.
+// All time starts as days; Report folds it into months when it is long.
+func trendGrain(w Window, now time.Time) (unit string, loc *time.Location) {
+	loc = now.Location()
+	if !w.Since.IsZero() {
+		loc = w.Since.Location()
+		end := w.Until
+		if end.IsZero() {
+			end = now
+		}
+		if end.Sub(w.Since) <= 48*time.Hour {
+			return trendHour, loc
+		}
+	}
+	return trendDay, loc
+}
+
+func trendBucket(unit string, loc *time.Location) func(time.Time) string {
+	layout := dayLayout
+	if unit == trendHour {
+		layout = hourLayout
+	}
+	return func(t time.Time) string { return t.In(loc).Format(layout) }
+}
+
+// buildTrend turns the roll-up's buckets into an ordered series with the
+// quiet buckets filled in, from the window's start (or the first bucket,
+// for all time) to its end (or now).
+func buildTrend(roll store.UsageRollup, w Window, now time.Time) ([]TrendPoint, string) {
+	unit, loc := trendGrain(w, now)
+	if len(roll.Trend) == 0 && w.Since.IsZero() {
+		return nil, unit
+	}
+	layout, step := dayLayout, func(t time.Time) time.Time { return t.AddDate(0, 0, 1) }
+	if unit == trendHour {
+		layout, step = hourLayout, func(t time.Time) time.Time { return t.Add(time.Hour) }
+	}
+	start := w.Since.In(loc)
+	if w.Since.IsZero() {
+		for k := range roll.Trend {
+			if t, err := time.ParseInLocation(layout, k, loc); err == nil && (start.IsZero() || t.Before(start)) {
+				start = t
+			}
+		}
+	}
+	end := w.Until
+	if end.IsZero() || end.After(now) {
+		end = now
+	}
+	end = end.In(loc)
+	if unit == trendHour {
+		start = start.Truncate(time.Hour)
+	} else {
+		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+	}
+	if unit == trendDay && end.Sub(start) > maxTrendDays*24*time.Hour {
+		unit, layout = trendMonth, monthLayout
+		start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, loc)
+		step = func(t time.Time) time.Time { return t.AddDate(0, 1, 0) }
+	}
+
+	sums := roll.Trend
+	if unit == trendMonth {
+		sums = map[string]*store.TrendBucket{}
+		for k, b := range roll.Trend {
+			t, err := time.ParseInLocation(dayLayout, k, loc)
+			if err != nil {
+				continue
+			}
+			mk := t.Format(monthLayout)
+			m := sums[mk]
+			if m == nil {
+				m = &store.TrendBucket{}
+				sums[mk] = m
+			}
+			m.Totals.Add(b.Totals)
+			m.Turns += b.Turns
+			// A session active on three days of the month is one
+			// conversation in that month, not three — but the daily
+			// buckets no longer say which sessions they held. The sum is
+			// an upper bound; label it as conversation-days.
+			m.Sessions += b.Sessions
+		}
+	}
+
+	var out []TrendPoint
+	for t := start; !t.After(end); t = step(t) {
+		k := t.Format(layout)
+		p := TrendPoint{Key: k}
+		if b := sums[k]; b != nil {
+			p.Totals, p.Turns, p.Sessions = TotalsOf(b.Totals), b.Turns, b.Sessions
+		}
+		out = append(out, p)
+	}
+	return out, unit
 }
 
 // Report builds the fleet-wide report for a window.
@@ -371,6 +501,7 @@ func (b *Builder) Report(w Window, sc Scope, force bool) (Report, error) {
 		ByUser:      Slices(roll.ByUser, grand, b.userName),
 		Partial:     roll.Partial,
 	}
+	rep.Trend, rep.TrendUnit = buildTrend(roll, w, b.clock())
 	if !w.Since.IsZero() {
 		rep.Since = w.Since.UTC().Format(time.RFC3339)
 	}
