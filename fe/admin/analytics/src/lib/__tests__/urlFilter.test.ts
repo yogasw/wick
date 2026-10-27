@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterQuery, readFilter, type PageFilter } from "$lib/urlFilter";
 
-const base: PageFilter = { range: 1, from: "", to: "", channels: [], instances: [], providers: [], people: [], models: [] };
+const base: PageFilter = { range: 1, from: "", to: "", channels: [], instances: [], providers: [], people: [], models: [], match: { text: "", in: "title", mode: "contains" } };
 
 describe("url filter", () => {
   it("leaves the default view out of the URL", () => {
@@ -33,5 +33,18 @@ describe("url filter", () => {
     expect(readFilter("?range=banana").range).toBe(1);
     expect(readFilter("?range=all").range).toBe("all");
     expect(readFilter("?providers=all,,codex/acct-b").providers).toEqual(["codex/acct-b"]);
+  });
+
+  it("round-trips the title / session id filter, defaults left out", () => {
+    const f: PageFilter = { ...base, match: { text: "^daily-\\d+", in: "session", mode: "regex" } };
+    const q = filterQuery(f);
+    expect(q).toContain("match_in=session");
+    expect(readFilter(q)).toEqual(f);
+    const plain = filterQuery({ ...base, match: { text: "report", in: "title", mode: "contains" } });
+    expect(plain).toBe("?match=report");
+  });
+
+  it("reads an unknown match field or mode as the defaults", () => {
+    expect(readFilter("?match=x&match_in=bogus&match_mode=bogus").match).toEqual({ text: "x", in: "title", mode: "contains" });
   });
 });

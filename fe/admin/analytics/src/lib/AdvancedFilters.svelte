@@ -1,14 +1,17 @@
 <script module lang="ts">
-  export type Advanced = { people: string[]; providers: string[]; models: string[] };
+  import type { TextFilter } from "$lib/urlFilter";
+  export type Advanced = { people: string[]; providers: string[]; models: string[]; match: TextFilter };
   export const filterRule = "A conversation that switched provider or model matches when any of them is picked.";
 </script>
 
 <script lang="ts">
-  /* The filters that would crowd the bar: people (forty accounts are not
-     a chip row), providers and models. Edits stay a draft until Apply, so
-     ticking three people costs one reload, not three. */
+  /* The filters that would crowd the bar: a title / session id pattern,
+     people (forty accounts are not a chip row), providers and models.
+     Edits stay a draft until Apply, so ticking three people costs one
+     reload, not three. */
   import { Modal } from "@wick-fe/common-ui";
   import { channelColor } from "$lib/format";
+  import { emptyText } from "$lib/urlFilter";
 
   type Props = {
     open: boolean;
@@ -22,12 +25,17 @@
   };
   let { open, people, providers, models, selected, onApply, onClose }: Props = $props();
 
-  let draft = $state<Advanced>({ people: [], providers: [], models: [] });
+  let draft = $state<Advanced>({ people: [], providers: [], models: [], match: { ...emptyText } });
   let search = $state("");
   // A fresh draft each time it opens: a cancelled edit must not linger.
   $effect(() => {
     if (open) {
-      draft = { people: [...selected.people], providers: [...selected.providers], models: [...selected.models] };
+      draft = {
+        people: [...selected.people],
+        providers: [...selected.providers],
+        models: [...selected.models],
+        match: { ...selected.match },
+      };
       search = "";
     }
   });
@@ -37,7 +45,20 @@
     return q ? people.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)) : people;
   });
 
-  function toggle(kind: keyof Advanced, v: string) {
+  /* A hint only: the browser's regex dialect is close to the server's but
+     not the same, so the server's own answer (match_error) is what the
+     page shows after Apply. */
+  const regexError = $derived.by(() => {
+    if (draft.match.mode !== "regex" || !draft.match.text.trim()) return "";
+    try {
+      new RegExp(draft.match.text.trim());
+      return "";
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  });
+
+  function toggle(kind: "people" | "providers" | "models", v: string) {
     const list = draft[kind];
     draft[kind] = list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
   }
@@ -65,6 +86,46 @@
 
 <Modal {open} {onClose} title="Advanced filters" size="lg">
   <div class="space-y-5 text-sm">
+    <section>
+      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
+        Title or session id
+      </h3>
+      <div class="flex flex-wrap gap-2">
+        <select
+          bind:value={draft.match.in}
+          data-testid="match-in"
+          class="rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 text-xs text-black-900 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+        >
+          <option value="title">Title</option>
+          <option value="session">Session id</option>
+          <option value="any">Title or session id</option>
+        </select>
+        <select
+          bind:value={draft.match.mode}
+          data-testid="match-mode"
+          class="rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 text-xs text-black-900 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+        >
+          <option value="contains">Contains</option>
+          <option value="exact">Match exactly</option>
+          <option value="regex">Regex</option>
+        </select>
+        <input
+          type="text"
+          bind:value={draft.match.text}
+          placeholder={draft.match.mode === "regex" ? "^daily-\\d+" : "e.g. handover"}
+          data-testid="match-text"
+          class="min-w-0 flex-1 rounded-lg border border-white-400 bg-white-100 px-3 py-1.5 font-mono text-xs text-black-900 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+        />
+      </div>
+      {#if regexError}
+        <p class="mt-1 text-xs text-red-600 dark:text-red-400" data-testid="match-regex-error">{regexError}</p>
+      {:else}
+        <p class="mt-1 text-xs text-black-600 dark:text-black-700">
+          Case-insensitive. Narrows every number on the page, token usage included — follow one use case across the
+          range.
+        </p>
+      {/if}
+    </section>
     <section>
       <div class="mb-1.5 flex items-center gap-2">
         <h3 class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">People</h3>
@@ -108,7 +169,7 @@
     <div class="flex justify-end gap-2">
       <button
         type="button"
-        onclick={() => (draft = { people: [], providers: [], models: [] })}
+        onclick={() => (draft = { people: [], providers: [], models: [], match: { ...emptyText } })}
         class="rounded-lg border border-white-300 px-3 py-1.5 text-xs text-black-700 dark:border-navy-600 dark:text-black-600"
       >
         Reset

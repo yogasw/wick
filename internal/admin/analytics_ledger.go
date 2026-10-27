@@ -139,6 +139,7 @@ func (h *Handler) analyticsLedgerJSON(w http.ResponseWriter, r *http.Request) {
 		Providers: csv(q.Get("providers")),
 		People:    csv(q.Get("people")),
 		Models:    csv(q.Get("models")),
+		Text:      usagereport.ParseTextMatch(q.Get("match"), q.Get("match_in"), q.Get("match_mode")),
 	}
 
 	// Everything after /ledger/ is either "usage" (the fleet) or

@@ -11,7 +11,7 @@ const props = (onApply = vi.fn()) => ({
   ],
   providers: ["claude/acct-a", "codex/acct-b"],
   models: ["(none)", "opus"],
-  selected: { people: ["user-b"], providers: [], models: [] },
+  selected: { people: ["user-b"], providers: [], models: [], match: { text: "", in: "title" as const, mode: "contains" as const } },
   onApply,
   onClose: vi.fn(),
 });
@@ -24,7 +24,12 @@ describe("AdvancedFilters", () => {
     await fireEvent.click(screen.getByText("opus"));
     expect(onApply).not.toHaveBeenCalled();
     await fireEvent.click(screen.getByText("Apply"));
-    expect(onApply).toHaveBeenCalledWith({ people: ["user-b"], providers: ["codex/acct-b"], models: ["opus"] });
+    expect(onApply).toHaveBeenCalledWith({
+      people: ["user-b"],
+      providers: ["codex/acct-b"],
+      models: ["opus"],
+      match: { text: "", in: "title", mode: "contains" },
+    });
   });
 
   it("searches people and resets the draft", async () => {
@@ -35,6 +40,25 @@ describe("AdvancedFilters", () => {
     expect(screen.getByText("User A")).toBeTruthy();
     await fireEvent.click(screen.getByText("Reset"));
     await fireEvent.click(screen.getByText("Apply"));
-    expect(onApply).toHaveBeenCalledWith({ people: [], providers: [], models: [] });
+    expect(onApply).toHaveBeenCalledWith({ people: [], providers: [], models: [], match: { text: "", in: "title", mode: "contains" } });
+  });
+
+  it("applies a title / session id pattern with its field and mode", async () => {
+    const onApply = vi.fn();
+    render(AdvancedFilters, { props: props(onApply) });
+    await fireEvent.change(screen.getByTestId("match-in"), { target: { value: "any" } });
+    await fireEvent.change(screen.getByTestId("match-mode"), { target: { value: "regex" } });
+    await fireEvent.input(screen.getByTestId("match-text"), { target: { value: "^daily-\\d+" } });
+    await fireEvent.click(screen.getByText("Apply"));
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({ match: { text: "^daily-\\d+", in: "any", mode: "regex" } }),
+    );
+  });
+
+  it("flags a regex that does not compile", async () => {
+    render(AdvancedFilters, { props: props() });
+    await fireEvent.change(screen.getByTestId("match-mode"), { target: { value: "regex" } });
+    await fireEvent.input(screen.getByTestId("match-text"), { target: { value: "daily-(" } });
+    expect(screen.getByTestId("match-regex-error")).toBeTruthy();
   });
 });

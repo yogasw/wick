@@ -30,6 +30,11 @@ export type AnalyticsWindow = {
   providers?: string[];
   people?: string[];
   models?: string[];
+  match?: string;
+  match_in?: string;
+  match_mode?: string;
+  /** The regex did not compile: the numbers below match nothing. */
+  match_error?: string;
 };
 
 /** One picked provider under the page's other filters: how often, who

@@ -4,6 +4,12 @@
 /** "all" runs back to the oldest conversation; "custom" uses the dates. */
 export type Range = 1 | 7 | 30 | 90 | 365 | "all" | "custom";
 
+/** Where the text filter looks, and how it reads the pattern. */
+export type MatchIn = "title" | "session" | "any";
+export type MatchMode = "contains" | "exact" | "regex";
+export type TextFilter = { text: string; in: MatchIn; mode: MatchMode };
+export const emptyText: TextFilter = { text: "", in: "title", mode: "contains" };
+
 export type PageFilter = {
   range: Range;
   from: string;
@@ -13,6 +19,7 @@ export type PageFilter = {
   providers: string[];
   people: string[];
   models: string[];
+  match: TextFilter;
 };
 
 /** Today: the page's own default, so it never needs to be in the URL. */
@@ -47,7 +54,31 @@ export function readFilter(search: string): PageFilter {
     providers: list(q, "providers"),
     people: list(q, "people"),
     models: list(q, "models"),
+    match: readText(q),
   };
+}
+
+function readText(q: URLSearchParams): TextFilter {
+  const text = (q.get("match") ?? "").trim();
+  if (!text) return { ...emptyText };
+  const rawIn = q.get("match_in");
+  const rawMode = q.get("match_mode");
+  return {
+    text,
+    in: rawIn === "session" || rawIn === "any" ? rawIn : "title",
+    mode: rawMode === "exact" || rawMode === "regex" ? rawMode : "contains",
+  };
+}
+
+/** The text filter as query pairs, [] when it is off. Shared by the
+ *  address bar, the page's fetch and the ledger's, so all three agree. */
+export function textParams(t: TextFilter): Array<[string, string]> {
+  const text = t.text.trim();
+  if (!text) return [];
+  const out: Array<[string, string]> = [["match", text]];
+  if (t.in !== "title") out.push(["match_in", t.in]);
+  if (t.mode !== "contains") out.push(["match_mode", t.mode]);
+  return out;
 }
 
 /** The query string for a filter, "" when everything is the default. */
@@ -63,6 +94,7 @@ export function filterQuery(f: PageFilter): string {
   if (f.providers.length) q.set("providers", f.providers.join(","));
   if (f.people.length) q.set("people", f.people.join(","));
   if (f.models.length) q.set("models", f.models.join(","));
+  for (const [k, v] of textParams(f.match)) q.set(k, v);
   const s = q.toString();
   return s ? `?${s}` : "";
 }

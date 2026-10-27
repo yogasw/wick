@@ -150,6 +150,10 @@ export type LedgerScope = {
   providers?: string[];
   people?: string[];
   models?: string[];
+  /** Title / session id pattern; see TextMatch on the server. */
+  match?: string;
+  matchIn?: string;
+  matchMode?: string;
 };
 
 function scopeQuery(scope: LedgerScope): string {
@@ -161,6 +165,11 @@ function scopeQuery(scope: LedgerScope): string {
     parts.push(`providers=${encodeURIComponent(scope.providers.join(","))}`);
   if (scope.people?.length) parts.push(`people=${encodeURIComponent(scope.people.join(","))}`);
   if (scope.models?.length) parts.push(`models=${encodeURIComponent(scope.models.join(","))}`);
+  if (scope.match) {
+    parts.push(`match=${encodeURIComponent(scope.match)}`);
+    if (scope.matchIn) parts.push(`match_in=${encodeURIComponent(scope.matchIn)}`);
+    if (scope.matchMode) parts.push(`match_mode=${encodeURIComponent(scope.matchMode)}`);
+  }
   return parts.length ? `&${parts.join("&")}` : "";
 }
 

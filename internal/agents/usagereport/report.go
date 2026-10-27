@@ -186,6 +186,9 @@ type Scope struct {
 	// sessions run on any of these models, NoProvider for none recorded.
 	People []string
 	Models []string
+	// Text narrows by title or session id; see TextMatch. It reads
+	// SessionTags.ID and Label, so it works with any Tags resolver.
+	Text TextMatch
 }
 
 // NoProvider is the key a session with no provider recorded is filed
@@ -200,11 +203,14 @@ const NoPerson = "(unattributed)"
 // Empty reports whether this scope narrows anything.
 func (sc Scope) Empty() bool {
 	return len(sc.Channels) == 0 && len(sc.Instances) == 0 && len(sc.Providers) == 0 &&
-		len(sc.People) == 0 && len(sc.Models) == 0
+		len(sc.People) == 0 && len(sc.Models) == 0 && sc.Text.Empty()
 }
 
 // Keep is the predicate the roll-up applies per session.
 func (sc Scope) Keep(t store.SessionTags) bool {
+	if !sc.Text.Keep(t.ID, t.Label) {
+		return false
+	}
 	if len(sc.Channels) > 0 && !contains(sc.Channels, t.Channel) {
 		return false
 	}
@@ -260,7 +266,7 @@ func (sc Scope) Key() string {
 	}
 	return "|ch:" + strings.Join(sc.Channels, ",") + "|in:" + strings.Join(sc.Instances, ",") +
 		"|pv:" + strings.Join(sc.Providers, ",") + "|pp:" + strings.Join(sc.People, ",") +
-		"|md:" + strings.Join(sc.Models, ",")
+		"|md:" + strings.Join(sc.Models, ",") + sc.Text.key()
 }
 
 func contains(list []string, v string) bool {

@@ -378,6 +378,9 @@ func LoadSessionUsage(layout config.Layout, sessionID string) (*SessionUsage, er
 // in session meta.json, which this package must not import (the session
 // package already depends on store), so the caller supplies them.
 type SessionTags struct {
+	// ID is the session's own id, filled by the roll-up rather than by the
+	// resolver, so a filter can match on it. Filter-only.
+	ID        string `json:"-"`
 	ProjectID string
 	UserID    string
 	// Label is the session's own title, so a ledger row can name the
@@ -654,6 +657,7 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		if tags != nil {
 			t = tags(id)
 		}
+		t.ID = id
 		if f.Keep != nil && !f.Keep(t) {
 			continue
 		}
