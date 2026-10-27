@@ -1425,13 +1425,16 @@ func NewServer() *Server {
 		if !ok {
 			return agentpool.TeamLimits{}, false
 		}
+		bash := slices.Contains(lim.NativeTools, "Bash")
+		disabled := slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill)
 		return agentpool.TeamLimits{
 			AgentID:         lim.AgentID,
 			DisallowedTools: team.DisallowedClaudeTools(lim.NativeTools),
-			BashAllowed:     slices.Contains(lim.NativeTools, "Bash"),
+			BashAllowed:     bash,
 			BashRules:       lim.BashRules,
 			DefaultScope:    lim.ProjectDir,
-			DisabledSkills:  slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill),
+			// Host-admin skills are dropped for an agent without Bash.
+			DisabledSkills: skillsync.WithAdminSkillsOff(disabled, bash),
 		}, true
 	}
 	agentsession.ProjectAgent = func(projectID string) string {

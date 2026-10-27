@@ -48,12 +48,10 @@ func TestSyncBuiltinWritesEverySkill(t *testing.T) {
 		if !strings.Contains(body, builtinWarningMarker) {
 			t.Errorf("%s missing overwrite warning header", md)
 		}
-		// The warning must sit ABOVE the frontmatter, or it would be parsed
-		// as part of it and break name/description resolution.
-		if idx := strings.Index(body, "---"); idx >= 0 {
-			if strings.Index(body, builtinWarningMarker) > idx {
-				t.Errorf("%s: warning must precede frontmatter", md)
-			}
+		// The file must still OPEN with the frontmatter: the provider CLIs
+		// read it only from the first line, so the warning goes below it.
+		if !strings.HasPrefix(body, "---\n") {
+			t.Errorf("%s: frontmatter must open the file", md)
 		}
 	}
 	if skills != res.SkillsCopied {
