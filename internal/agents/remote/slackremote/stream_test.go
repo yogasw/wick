@@ -307,3 +307,27 @@ func TestRouterOwnsSavedTargetWithoutTurn(t *testing.T) {
 		t.Fatal("DM target's bot reply must be owned")
 	}
 }
+
+// A saved channel target that opens a thread itself (a top-level message,
+// e.g. mentioning an agent here) is starting its own conversation, not
+// replying to a turn: neither that message nor its later messages in the
+// same thread are owned. Its messages in other threads still are.
+func TestRouterLeavesThreadsSavedTargetOpened(t *testing.T) {
+	r := NewRouter()
+	r.SetTargets(func() ([]Config, error) {
+		return []Config{{Target: TargetChannel, Channel: "C01TESTCHAN", MentionID: "UREMOTE"}}, nil
+	})
+	opener := Message{Channel: "C01TESTCHAN", TS: "30.0", User: "UREMOTE", BotID: "BREMOTE", Text: "<@UAGENT> please check"}
+	if r.Owns(opener) {
+		t.Fatal("top-level message from the target must not be owned")
+	}
+	if r.Owns(Message{Channel: "C01TESTCHAN", TS: "30.0", ThreadTS: "30.0", User: "UREMOTE", BotID: "BREMOTE"}) {
+		t.Fatal("thread parent echoed with its own ts must not be owned")
+	}
+	if r.Owns(Message{Channel: "C01TESTCHAN", TS: "31.0", ThreadTS: "30.0", User: "UREMOTE", BotID: "BREMOTE", Text: "<@UAGENT> follow-up"}) {
+		t.Fatal("follow-up in the thread the target opened must not be owned")
+	}
+	if !r.Owns(Message{Channel: "C01TESTCHAN", TS: "41.0", ThreadTS: "40.0", User: "UREMOTE", BotID: "BREMOTE"}) {
+		t.Fatal("reply in a thread the target did not open must stay owned")
+	}
+}
