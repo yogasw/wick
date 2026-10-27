@@ -714,60 +714,60 @@
        chip: the surface and the sender tell it apart from an answer (no
        background) and from a person's message (green, on the right). -->
   <div class="flex min-w-0 justify-start group" data-testid={teamFrom ? "teammate-card" : "system-card"} data-kind={teamFrom ? teamFrom.kind : systemSrc?.key}>
-    <div class="w-full min-w-0 rounded-xl bg-white-200 px-3 py-2.5 dark:bg-navy-700">
+    <div class="w-full min-w-0 rounded-xl bg-white-300 px-3 py-2.5 dark:bg-navy-700">
       <div class="flex min-w-0 items-center gap-2 text-[12.5px] leading-5">
         {#if teamFrom}
           {#if teamFrom.handle}
             <AgentAvatar kind={teamFromAgent?.kind} image={teamFromAgent?.image} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
           {:else}
-            <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">🤝</span>
+            <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-100 text-[11px] dark:bg-navy-600">🤝</span>
           {/if}
           <span data-testid="team-sender-chip" title={teamFrom.handle ? `${teamFrom.name} (@${teamFrom.handle}) · Team agent` : "Replies from several teammates"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span>
         {:else if systemSrc}
-          <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">{systemSrc.icon}</span>
+          <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-100 text-[11px] dark:bg-navy-600">{systemSrc.icon}</span>
           <span data-testid="source-chip" title={"Posted by " + systemSrc.label + ", not typed by a person"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{systemSrc.label === "cli" ? "CLI" : systemSrc.label.charAt(0).toUpperCase() + systemSrc.label.slice(1)}</span>
         {/if}
         {#if teamFrom?.kind === "revision"}
           <!-- A revision of a task (amend_task): one muted line, no status —
                it is the same task, not a new one. -->
-          <span data-testid="card-revision" title={"Revision of task " + teamFrom.taskId} class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">↻ revision {teamFrom.revision}{teamFrom.replace ? " · replaces the brief" : ""}{stamp ? " · " + stamp : ""}</span>
+          <span data-testid="card-revision" title={"Revision of task " + teamFrom.taskId} class="shrink-0 text-[11.5px] text-black-800 dark:text-black-600">↻ revision {teamFrom.revision}{teamFrom.replace ? " · replaces the brief" : ""}{stamp ? " · " + stamp : ""}</span>
         {:else if stamp}
-          <span class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">{stamp}</span>
+          <span class="shrink-0 text-[11.5px] text-black-800 dark:text-black-600">{stamp}</span>
         {/if}
-        <span class="flex-1"></span>
-        {#if teamFrom && cardStatus}
-          <span data-testid="card-status" class="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-black-700 dark:text-black-600">
-            <span aria-hidden="true" class={"h-[7px] w-[7px] rounded-full " + cardStatus.dot}></span>{cardStatus.label}
-          </span>
-        {/if}
-        {#if teamFrom?.handle && onOpenAgent}
-          <button type="button" data-testid="card-open" onclick={() => onOpenAgent?.(teamFrom.handle)} title={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} aria-label={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} class="shrink-0 rounded-md px-1 text-[13px] text-black-700 hover:bg-white-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:bg-navy-600">↗</button>
-        {/if}
-      </div>
-      {#if teamFrom}
-        <div
-          use:enrich={cardBody}
-          class={"wick-prose wick-prose-sm mt-0.5 min-w-0 break-words text-black-900 dark:text-white-100" + (cardFolds && !cardOpen ? " max-h-[4.8em] overflow-hidden" : "")}
-        >
-          {@html renderMarkdown(cardBody)}
-        </div>
-      {:else}
-        <div data-testid="system-card-body" class={"mt-0.5 min-w-0 whitespace-pre-wrap text-[13px] leading-relaxed text-black-700 [overflow-wrap:anywhere] dark:text-black-600" + (cardFolds && !cardOpen ? " line-clamp-3" : "")}>{@html linkifyText(cardBody)}</div>
-      {/if}
-      {#if cardFolds}
-        <FoldToggle open={cardOpen} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
-      {/if}
-      {#if canReply}
-        <div class="flex justify-end">
+        {#if canReply}
+          <!-- Reply sits by the time, as under an answer, so the card has no
+               extra row for it and it never stacks on "Show more". -->
           <button
             type="button"
             data-testid="reply-action"
             aria-label="Reply to this message"
             title="Reply"
             onclick={startReply}
-            class="inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-none text-black-700 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
+            class="inline-flex shrink-0 items-center gap-0.5 rounded px-1 text-[11.5px] leading-none text-black-800 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
           >↩ Reply</button>
+        {/if}
+        <span class="flex-1"></span>
+        {#if teamFrom && cardStatus}
+          <span data-testid="card-status" class="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-black-800 dark:text-black-600">
+            <span aria-hidden="true" class={"h-[7px] w-[7px] rounded-full " + cardStatus.dot}></span>{cardStatus.label}
+          </span>
+        {/if}
+        {#if teamFrom?.handle && onOpenAgent}
+          <button type="button" data-testid="card-open" onclick={() => onOpenAgent?.(teamFrom.handle)} title={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} aria-label={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} class="shrink-0 rounded-md px-1 text-[13px] text-black-800 hover:bg-white-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:bg-navy-600">↗</button>
+        {/if}
+      </div>
+      {#if teamFrom}
+        <div
+          use:enrich={cardBody}
+          class={"wick-prose wick-prose-sm mt-0.5 min-w-0 break-words text-black-900 dark:text-white-100 [&_code]:bg-white-100 dark:[&_code]:bg-navy-600" + (cardFolds && !cardOpen ? " max-h-[4.8em] overflow-hidden" : "")}
+        >
+          {@html renderMarkdown(cardBody)}
         </div>
+      {:else}
+        <div data-testid="system-card-body" class={"mt-0.5 min-w-0 whitespace-pre-wrap text-[13px] leading-relaxed text-black-800 [overflow-wrap:anywhere] dark:text-black-600" + (cardFolds && !cardOpen ? " line-clamp-3" : "")}>{@html linkifyText(cardBody)}</div>
+      {/if}
+      {#if cardFolds}
+        <FoldToggle open={cardOpen} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
       {/if}
     </div>
   </div>

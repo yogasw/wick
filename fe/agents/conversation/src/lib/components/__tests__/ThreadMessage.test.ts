@@ -1265,7 +1265,7 @@ describe("ThreadMessage - message types", () => {
     });
     const card = screen.getByTestId("teammate-card");
     expect(card.className).toContain("justify-start");
-    expect(card.innerHTML).toContain("bg-white-200");
+    expect(card.innerHTML).toContain("bg-white-300");
     expect(card.innerHTML).not.toContain("border-l-");
     expect(screen.getByTestId("team-sender-chip").textContent).toContain("Anton");
     expect(container.innerHTML).not.toContain("bg-green-500");
