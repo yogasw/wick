@@ -79,6 +79,9 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+	// predWait: session+agent keys held for a draining predecessor's turn
+	// (waitForPredecessor). Guarded by mu.
+	predWait map[string]bool
 
 	// keepTurn marks a session+agent whose current turn carries a message
 	// a person sent, or a teammate's task (released per agent instead):
@@ -247,8 +250,14 @@ type PoolConfig struct {
 	// to wait for the idle TTL. The preempted session keeps its CLI session
 	// ID in agents.json and resumes via --resume on its next message.
 	PreemptIdle bool
-	Layout      config.Layout
-	Factory     AgentFactory
+	// PredecessorHolds reports whether a still-draining previous process is
+	// running sessionID's turn. During a handover this process already takes
+	// the channels while that turn finishes there; a message for the same
+	// session waits buffered until it does, so one session never runs two
+	// agents at once. Nil = never.
+	PredecessorHolds func(sessionID string) bool
+	Layout           config.Layout
+	Factory          AgentFactory
 	// DefaultProvider is the instance key ("claude", "claude/work", ...)
 	// used when a session's agent entry has no provider bound — the
 	// channel/API/quick-create path where AddAgent is called with an empty
@@ -1160,6 +1169,12 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	if moving {
 		return nil
 	}
+	// The previous build is still finishing this session's turn: the
+	// message stays buffered and is delivered here once that turn ends.
+	if p.cfg.PredecessorHolds != nil && p.cfg.PredecessorHolds(sessionID) {
+		p.waitForPredecessor(sessionID, agentName, source)
+		return p.markStatus(sessionID, session.StatusQueued)
+	}
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
 	pType, pName := p.providerForSession(sessionID, agentName)
@@ -1225,6 +1240,54 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 		p.preemptIdleSlot()
 	}
 	return p.markStatus(sessionID, session.StatusQueued)
+}
+
+// predecessorPoll is how often a held session checks whether the draining
+// predecessor finished its turn. A var for tests.
+var predecessorPoll = 2 * time.Second
+
+// waitForPredecessor delivers sessionID's buffered messages once the
+// draining predecessor no longer runs its turn. One waiter per session+agent;
+// later messages join the buffer it will drain.
+func (p *Pool) waitForPredecessor(sessionID, agentName, source string) {
+	key := sessionKey(sessionID, agentName)
+	p.mu.Lock()
+	if p.predWait == nil {
+		p.predWait = map[string]bool{}
+	}
+	if p.predWait[key] {
+		p.mu.Unlock()
+		return
+	}
+	p.predWait[key] = true
+	p.mu.Unlock()
+	log.Info().Str("component", "pool").Str("session", sessionID).Str("agent", agentName).
+		Msg("pool: previous build still runs this session's turn — message held until it ends")
+	go func() {
+		defer func() {
+			p.mu.Lock()
+			delete(p.predWait, key)
+			p.mu.Unlock()
+		}()
+		t := time.NewTicker(predecessorPoll)
+		defer t.Stop()
+		for p.cfg.PredecessorHolds(sessionID) {
+			select {
+			case <-p.stopCh:
+				return
+			case <-t.C:
+			}
+		}
+		p.mu.Lock()
+		delete(p.predWait, key)
+		p.mu.Unlock()
+		log.Info().Str("component", "pool").Str("session", sessionID).Str("agent", agentName).
+			Msg("pool: previous build finished this session's turn — delivering held message")
+		if err := p.spawnOrQueue(context.Background(), sessionID, agentName, source); err != nil {
+			log.Warn().Err(err).Str("component", "pool").Str("session", sessionID).
+				Msg("pool: delivering held message failed")
+		}
+	}()
 }
 
 // persistBufferedTurn writes one user/system message to the session's

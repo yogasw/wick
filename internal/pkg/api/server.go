@@ -1116,6 +1116,11 @@ func NewServer() *Server {
 		IdentityFixed: func(ctx context.Context, sessionID string) bool {
 			return teamSvc.IdentityFixed(ctx, sessionID)
 		},
+		// During a handover the channels move first: a message for a session
+		// whose turn the draining build still runs waits for that turn.
+		PredecessorHolds: func(sessionID string) bool {
+			return upgrade.PredecessorHolds(agentsLayout.BaseDir, sessionID)
+		},
 		Layout:          agentsLayout,
 		Factory:         agentsFactory,
 		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
@@ -3704,10 +3709,13 @@ type Server struct {
 	// intakeReady closes once this process holds the intake baton, i.e. once
 	// it is the process allowed to accept NEW work (channel listeners, cron,
 	// scheduled messages). During a graceful upgrade the successor parks here
-	// until the draining parent is finished, so exactly one process is ever
-	// consuming Slack events. Read by the single-node `all` entrypoint, which
-	// must hold its job scheduler back for the same reason.
+	// until the draining parent is finished; channel listeners alone may start
+	// earlier, when the parent offers them (channelsOnce). Read by the
+	// single-node `all` entrypoint, which must hold its job scheduler back.
 	intakeReady chan struct{}
+	// channelsOnce starts the channel listeners once, from whichever comes
+	// first: the predecessor's offer or the intake baton.
+	channelsOnce sync.Once
 	// teamHub builds the Team A2A hub on first use. Run builds it once the
 	// intake baton is held, so tasks a restart left working are settled
 	// without waiting for someone to touch a team feature.
@@ -3740,8 +3748,28 @@ func (s *Server) JobsSvc() *manager.Service { return s.jobsSvc }
 // watchTelegram methods — Reload semantics now live inside each
 // channel's ConfigSource.
 func (s *Server) startChannels(ctx context.Context) {
-	s.channelReg.StartAll(ctx)
-	go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+	s.startChannelListeners(ctx)
+	s.startIntakeWatchers(ctx)
+}
+
+// startChannelListeners starts the channel instances (Slack sockets,
+// Telegram polling) and their config hot-reload, once per process. During a
+// handover it runs before the intake baton is ours — as soon as the
+// draining predecessor offers its channels (see upgrade.ReleaseChannels).
+func (s *Server) startChannelListeners(ctx context.Context) {
+	s.channelsOnce.Do(func() {
+		s.channelReg.StartAll(ctx)
+		go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+		if s.agentsLayout.BaseDir != "" {
+			upgrade.MarkChannelsTaken(s.agentsLayout.BaseDir)
+		}
+	})
+}
+
+// startIntakeWatchers starts what must run in one process only and so
+// moves with the intake baton: background-set replay and the workflow
+// watcher.
+func (s *Server) startIntakeWatchers(ctx context.Context) {
 	if s.bgSets != nil {
 		go replayBackgroundSets(ctx, s.bgSets)
 	}
@@ -4171,6 +4199,30 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// random and double-fire every cron; parking instead means intake moves
 	// exactly once, at the moment the old process exits.
 	batonCh := make(chan *upgrade.IntakeBaton, 1)
+	intakeHeld := make(chan struct{})
+	if upg.Enabled() && upg.IsChild() && s.agentsLayout.BaseDir != "" {
+		// Channels need not wait for the baton: the draining predecessor
+		// offers them as soon as it starts draining, so new messages reach
+		// this build at once instead of the one being replaced.
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-intakeHeld:
+					return
+				case <-t.C:
+				}
+				if upgrade.PredecessorReleasedChannels(s.agentsLayout.BaseDir) {
+					logger.Info().Msg("intake: previous process released its channels — starting them here")
+					s.startChannelListeners(ctx)
+					return
+				}
+			}
+		}()
+	}
 	go func() {
 		if upg.Enabled() && upg.IsChild() {
 			logger.Info().Msg("intake: waiting for the previous process to finish draining")
@@ -4183,6 +4235,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			return
 		}
 		batonCh <- baton
+		close(intakeHeld)
 		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
 		if s.resyncSessions != nil && upg.IsChild() {
 			// The predecessor is gone now; whatever turns it ran since our
@@ -4470,6 +4523,36 @@ func turnSessions(p *agentpool.Pool) []string {
 	return out
 }
 
+// channelsHandoverWait bounds how long a draining process waits for the
+// successor to take its channels, and channelsOverlap how long both listen
+// before this one stops. Vars for tests.
+var (
+	channelsHandoverWait = 2 * time.Minute
+	channelsOverlap      = 5 * time.Second
+)
+
+// handOverChannels stops this draining process's channel listeners once the
+// successor has started its own (upgrade.ChannelsTakenByOther). Until then
+// both listen; briefly sharing a socket loses nothing, a gap would. A
+// successor that never takes them — an older binary, after a rollback — gets
+// them the old way: this process keeps listening until it exits. Sending is
+// untouched either way, so a reply still being written goes out.
+func (s *Server) handOverChannels(logger *zerolog.Logger, dir string) {
+	deadline := time.Now().Add(channelsHandoverWait)
+	for !upgrade.ChannelsTakenByOther(dir) {
+		if time.Now().After(deadline) {
+			logger.Warn().Msg("upgrade: successor did not take the channels — keeping them until this process exits")
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	time.Sleep(channelsOverlap)
+	if s.channelReg != nil {
+		s.channelReg.StopAll()
+	}
+	logger.Info().Msg("upgrade: channels handed to the successor — this process takes no new messages")
+}
+
 // drainForUpgrade runs in the OLD process once a successor has taken over the
 // listener. It is the whole point of the feature: instead of killing agents
 // mid-turn, this process stops answering HTTP and then simply waits for its
@@ -4480,11 +4563,12 @@ func turnSessions(p *agentpool.Pool) []string {
 //  1. HTTP down first — the successor already holds the same socket, so every
 //     new request (including MCP calls from our own agents) is served there.
 //  2. Wait for the pool. Nothing is signalled; a ten-minute debug run keeps
-//     running and still posts its reply to Slack, because this process also
-//     keeps its channel listeners for the whole drain.
+//     running and still posts its reply to Slack. Its channel LISTENERS move
+//     to the successor right away (handOverChannels), so new messages are
+//     answered by the new build; sending stays here until the turn ends.
 //  3. Release the intake baton LAST. The successor is parked on it and starts
-//     its Slack listeners the moment it is free, so intake moves exactly once
-//     — never split across two binaries, never absent.
+//     cron, workflows and scheduled messages the moment it is free, so those
+//     move exactly once — never split across two binaries, never absent.
 func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, batonCh chan *upgrade.IntakeBaton) {
 	logger.Info().Msg("upgrade: successor is serving — draining this process (nothing is killed)")
 	// Stop watching the binary. The successor holds the socket and runs its
@@ -4539,6 +4623,12 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	// names who is blocking without ever saying why.
 	drainDir := s.agentsLayout.BaseDir
 	drainStarted := time.Now()
+	// Offer the channels to the successor before the first record goes
+	// out, so that record already carries the offer.
+	if drainDir != "" {
+		upgrade.ReleaseChannels()
+		go s.handOverChannels(logger, drainDir)
+	}
 	stopPublish := make(chan struct{})
 	go func() {
 		t := time.NewTicker(3 * time.Second)

@@ -36,6 +36,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/slackmd"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 const (
@@ -952,6 +953,12 @@ var socketStartTimeout = 60 * time.Second
 // Start begins listening for Slack events. Blocks until ctx is cancelled
 // or Stop/Reload is called.
 func (s *Channel) Start(ctx context.Context) error {
+	// A draining process gave its channels to the successor: an instance
+	// added or switched on here now would listen beside it.
+	if upgrade.ChannelsReleased() {
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("not started — channels handed to the new build")
+		return nil
+	}
 	s.runMu.Lock()
 	s.halted.Store(false)
 	s.runMu.Unlock()

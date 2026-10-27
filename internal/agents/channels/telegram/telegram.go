@@ -22,6 +22,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 // pendingApproval tracks an in-flight gate approval message for one session.
@@ -343,6 +344,12 @@ func senderFor(msg *tgbotapi.Message, wickUserID string) *store.Sender {
 
 // Start begins long polling. Blocks until ctx is cancelled or Stop is called.
 func (t *Channel) Start(ctx context.Context) error {
+	// A draining process gave its channels to the successor: polling here
+	// too would fight it for updates.
+	if upgrade.ChannelsReleased() {
+		log.Info().Str("channel", "telegram").Msg("not started — channels handed to the new build")
+		return nil
+	}
 	t.mu.Lock()
 	bot := t.bot
 	t.mu.Unlock()
