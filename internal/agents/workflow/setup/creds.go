@@ -44,8 +44,12 @@ func UserResolverAdapter(svc userLookup) connector.UserResolverFn {
 // the instance (tag) level by the palette; here we only assert the
 // account actually belongs to the resolved row (data integrity), not who
 // may use it.
-func ConnectorsCredsAdapter(svc *connectorsvc.Service) func(module, row, accountID string) (map[string]string, error) {
-	return func(module, row, accountID string) (map[string]string, error) {
+//
+// Encrypted values in the row's config are opened under ownerID (the
+// workflow owner), as Execute opens them under the caller: without this a
+// secret saved as a wick_enc_ token reached the connector still encrypted.
+func ConnectorsCredsAdapter(svc *connectorsvc.Service) func(module, row, accountID, ownerID string) (map[string]string, error) {
+	return func(module, row, accountID, ownerID string) (map[string]string, error) {
 		ctx := context.Background()
 		rows, err := svc.ListByKey(ctx, module)
 		if err != nil {
@@ -62,7 +66,10 @@ func ConnectorsCredsAdapter(svc *connectorsvc.Service) func(module, row, account
 				break
 			}
 		}
-		creds := svc.LoadConfigs(chosen)
+		creds, err := svc.DecryptConfigs(svc.LoadConfigs(chosen), ownerID)
+		if err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(accountID) != "" {
 			acc, err := svc.GetAccount(ctx, accountID)
 			if err != nil {

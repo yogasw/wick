@@ -9,6 +9,8 @@ import (
 
 	"github.com/yogasw/wick/internal/configs"
 	connectorsvc "github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/enc"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
@@ -32,7 +34,8 @@ func credsTestSvc(t *testing.T) (*connectorsvc.Service, string) {
 	svc := connectorsvc.NewServiceFromDB(db)
 	svc.SetConfigs(cfgs)
 	mod := pkgconnector.Module{
-		Meta: pkgconnector.Meta{Key: "stub", Name: "Stub"},
+		Meta:    pkgconnector.Meta{Key: "stub", Name: "Stub"},
+		Configs: []entity.Config{{Key: "api_token", Type: "text", IsSecret: true}},
 		Operations: []pkgconnector.Category{
 			pkgconnector.Cat("", "", pkgconnector.Operation{
 				Key: "echo", Name: "Echo",
@@ -60,7 +63,7 @@ func TestConnectorsCredsAdapter_AccountToken(t *testing.T) {
 	adapter := ConnectorsCredsAdapter(svc)
 
 	// No account → plain row creds (no user_token).
-	creds, err := adapter("stub", rowID, "")
+	creds, err := adapter("stub", rowID, "", "")
 	if err != nil {
 		t.Fatalf("adapter(no account): %v", err)
 	}
@@ -76,7 +79,7 @@ func TestConnectorsCredsAdapter_AccountToken(t *testing.T) {
 	if err != nil || len(accs) != 1 {
 		t.Fatalf("ListAccounts: %v (n=%d)", err, len(accs))
 	}
-	creds, err = adapter("stub", rowID, accs[0].ID)
+	creds, err = adapter("stub", rowID, accs[0].ID, "")
 	if err != nil {
 		t.Fatalf("adapter(with account): %v", err)
 	}
@@ -85,7 +88,43 @@ func TestConnectorsCredsAdapter_AccountToken(t *testing.T) {
 	}
 
 	// An account id that doesn't exist → error (integrity check).
-	if _, err := adapter("stub", rowID, "does-not-exist"); err == nil {
+	if _, err := adapter("stub", rowID, "does-not-exist", ""); err == nil {
 		t.Error("expected error for unknown account id")
+	}
+}
+
+// A secret saved as a wick_enc_ token reaches the connector as plaintext,
+// opened under the workflow owner's key, the same way a direct call opens
+// it under the caller's. A token the owner's key cannot open is an error,
+// not a ciphertext sent upstream as the credential.
+func TestConnectorsCredsAdapter_DecryptsUnderOwnerKey(t *testing.T) {
+	t.Setenv("WICK_ENC_DISABLE", "")
+	ctx := context.Background()
+	encSvc, err := enc.New("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("enc.New: %v", err)
+	}
+	svc, rowID := credsTestSvc(t)
+	svc.SetEnc(encSvc)
+
+	tok, err := encSvc.EncryptValue("plain-api-key", "u-owner")
+	if err != nil {
+		t.Fatalf("EncryptValue: %v", err)
+	}
+	if err := svc.Update(ctx, rowID, "Stub", map[string]string{"api_token": tok}, false); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	adapter := ConnectorsCredsAdapter(svc)
+
+	creds, err := adapter("stub", rowID, "", "u-owner")
+	if err != nil {
+		t.Fatalf("adapter(owner): %v", err)
+	}
+	if creds["api_token"] != "plain-api-key" {
+		t.Errorf("api_token = %q, want the decrypted value", creds["api_token"])
+	}
+
+	if _, err := adapter("stub", rowID, "", "u-other"); err == nil {
+		t.Error("expected an error when the owner's key cannot open the token")
 	}
 }

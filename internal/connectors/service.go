@@ -1763,6 +1763,38 @@ func (s *Service) RunHealthCheck(ctx context.Context, connectorID, callerUserID 
 // on that connector at all.
 var ErrNoHealthCheck = errors.New("connector does not implement HealthCheck")
 
+// DecryptConfigs resolves a stored config map to plaintext the way Execute
+// does before handing it to a connector: wick_cenc_ master tokens via the
+// system key, wick_enc_ tokens via userID's key. For callers that run an op
+// past Execute (workflow connector nodes). A token that does not decrypt is
+// an error naming the field, never passed on as if it were the credential.
+func (s *Service) DecryptConfigs(configs map[string]string, userID string) (map[string]string, error) {
+	out := make(map[string]string, len(configs))
+	for k, v := range configs {
+		out[k] = v
+	}
+	if s.enc == nil || s.enc.Disabled() {
+		return out, nil
+	}
+	for k, v := range out {
+		switch {
+		case enc.IsMasterToken(v):
+			plain, err := s.enc.DecryptMaster(v)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt config %q: %w", k, err)
+			}
+			out[k] = plain
+		case enc.IsToken(v):
+			plain, err := s.enc.DecryptValue(v, userID)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt config %q as user %q: %w", k, userID, err)
+			}
+			out[k] = plain
+		}
+	}
+	return out, nil
+}
+
 // decryptInstanceConfig resolves a session-workspace instance's config
 // map to plaintext: wick_cenc_ master tokens (the secret fields) via the
 // system master key, plus any wick_enc_ tokens via callerUserID's key

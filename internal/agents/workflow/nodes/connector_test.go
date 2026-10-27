@@ -112,7 +112,7 @@ func TestConnector_EmptyOwnerSkipsStamp(t *testing.T) {
 // (module defaults for unsaved fields).
 func TestConnector_VisibleWhenGuard(t *testing.T) {
 	creds := map[string]string{}
-	reg := connector.NewRegistry(func(module, row, accountID string) (map[string]string, error) {
+	reg := connector.NewRegistry(func(module, row, accountID, ownerID string) (map[string]string, error) {
 		return creds, nil
 	}, nil)
 	reg.Register(pkgconnector.Module{
