@@ -153,3 +153,35 @@ func TestOpRequestValidateMultipart(t *testing.T) {
 		t.Error("duplicate part name accepted")
 	}
 }
+
+func TestBuildMultipartSetsFileContentType(t *testing.T) {
+	root := withSandbox(t)
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	cases := map[string]string{
+		"photo.png": "image/png",
+		"doc.pdf":   "application/pdf",
+		"noext":     "image/png", // sniffed from the bytes
+	}
+	for name, want := range cases {
+		file := filepath.Join(root, name)
+		if err := os.WriteFile(file, png, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		body, ct, err := buildMultipart(&MultipartSpec{Files: map[string]string{"file": "{{.in.path}}"}}, nil, map[string]string{"path": file})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		req := httptest.NewRequest("POST", "/", body)
+		req.Header.Set("Content-Type", ct)
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		_, h, err := req.FormFile("file")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := h.Header.Get("Content-Type"); got != want {
+			t.Errorf("%s: Content-Type = %q, want %q", name, got, want)
+		}
+	}
+}

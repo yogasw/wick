@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
+	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,7 +62,7 @@ func buildMultipart(spec *MultipartSpec, cfg, in map[string]string) (*bytes.Buff
 		if err != nil {
 			return nil, "", fmt.Errorf("multipart file %s: %w", name, err)
 		}
-		part, err := w.CreateFormFile(name, base)
+		part, err := w.CreatePart(fileHeader(name, base, data))
 		if err != nil {
 			return nil, "", fmt.Errorf("multipart file %s: %w", name, err)
 		}
@@ -76,6 +79,27 @@ func buildMultipart(spec *MultipartSpec, cfg, in map[string]string) (*bytes.Buff
 		return nil, "", fmt.Errorf("multipart: %w", err)
 	}
 	return buf, w.FormDataContentType(), nil
+}
+
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
+// fileHeader is CreateFormFile's header with the real Content-Type of the
+// file instead of a blanket application/octet-stream: APIs that validate
+// the part's type (image/png, application/pdf…) reject the generic one.
+// The extension decides first, the content sniff covers files without one.
+func fileHeader(name, base string, data []byte) textproto.MIMEHeader {
+	ct := mime.TypeByExtension(filepath.Ext(base))
+	if ct == "" {
+		ct = http.DetectContentType(data)
+	}
+	if mt, _, err := mime.ParseMediaType(ct); err == nil && !strings.HasPrefix(mt, "text/") {
+		ct = mt
+	}
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`,
+		quoteEscaper.Replace(name), quoteEscaper.Replace(base)))
+	h.Set("Content-Type", ct)
+	return h
 }
 
 // readSandboxedFile reads one regular file that must sit inside
