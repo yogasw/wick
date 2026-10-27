@@ -162,14 +162,14 @@ An **idle** agent subprocess — alive, holding no turn, counting down its auto-
 
 That last point is the whole reason this used to be a timer. The drain counted `len(active)`, which is *subprocesses*, not turns, and a slot is only released when its process exits. The count stayed non-zero for minutes after everybody had stopped talking, so waiting on it meant waiting on the idle TTL — and the only escape was a deadline, which also cut off the live turns it was supposed to protect. Counting what is actually producing is what makes an unbounded wait terminate on its own.
 
-`WICK_DRAIN_TIMEOUT` is the **hard cap on the whole drain**, **10 minutes by default** (`0` = no cap). When it fires it interrupts whatever is still running; the default exists because of the intake case below. `WICK_DRAIN_AGENT_GRACE` is gone — a host that still sets it gets a warning in the log and nothing else.
+`WICK_DRAIN_TIMEOUT` is still read, now as an **optional hard cap on the whole drain**, and is **unset by default**. Set it only for an unattended deploy that must finish inside a known time, and accept that it interrupts whatever is still running when it fires. `WICK_DRAIN_AGENT_GRACE` is gone — a host that still sets it gets a warning in the log and nothing else.
 
 Two costs of letting work finish in the old process, both real:
 
 - The old process keeps the MCP credential it minted per spawn, and that credential is known only to the process that minted it. Its agents' own wick tool calls now land on the successor (same socket) and come back `401` — see Troubleshooting. Non-MCP tools are unaffected.
 - While the parent is alive the *next* reload is refused with `parent hasn't exited`. Two generations at a time, no more.
 
-One case where the wait genuinely may not converge: the draining process keeps the **intake baton** to the end, so inbound Slack events and cron ticks still land *here* and start new work, which restarts the settle window. On a busy host a real lull may never come, and meanwhile every message is handled by the OLD build — the fix just deployed is not live yet. The 10-minute `WICK_DRAIN_TIMEOUT` bounds that; a human can still force the swap sooner.
+One case where the wait genuinely may not converge: the draining process keeps the **intake baton** to the end, so inbound Slack events and cron ticks still land *here* and start new work, which restarts the settle window. On a busy host the handover waits for a real lull. That is the trade the rule asks for — nothing is killed — and the escape is a human forcing the swap, not a timer choosing for them.
 
 Every 15 seconds a drain logs what is still outstanding, by name, so a long wait is legible rather than a silent hang.
 

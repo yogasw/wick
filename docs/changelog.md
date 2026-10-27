@@ -10,9 +10,6 @@ All notable changes to Wick are documented here.
 -   **GitLab connector plugin** (`gitlab`, gitlab.com or self-managed): projects, repository, merge requests, pipelines and job logs, issues. A **Permission status** panel probes reads live and names the missing fine-grained permissions as GitLab's token form shows them; **↻ Recheck** and a **Test project** box. **Merge rules** like Bitbucket's, checked by `merge_merge_request`: one approval by default, `*helm*` denied, and a fixed **Else** row so no project merges unchecked. A **Test merge rules** panel judges a pasted MR without merging. See [GitLab](/connectors/gitlab).
 -   **`data-op-input`** for `html=` widgets: an op that runs while the operator types, debounced. The Bitbucket and GitLab approver search use it and lose their Search button.
 
-### Changed
--   **Drain cap on by default**: `WICK_DRAIN_TIMEOUT` now defaults to 10 minutes (`0` = no cap). A draining process keeps Slack and cron intake, so on a busy host it kept starting new work and never handed over, leaving the old build answering every message.
-
 ### Fixed
 -   Slack remote agents: a saved remote target that opens a thread itself (e.g. mentioning another agent served here) is no longer taken for the remote's reply and dropped before the agent's allowlist is checked.
 -   `html=` widgets: hidden inputs now follow each re-render, so the next click no longer posts stale state (an "Add rule" that showed two rows, an approver list missing the one just added).

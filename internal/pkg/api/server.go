@@ -4519,11 +4519,11 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	// waited for until it is done, however long that takes, and the moment
 	// the last of it settles this process exits.
 	//
-	// A deadline here does not stop work — it kills it, and the subsystems
-	// most likely to be mid-flight are exactly the ones that cannot be
-	// resumed. It still defaults to 10 minutes (WICK_DRAIN_TIMEOUT, "0" =
-	// none): this process keeps intake until it exits, so on a busy host new
-	// work keeps arriving here and the drain would never end on its own.
+	// No default deadline, because a deadline here does not stop work — it
+	// kills it, and the subsystems most likely to be mid-flight are exactly
+	// the ones that cannot be resumed. An operator who cannot wait forces the
+	// swap; WICK_DRAIN_TIMEOUT is an optional hard cap for an unattended
+	// deploy, and is unset by default.
 	if v := strings.TrimSpace(os.Getenv("WICK_DRAIN_AGENT_GRACE")); v != "" {
 		// Silently ignoring it would be worse than either behaviour: the
 		// operator set it to bound a handover and would never learn that the
