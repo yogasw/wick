@@ -13,31 +13,34 @@ import (
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
 
-// stubModule registers a single "whoami" op that surfaces the logged-in
-// user (if any) the same way an identity-gated connector op would via
-// login.GetUser(c.Context()).
-func stubIdentityRegistry() (*connector.Registry, *string) {
-	seen := new(string)
-	reg := connector.NewRegistry(nil, nil)
+// stubRegistry registers a "stub" module with one "whoami" op and records
+// every Call the node hands to the executor, plus the user on its ctx.
+func stubRegistry(result string, execErr error) (*connector.Registry, *[]connector.Call, *string) {
+	calls := &[]connector.Call{}
+	ctxUser := new(string)
+	reg := connector.NewRegistry(func(ctx context.Context, c connector.Call) (string, error) {
+		*calls = append(*calls, c)
+		if u := login.GetUser(ctx); u != nil {
+			*ctxUser = u.ID
+		}
+		return result, execErr
+	}, nil)
 	reg.Register(pkgconnector.Module{
 		Meta: pkgconnector.Meta{Key: "stub", Name: "Stub"},
 		Operations: []pkgconnector.Category{
-			pkgconnector.Cat("", "",
-				pkgconnector.Operation{
-					Key: "whoami",
-					Execute: func(c *pkgconnector.Ctx) (any, error) {
-						u := login.GetUser(c.Context())
-						if u == nil {
-							return nil, errors.New("not authenticated")
-						}
-						*seen = u.ID
-						return map[string]any{"id": u.ID}, nil
-					},
-				},
-			),
+			pkgconnector.Cat("", "", pkgconnector.Operation{Key: "whoami"}),
 		},
 	})
-	return reg, seen
+	return reg, calls, ctxUser
+}
+
+func ownerResolver(want string) connector.UserResolverFn {
+	return func(ctx context.Context, id string) (*entity.User, []string, error) {
+		if id != want {
+			return nil, nil, nil
+		}
+		return &entity.User{ID: id}, []string{"tag-a"}, nil
+	}
 }
 
 func connRC(createdBy string) *workflow.RunContext {
@@ -49,91 +52,64 @@ func connRC(createdBy string) *workflow.RunContext {
 }
 
 func whoamiNode() workflow.Node {
-	return workflow.Node{ID: "call", Type: workflow.NodeConnector, Module: "stub", Op: "whoami"}
+	return workflow.Node{ID: "call", Type: workflow.NodeConnector, Module: "stub", Op: "whoami", Row: "Instance B"}
 }
 
-// With a resolver wired, the connector node runs as the workflow owner —
-// the op sees login.GetUser instead of "not authenticated". This is the
-// headless-run identity fix.
-func TestConnector_StampsWorkflowOwner(t *testing.T) {
-	reg, seen := stubIdentityRegistry()
-	reg.SetUserResolver(func(ctx context.Context, id string) (*entity.User, []string, error) {
-		if id != "owner-7" {
-			return nil, nil, nil
-		}
-		return &entity.User{ID: "owner-7"}, []string{"tag-a"}, nil
-	})
+// The node hands the op, the named instance and the workflow owner to the
+// executor, with the owner on the ctx, and decodes the JSON it returns.
+func TestConnector_RunsAsOwnerOnNamedInstance(t *testing.T) {
+	reg, calls, ctxUser := stubRegistry(`{"id":"owner-7"}`, nil)
+	reg.SetUserResolver(ownerResolver("owner-7"))
 
-	exec := NewConnectorExecutor(reg)
-	out, err := exec.Execute(context.Background(), whoamiNode(), connRC("owner-7"))
+	out, err := NewConnectorExecutor(reg).Execute(context.Background(), whoamiNode(), connRC("owner-7"))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if *seen != "owner-7" {
-		t.Fatalf("op saw user %q, want owner-7", *seen)
+	if len(*calls) != 1 {
+		t.Fatalf("executor called %d times, want 1", len(*calls))
+	}
+	c := (*calls)[0]
+	if c.Module != "stub" || c.Op != "whoami" || c.Instance != "Instance B" {
+		t.Errorf("call = %s.%s on %q, want stub.whoami on Instance B", c.Module, c.Op, c.Instance)
+	}
+	if c.Owner == nil || c.Owner.ID != "owner-7" || len(c.OwnerTags) != 1 {
+		t.Errorf("owner = %+v tags %v, want owner-7 with its tags", c.Owner, c.OwnerTags)
+	}
+	if *ctxUser != "owner-7" {
+		t.Errorf("ctx user = %q, want owner-7", *ctxUser)
 	}
 	if got := out.Fields["id"]; got != "owner-7" {
-		t.Fatalf("result id = %v, want owner-7", got)
+		t.Errorf("result id = %v, want owner-7", got)
 	}
 }
 
-// No resolver wired (legacy) → no identity stamped → the op's own gate
-// rejects. Confirms we didn't paper over auth: the gate still fires.
-func TestConnector_NoResolverStaysUnauthenticated(t *testing.T) {
-	reg, _ := stubIdentityRegistry()
-	exec := NewConnectorExecutor(reg)
-	_, err := exec.Execute(context.Background(), whoamiNode(), connRC("owner-7"))
-	if err == nil {
-		t.Fatal("expected not-authenticated error, got nil")
+// No owner to run as — unresolvable, or none recorded — fails the node
+// before anything reaches the connector.
+func TestConnector_NoOwnerFailsBeforeExecute(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		createdBy string
+	}{{"unresolved", "someone-else"}, {"empty", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg, calls, _ := stubRegistry(`{}`, nil)
+			reg.SetUserResolver(ownerResolver("owner-7"))
+			_, err := NewConnectorExecutor(reg).Execute(context.Background(), whoamiNode(), connRC(tc.createdBy))
+			if err == nil || !strings.Contains(err.Error(), "no owner") {
+				t.Fatalf("want a no-owner error, got %v", err)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("executor must not be called, got %d calls", len(*calls))
+			}
+		})
 	}
 }
 
-// Empty CreatedBy (no owner recorded) must not blow up the resolver — it
-// just runs unauthenticated.
-func TestConnector_EmptyOwnerSkipsStamp(t *testing.T) {
-	reg, _ := stubIdentityRegistry()
-	called := false
-	reg.SetUserResolver(func(ctx context.Context, id string) (*entity.User, []string, error) {
-		called = true
-		return &entity.User{ID: id}, nil, nil
-	})
-	exec := NewConnectorExecutor(reg)
-	_, err := exec.Execute(context.Background(), whoamiNode(), connRC(""))
-	if err == nil {
-		t.Fatal("expected not-authenticated error with empty owner")
-	}
-	if called {
-		t.Fatal("resolver should not be called for empty CreatedBy")
-	}
-}
-
-// A workflow node calls op.Execute directly, so it repeats the
-// connectors.Service.Execute VisibleWhen guard against the row's creds
-// (module defaults for unsaved fields).
-func TestConnector_VisibleWhenGuard(t *testing.T) {
-	creds := map[string]string{}
-	reg := connector.NewRegistry(func(module, row, accountID, ownerID string) (map[string]string, error) {
-		return creds, nil
-	}, nil)
-	reg.Register(pkgconnector.Module{
-		Meta:    pkgconnector.Meta{Key: "stub", Name: "Stub"},
-		Configs: []entity.Config{{Key: "browser", Value: "chromium"}},
-		Operations: []pkgconnector.Category{pkgconnector.Cat("", "",
-			pkgconnector.Operation{
-				Key:         "pdf",
-				VisibleWhen: "browser:moli",
-				Execute:     func(c *pkgconnector.Ctx) (any, error) { return map[string]any{"ok": true}, nil },
-			},
-		)},
-	})
-	exec := NewConnectorExecutor(reg)
-	node := workflow.Node{ID: "call", Type: workflow.NodeConnector, Module: "stub", Op: "pdf"}
-
-	if _, err := exec.Execute(context.Background(), node, connRC("")); err == nil || !strings.Contains(err.Error(), "requires browser:moli") {
-		t.Fatalf("default chromium: want refusal, got %v", err)
-	}
-	creds["browser"] = "moli"
-	if _, err := exec.Execute(context.Background(), node, connRC("")); err != nil {
-		t.Fatalf("browser=moli: %v", err)
+// An executor error surfaces as the node's error, prefixed with the op.
+func TestConnector_ExecuteErrorFailsNode(t *testing.T) {
+	reg, _, _ := stubRegistry("", errors.New("the workflow owner cannot use stub instance"))
+	reg.SetUserResolver(ownerResolver("owner-7"))
+	_, err := NewConnectorExecutor(reg).Execute(context.Background(), whoamiNode(), connRC("owner-7"))
+	if err == nil || !strings.Contains(err.Error(), "stub.whoami: the workflow owner cannot use") {
+		t.Fatalf("want the executor error, got %v", err)
 	}
 }

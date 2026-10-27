@@ -127,7 +127,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	// Ordering of the wfconn / RegisterBuiltins calls below no longer
 	// matters; see internal/agents/workflow/setup/connectors.go.
 	wfsetup.RegisterLiveConnectors(stdioWfMgr.Connectors)
-	stdioWfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connSvc))
+	stdioWfMgr.Connectors.SetExecutor(wfsetup.ConnectorsExecutor(connSvc))
 	stdioWfMgr.Connectors.SetUserResolver(wfsetup.UserResolverAdapter(authSvc))
 	// Register Slack workflow descriptors into the integration registry
 	// so workflow_integration / workflow_channels can surface full

@@ -1532,9 +1532,9 @@ func NewServer() *Server {
 		wfMgr.Router.SetGlobalConcurrency(n)
 	}
 	// connectorsSvc is constructed further down (line ~517) — the
-	// creds adapter is wired after that block so RowCreds can resolve
+	// executor is wired after that block so connector nodes can resolve
 	// rows from the live connectors service. Search for
-	// "SetRowCreds" below.
+	// "SetExecutor" below.
 	if provs, perr := wfsetup.NewCLIProviders(); perr == nil {
 		for _, p := range provs {
 			wfMgr.WithProvider(p)
@@ -1985,9 +1985,9 @@ func NewServer() *Server {
 	// 	return systemprompt.ConnectorCatalog(ready)
 	// }
 
-	// Workflow connector executor needs row credentials resolved
-	// from the connectors service — wire after the service is built.
-	wfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connectorsSvc))
+	// Workflow connector nodes run through the connectors service —
+	// wire after the service is built.
+	wfMgr.Connectors.SetExecutor(wfsetup.ConnectorsExecutor(connectorsSvc))
 	// Run identity-gated connector ops as the workflow owner — headless
 	// runs have no cookie session to stamp login.GetUser. See connector
 	// node executor.

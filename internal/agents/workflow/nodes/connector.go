@@ -100,28 +100,35 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 		return workflow.NodeOutput{}, err
 	}
 
-	creds, cerr := e.Registry.RowCreds(n.Module, n.Row, n.Account, rc.Workflow.CreatedBy)
-	if cerr != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("resolve creds: %w", cerr)
+	// Workflows run headless — no cookie session names a caller — so the
+	// op runs as the workflow owner through the same connectors path a
+	// direct call takes: access, op state, decryption and masking are that
+	// path's, not re-done here.
+	u, tagIDs, uerr := e.Registry.ResolveUser(ctx, rc.Workflow.CreatedBy)
+	if uerr != nil {
+		return workflow.NodeOutput{}, fmt.Errorf("resolve workflow owner: %w", uerr)
 	}
-	// This path calls op.Execute directly, past connectors.Service.Execute,
-	// so it repeats that guard: an op whose VisibleWhen the row's config
-	// does not meet is refused here too.
-	if op.VisibleWhen != "" && !pkgconnector.OpVisible(*op, pkgconnector.EffectiveConfigValues(mod, creds)) {
-		return workflow.NodeOutput{}, fmt.Errorf("operation %q is not available on this instance (requires %s)", n.Op, op.VisibleWhen)
+	if u == nil {
+		return workflow.NodeOutput{}, fmt.Errorf("connector %s.%s: workflow has no owner to run as", n.Module, n.Op)
 	}
+	ctx = login.WithUser(ctx, u, tagIDs)
 
-	// Workflows run headless — no cookie-session middleware stamps the
-	// user. Connector ops that gate on login.GetUser (e.g. notifications'
-	// requireAdmin) would otherwise fail with "not authenticated". Run as
-	// the workflow owner: resolve CreatedBy → user and stamp the same
-	// context keys the HTTP Session middleware uses.
-	if u, tagIDs, uerr := e.Registry.ResolveUser(ctx, rc.Workflow.CreatedBy); uerr == nil && u != nil {
-		ctx = login.WithUser(ctx, u, tagIDs)
+	raw, execErr := e.Registry.Execute(ctx, connector.Call{
+		Module:    n.Module,
+		Op:        n.Op,
+		Instance:  n.Row,
+		AccountID: n.Account,
+		Owner:     u,
+		OwnerTags: tagIDs,
+		Input:     inputs,
+		RawInput:  argsMap,
+	})
+	var resp any
+	if raw != "" {
+		if jerr := json.Unmarshal([]byte(raw), &resp); jerr != nil {
+			resp = raw
+		}
 	}
-
-	cctx := pkgconnector.NewCtx(ctx, n.Row, creds, inputs, e.Registry.HTTPClient(), nil, nil)
-	resp, execErr := op.Execute(cctx)
 
 	e.Registry.WriteAudit(ctx, connector.RunRecord{
 		WorkflowID:  rc.Workflow.ID,
