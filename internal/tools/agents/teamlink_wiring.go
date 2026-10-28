@@ -1477,8 +1477,14 @@ func collectTurn(ctx context.Context, ch <-chan delegation.StreamEvent) string {
 // (any remote agent: A2A, Slack, plugin) the first error ends the turn,
 // since the remote runner sends nothing after it; a remote timeout does
 // so in any session. Any other error is returned with the text at Done.
+//
+// The text is the turn's answer: what was written after its last tool
+// call, like a provider's own final result. Narration between tool calls
+// ("querying…", "adjusting…") stays in the agent's own chat. A tool call
+// with no text after it (a closing todo update) keeps the text before it.
 func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remoteTurn bool) (string, string) {
 	var b strings.Builder
+	afterTool := false
 	failed := ""
 	for {
 		select {
@@ -1494,7 +1500,13 @@ func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remot
 					return b.String(), ev.Text
 				}
 				failed = ev.Text
+			case event.ToolUse:
+				afterTool = true
 			case event.TextDelta:
+				if afterTool && strings.TrimSpace(ev.Text) != "" {
+					b.Reset()
+					afterTool = false
+				}
 				b.WriteString(ev.Text)
 			case event.TextReplace:
 				b.Reset()
