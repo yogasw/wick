@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { composerHint, groupFormError, handlesLine, mergeTurn, overrideChoices, stacked, toggleMember } from "../teamGroups.js";
+import { composerHint, groupFormError, handlesLine, mergeTurn, overrideChoices, relayBody, relayTo, stacked, toggleMember } from "../teamGroups.js";
+import type { GroupTurn } from "../api/team.js";
 import type { GroupMember } from "../api/team.js";
 
 const m = (handle: string): GroupMember => ({ id: `a-${handle}`, handle, name: handle, avatar: { shape: "circle", color: "#0a0" }, is_captain: false, disabled: false, max_hops: 4 });
@@ -52,3 +53,31 @@ describe("backing link", () => {
     expect(backingLink({ speaker: null })).toBeNull();
   });
 });
+
+describe("hand-off turns", () => {
+  const members = [m("lead"), m("baker"), m("clerk")];
+  const said = (handle: string, text: string): GroupTurn => ({ ts: "", role: "assistant", text, speaker: { agent_id: `a-${handle}`, handle, via: "group" } });
+  const person = (text: string): GroupTurn => ({ ts: "", role: "user", text });
+
+  it("names the member a turn hands the thread to once that member answers", () => {
+    const turns = [person("any orders today?"), said("lead", "@baker check today's orders, links please"), said("baker", "Two orders.")];
+    expect(relayTo(turns, 1, members)).toBe("baker");
+  });
+
+  it("keeps a turn whole when nobody answered the mention before the next message", () => {
+    expect(relayTo([said("lead", "@baker check this"), person("never mind")], 0, members)).toBe("");
+    expect(relayTo([said("lead", "@baker check this")], 0, members)).toBe("");
+  });
+
+  it("keeps an answer that only mentions a member later, or names no member", () => {
+    const answer = [said("lead", "Here is what I found.\n@baker can you confirm?"), said("baker", "Confirmed.")];
+    expect(relayTo(answer, 0, members)).toBe("");
+    expect(relayTo([said("lead", "@stranger hi"), said("baker", "x")], 0, members)).toBe("");
+    expect(relayTo([said("baker", "@baker note to self"), said("baker", "x")], 0, members)).toBe("");
+  });
+
+  it("drops the leading mention from the hand-off line", () => {
+    expect(relayBody("@baker,  check today's\norders")).toBe("check today's orders");
+  });
+});
+
