@@ -34,6 +34,9 @@ export function activityLabel(substate?: string, toolName?: string): string {
   if (toolName) return toolActivityLabel(toolName);
   if (!substate || substate === "thinking" || substate === "idle") return THINKING_LABEL;
   if (substate === "spawning") return "spawning…";
+  // The turn ended but teammates it sent work to are still on it: the
+  // agent is still working on the answer (see threadTyping).
+  if (substate === "team_waiting") return "working…";
   // "running_tool" is the backend's generic lifecycle substate for "a tool
   // is executing" (agents/state.State.String()) — it's not a tool name.
   // It normally arrives together with a tool_use event that fills in
