@@ -43,6 +43,15 @@ describe("approvalView: Captain access change", () => {
     expect(approvalView("x", { approval_id: "ap-9", state: "approve_once", type: "access_change" }).outcome).toBe("applied");
     expect(approvalView("x", { approval_id: "ap-9", state: "block", type: "access_change" }).outcome).toBe("declined");
   });
+
+  it("reads a prompt change card as an access-style diff", () => {
+    const v = approvalView("An agent wants to change system_prompt_security", { approval_id: "pc-1", state: "pending", type: "prompt_change", target: "system_prompt_security", changes: "+new rule\n-old rule", reason: "tighten" });
+    expect(v.prompt).toBe(true);
+    expect(v.access?.target).toBe("system_prompt_security");
+    expect(v.access?.changes).toEqual(["+new rule", "-old rule"]);
+    expect(v.cmd).toBe("");
+    expect(approvalView("x", { approval_id: "pc-1", state: "approve_once", type: "prompt_change" }).outcome).toBe("applied");
+  });
   it("leaves gate cards alone", () => {
     expect(approvalView("Bash: ls", { approval_id: "a", state: "pending", tool: "Bash", cmd: "ls" }).access).toBeUndefined();
   });

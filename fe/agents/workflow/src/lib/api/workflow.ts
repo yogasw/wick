@@ -156,6 +156,9 @@ export type ConnectorDescriptor = {
   module: string;
   name: string;
   ops?: ConnectorOpDescriptor[];
+  // Instances the caller may pick for a node (ready + accessible), newest
+  // first. A node without row_id runs on the newest instance of the module.
+  instances?: { id: string; label: string }[];
 };
 
 export type CatalogResponse = {

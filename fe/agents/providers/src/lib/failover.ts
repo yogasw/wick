@@ -3,7 +3,7 @@ import type { FailoverTarget } from "./api.js";
 import type { ProviderHealthDTO } from "./types.js";
 
 /* Limits mirror internal/agents/provider/failover_config.go. */
-export const MAX_FAILOVER_TARGETS = 3;
+export const MAX_FAILOVER_TARGETS = 6;
 export const MIN_RECHECK_MINUTES = 1;
 export const MAX_RECHECK_MINUTES = 60;
 

@@ -18,11 +18,13 @@ export function rosterActivity(st: Pick<RosterStatus, "presence" | "attention" |
   if (st.attention) return "alert";
   switch (st.work) {
     case "thinking":
+    case "replying":
       return "thinking";
     case "tool":
     case "subagent":
       return "tool";
     case "waiting":
+    case "team":
       return "remote";
   }
   return "idle";

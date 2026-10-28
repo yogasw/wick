@@ -2,6 +2,7 @@ package view
 
 import (
 	"github.com/yogasw/wick/internal/entity"
+	"strconv"
 	"strings"
 )
 
@@ -14,16 +15,23 @@ type ResourceOwnerEdit struct {
 	Users   []UserOption
 }
 
-templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, allTags []*entity.Tag, owner ResourceOwnerEdit, user *entity.User) {
+templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, allTags []*entity.Tag, owner ResourceOwnerEdit, filter ResourceFilter, user *entity.User) {
 	@AdminLayout("Admin · "+title, strings.ToLower(title), user) {
 		{{ tagsJSON := tagsToJSON(allTags) }}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ title }</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Assign access tags to control which non-admin users can see each { strings.ToLower(title[:len(title)-1]) }.</p>
 			@AccessSearch(strings.ToLower(title))
+			if filter.Enabled {
+				@resourceFilterTabs(baseURL, filter)
+			}
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
-					No { strings.ToLower(title) } found.
+					if filter.Show == ShowDeleted {
+						No deleted { strings.ToLower(title) }.
+					} else {
+						No { strings.ToLower(title) } found.
+					}
 				</div>
 			} else {
 				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
@@ -38,7 +46,11 @@ templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, 
 						</thead>
 						<tbody>
 							for _, row := range rows {
-								@resourceAdminRow(row, baseURL, tagsJSON, owner)
+								if row.Deleted != nil {
+									@deletedProjectRow(row)
+								} else {
+									@resourceAdminRow(row, baseURL, tagsJSON, owner)
+								}
 							}
 						</tbody>
 					</table>
@@ -147,4 +159,66 @@ templ resourceOwnerPicker(row ResourceAdminRow, baseURL string, users []UserOpti
 			class="shrink-0 rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-2 py-1 text-xs text-green-700 dark:text-green-300 hover:border-green-500 transition-colors"
 		>Save</button>
 	</form>
+}
+
+// resourceFilterTabs is the Active / Deleted / All switch: plain links, so
+// the page stays server-rendered and the choice survives a reload.
+templ resourceFilterTabs(baseURL string, f ResourceFilter) {
+	<div class="mt-4 inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700" data-testid="resource-filter">
+		@resourceFilterTab(baseURL, ShowActive, "Active", f.Active, f.Show == ShowActive)
+		@resourceFilterTab(baseURL, ShowDeleted, "Deleted", f.Deleted, f.Show == ShowDeleted)
+		@resourceFilterTab(baseURL, ShowAll, "All", f.Active+f.Deleted, f.Show == ShowAll)
+	</div>
+}
+
+templ resourceFilterTab(baseURL, show, label string, n int, active bool) {
+	<a
+		href={ templ.SafeURL(baseURL + "?show=" + show) }
+		aria-current?={ active }
+		if active {
+			class="px-3 py-1.5 text-xs font-semibold bg-green-500 text-white-100"
+		} else {
+			class="px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+		}
+	>{ label } <span class="opacity-75">{ strconv.Itoa(n) }</span></a>
+}
+
+// deletedProjectRow is a project waiting in the trash. It does not link
+// anywhere and has no owner picker or tag controls: the project is not
+// live, so there is nothing to configure — only Restore, confirmed with a
+// plain dialog because bringing a project back destroys nothing.
+templ deletedProjectRow(row ResourceAdminRow) {
+	<tr
+		id={ "deleted-" + row.Deleted.Key }
+		data-search={ searchHaystack(row.Name, row.ID, row.Path, "deleted") }
+		data-search-id={ row.ID + " " + row.Path }
+		data-deleted="true"
+		class="border-b border-white-300 dark:border-navy-600 last:border-0 bg-white-200/60 dark:bg-navy-800/60"
+	>
+		<td class="px-4 py-3">
+			<div class="flex items-center gap-2">
+				<p class="font-medium text-black-800 dark:text-black-600 line-through decoration-black-600/50">{ row.Name }</p>
+				<span class="inline-flex items-center rounded-full border border-neg-400/40 bg-neg-400/10 px-2 py-0.5 text-[11px] font-semibold text-neg-400">Deleted</span>
+			</div>
+			<p class="font-mono text-[10px] text-black-700 dark:text-black-600">{ row.ID }</p>
+		</td>
+		<td class="px-4 py-3 align-top">
+			@resourceOwnerLabel(row)
+		</td>
+		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
+			<p>Deleted by { row.Deleted.By }</p>
+			<p class="text-black-700 dark:text-black-600">{ row.Deleted.At.Local().Format("2006-01-02 15:04") } · { strconv.Itoa(row.Deleted.Chats) } chats</p>
+			<p class="mt-0.5 font-medium text-neg-400">{ daysLeftLabel(row.Deleted.DaysLeft) }</p>
+		</td>
+		<td class="px-4 py-3 align-top">
+			<form
+				action={ templ.SafeURL("/admin/projects-trash/" + row.Deleted.Key + "/restore") }
+				method="POST"
+				data-confirm={ "Restore " + row.Name + "? Its chats, tickets and files go back where they were. Schedules it had stay cancelled." }
+				onsubmit="return confirm(this.dataset.confirm)"
+			>
+				<button type="submit" class="rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-300 hover:border-green-500 transition-colors">Restore</button>
+			</form>
+		</td>
+	</tr>
 }

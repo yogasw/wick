@@ -46,10 +46,11 @@ const builtinRoot = "builtin"
 // signal pruning uses to tell a file wick wrote from one a user took over.
 const builtinWarningMarker = "MANAGED BY WICK"
 
-// builtinWarningHeader is prepended to each extracted SKILL.md. It sits ABOVE
-// the frontmatter as an HTML comment: markdown renderers hide it, and the
-// frontmatter parser is unaffected because it only reads the block after the
-// first `---`.
+// builtinWarningHeader is added to each extracted SKILL.md as an HTML comment
+// (markdown renderers hide it), placed right BELOW the frontmatter by
+// withWarningHeader. It must not sit above it: the provider CLIs only read
+// frontmatter that opens the file, and with the comment first they listed
+// every shipped skill with the comment as its description.
 const builtinWarningHeader = "<!-- " + builtinWarningMarker + " — DO NOT EDIT.\n" +
 	"This file ships inside the wick binary and is rewritten from scratch every\n" +
 	"time wick starts or skills are synced. Any change made here is lost.\n" +
@@ -244,7 +245,7 @@ func syncBuiltinTo(dir string) (Result, error) {
 			return nil
 		}
 		if filepath.Base(rel) == "SKILL.md" {
-			data = append([]byte(builtinWarningHeader), data...)
+			data = withWarningHeader(data)
 		}
 		live[filepath.ToSlash(rel)] = true
 
@@ -282,6 +283,20 @@ func syncBuiltinTo(dir string) (Result, error) {
 	}
 	res.SkillsCopied = len(skills)
 	return res, nil
+}
+
+// withWarningHeader returns a SKILL.md body with builtinWarningHeader inserted
+// right after its frontmatter, so the file still opens with `---`. A body with
+// no frontmatter gets the header on top.
+func withWarningHeader(data []byte) []byte {
+	s := string(data)
+	if strings.HasPrefix(s, "---\n") {
+		if end := strings.Index(s[4:], "\n---\n"); end >= 0 {
+			cut := 4 + end + len("\n---\n")
+			return []byte(s[:cut] + builtinWarningHeader + s[cut:])
+		}
+	}
+	return append([]byte(builtinWarningHeader), data...)
 }
 
 // fileHasContent reports whether the file at p already holds exactly want,

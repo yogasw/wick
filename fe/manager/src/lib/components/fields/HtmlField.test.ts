@@ -222,3 +222,96 @@ test("only the SELECTED radio in a group is sent", async () => {
     expect(call?.[3]).toMatchObject({ mode: "hard" });
   });
 });
+
+// findEl waits until the widget has rendered the element (waitFor only
+// retries on a throw, so a bare querySelector null would pass at once).
+async function findEl<T extends Element>(sel: string): Promise<T> {
+  return waitFor(() => {
+    const el = document.querySelector<T>(sel);
+    if (!el) throw new Error("not rendered yet: " + sel);
+    return el;
+  });
+}
+
+test("a hidden input follows the new markup after an action", async () => {
+  // The add op answers with the posted count + 1. If the morph kept the old
+  // live value of the hidden input, the second click would post 2 again.
+  const markup = (n: number) => `<input type="hidden" name="row_count" value="${n}"/><button data-op="add">Add ${n}</button>`;
+  const spy = vi.spyOn(api, "runConnectorTest").mockImplementation((_k, _id, operation, input) => {
+    const n = operation === "add" ? Number((input as Record<string, string>).row_count) + 1 : 2;
+    return Promise.resolve({ error: "", response: { html: markup(n) } } as never);
+  });
+  render(HtmlField, {
+    props: { connectorKey: "k", connectorId: "id1", op: "render", value: "", onChange: vi.fn() },
+  });
+  await fireEvent.click(await screen.findByText("Add 2"));
+  await fireEvent.click(await screen.findByText("Add 3"));
+  await screen.findByText("Add 4");
+  const adds = spy.mock.calls.filter((c) => c[2] === "add").map((c) => (c[3] as Record<string, string>).row_count);
+  expect(adds).toEqual(["2", "3"]);
+});
+
+test("a typed visible input keeps the operator's text across a render", async () => {
+  mockRun([
+    { html: `<input name="q" value=""/><button data-op="go">Go</button>` },
+    { html: `<input name="q" value=""/><p>done</p><button data-op="go">Go</button>` },
+  ]);
+  render(HtmlField, {
+    props: { connectorKey: "k", connectorId: "id1", op: "render", value: "", onChange: vi.fn() },
+  });
+  const q = await findEl<HTMLInputElement>('[name="q"]');
+  await fireEvent.input(q, { target: { value: "half typed" } });
+  await fireEvent.click(screen.getByText("Go"));
+  await screen.findByText("done");
+  expect((document.querySelector('[name="q"]') as HTMLInputElement).value).toBe("half typed");
+});
+
+test("data-op-input runs its op once, debounced, with the typed value", async () => {
+  const spy = mockByOp({
+    render: { html: `<input name="q_0" data-op-input="search" data-arg="0" value=""/>` },
+    search: { html: `<input name="q_0" data-op-input="search" data-arg="0" value=""/><p>3 matches</p>` },
+  });
+  render(HtmlField, {
+    props: { connectorKey: "k", connectorId: "id1", op: "render", value: "", onChange: vi.fn() },
+  });
+  const q = await findEl<HTMLInputElement>('[name="q_0"]');
+  await fireEvent.input(q, { target: { value: "t" } });
+  await fireEvent.input(q, { target: { value: "ta" } });
+  await fireEvent.input(q, { target: { value: "tau" } });
+  await screen.findByText("3 matches", {}, { timeout: 2000 });
+  const searches = spy.mock.calls.filter((c) => c[2] === "search");
+  expect(searches).toHaveLength(1);
+  expect(searches[0][3]).toMatchObject({ browser: "0", q_0: "tau" });
+  expect((document.querySelector('[name="q_0"]') as HTMLInputElement).value).toBe("tau");
+});
+
+test("markup that changes on every render is fetched once, not in a loop", async () => {
+  let n = 0;
+  const spy = vi.spyOn(api, "runConnectorTest").mockImplementation(() => {
+    n++;
+    return Promise.resolve({ error: "", response: { html: `<p>checked #${n}</p>` } } as never);
+  });
+  render(HtmlField, {
+    props: { connectorKey: "k", connectorId: "id1", op: "status", value: "", onChange: vi.fn() },
+  });
+  await screen.findByText(/checked #/);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
+});
+
+test("a widget inside a closed group renders only when the group opens", async () => {
+  const spy = mockByOp({ status: { html: `<p>probed</p>` } });
+  const details = document.createElement("details");
+  document.body.appendChild(details);
+  render(HtmlField, {
+    target: details,
+    props: { connectorKey: "k", connectorId: "id1", op: "status", value: "", onChange: vi.fn() },
+  });
+  await new Promise((r) => setTimeout(r, 100));
+  expect(spy).not.toHaveBeenCalled();
+  details.open = true;
+  details.dispatchEvent(new Event("toggle"));
+  await screen.findByText("probed");
+  expect(spy).toHaveBeenCalledTimes(1);
+  details.remove();
+});

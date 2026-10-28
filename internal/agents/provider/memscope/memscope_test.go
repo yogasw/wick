@@ -183,3 +183,16 @@ func TestEnsureSliceAt_IdempotentWrite(t *testing.T) {
 		t.Fatal("a changed limit did not rewrite the unit")
 	}
 }
+
+// The runtime override carries the unit's memory keys, never throttling:
+// a stale runtime MemoryHigh outranks the unit file.
+func TestRuntimeMemoryArgs(t *testing.T) {
+	got := strings.Join(RuntimeMemoryArgs(SliceLimits{AggregateMB: 6071, CPUQuotaPct: 140}), " ")
+	want := "--user set-property --runtime " + SliceName + " MemoryHigh=infinity MemorySwapMax=0 MemoryMax=6071M"
+	if got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if got := RuntimeMemoryArgs(SliceLimits{}); got[len(got)-1] != "MemoryMax=infinity" {
+		t.Fatalf("no aggregate must lift the ceiling, got %v", got)
+	}
+}

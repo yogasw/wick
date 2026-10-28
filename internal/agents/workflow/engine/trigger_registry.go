@@ -102,7 +102,7 @@ func DefaultTriggerDescriptors() []TriggerDescriptor {
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"schedule": map[string]any{"type": "string", "description": "5- or 6-field cron expression."},
+					"schedule": map[string]any{"type": "string", "description": "5-field (min hour dom mon dow) or 6-field (sec min hour dom mon dow) cron expression; \"*/30 * * * * *\" = every 30 seconds."},
 					"timezone": map[string]any{"type": "string", "description": "IANA timezone, default UTC."},
 				},
 				"required": []string{"schedule"},

@@ -136,6 +136,29 @@ folder). It stops only on timeout, cancel, or `fail_rules`.
 **Rule for `extract` in continue mode: extract ONLY what marks new data** — a build number, an id, a branch. Never
 durations, `now`, `updated_at`, counters that tick: they change every run and would notify every run.
 
+### wake_on — wait for an event instead of polling
+
+`"wake_on":"<plugin key>:<topic>"` subscribes the watch to events a plugin publishes (a webhook it received). The
+moment a matching event arrives the watch runs, with the **event JSON as the first step's input** — so the first step
+may be a `check` on it. A trailing `*` matches a prefix (`gitlab_webhook:team/*`).
+
+- no `every`/`cron` → **events only**: no tick at all, nothing runs while it waits; `timeout` still applies (default
+  24h, `off` = wait forever) and ends it with ONE timeout notice.
+- with `every`/`cron` → it keeps polling as usual and events add runs in between.
+- an event that does not pass the check is a `pending` run (in the history, `event` names the topic); the watch keeps
+  waiting. Queued events live in memory: a wick restart drops the ones not yet run.
+
+Wait for a GitLab merge request to merge (needs the `gitlab_webhook` tool and the project's webhook pointing at it):
+
+```json
+{"action":"create","type":"watch","wake_on":"gitlab_webhook:group/repo","timeout":"72h",
+ "message":"MR !12 merged — tell the thread the fix is live",
+ "steps":[{"name":"merged?","kind":"check","rules":[
+   {"path":"kind","op":"equals","value":"merge_request"},
+   {"path":"mr_iid","op":"equals","value":12},
+   {"path":"action","op":"equals","value":"merge"}]}]}
+```
+
 ## Ready to copy
 
 Get `tool_id` and the op's params from `wick_get` first; never guess them.

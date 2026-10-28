@@ -78,6 +78,12 @@ type Config struct {
 
 	PolicyManager string `wick:"html=policy_manager;group=Policy|Everything this connector refuses to do: the fallback that applies everywhere, per-repo overrides that win over it, and a simulator to check a rule before trusting it.|collapsed;desc=The only place policy is edited. Nothing outside this panel changes it."`
 
+	// Words a commit must never carry (client names, internal repos, people,
+	// real chat ids): checked against the message and every line the commit
+	// adds. Git hooks are off for the commit op, so this is the guard there.
+	DenyPatterns     string `wick:"textarea;group=Sensitive Data|A commit is refused when its message or a line it adds matches one of these patterns. One regex per line, case-insensitive, and lines starting with # are notes.|collapsed;desc=Patterns a commit must never contain."`
+	DenyPatternsFile string `wick:"group=Sensitive Data;desc=Absolute path of a file with more patterns in the same format, read on every commit, so one list kept outside any repo serves every connector."`
+
 	RawEnabled bool   `wick:"bool;group=Raw Operation||collapsed;desc=Enable the raw operation, which runs an arbitrary git subcommand. Off by default."`
 	RawRules   string `wick:"kvlist=subcommand|mode;group=Raw Operation;desc=Per-subcommand rules for raw. mode is allow or deny. A subcommand that is not listed is denied."`
 
@@ -678,9 +684,9 @@ func doCommit(c *connector.Ctx) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return dryRun(c, "commit", repo, Request{Branch: branch, Message: msg}, args)
+		return dryRun(c, "commit", repo, Request{Branch: branch, Message: msg, Added: stagedAdditions(c, repo, c.InputBool("all"))}, args)
 	}
-	return execute(c, "commit", repo, Request{Branch: branch, Message: msg}, build, false)
+	return execute(c, "commit", repo, Request{Branch: branch, Message: msg, Added: stagedAdditions(c, repo, c.InputBool("all"))}, build, false)
 }
 
 func doStash(c *connector.Ctx) (any, error) {

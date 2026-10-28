@@ -36,6 +36,9 @@ export type SystemEventRenderer = {
   tone?: SystemEventTone;
   /** What the chip says. Defaults to the turn's own text. */
   parts?: (turn: SystemEventTurn, ctx: SystemEventCtx) => SystemEventPart[];
+  /** Kept in history (the server reads it back) but not drawn: something
+      else in the thread already shows it. */
+  hidden?: boolean;
 };
 
 const renderers = new Map<string, SystemEventRenderer>();
@@ -53,6 +56,11 @@ export function getSystemEvent(kind: string | undefined): SystemEventRenderer {
     card — input_request / approval_request — or a legacy notice). */
 export function isSystemEventKind(kind: string | undefined): boolean {
   return !!kind && renderers.has(kind);
+}
+
+/** isHiddenSystemEvent reports whether kind is stored but never drawn. */
+export function isHiddenSystemEvent(kind: string | undefined): boolean {
+  return !!kind && renderers.get(kind)?.hidden === true;
 }
 
 /** systemEventParts resolves what a chip says for turn. */
@@ -73,11 +81,23 @@ registerSystemEvent("group_member_removed", { icon: "ban" });
 // A ticket room's first line: nobody joined, so no user-plus.
 registerSystemEvent("ticket_room_opened", { icon: "info" });
 registerSystemEvent("ticket_status", { icon: "info" });
-registerSystemEvent("scheduled_fired", { icon: "clock" });
+// The schedule's own message card above it already says it ran.
+registerSystemEvent("scheduled_fired", { icon: "clock", hidden: true });
 // The old name of scheduled_fired, still in stored history.
-registerSystemEvent("routine_fired", { icon: "clock" });
+registerSystemEvent("routine_fired", { icon: "clock", hidden: true });
 registerSystemEvent("connection_changed", { icon: "plug" });
 registerSystemEvent("a2a_context", { icon: "link" });
+// A Slack reply listen mode / auto-reply is holding, then where it went.
+// One row per hold (folded on hold_id); the server writes the text.
+registerSystemEvent("listen_held", {
+  icon: "clock",
+  parts: (turn) => {
+    const e = turn.extras ?? {};
+    const mark = e.mode === "auto_reply" ? "⚡" : "👂";
+    const state = e.state === "held" ? "⏳ " : e.state === "sent" ? "✓ " : "";
+    return [`${mark} ${state}${turn.text}`];
+  },
+});
 registerSystemEvent("mention_handoff", {
   icon: "arrow",
   // Who handed what to whom and how it ended. The target is a handle so the
@@ -97,6 +117,7 @@ const FOLD_KEY: Record<string, string> = {
   input_request: "ask_id",
   approval_request: "approval_id",
   remote_queue: "queue_id",
+  listen_held: "hold_id",
 };
 
 /** foldSystemEvents folds the system turns that share a fold key into one

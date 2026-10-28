@@ -44,6 +44,10 @@ export type ApprovalView = {
   /** An access change a Captain proposed (agents.set_access): no command,
       a target agent and the diff lines; Accept / Decline only. */
   access?: { target: string; changes: string[]; reason: string };
+  /** The change is to an operator prompt (wickmanager prompt_set /
+      prompt_rollback): access.target is the prompt key, the diff its
+      +/- lines. */
+  prompt?: boolean;
 };
 
 const OUTCOME: Record<string, string> = {
@@ -66,7 +70,8 @@ export function approvalView(text: string, extras: Record<string, string> | unde
     const m = /^([^:]+):\s*(.*)$/s.exec(text);
     if (m) { tool = m[1]; cmd = m[2]; }
   }
-  const access = x.type === "access_change";
+  const prompt = x.type === "prompt_change";
+  const access = x.type === "access_change" || prompt;
   return {
     id: x.approval_id ?? "",
     pending,
@@ -78,5 +83,6 @@ export function approvalView(text: string, extras: Record<string, string> | unde
     ...(access
       ? { access: { target: x.target ?? "", changes: (x.changes ?? "").split("\n").filter(Boolean), reason: x.reason ?? "" } }
       : {}),
+    ...(prompt ? { prompt: true } : {}),
   };
 }

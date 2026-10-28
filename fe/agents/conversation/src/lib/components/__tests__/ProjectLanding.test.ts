@@ -80,17 +80,30 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(container.querySelector(`a[href='/tools/agents/projects/proj-42']`)).not.toBeNull();
   });
 
-  test("the menu's last item opens the shared delete dialog", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ id: "proj-42", name: "Acme API", chats: 3, protected: false }), { status: 200 })),
-    );
+  test("the menu offers no project delete, that lives in project settings", async () => {
     render(ProjectLanding, { props: baseProps });
     await openProjectMenu();
-    await fireEvent.click(screen.getByTestId("project-menu-delete"));
-    expect(await screen.findByText("Delete project Acme API?")).toBeDefined();
-    expect(screen.getByLabelText("Project name")).toBeDefined();
-    vi.unstubAllGlobals();
+    expect(screen.queryByTestId("project-menu-delete")).toBeNull();
+    expect(screen.queryByText("Delete project…")).toBeNull();
+  });
+
+  test("Project settings are hidden from someone who does not own the project", async () => {
+    const { container } = render(ProjectLanding, {
+      props: { ...baseProps, project: { ...baseProps.project, can_manage: false } },
+    });
+    await openProjectMenu();
+    expect(screen.queryByTestId("project-menu-settings")).toBeNull();
+    expect(container.querySelector(`a[href='/tools/agents/projects/proj-42']`)).toBeNull();
+    // The member keeps the rest of the menu.
+    expect(screen.getByTestId("project-menu-pin")).toBeDefined();
+  });
+
+  test("Project settings are offered to the owner", async () => {
+    render(ProjectLanding, {
+      props: { ...baseProps, project: { ...baseProps.project, can_manage: true } },
+    });
+    await openProjectMenu();
+    expect(screen.getByTestId("project-menu-settings")).toBeDefined();
   });
 
   test("renders a session list item for each session", () => {

@@ -223,7 +223,11 @@ func validateCreatePullRequest(c *connector.Ctx) (requestParams, map[string]any,
 		},
 		"close_source_branch": c.InputBool("close_source_branch"),
 	}
-	reviewers, err := parseReviewers(c.Input("reviewers"))
+	raw := c.Input("reviewers")
+	if !c.InputBool("skip_default_reviewers") {
+		raw += "," + c.Cfg("default_reviewers")
+	}
+	reviewers, err := parseReviewers(raw)
 	if err != nil {
 		return requestParams{}, nil, err
 	}

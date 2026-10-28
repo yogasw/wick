@@ -267,6 +267,35 @@ func TestCollectTurnErrRemoteError(t *testing.T) {
 	}
 }
 
+// A failover took the turn: the teammate's reply is the next provider's
+// answer, without the failed provider's limit line.
+func TestCollectTurnErrDropsFailedOverText(t *testing.T) {
+	ch := make(chan delegation.StreamEvent, 4)
+	ch <- delegation.StreamEvent{Type: event.TextDelta, Text: "You've hit your weekly limit · resets Oct 24"}
+	ch <- delegation.StreamEvent{Type: event.Warning, Text: "Provider failed over", FailedOver: true}
+	ch <- delegation.StreamEvent{Type: event.TextDelta, Text: "reading the repo now"}
+	ch <- delegation.StreamEvent{Type: event.Done}
+	if text, failed := collectTurnErr(context.Background(), ch, false); text != "reading the repo now" || failed != "" {
+		t.Fatalf("= %q, %q", text, failed)
+	}
+}
+
+// The SSE bridge carries the failover mark to the collectors.
+func TestDelegationStreamCarriesFailedOver(t *testing.T) {
+	b := NewBroadcaster()
+	ch, unsub := NewDelegationStream(b).SubscribeSession("S1")
+	defer unsub()
+	b.Publish("S1", "claude", event.AgentEvent{Type: event.Warning, ErrorMsg: "failed over", FailedOver: true})
+	select {
+	case ev := <-ch:
+		if ev.Type != event.Warning || !ev.FailedOver {
+			t.Fatalf("ev = %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no event")
+	}
+}
+
 // remoteTurnEnd: a remote's failed, rejected, canceled or auth_required
 // task ends the team task in that state with the remote's message; a
 // question stays input_required; a stale state never speaks for this

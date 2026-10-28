@@ -57,12 +57,22 @@ decision when no admin has touched the scope; *declaration* is the
 | `rest.write` | `Rest` with POST/PUT/PATCH/DELETE | **OFF** | destructive | `rest` |
 | `db.read` | `Query` (`POST /api/query`, `write=false`) | **OFF** | – | `db` |
 | `db.write` | `Query` with `write=true` | **OFF** | destructive | `db` |
+| `events.publish` | `Invoke` method `events.publish` (`POST /api/invoke`): wakes the watches whose `wake_on` matches `<plugin key>:<topic>`; plugin-level, no acting user | allow | – | – |
 | `datadir` | none — declarative: keeps a persistent data folder | allow | – | – |
 | `net.listen` | none — declarative: opens a local port | allow | – | – |
 
 `Invoke` (`POST /api/invoke`) calls a method by name and uses **that
 method's** scope; there is no separate "invoke" scope. `ListMethods` lists
 every RPC with its scope.
+
+`events.publish` is an `Invoke` method, not an RPC: args
+`{"topic": "<topic>", "payload": <any JSON>}`, answer `{"topic", "woken"}`.
+wick prefixes the topic with the calling plugin's key, so a plugin can only
+wake the schedule watches subscribed to its own events (`wake_on`
+`"<plugin key>:<topic>"`). Those watches run at once, as their owners, with
+the payload as their first step's input. The call is plugin-level: it needs
+no acting user or `wick_pat`, which is what lets a webhook receiver end a
+watch without holding anybody's credentials.
 
 Notes that matter in practice:
 

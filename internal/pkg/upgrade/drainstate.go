@@ -41,6 +41,10 @@ type DrainState struct {
 	// this is the list a reader can rely on without parsing it. Absent on a
 	// record written by an older binary.
 	Sessions []string `json:"sessions,omitempty"`
+	// ChannelsReleased: this process offers its channel intake to the
+	// successor (see channels_handover.go). Absent on an older binary's
+	// record, which keeps its channels until it exits.
+	ChannelsReleased bool `json:"channels_released,omitempty"`
 	// UpdatedAt lets a reader ignore a record left behind by a process that
 	// died without cleaning up.
 	UpdatedAt time.Time `json:"updated_at"`
@@ -59,7 +63,7 @@ func PublishDrainStateAt(dir string, pid int, since time.Time, outstanding []str
 	if dir == "" {
 		return
 	}
-	b, err := json.Marshal(DrainState{PID: pid, Since: since, Outstanding: outstanding, Sessions: sessions, UpdatedAt: at})
+	b, err := json.Marshal(DrainState{PID: pid, Since: since, Outstanding: outstanding, Sessions: sessions, ChannelsReleased: channelsReleased.Load(), UpdatedAt: at})
 	if err != nil {
 		return
 	}

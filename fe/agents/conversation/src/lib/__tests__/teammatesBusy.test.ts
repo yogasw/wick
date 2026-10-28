@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { workingTeammates, waitingHeaderLabel, waitingTrayLine, stopDialog, teammatesHiddenNote } from "../teammatesBusy.js";
+import { workingTeammates, waitingHeaderLabel, waitingTrayLine, stopDialog, teammatesHiddenNote, threadTyping } from "../teammatesBusy.js";
+import { activityLabel } from "../activityLabel.js";
 import type { TeamTaskItem } from "../types/agents.js";
 
 const task = (to: string, state: string): TeamTaskItem => ({ task_id: to + state, to_handle: to, state } as unknown as TeamTaskItem);
@@ -28,5 +29,20 @@ describe("teammatesBusy", () => {
   test("hidden note names the channel", () => {
     expect(teammatesHiddenNote("Sent to Slack")).toBe("teammates hidden in Slack");
     expect(teammatesHiddenNote("Sent to Telegram")).toBe("teammates hidden in Telegram");
+  });
+});
+
+describe("threadTyping", () => {
+  test("the agent's own turn wins", () => {
+    const t = { active: true, toolName: "Bash" };
+    expect(threadTyping(t, 2)).toBe(t);
+  });
+  test("no turn and nobody working: idle", () => {
+    expect(threadTyping({ active: false }, 0)).toEqual({ active: false });
+  });
+  test("no turn but teammates working: still working", () => {
+    const t = threadTyping({ active: false }, 1);
+    expect(t.active).toBe(true);
+    expect(activityLabel(t.substate, t.toolName)).toBe("working…");
   });
 });

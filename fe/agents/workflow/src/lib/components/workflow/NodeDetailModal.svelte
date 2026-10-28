@@ -63,6 +63,26 @@
   const currentConnectorOp = $derived.by(() => {
     return currentConnectorOps.find((o) => o.id === node?.op);
   });
+  // Instance picker for connector nodes. A saved row_id the caller cannot
+  // see stays listed (marked) so opening the node never drops it silently.
+  const connectorInstanceOptions = $derived.by(() => {
+    if (!node || node.type !== "connector" || !node.module) return [];
+    const insts = $catalog?.connectors?.find((c) => c.module === node.module)?.instances ?? [];
+    const opts = [
+      { label: "Newest instance (default)", value: "" },
+      ...insts.map((i) => ({ label: i.label || i.id, value: i.id })),
+    ];
+    const saved = node.row_id ?? "";
+    if (saved && !insts.some((i) => i.id === saved || i.label.toLowerCase() === saved.toLowerCase())) {
+      opts.push({ label: `${saved} (not available to you)`, value: saved });
+    }
+    return opts;
+  });
+  const connectorInstanceValue = $derived.by(() => {
+    const saved = node?.row_id ?? "";
+    const insts = $catalog?.connectors?.find((c) => c.module === node?.module)?.instances ?? [];
+    return insts.find((i) => i.label.toLowerCase() === saved.toLowerCase())?.id ?? saved;
+  });
 
   const node = $derived.by<Node | null>(() => {
     const id = $detailNodeID;
@@ -1554,6 +1574,16 @@
                       </div>
                     {/if}
                   {/if}
+                {/if}
+                {#if node.module}
+                  <Field
+                    kind="select"
+                    label="Instance"
+                    value={connectorInstanceValue}
+                    onChange={(v) => patch("row_id", v)}
+                    options={connectorInstanceOptions}
+                    helper="Which connector instance this node runs on. It runs as the workflow owner, who must have access to the instance."
+                  />
                 {/if}
                 {#if currentConnectorOp?.args_schema && currentConnectorOp.args_schema.length > 0}
                   <div class="rounded border border-white-400 dark:border-navy-600 p-2">

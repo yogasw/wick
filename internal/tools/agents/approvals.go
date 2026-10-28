@@ -212,6 +212,10 @@ func sessionApprovalDecision(c *tool.Ctx) {
 	if resolveAccessApproval(c, sessionID, approvalID, decision) {
 		return
 	}
+	// So is an operator prompt change filed over MCP.
+	if resolvePromptApproval(c, sessionID, approvalID, decision) {
+		return
+	}
 	if notReadyApprovals(c) {
 		return
 	}

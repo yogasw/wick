@@ -70,7 +70,7 @@ func parseMergeRules(raw string) ([]mergeRule, error) {
 }
 
 // matchMergeRule picks the rule for workspace/repo. The rule with the fewest
-// wildcards wins, so "integration-helm" beats "*"; on a tie the earlier row wins.
+// wildcards wins, so "infra-helm" beats "*"; on a tie the earlier row wins.
 func matchMergeRule(rules []mergeRule, workspace, repo string) (mergeRule, bool) {
 	full := workspace + "/" + repo
 	best, found := mergeRule{}, false

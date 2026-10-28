@@ -481,9 +481,18 @@ func buildMemoryReport() memoryReport {
 			if o, ok := owners[r.PID]; ok {
 				row.SessionID, row.AgentName = o.session, o.agent
 			}
-			// Only rows this wick cannot place: reading another process's
-			// cmdline/environ is not free, and a pool row already knows.
-			if !row.FromWick {
+			// A row this wick cannot place is read from its token; a pool
+			// row knows its session and is only described (title, Team
+			// agent), falling back to the token when the pool lost track.
+			switch {
+			case !row.FromWick:
+				if ws, ok := detectWickSession(r.PID); ok {
+					row.WickSession = &ws
+				}
+			case row.SessionID != "":
+				ws := describeWickSession(row.SessionID)
+				row.WickSession = &ws
+			default:
 				if ws, ok := detectWickSession(r.PID); ok {
 					row.WickSession = &ws
 				}
@@ -587,13 +596,21 @@ func applySuggestedMemoryHandler(c *tool.Ctx) {
 	}
 
 	ctx := c.Context()
-	writes := map[string]int{
+	// Ordered: the save validates agents_total + min_free against RAM using
+	// the value already stored for the other one, so whichever of the two
+	// shrinks goes first and every intermediate pair still fits.
+	budget := []string{"agents_total_memory_mb", "min_free_memory_mb"}
+	if d.AgentsTotalMB > memGuardInt("agents_total_memory_mb") {
+		budget[0], budget[1] = budget[1], budget[0]
+	}
+	values := map[string]int{
 		"agent_memory_max_mb":    d.AgentMaxMB,
 		"agents_total_memory_mb": d.AgentsTotalMB,
 		"tool_memory_max_mb":     d.ToolMaxMB,
 		"min_free_memory_mb":     d.MinFreeMB,
 	}
-	for key, val := range writes {
+	for _, key := range append(budget, "agent_memory_max_mb", "tool_memory_max_mb") {
+		val := values[key]
 		if err := globalConfigs.SetOwned(ctx, "agents", key, strconv.Itoa(val)); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

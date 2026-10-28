@@ -37,7 +37,9 @@
     <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
       <path d="M6 1 10.5 2.8v3c0 2.4-1.8 4.3-4.5 5.2C3.3 10.1 1.5 8.2 1.5 5.8v-3z"></path>
     </svg>
-    {#if v.access}
+    {#if v.access && v.prompt}
+      <span data-testid="approval-prompt-title">{v.agent ? `@${v.agent}` : "An agent"} wants to change the operator prompt {v.access.target}</span>
+    {:else if v.access}
       <span data-testid="approval-access-title">{v.agent ? `@${v.agent}` : "The Captain"} wants to change access of @{v.access.target}</span>
     {:else}
       <span>{v.agent ? `@${v.agent} wants to run` : "Approval needed"}{v.tool ? ` · ${v.tool}` : ""}</span>

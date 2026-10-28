@@ -14,7 +14,10 @@ type GeneralConfig struct {
 	IdleTimeoutSec   int    `wick:"number;group=Concurrency & Lifecycle;desc=Seconds of inactivity before subprocess is killed. Default: 120."`
 	KillAfterIdleSec int    `wick:"number;group=Concurrency & Lifecycle;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PreemptIdle      bool   `wick:"bool;group=Concurrency & Lifecycle;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
-	AutoRescan       bool   `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
+	// StopAfterMachineTurn: a turn no person asked for (schedule, workflow,
+	// watch, sub-agent, CLI) stops its process as soon as it ends.
+	StopAfterMachineTurn bool `wick:"bool;key=stop_after_machine_turn;group=Concurrency & Lifecycle;desc=Stop an agent's process as soon as a turn no person asked for ends (a schedule, a workflow, a watch, a sub-agent, the CLI), instead of letting it idle until the idle timeout while it holds a slot and memory. A turn a person sends from the web, Slack or Telegram idles as usual. A teammate's task follows that agent's own 'Stop after answering a teammate' setting. The session resumes where it left off on its next message."`
+	AutoRescan           bool `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
 	// A2ARemoteAllowedHosts limits which hosts an A2A remote agent may be
 	// connected to (package a2aremote). Empty = any public host.
 	A2ARemoteAllowedHosts string `wick:"textarea;key=a2a_remote_allowed_hosts;group=A2A Remote Agents|Agents of other systems that people add to their Team over A2A.;desc=Hosts an A2A remote agent may be connected to, separated by commas or new lines, *.example.com matches every subdomain. Empty = any public host, while loopback, link-local and cloud metadata addresses are always refused. A host listed here is allowed even when it resolves to one of those, for an agent running beside wick."`
@@ -86,8 +89,12 @@ type GeneralConfig struct {
 	ResourceSampleIntervalSec   int    `wick:"number;group=Usage History;desc=Seconds between samples. Shorter shows brief spikes (a browser opening) but stores more points, 15 is a good balance. Default: 15."`
 	ResourceRetentionMinutes    int    `wick:"number;group=Usage History;desc=How long to keep samples, in minutes. Anything older is discarded automatically. 360 = 6 hours (default), 1440 = one day. Lowering this frees memory immediately."`
 	ResourceHistoryMaxPoints    int    `wick:"number;group=Usage History;desc=Hard ceiling on stored samples, whatever the retention window says. Protects against a very short interval filling memory. Default: 4096."`
-	SystemPrompt                string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
-	SystemPromptTeam            string `wick:"textarea;desc=Team agents system prompt — replaces system_prompt for Team agent sessions, leave empty for none"`
+	AdminContact                string `wick:"text;desc=Who agents tell people to ask when an access, connector or project is missing, e.g. a name and where to reach them. Fills the built-in rule. Empty = the wick admin."`
+	PathGuard                   string `wick:"dropdown=block|off;desc=Path guard for claude agents. block (default) = a tool call (file tools or Bash) that reaches into another agent's project folder or another session's folder is refused, in every permission mode, by a hook the agent cannot edit. off = no guard."`
+	PathGuardAllow              string `wick:"textarea;desc=Exceptions to the path guard, one per line: a path every agent may reach, or a project id, a space and a path only that project's agents may reach. A path may hold * per segment (e.g. projects/*/files/knowledge). Lines starting with # are comments."`
+	SystemPromptSecurity        string `wick:"textarea;desc=Security rules every agent spawn carries right after wick's own rules — project sessions, Team agents and sub-agents alike. Admins edit it here. An agent can only propose a change over MCP, which waits for an admin to accept it on the approval card. Every change is kept in the prompt history. Empty = none."`
+	SystemPrompt                string `wick:"textarea;desc=Base operator prompt for every session — project sessions and Team agents alike. Company-specific rules only: wick's general behaviour is built in, security rules go in system_prompt_security."`
+	SystemPromptTeam            string `wick:"textarea;desc=Addition for Team agents only, placed right after system_prompt. Empty = nothing added."`
 	TeamBatchResults            bool   `wick:"bool;desc=Team fan-in: the replies of the teammates an agent asked in one turn reach it together in ONE message instead of one wake per reply. Off = every reply is delivered on its own (the behaviour before batches). Default on."`
 	TeamBatchSoftTimeoutMinutes int    `wick:"number;desc=Optional soft timeout of a Team batch, in minutes: after it, the replies that arrived are delivered while the others keep working (nothing is canceled, later replies come as an update). 0 = none (default): a batch waits as long as its teammates work, with a safety net for a teammate with no progress for 30 minutes."`
 	WorkflowGuardMode           string `wick:"dropdown=off|warn|block;group=Workflow|Workflow guard policy, parallelism, and run-event export.;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
@@ -183,6 +190,9 @@ func DefaultGeneralConfig() GeneralConfig {
 		// doesn't pin a provider the operator never chose.
 		AutoRescan:  true,
 		PreemptIdle: true,
+		// Ships ON: machine turns (a schedule every 5 minutes, workflow
+		// runs) idling 2 minutes each filled the pool on a 2-core host.
+		StopAfterMachineTurn: true,
 		// Ships ON: off, a person joining someone else's running session has
 		// their turn served with that owner's connectors — on an admin's
 		// session that is privilege escalation. A single-user session never
@@ -196,6 +206,7 @@ func DefaultGeneralConfig() GeneralConfig {
 		// turn on installs that have no use for one. The dashboard shows the
 		// full sender either way.
 		SenderVisibility:         "name",
+		PathGuard:                "block",
 		SystemPrompt:             systemprompt.DefaultSystemPrompt(),
 		WorkflowGuardMode:        "off",
 		WorkflowRunKeepMax:       50,

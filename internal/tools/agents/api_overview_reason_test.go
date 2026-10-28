@@ -34,3 +34,22 @@ func TestQueueReason(t *testing.T) {
 		t.Fatalf("free slots = %+v", r)
 	}
 }
+
+// A hold with no near_hang behind it (an outside load) shows the guard's
+// current reason; one a near_hang explains keeps that event's detail.
+func TestWithHoldReason(t *testing.T) {
+	r := withHoldReason(&OverviewQueueReasonDTO{Kind: "guard_hold"}, "memory pressure full avg10 25%")
+	if r.Detail != "memory pressure full avg10 25%" {
+		t.Fatalf("detail = %q", r.Detail)
+	}
+	r = withHoldReason(&OverviewQueueReasonDTO{Kind: "guard_hold", Detail: "host near a hang"}, "other")
+	if r.Detail != "host near a hang" {
+		t.Fatalf("detail overwritten: %q", r.Detail)
+	}
+	if r := withHoldReason(&OverviewQueueReasonDTO{Kind: "waiting"}, "x"); r.Detail != "" {
+		t.Fatalf("waiting got a guard reason: %q", r.Detail)
+	}
+	if withHoldReason(nil, "x") != nil {
+		t.Fatal("nil reason grew a value")
+	}
+}

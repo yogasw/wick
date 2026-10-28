@@ -181,14 +181,14 @@ describe("edits", () => {
 describe("folderView", () => {
   const f = { id: "f1", name: "Client" };
   test("thinking beats waiting; summary names who", () => {
-    const m = [agent("paragon", TODAY), agent("kpj", TODAY_LATER), agent("cosmix", OLD)];
-    const v = folderView(f, m, statuses({ paragon: { work: "thinking" }, kpj: { work: "tool" }, cosmix: { work: "team" } }), NOW);
+    const m = [agent("papa", TODAY), agent("kilo", TODAY_LATER), agent("cosmix", OLD)];
+    const v = folderView(f, m, statuses({ papa: { work: "thinking" }, kilo: { work: "tool" }, cosmix: { work: "team" } }), NOW);
     expect(v.busy).toBe("thinking");
-    expect(v.busyAgents.map((a) => a.id)).toEqual(["kpj", "paragon"]);
-    expect(v.summary).toBe("Kpj, Paragon thinking…");
+    expect(v.busyAgents.map((a) => a.id)).toEqual(["kilo", "papa"]);
+    expect(v.summary).toBe("Kilo, Papa thinking…");
   });
   test("only waiting on teammates is waiting", () => {
-    const v = folderView(f, [agent("cosmix", OLD), agent("olx", TODAY)], statuses({ cosmix: { work: "team" } }), NOW);
+    const v = folderView(f, [agent("cosmix", OLD), agent("oscar", TODAY)], statuses({ cosmix: { work: "team" } }), NOW);
     expect(v.busy).toBe("waiting");
     expect(v.summary).toBe("Cosmix waiting…");
   });

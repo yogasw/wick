@@ -182,6 +182,7 @@ type Config struct {
 |-----------|-----------------|
 | `data-op="__select" data-arg="<value>"` | Store `<value>` as this field's value (reserved — no op call). |
 | `data-op="<opKey>" data-arg="<value>"` | Run connector op `<opKey>` (with `<value>` passed as its argument) via `/test`, then **re-fetch** the HTML so state updates. |
+| `data-op-input="<opKey>" data-arg="<value>"` on an `<input>` | Run `<opKey>` **while the operator types**, debounced 400 ms — a search box with no Search button. The field is never disabled and keeps its text and caret; an answer that lands after newer typing is dropped. |
 
 ```go
 // Example browser_status op output — the connector owns all layout + logic:
@@ -190,6 +191,10 @@ type Config struct {
 ```
 
 So a Download button installs then refreshes; a row click selects. No SSE — long actions are covered by the re-fetch (poll the status op yourself inside a loop if you want live progress). The markup is admin-only server content rendered in the admin Settings page, so it is `{@html}`-rendered directly; keep it to connector-authored markup, never user input.
+
+**Re-renders keep typing, not stale state** — a response is patched into the live markup rather than replacing it. A visible field the operator changed keeps its text; a field still showing what it was rendered with, and every `type="hidden"` input, take the new value. So state the connector carries in hidden inputs (a row count, an id list) is always what the last render sent.
+
+**When it renders** — on mount and when the field's own value changes; never because the markup changed (an op whose HTML holds a timestamp does not re-fetch itself). A widget inside a collapsed config group (`group=Title|Desc|collapsed`) renders only when the group is opened, and again on each re-open, so live probes run only for panels somebody looks at.
 
 **Named inputs** — any element with a `name` inside the widget's markup is collected as `input.<name>` when an op runs, so a connector can render its own form (e.g. a textarea, a checkbox-based policy editor) and read what the user entered. Collection follows plain HTML form semantics: text/textarea/select send `.value`; a checkbox or radio sends its `value` attribute (default `"on"`) **only when checked** — unchecked contributes nothing, so a boolean setting must be read as "key present", not "value truthy".
 

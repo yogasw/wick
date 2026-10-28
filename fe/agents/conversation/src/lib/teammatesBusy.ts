@@ -1,4 +1,4 @@
-import type { TeamTaskItem } from "./types/agents.js";
+import type { TeamTaskItem, TypingState } from "./types/agents.js";
 import { taskStatus } from "./delegations.js";
 
 /* "Waiting on teammates": the teammates this chat sent work to that are
@@ -10,6 +10,15 @@ export function workingTeammates(tasks: TeamTaskItem[]): string[] {
     if (taskStatus(t) === "working" && t.to_handle && !out.includes(t.to_handle)) out.push(t.to_handle);
   }
   return out;
+}
+
+/** The thread's working bubble: the agent's own typing while its turn
+    runs, else a plain working state while teammates it sent work to are
+    still on it — its process may have stopped between turns, but the
+    answer is still on its way, so the thread must not read as finished. */
+export function threadTyping(typing: TypingState, teammatesWorking: number): TypingState {
+  if (typing.active || teammatesWorking <= 0) return typing;
+  return { active: true, substate: "team_waiting" };
 }
 
 const teammates = (n: number) => `${n} ${n === 1 ? "teammate" : "teammates"}`;

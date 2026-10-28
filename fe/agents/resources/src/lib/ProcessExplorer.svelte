@@ -5,6 +5,7 @@
   import { fetchProcessesE, killProcessE } from "$lib/api.js";
   import CommandLine from "$lib/CommandLine.svelte";
   import RowMenu from "$lib/RowMenu.svelte";
+  import PropsDialog from "$lib/PropsDialog.svelte";
   import { humanBytes, humanBps, humanPct, cpuShare, humanCores } from "$lib/format.js";
   import type { ProcessListResponse } from "$lib/types.js";
 
@@ -23,6 +24,8 @@
   let loading = $state(false);
   let error = $state("");
   let expanded = $state<Set<string>>(new Set());
+  // The pid whose Properties dialog is open, or 0.
+  let propsPid = $state(0);
 
   async function load(): Promise<void> {
     loading = true;
@@ -371,6 +374,7 @@
                   label={g.name}
                   count={g.count}
                   protectedReason={gLocked}
+                  onProps={g.count === 1 && g.members[0] ? () => (propsPid = g.members[0].pid) : undefined}
                   onKill={() => void kill(g.count > 1 ? { name: g.name } : { pid: g.members[0]?.pid })}
                 />
               </td>
@@ -438,6 +442,7 @@
                       cmd={m.cmdline ?? ""}
                       label="{m.name} (pid {m.pid})"
                       protectedReason={mLocked}
+                      onProps={() => (propsPid = m.pid)}
                       onKill={() => void kill({ pid: m.pid })}
                     />
                   </td>
@@ -485,3 +490,7 @@
     <p class="px-5 py-6 text-center text-xs text-black-700 dark:text-black-600">Loading…</p>
   {/if}
 </div>
+
+{#if propsPid}
+  <PropsDialog {base} pid={propsPid} onClose={() => (propsPid = 0)} />
+{/if}

@@ -44,7 +44,34 @@ func ParseMentions(text string, roster []string) []Mention {
 		if body == "" || !known[handle] {
 			continue
 		}
+		if citesSource(body, handle) {
+			// "@vera found 12 errors [from:@vera]" reports what that
+			// teammate answered; it is not a new task for it.
+			continue
+		}
 		out = append(out, Mention{Handle: handle, Body: body})
 	}
 	return out
+}
+
+// citesSource reports whether body carries a source tag naming handle:
+// "[from:@handle]" or one listing several handles, "[from:@a,@handle]".
+func citesSource(body, handle string) bool {
+	for rest := body; ; {
+		i := strings.Index(rest, "[from:")
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len("[from:"):]
+		end := strings.IndexByte(rest, ']')
+		if end < 0 {
+			return false
+		}
+		for _, h := range strings.Split(rest[:end], ",") {
+			if strings.TrimPrefix(strings.TrimSpace(h), "@") == handle {
+				return true
+			}
+		}
+		rest = rest[end+1:]
+	}
 }

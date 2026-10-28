@@ -66,7 +66,13 @@ func repoRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot locate test file")
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	// The walk below does not follow a symlinked root: from a checkout
+	// reached through a symlink it would scan nothing and pass vacuously.
+	root, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	return root
 }
 
 // TestEverySpawnSiteScrubsOrIsAllowed walks the repository and fails on any

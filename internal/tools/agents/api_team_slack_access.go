@@ -185,6 +185,7 @@ type AgentSlackSettings struct {
 	OwnerID     string            `json:"owner_slack_id,omitempty"`
 	OwnerName   string            `json:"owner_slack_name,omitempty"`
 	OwnerHandle string            `json:"owner_slack_handle,omitempty"`
+	Listen      *agentListenInfo  `json:"listen,omitempty"`
 }
 
 func agentSlackSettingsOf(p entity.AgentPersona) (AgentSlackSettings, bool) {
@@ -214,6 +215,7 @@ func agentSlackSettingsOf(p entity.AgentPersona) (AgentSlackSettings, bool) {
 		OwnerID:     m[agentSlackKeyOwnerSlackID],
 		OwnerName:   m[agentSlackKeyOwnerSlackName],
 		OwnerHandle: m[agentSlackKeyOwnerSlackHandle],
+		Listen:      agentListenInfoOf(p),
 	}, true
 }
 

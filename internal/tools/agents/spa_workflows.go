@@ -949,6 +949,11 @@ func spaExecNode(c *tool.Ctx) {
 		// Soft-fail — operator may be iterating before any save lands.
 		w = wf.Workflow{ID: id}
 	}
+	// A step runs as the workflow owner, like a real run; a workflow not
+	// saved yet has none, so the person clicking stands in.
+	if w.CreatedBy == "" {
+		w.CreatedBy = actorID(c)
+	}
 	envVals, _ := globalWorkflowMgr.Service.LoadEnvValues(id)
 	// Decrypt secrets into envVals — all keys accessible via {{.Env.X}}.
 	// Secrets map kept for output masking.

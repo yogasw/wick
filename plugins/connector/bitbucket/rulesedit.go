@@ -213,8 +213,8 @@ func rulesEditorSearch(c *connector.Ctx) (any, error) {
 	q := strings.TrimSpace(c.Input("q_" + strconv.Itoa(i)))
 	st := editorState{Search: i, Query: q}
 	if q == "" {
-		st.Notice = "Type part of a name first."
-		return map[string]any{"html": renderRulesEditor(rows, st)}, nil
+		// Cleared while typing: just drop the results, no nagging.
+		return map[string]any{"html": renderRulesEditor(rows, editorState{Search: -1})}, nil
 	}
 	users, source, err := searchUsers(c, q)
 	switch {
@@ -518,7 +518,8 @@ func renderRulesEditor(rows []editorRow, st editorState) string {
 		if st.Search == i {
 			q = st.Query
 		}
-		fmt.Fprintf(&b, `<div class="%[1]s-search"><input class="%[1]s-in" name="q_%[2]s" value="%[3]s" placeholder="Search Bitbucket user by name, e.g. taufik"/><button type="button" class="%[1]s-btn2" data-op="rules_editor_search" data-arg="%[2]s">Search</button></div>`, p, k, esc(q))
+		// No Search button: data-op-input runs the search as the operator types (debounced by the widget).
+		fmt.Fprintf(&b, `<div class="%[1]s-search"><input class="%[1]s-in" name="q_%[2]s" value="%[3]s" autocomplete="off" data-op-input="rules_editor_search" data-arg="%[2]s" placeholder="Search Bitbucket user by name (results appear as you type)"/></div>`, p, k, esc(q))
 		if st.Search == i && len(st.Results) > 0 {
 			fmt.Fprintf(&b, `<div class="%s-res">`, p)
 			for _, u := range st.Results {

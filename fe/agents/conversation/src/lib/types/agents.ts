@@ -640,6 +640,9 @@ export type ProjectOption = {
   /** Returned only because it was asked for by id (`include`) and the
       caller cannot open it: shown to name a saved choice, never offered. */
   no_access?: boolean;
+  /** The caller owns it (or it is ownerless and they are an admin), so
+      Project settings — and the delete inside — are theirs to open. */
+  can_manage?: boolean;
 };
 
 /** One column on a project's board. Statuses are per project: a team names

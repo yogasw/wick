@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/sve
 import FailoverCard from "../FailoverCard.svelte";
 import * as api from "$lib/api.js";
 import type { FailoverConfig, FailoverResponse } from "$lib/api.js";
+import { MAX_FAILOVER_TARGETS } from "$lib/failover.js";
 
 vi.mock("$lib/api.js");
 vi.mock("@wick-fe/common-stores", () => ({
@@ -55,7 +56,7 @@ describe("FailoverCard", () => {
     expect(screen.queryByTestId("failover-crosstype-0")).toBeNull();
   });
 
-  it("adds up to three targets, removes and reorders", async () => {
+  it("adds up to MAX_FAILOVER_TARGETS targets, removes and reorders", async () => {
     vi.mocked(api.apiGetFailover).mockResolvedValue(
       resp({ chain: [{ instance: "claude/sibling" }, { instance: "codex/waba" }] }),
     );
@@ -68,13 +69,21 @@ describe("FailoverCard", () => {
     expect((screen.getByTestId("failover-up-0") as HTMLButtonElement).disabled).toBe(true);
 
     const add = screen.getByTestId("failover-add") as HTMLButtonElement;
-    await fireEvent.click(add);
-    expect(screen.getAllByTestId("failover-target")).toHaveLength(3);
+    expect(MAX_FAILOVER_TARGETS).toBe(6);
+    for (let i = 2; i < MAX_FAILOVER_TARGETS; i++) {
+      expect(add.disabled).toBe(false);
+      await fireEvent.click(add);
+    }
+    expect(screen.getAllByTestId("failover-target")).toHaveLength(MAX_FAILOVER_TARGETS);
     expect(add.disabled).toBe(true);
+    await fireEvent.click(add);
+    expect(screen.getAllByTestId("failover-target")).toHaveLength(MAX_FAILOVER_TARGETS);
     // An empty row cannot be saved.
     expect((screen.getByTestId("failover-save") as HTMLButtonElement).disabled).toBe(true);
 
-    await fireEvent.click(screen.getByTestId("failover-remove-2"));
+    for (let i = MAX_FAILOVER_TARGETS - 1; i >= 2; i--) {
+      await fireEvent.click(screen.getByTestId(`failover-remove-${i}`));
+    }
     await fireEvent.click(screen.getByTestId("failover-remove-0"));
     expect(targets()).toEqual(["codex/waba"]);
     expect(add.disabled).toBe(false);

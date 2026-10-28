@@ -64,7 +64,7 @@
   import { setTeamTasksCtx } from "../teamTasksContext.js";
   import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
-  import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
+  import { workingTeammates, waitingTrayLine, stopDialog, threadTyping } from "../teammatesBusy.js";
   import TeamQueueStrip from "./TeamQueueStrip.svelte";
   import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, summarizeTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
@@ -118,6 +118,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import { cancelRemoteQueued, getSessionOptions, listAgentRoster, recheckRemote, runApi, type SessionOptions } from "../api/team.js";
   import SessionFieldChips from "./SessionFieldChips.svelte";
+  import ListenModeButton from "./ListenModeButton.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
   import { readRosterCache, teamAgentsByHandle as teamAgentsOf } from "../rosterCache.js";
@@ -2423,6 +2424,18 @@
     agentLifecycle.state === "queued" ||
       liveProcesses.some((p) => p.session_id === sessionId && p.lifecycle === "queued"),
   );
+  /* Where a queued turn stands, for the composer's spinner: its place in
+     the queue and how full the pool is. */
+  const composerQueueLabel = $derived.by(() => {
+    const w = waitState;
+    if (!composerQueued || !w) return "";
+    const parts: string[] = [];
+    if (w.queue_pos > 0) parts.push(w.queue_len > 0 ? `#${w.queue_pos} of ${w.queue_len}` : `#${w.queue_pos}`);
+    if (w.global_max > 0) parts.push(`${w.global_used}/${w.global_max} running`);
+    else if (w.provider && w.max > 0) parts.push(`${w.used}/${w.max} running`);
+    if (w.hold) parts.push("host busy");
+    return parts.join(" · ");
+  });
   const composerRunning = $derived(
     !composerQueued &&
       (typing.active || live !== null || agentLifecycle.state === "working" || agentLifecycle.state === "spawning"),
@@ -3198,6 +3211,13 @@
   {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
 {/snippet}
 
+<!-- The Slack reply-mode button (hidden for any session that is no Slack
+     channel thread), then the session's locked fields. -->
+{#snippet composerToolbarExtra()}
+  <ListenModeButton {base} {sessionId} />
+  {#if sessionFields && sessionFields.fields.length > 0}{@render lockedSessionFields()}{/if}
+{/snippet}
+
 {#snippet sessionPanel()}
   <SessionPanel
     info={notesInfo}
@@ -3253,6 +3273,8 @@
       teammatesBusy={busyTeammateCount}
       {activeView}
       {ticketJump}
+      {base}
+      {sessionId}
       onKill={handleKill}
       onDelete={handleDelete}
       onTabChange={handleTabChange}
@@ -3286,7 +3308,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} waitNote={detached ? null : turnWait} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : threadTyping(typing, busyTeammateCount)} {progressLabel} waitNote={detached ? null : turnWait} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
           {#if loadingNewer}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -3477,8 +3499,9 @@
             caption={agentMode?.agent?.caption}
             running={composerRunning}
             queued={composerQueued}
+            queueLabel={composerQueueLabel}
             onStop={handleStopFromComposer}
-            toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
+            toolbarExtra={composerToolbarExtra}
           />
           </div>
         </div>

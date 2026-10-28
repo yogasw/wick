@@ -77,6 +77,9 @@
     /** The agent is waiting for a pool slot: the action button reads
         "Cancel" and drops the queued spawn instead. */
     queued?: boolean;
+    /** While queued: where it stands ("#2 · 19/20 running"), shown beside
+        a spinner before Cancel so a wait reads as a wait, not a hang. */
+    queueLabel?: string;
     /** Stop the running turn / cancel the queued spawn. Omit → no button. */
     onStop?: () => void;
     /** Extra controls drawn in the toolbar after the bell and project chip,
@@ -120,6 +123,7 @@
     commands = [],
     running = false,
     queued = false,
+    queueLabel = "",
     onStop,
     toolbarExtra,
   }: Props = $props();
@@ -1735,6 +1739,19 @@
         >
           {@render provIcon(providerChip.value, "h-5 w-5")}
         </button>
+      {/if}
+      {#if queued}
+        <span
+          class="inline-flex items-center gap-1.5 h-8 shrink-0 rounded-lg border border-white-300 dark:border-navy-600 px-2.5 text-xs text-black-800 dark:text-black-600"
+          title="Waiting for a free agent slot"
+          data-testid="composer-queued"
+        >
+          <svg viewBox="0 0 24 24" class="stop-ring h-3.5 w-3.5 text-cau-400" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.3"></circle>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
+          </svg>
+          <span class="whitespace-nowrap">Queued{queueLabel ? ` ${queueLabel}` : ""}</span>
+        </span>
       {/if}
       {#if onStop && queued}
         <!-- One action slot: while the spawn waits for a pool slot it

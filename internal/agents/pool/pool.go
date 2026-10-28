@@ -79,6 +79,16 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+	// predWait: session+agent keys held for a draining predecessor's turn
+	// (waitForPredecessor). Guarded by mu.
+	predWait map[string]bool
+
+	// keepTurn marks a session+agent whose current turn carries a message
+	// a person sent, or a teammate's task (released per agent instead):
+	// anything but a machine source. Read and cleared when the turn ends,
+	// see afterTurn.
+	keepTurn map[string]bool
+
 	// leases are slots held by work that is not a session subprocess
 	// (one-shot LLM helpers, see lease.go). Lazily created; guarded by mu.
 	leases map[string]leaseEntry
@@ -162,6 +172,17 @@ type PoolConfig struct {
 	// back because memory is FALLING toward the floor — the trend a static
 	// MinFreeMemoryLoader floor cannot see. nil = no trend gate.
 	SpawnHold func() bool
+	// SpawnHoldReason says what the guard saw when it held a spawn
+	// ("memory pressure full avg10 25%"), for the log. nil = unknown.
+	SpawnHoldReason func() string
+
+	// StopAfterMachineTurn reports whether a process whose turn no person
+	// asked for (a schedule, a workflow, a watch, a sub-agent, the CLI…)
+	// is stopped as soon as that turn ends, instead of idling until
+	// IdleTimeout while it holds a slot and its memory. A person's turn
+	// (web, Slack, Telegram…) always idles as usual. Read live; nil = off.
+	// Team turns are decided per agent instead (StopAfterTeamTask).
+	StopAfterMachineTurn func() bool
 	// CallerUserID resolves the wick user behind a Send from its context.
 	// The pool stays decoupled from the auth packages: the server injects
 	// this. nil (or empty result) = no resolved caller, which disables
@@ -229,8 +250,14 @@ type PoolConfig struct {
 	// to wait for the idle TTL. The preempted session keeps its CLI session
 	// ID in agents.json and resumes via --resume on its next message.
 	PreemptIdle bool
-	Layout      config.Layout
-	Factory     AgentFactory
+	// PredecessorHolds reports whether a still-draining previous process is
+	// running sessionID's turn. During a handover this process already takes
+	// the channels while that turn finishes there; a message for the same
+	// session waits buffered until it does, so one session never runs two
+	// agents at once. Nil = never.
+	PredecessorHolds func(sessionID string) bool
+	Layout           config.Layout
+	Factory          AgentFactory
 	// DefaultProvider is the instance key ("claude", "claude/work", ...)
 	// used when a session's agent entry has no provider bound — the
 	// channel/API/quick-create path where AddAgent is called with an empty
@@ -252,6 +279,10 @@ type PoolConfig struct {
 	// new title broadcasts over SSE — otherwise the sidebar/list would
 	// only catch up on the next page load. Optional; nil = no callback.
 	OnSessionMeta func(sessionID string)
+	// TurnNote, when set, returns a block put in front of the agent-facing
+	// text of a user turn ("" for none): the [linked] line of sessions
+	// working on the same matter right now. Never stored in the history.
+	TurnNote func(sessionID string) string
 	// OnFirstUserMessage fires once per session, right after the first
 	// user message has been persisted and the auto-label derived. Wired
 	// to the ticket auto-create evaluator: its rules can key off the
@@ -265,12 +296,11 @@ type PoolConfig struct {
 	// want every transition should subscribe to AgentEvent via
 	// the factory's OnEvent. Optional; nil = no callback.
 	OnLifecycle func(LifecycleEvent)
-	// OnFailoverNotify / OnFailoverReply carry an automatic provider
-	// failover's notice out, like SwitchOptions.Notify / Reply of a manual
-	// switch: the system turn's chip and steps for the web UI, the
-	// sentence for channels that show no system turn. Optional.
+	// OnFailoverNotify carries an automatic provider failover's notice
+	// out, like SwitchOptions.Notify of a manual switch: the system turn's
+	// chip and steps for the web UI. Channels get no notice (no Reply): to
+	// a thread the turn just goes on, on the next provider. Optional.
 	OnFailoverNotify func(sessionID, agentName, chip string, steps []string)
-	OnFailoverReply  func(sessionID, agentName, text string)
 	// OnFailoverAbort publishes the end of a turn a failover took over
 	// but could not carry on (switch refused, re-send failed, session
 	// stopped): the original Error when there is one, then Done. Optional.
@@ -857,6 +887,14 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// process. It spawned a second, nameless track instead and every
 	// name-keyed write after it landed on a row nobody reads.
 	agentName = p.resolveAgentName(sessionID, agentName)
+	if !MachineSource(source) && source != "failover" {
+		p.mu.Lock()
+		if p.keepTurn == nil {
+			p.keepTurn = map[string]bool{}
+		}
+		p.keepTurn[sessionKey(sessionID, agentName)] = true
+		p.mu.Unlock()
+	}
 	if p.cfg.OnSend != nil {
 		done, err := p.cfg.OnSend(ctx, sessionID, role)
 		if err != nil {
@@ -978,7 +1016,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 
 	// The agent is being moved to another provider: the message waits in
 	// the buffer and goes out after the turn it interrupted.
-	if held, err := p.holdForFailover(key, sessionID, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); held {
+	if held, err := p.holdForFailover(key, sessionID, p.withTurnNote(sessionID, role, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))); held {
 		if err != nil {
 			return err
 		}
@@ -1013,7 +1051,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))
+		err := entry.agent.Send(p.withTurnNote(sessionID, role, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)))
 		delivered = err == nil
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
@@ -1080,7 +1118,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// before the subprocess exists, and drain concatenates them into one
 	// prompt. Stamping at drain would label every one of them with whoever
 	// happened to send last.
-	if err := buf.Append(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); err != nil {
+	if err := buf.Append(p.withTurnNote(sessionID, role, withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))); err != nil {
 		return err
 	}
 	delivered = true
@@ -1130,6 +1168,12 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	p.foMu.Unlock()
 	if moving {
 		return nil
+	}
+	// The previous build is still finishing this session's turn: the
+	// message stays buffered and is delivered here once that turn ends.
+	if p.cfg.PredecessorHolds != nil && p.cfg.PredecessorHolds(sessionID) {
+		p.waitForPredecessor(sessionID, agentName, source)
+		return p.markStatus(sessionID, session.StatusQueued)
 	}
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
@@ -1198,6 +1242,54 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	return p.markStatus(sessionID, session.StatusQueued)
 }
 
+// predecessorPoll is how often a held session checks whether the draining
+// predecessor finished its turn. A var for tests.
+var predecessorPoll = 2 * time.Second
+
+// waitForPredecessor delivers sessionID's buffered messages once the
+// draining predecessor no longer runs its turn. One waiter per session+agent;
+// later messages join the buffer it will drain.
+func (p *Pool) waitForPredecessor(sessionID, agentName, source string) {
+	key := sessionKey(sessionID, agentName)
+	p.mu.Lock()
+	if p.predWait == nil {
+		p.predWait = map[string]bool{}
+	}
+	if p.predWait[key] {
+		p.mu.Unlock()
+		return
+	}
+	p.predWait[key] = true
+	p.mu.Unlock()
+	log.Info().Str("component", "pool").Str("session", sessionID).Str("agent", agentName).
+		Msg("pool: previous build still runs this session's turn — message held until it ends")
+	go func() {
+		defer func() {
+			p.mu.Lock()
+			delete(p.predWait, key)
+			p.mu.Unlock()
+		}()
+		t := time.NewTicker(predecessorPoll)
+		defer t.Stop()
+		for p.cfg.PredecessorHolds(sessionID) {
+			select {
+			case <-p.stopCh:
+				return
+			case <-t.C:
+			}
+		}
+		p.mu.Lock()
+		delete(p.predWait, key)
+		p.mu.Unlock()
+		log.Info().Str("component", "pool").Str("session", sessionID).Str("agent", agentName).
+			Msg("pool: previous build finished this session's turn — delivering held message")
+		if err := p.spawnOrQueue(context.Background(), sessionID, agentName, source); err != nil {
+			log.Warn().Err(err).Str("component", "pool").Str("session", sessionID).
+				Msg("pool: delivering held message failed")
+		}
+	}()
+}
+
 // persistBufferedTurn writes one user/system message to the session's
 // conversation.jsonl from outside an active runEntry. The buffered path
 // (subprocess not yet alive) used to skip this, which made messages
@@ -1260,6 +1352,96 @@ func (p *Pool) preemptIdleSlot() bool {
 		_ = victim.agent.Stop()
 	}()
 	return true
+}
+
+// ReleaseDone stops sessionID's processes whose work is over, so their
+// slots and memory return to the pool now instead of after the idle TTL.
+// A process mid-turn, mid-spawn, holding queued messages or waiting on a
+// background task is left alone (Agent.StopIfDone). The session keeps its
+// CLI session ID and resumes via --resume on its next message. Returns
+// how many processes were stopped. Stop blocks, so call it off any lock.
+func (p *Pool) ReleaseDone(sessionID, cause string) int {
+	prefix := sessionID + "::"
+	p.mu.Lock()
+	var entries []*runEntry
+	for k, e := range p.active {
+		if _, spawning := p.spawningKeys[k]; spawning || !strings.HasPrefix(k, prefix) || e.agent == nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	p.mu.Unlock()
+	n := 0
+	for _, e := range entries {
+		if e.agent.StopIfDone(cause) {
+			n++
+		}
+	}
+	if n > 0 {
+		log.Info().Str("component", "pool").Str("session", sessionID).Int("stopped", n).Str("cause", cause).
+			Msg("pool: released finished session")
+	}
+	return n
+}
+
+// machineSources are the Send sources no person stands behind: wick
+// itself sends them (see drainRefused) or a crash recovery does. "team"
+// is left out on purpose: a teammate's task is released per agent
+// (StopAfterTeamTask), so an agent can keep its process warm for them.
+var machineSources = map[string]bool{
+	"subagent": true, "schedule": true, "watch": true, "agent": true,
+	"agentctl": true, "cli": true, "workflow": true, "recover": true,
+}
+
+// MachineSource reports whether a Send source is one no person typed and
+// no teammate asked for (StopAfterMachineTurn). "failover" re-sends a turn
+// whatever started it, so send leaves the turn's mark as it was for it.
+func MachineSource(source string) bool {
+	return machineSources[source]
+}
+
+// afterTurn runs when a session's turn ends (working → idle). A turn only
+// machine sources fed releases the process right away when
+// StopAfterMachineTurn says so; a person's turn idles as usual, and a
+// teammate's is left to the team path (StopAfterTeamTask).
+func (p *Pool) afterTurn(sessionID, agentName string) {
+	key := sessionKey(sessionID, agentName)
+	p.mu.Lock()
+	keep := p.keepTurn[key]
+	delete(p.keepTurn, key)
+	closed := p.closed
+	p.mu.Unlock()
+	if keep || closed || p.cfg.StopAfterMachineTurn == nil || !p.cfg.StopAfterMachineTurn() {
+		return
+	}
+	go p.releaseWhenSettled(sessionID, "machine turn done")
+}
+
+// releaseWhenSettled retries ReleaseDone briefly: the lifecycle flips to
+// idle a moment before the agent itself is between turns. It gives up
+// once the session is gone, a person sends into it, or ~10s pass (a
+// process that took more work or launched a background task stays).
+func (p *Pool) releaseWhenSettled(sessionID, cause string) {
+	prefix := sessionID + "::"
+	for range 40 {
+		p.mu.Lock()
+		alive, keep := false, false
+		for k := range p.active {
+			if strings.HasPrefix(k, prefix) {
+				alive = true
+				keep = keep || p.keepTurn[k]
+			}
+		}
+		closed := p.closed
+		p.mu.Unlock()
+		if !alive || keep || closed {
+			return
+		}
+		if p.ReleaseDone(sessionID, cause) > 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // spawn allocates a slot, builds an agent via the factory, drains the
@@ -1504,8 +1686,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	// OnLifecycle callback so working↔idle transitions reach SSE the
 	// same path as spawning/killed. BE becomes the source of truth;
 	// the FE just listens to "lifecycle" events.
-	if p.cfg.OnLifecycle != nil {
-		st.SetLifecycleHook(func(from, to state.Lifecycle) {
+	st.SetLifecycleHook(func(from, to state.Lifecycle) {
+		if p.cfg.OnLifecycle != nil {
 			p.cfg.OnLifecycle(LifecycleEvent{
 				SessionID:    sessionID,
 				AgentName:    agentName,
@@ -1516,8 +1698,11 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 				ProviderType: pType,
 				ProviderName: pName,
 			})
-		})
-	}
+		}
+		if from == state.LifecycleWorking && to == state.LifecycleIdle {
+			p.afterTurn(sessionID, agentName)
+		}
+	})
 	// Every spawn drains the session's buffer, so the buffer must exist for
 	// every spawn — not only for sessions that entered through send().
 	//
@@ -3458,4 +3643,17 @@ func dropForeignModelPin(providerRef, modelID string) bool {
 		return !grouped
 	}
 	return true
+}
+
+// withTurnNote puts cfg.TurnNote's block in front of a user turn's
+// agent-facing text. Other roles (context blocks, sub-agent results) go
+// through untouched.
+func (p *Pool) withTurnNote(sessionID, role, text string) string {
+	if role != "user" || p.cfg.TurnNote == nil {
+		return text
+	}
+	if note := p.cfg.TurnNote(sessionID); note != "" {
+		return note + "\n\n" + text
+	}
+	return text
 }

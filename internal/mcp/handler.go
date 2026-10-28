@@ -68,6 +68,9 @@ type Handler struct {
 	// stdio mode and tests — the disk write still lands; only the live
 	// dashboard cache misses the update until the next reload.
 	refreshSession func(id string) error
+	// threadListen backs wick_slack_listen (the channel registry). nil in
+	// stdio mode and tests: the tool then says it is unavailable.
+	threadListen handlers.ThreadListenFn
 	// db is passed to wick_info so it can surface DB status/type.
 	// May be nil (tests, smoke mode); handlers.WickInfo reports
 	// "disabled" in that case. DSN is never exposed.
@@ -142,6 +145,12 @@ func (h *Handler) WithLayout(l agentconfig.Layout) *Handler {
 // sync after the title is written to disk.
 func (h *Handler) WithRefreshSession(fn func(id string) error) *Handler {
 	h.refreshSession = fn
+	return h
+}
+
+// WithThreadListen wires wick_slack_listen to the channel registry.
+func (h *Handler) WithThreadListen(fn handlers.ThreadListenFn) *Handler {
+	h.threadListen = fn
 	return h
 }
 
@@ -436,6 +445,10 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, args)
 	case "wick_set_title":
 		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, args)
+	case "wick_slack_listen":
+		handlers.WickSlackListen(w, r, hreq, rsp, h.layout, h.threadListen, args)
+	case "wick_session_link":
+		handlers.WickSessionLink(w, r, hreq, rsp, h.layout, h.refreshSession, args)
 	// Tickets, notes and the source-repo selection are connectors
 	// (internal/connectors/{tickets,notes,source}), not meta-tools: a
 	// connector is taggable and auditable per user, which a hard-coded

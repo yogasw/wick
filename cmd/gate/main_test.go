@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -321,5 +322,31 @@ func TestEmitBlock_IsAHardBlock(t *testing.T) {
 	}
 	if payload["continue"] != false {
 		t.Error("emitBlock must remain the turn-ending form")
+	}
+}
+
+// The path guard hook: exit 2 with the reason on stderr for a call into a
+// guarded root, 0 otherwise, and 2 when its spec is missing.
+func TestRunPathGuard(t *testing.T) {
+	dir := t.TempDir()
+	guarded := filepath.Join(dir, "projects")
+	if err := os.MkdirAll(filepath.Join(guarded, "own"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.WritePathGuard(dir, "/bin/gate", gate.PathGuardSpec{Guarded: []string{guarded}, Allow: []string{filepath.Join(guarded, "own")}}); err != nil {
+		t.Fatal(err)
+	}
+	spec := filepath.Join(dir, "pathguard-spec.json")
+	var errBuf strings.Builder
+	in := `{"cwd":"` + filepath.Join(guarded, "own") + `","tool_input":{"command":"cat ../other/x"}}`
+	if code := runPathGuard([]string{spec}, strings.NewReader(in), &errBuf); code != 2 || !strings.Contains(errBuf.String(), "path guard:") {
+		t.Fatalf("other project: code=%d stderr=%q", code, errBuf.String())
+	}
+	in = `{"cwd":"` + filepath.Join(guarded, "own") + `","tool_input":{"file_path":"a.txt"}}`
+	if code := runPathGuard([]string{spec}, strings.NewReader(in), &errBuf); code != 0 {
+		t.Fatalf("own file: code=%d", code)
+	}
+	if code := runPathGuard([]string{filepath.Join(dir, "missing.json")}, strings.NewReader(in), &errBuf); code != 2 {
+		t.Fatalf("missing spec: code=%d, want 2 (fail closed)", code)
 	}
 }

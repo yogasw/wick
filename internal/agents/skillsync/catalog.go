@@ -158,3 +158,30 @@ var requiredSkills = []string{"wick-agent-cards", "wick-connectors"}
 
 // IsRequiredSkill reports whether name is one of requiredSkills.
 func IsRequiredSkill(name string) bool { return slices.Contains(requiredSkills, name) }
+
+// adminSkills are the shipped skills about running the wick host itself:
+// deploying the binary, building and installing plugins, resource limits.
+// A Team agent without Bash cannot act on any of them, so they only cost it
+// prompt and are switched off for it (see WithAdminSkillsOff).
+var adminSkills = []string{
+	"wick-plugin-authoring",
+	"wick-plugin-service",
+	"wick-plugins",
+	"wick-resource-limits",
+	"wick-zero-downtime-upgrade",
+}
+
+// WithAdminSkillsOff returns disabled plus adminSkills when the agent has no
+// Bash, or disabled unchanged when it does.
+func WithAdminSkillsOff(disabled []string, bashAllowed bool) []string {
+	if bashAllowed {
+		return disabled
+	}
+	out := slices.Clone(disabled)
+	for _, name := range adminSkills {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
