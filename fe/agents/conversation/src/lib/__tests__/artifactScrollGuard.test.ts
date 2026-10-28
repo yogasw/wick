@@ -23,7 +23,7 @@ describe("artifact scroll guard", () => {
     expect(doc.indexOf("EP.scrollIntoView=")).toBeLessThan(doc.indexOf("go()"));
   });
 
-  // The Modena widget calls row.scrollIntoView({block:"nearest",behavior:"smooth"}).
+  // A client widget calls row.scrollIntoView({block:"nearest",behavior:"smooth"}).
   test("scrollIntoView scrolls the container inside the document, never escapes it", () => {
     runScript(artifactScrollGuard());
     const box = document.createElement("div");

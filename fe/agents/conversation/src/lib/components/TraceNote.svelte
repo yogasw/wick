@@ -14,6 +14,6 @@
   <div
     data-thinking-block={kind === "thinking" ? "" : undefined}
     data-text-block={kind === "text" ? "" : undefined}
-    class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words"
+    class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-800 dark:text-black-700 whitespace-pre-wrap break-words"
   >{shown}</div>
 {/if}

@@ -27,9 +27,15 @@ var tagOptionKeys = map[string]bool{
 // repoRoot walks up from the test's working directory to the module root.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
+	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
+	}
+	// The walk below does not follow a symlinked root: from a checkout
+	// reached through a symlink it would scan nothing and pass vacuously.
+	dir, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", wd, err)
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {

@@ -183,6 +183,32 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	return CheckAgentProject(ctx, projectID)
 }
 
+// ErrNotProjectOwner refuses a settings change or delete by someone who
+// may work in the project but does not own it.
+var ErrNotProjectOwner = errors.New("only the project owner can change project settings")
+
+// CheckProjectOwner is the project.CanManage gate for connector ops that
+// reconfigure a project. An agent acts as its owner; a call with no person
+// behind it (internal) passes, the same as CheckProjectTarget.
+func CheckProjectOwner(ctx context.Context, layout config.Layout, callerUID, projectID string) error {
+	p, err := project.Load(layout, projectID)
+	if err != nil {
+		return fmt.Errorf("project not found: %s", projectID)
+	}
+	uid := callerUID
+	if owner, ok := AgentOwner(ctx); ok {
+		uid = owner
+	}
+	if uid == "" {
+		return nil
+	}
+	u := personOf(ctx, uid)
+	if !project.CanManage(p.Meta, uid, u != nil && u.IsAdmin()) {
+		return ErrNotProjectOwner
+	}
+	return nil
+}
+
 // RoomTicket is the one ticket a ticket room's member may reach from its
 // backing session (callingSID): the room's ticket, in the room's project.
 // ok only while the session is the backing session of a current member

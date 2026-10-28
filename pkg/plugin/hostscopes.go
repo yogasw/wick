@@ -30,6 +30,7 @@ const (
 	ScopeHostRestWrite        = "rest.write"
 	ScopeHostDBRead           = "db.read"
 	ScopeHostDBWrite          = "db.write"
+	ScopeHostEventsPublish    = "events.publish"
 	ScopeHostDatadir          = "datadir"
 	ScopeHostNetListen        = "net.listen"
 )
@@ -93,6 +94,7 @@ var HostScopes = []HostScope{
 	{Name: ScopeHostRestWrite, Label: "Change via wick API", Description: "Call the declared POST/PUT/PATCH/DELETE paths of wick's REST API as the acting user.", Destructive: true, Resource: HostResourceRest},
 	{Name: ScopeHostDBRead, Label: "Read wick database", Description: "Run read-only SQL against the declared tables.", Resource: HostResourceDB},
 	{Name: ScopeHostDBWrite, Label: "Write wick database", Description: "Run SQL that changes the declared tables.", Destructive: true, Resource: HostResourceDB},
+	{Name: ScopeHostEventsPublish, Label: "Wake watches", Description: "Publish an event under its own key; watches subscribed to it with wake_on run right away, as their owners.", DefaultAllow: true},
 	{Name: ScopeHostDatadir, Label: "Keep a data folder", Description: "Store files in its own persistent data folder.", DefaultAllow: true, Declarative: true},
 	{Name: ScopeHostNetListen, Label: "Open a local port", Description: "Listen on a local network port.", DefaultAllow: true, Declarative: true},
 }

@@ -12,6 +12,10 @@ const REST: SlackSettingField[] = [
   { key: "reaction_trigger_enabled", value: "false", type: "bool", group: "Reaction Auto-Reply" },
   { key: "reaction_channels_mode", value: "whitelist", type: "dropdown", options: "all|whitelist", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
   { key: "reaction_channels", value: "", type: "picker", options: "slack.channels", visible_when: "reaction_channels_mode:whitelist", group: "Reaction Auto-Reply" },
+  { key: "reply_mode", value: "listen", type: "dropdown", options: "listen|auto_reply", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
+  { key: "listen_delay_sec", value: "", type: "text", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
+  { key: "auto_reply_delay_sec", value: "3", type: "text", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
+  { key: "channel_reply_rules", value: "", type: "kvlist", options: "id|name|mode|delay", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
   { key: "gate_approvers", value: "trigger_users", type: "dropdown", options: "trigger_users|admins|custom", group: "Approval Gates" },
   { key: "gate_approver_users", value: "", type: "picker", options: "slack.users", visible_when: "gate_approvers:custom", group: "Approval Gates" },
   { key: "gate_approver_groups", value: "", type: "picker", options: "slack.usergroups", visible_when: "gate_approvers:custom", group: "Approval Gates" },
@@ -28,6 +32,7 @@ const SCHEMA_KEYS = [
   "users_mode", "allowed_users", "groups_mode", "allowed_groups", "bots_mode", "allowed_bots", "channels_mode", "allowed_channels",
   "ask_user_enabled", "hide_subagent_status",
   "reaction_trigger_enabled", "reaction_channels_mode", "reaction_channels",
+  "reply_mode", "listen_delay_sec", "auto_reply_delay_sec", "channel_reply_rules",
   "gate_approvers", "gate_approver_users", "gate_approver_groups",
   "project_id", "public_url",
 ];
@@ -229,5 +234,56 @@ describe("accessSummary", () => {
   test("owner plus a group keeps 'only Yoga'", () => {
     const v = { users_mode: "whitelist", allowed_users: ONLY_ME, groups_mode: "whitelist", allowed_groups: JSON.stringify([{ id: "SB", name: "B" }]), channels_mode: "all" };
     expect(accessSummary(v, "UOWNER", "Yoga")).toBe("Access: only Yoga · 1 group · all channels");
+  });
+
+  test("Reaction Auto-Reply shows the listen mode in effect and the agent's LISTEN.md", async () => {
+    current = {
+      fields: fields(), owner_slack_id: "UOWNER", owner_slack_name: "Yoga",
+      listen: { wick_path: "/a/LISTEN.md", wick_exists: false, agent_path: "/p/franky/LISTEN.md", agent_exists: true, delay_sec: 120, scope: "thread", on_team_reply: "review", instructions: "Only WABA." },
+    };
+    render(SlackSettingsGroups, { props: { base: "/b", agent } });
+    const info = await screen.findByTestId("listen-info");
+    expect(info.closest("[data-group]")?.getAttribute("data-group")).toBe("Reaction Auto-Reply");
+    expect(screen.getByTestId("listen-effective").textContent).toContain("Delay 2m · scope thread · when someone else answers: review");
+    expect(info.textContent).toContain("/p/franky/LISTEN.md");
+    expect(info.textContent).toContain("built-in");
+  });
+});
+
+describe("SlackSettingsGroups reply modes", () => {
+  beforeEach(() => patch.mockClear());
+  const owner = { owner_slack_id: "UOWNER", owner_slack_name: "Yoga", owner_slack_handle: "yoga" };
+  const on = (over: Record<string, string> = {}) =>
+    fields().map((x) => ({ ...x, value: ({ reaction_trigger_enabled: "true", ...over } as Record<string, string>)[x.key] ?? x.value }));
+
+  test("the default mode is two cards and picking one saves reply_mode", async () => {
+    current = { fields: on(), ...owner };
+    render(SlackSettingsGroups, { props: { base: "/b", agent } });
+    await waitFor(() => expect(screen.getAllByTestId("mode-card").length).toBe(2));
+    const auto = screen.getAllByTestId("mode-card").find((c) => c.dataset.mode === "auto_reply")!;
+    await fireEvent.click(auto.querySelector("input[type=radio]")!);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("reply_mode", "auto_reply"));
+  });
+
+  test("a channel rule changes mode and delay in place and is removed with the trash button", async () => {
+    const rule = JSON.stringify([{ id: "C1", name: "#debug", mode: "listen", delay: "" }]);
+    current = { fields: on({ channel_reply_rules: rule }), ...owner };
+    render(SlackSettingsGroups, { props: { base: "/b", agent } });
+    const row = await screen.findByTestId("reply-rule");
+    await fireEvent.change(screen.getByLabelText("Mode for #debug"), { target: { value: "auto_reply" } });
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("channel_reply_rules", JSON.stringify([{ id: "C1", name: "#debug", mode: "auto_reply", delay: "" }])));
+    await fireEvent.change(row.querySelector("[data-testid='delay-rule-C1']")!, { target: { value: "5" } });
+    await waitFor(() => expect(patch).toHaveBeenLastCalledWith("channel_reply_rules", JSON.stringify([{ id: "C1", name: "#debug", mode: "auto_reply", delay: "5" }])));
+    await fireEvent.click(screen.getByLabelText("Remove rule for #debug"));
+    await waitFor(() => expect(patch).toHaveBeenLastCalledWith("channel_reply_rules", "[]"));
+  });
+
+  test("adding a channel starts it in auto-reply", async () => {
+    LOOKUP["slack.channels"] = [{ id: "C9", name: "#support" }];
+    current = { fields: on(), ...owner };
+    render(SlackSettingsGroups, { props: { base: "/b", agent } });
+    await fireEvent.input(await screen.findByTestId("reply-rule-search"), { target: { value: "sup" } });
+    await fireEvent.click(await screen.findByText("#support"));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("channel_reply_rules", JSON.stringify([{ id: "C9", name: "#support", mode: "auto_reply", delay: "" }])));
   });
 });

@@ -463,3 +463,36 @@ func TestWriteOpsAreDestructiveSoTheyDefaultOff(t *testing.T) {
 	}
 	assert.Equal(t, want, got)
 }
+
+// ── Custom API: user group writes ────────────────────────────────────
+
+func TestCheckMethodAllowed_UsergroupWriteBlockedByDefault(t *testing.T) {
+	// Neither 'all' mode nor an allowlist wildcard may reach a user group
+	// write: those groups belong to the whole workspace.
+	all := newCustomCtx(t, map[string]string{"custom_api_mode": "all"}, map[string]string{})
+	wild := newCustomCtx(t, map[string]string{
+		"custom_api_mode":      "allowlist",
+		"custom_api_allowlist": `[{"method":"usergroups.*"},{"method":"*"}]`,
+	}, map[string]string{})
+	for _, m := range []string{"usergroups.create", "usergroups.update", "usergroups.enable", "usergroups.disable", "usergroups.users.update", "UserGroups.Users.Update"} {
+		for _, c := range []*connector.Ctx{all, wild} {
+			err := checkMethodAllowed(c, m)
+			require.Errorf(t, err, "expected %q to be blocked", m)
+			assert.Contains(t, err.Error(), "allow_usergroup_write")
+		}
+	}
+	// Reads stay governed by the normal allowlist.
+	require.NoError(t, checkMethodAllowed(all, "usergroups.list"))
+	require.NoError(t, checkMethodAllowed(wild, "usergroups.users.list"))
+}
+
+func TestCheckMethodAllowed_UsergroupWriteNeedsToggleAndAllowlist(t *testing.T) {
+	on := newCustomCtx(t, map[string]string{
+		"custom_api_mode":       "allowlist",
+		"custom_api_allowlist":  `[{"method":"usergroups.users.update"}]`,
+		"allow_usergroup_write": "true",
+	}, map[string]string{})
+	require.NoError(t, checkMethodAllowed(on, "usergroups.users.update"))
+	// The toggle does not bypass the allowlist.
+	require.Error(t, checkMethodAllowed(on, "usergroups.create"))
+}

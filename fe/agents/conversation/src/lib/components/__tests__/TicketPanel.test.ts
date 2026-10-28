@@ -294,7 +294,7 @@ describe("TicketPanel — ticket picker search", () => {
         new Response(
           JSON.stringify({
             tickets: [
-              { id: "3eb1f07f4ae081c38ec0edde28a0604e", title: "Paragon webhook", status: "open", updated_at: "2026-09-30T10:00:00Z" },
+              { id: "3eb1f07f4ae081c38ec0edde28a0604e", title: "Client A webhook", status: "open", updated_at: "2026-09-30T10:00:00Z" },
               { id: "3eb1f07f4ae08125bf4bff60a77bce2f", title: "MTI changes", status: "open", updated_at: "2026-09-30T09:00:00Z" },
               { id: "T-2", title: "Unrelated", status: "open", updated_at: "2026-09-30T11:00:00Z" },
             ],

@@ -259,10 +259,19 @@ func shapeOneMessage(in any) map[string]any {
 	if !ok {
 		return map[string]any{}
 	}
+	text := m["text"]
+	// rich_text only replaces a fallback that was clipped to a preview; any
+	// other rich_text message (people, workflow posts) already has exact text.
+	topText, _ := m["text"].(string)
+	_, isBot := m["bot_id"]
+	clipped := isBot && strings.HasSuffix(strings.TrimSpace(topText), "…")
+	if bt := blockText(m["blocks"], clipped); bt != "" {
+		text = bt
+	}
 	out := map[string]any{
 		"ts":   m["ts"],
 		"user": m["user"],
-		"text": m["text"],
+		"text": text,
 		"type": m["type"],
 	}
 	if v, ok := m["bot_id"]; ok {
@@ -291,6 +300,139 @@ func shapeOneMessage(in any) map[string]any {
 		out["reactions"] = shapedReacts
 	}
 	return out
+}
+
+// blockText returns the text a message actually renders when it was posted
+// as section / markdown / header blocks. The top-level `text` of such a
+// message is only the notification fallback: Slack derives it from the
+// blocks with blank lines collapsed, and a markdown reply clips it to a
+// preview, so reading it back makes a paragraphed message look like one
+// run-on block. Slack also stores a posted markdown block as rich_text, so
+// when the fallback was clipped (useRichText) rich_text is rendered back to
+// mrkdwn too. Otherwise rich_text is skipped (its `text` is already exact),
+// as are context blocks (the "Sent using" footer); "" means keep the
+// top-level text.
+func blockText(raw any, useRichText bool) string {
+	blocks, _ := raw.([]any)
+	var parts []string
+	for _, b := range blocks {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch bm["type"] {
+		case "section", "header":
+			if t, ok := bm["text"].(map[string]any); ok {
+				if s, _ := t["text"].(string); s != "" {
+					parts = append(parts, s)
+				}
+			}
+		case "markdown":
+			if s, _ := bm["text"].(string); s != "" {
+				parts = append(parts, s)
+			}
+		case "rich_text":
+			if useRichText {
+				if s := richText(bm["elements"]); s != "" {
+					parts = append(parts, s)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// richText renders the elements of a rich_text block back to mrkdwn:
+// sections, bullet/ordered lists, code blocks and quotes.
+func richText(raw any) string {
+	elems, _ := raw.([]any)
+	var b strings.Builder
+	for _, e := range elems {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch em["type"] {
+		case "rich_text_section":
+			b.WriteString(richInline(em["elements"]))
+		case "rich_text_preformatted":
+			ensureNewline(&b)
+			b.WriteString("```\n" + richInline(em["elements"]) + "\n```\n")
+		case "rich_text_quote":
+			ensureNewline(&b)
+			for _, line := range strings.Split(richInline(em["elements"]), "\n") {
+				b.WriteString("> " + line + "\n")
+			}
+		case "rich_text_list":
+			ensureNewline(&b)
+			indent, _ := em["indent"].(float64)
+			pad := strings.Repeat("  ", int(indent))
+			items, _ := em["elements"].([]any)
+			for i, it := range items {
+				im, _ := it.(map[string]any)
+				marker := "•"
+				if em["style"] == "ordered" {
+					marker = fmt.Sprintf("%d.", i+1)
+				}
+				b.WriteString(pad + marker + " " + richInline(im["elements"]) + "\n")
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func ensureNewline(b *strings.Builder) {
+	if s := b.String(); s != "" && !strings.HasSuffix(s, "\n") {
+		b.WriteString("\n")
+	}
+}
+
+func richInline(raw any) string {
+	elems, _ := raw.([]any)
+	var b strings.Builder
+	for _, e := range elems {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		str := func(k string) string { s, _ := em[k].(string); return s }
+		switch em["type"] {
+		case "text":
+			t := str("text")
+			if st, ok := em["style"].(map[string]any); ok && strings.TrimSpace(t) != "" {
+				if st["code"] == true {
+					t = "`" + t + "`"
+				}
+				if st["bold"] == true {
+					t = "*" + t + "*"
+				}
+				if st["italic"] == true {
+					t = "_" + t + "_"
+				}
+				if st["strike"] == true {
+					t = "~" + t + "~"
+				}
+			}
+			b.WriteString(t)
+		case "link":
+			if label := str("text"); label != "" {
+				b.WriteString("<" + str("url") + "|" + label + ">")
+			} else {
+				b.WriteString("<" + str("url") + ">")
+			}
+		case "user":
+			b.WriteString("<@" + str("user_id") + ">")
+		case "usergroup":
+			b.WriteString("<!subteam^" + str("usergroup_id") + ">")
+		case "channel":
+			b.WriteString("<#" + str("channel_id") + ">")
+		case "broadcast":
+			b.WriteString("<!" + str("range") + ">")
+		case "emoji":
+			b.WriteString(":" + str("name") + ":")
+		}
+	}
+	return b.String()
 }
 
 func shapeUserList(raw any, includeDeleted bool) any {
@@ -1067,6 +1209,9 @@ func normalizeAPIMethod(raw string) (string, error) {
 // permits only the configured method names, where a trailing * matches
 // any method sharing that prefix.
 func checkMethodAllowed(c *connector.Ctx, method string) error {
+	if isUsergroupWrite(method) && !c.CfgBool("allow_usergroup_write") {
+		return fmt.Errorf("method %q changes a workspace user group and is blocked on every Slack connector — an admin must check allow_usergroup_write on this connector's page first", method)
+	}
 	mode := strings.TrimSpace(c.Cfg("custom_api_mode"))
 	if mode == "" {
 		mode = "allowlist"
@@ -1088,6 +1233,22 @@ func checkMethodAllowed(c *connector.Ctx, method string) error {
 		}
 	}
 	return fmt.Errorf("method %q is not in this connector's Custom API allowlist (allowed: %s) — add it there, or switch the mode to 'all'", method, strings.Join(allowed, ", "))
+}
+
+// usergroupWriteMethods are the Slack methods that create, rename, toggle
+// or re-member a user group.
+var usergroupWriteMethods = map[string]bool{
+	"usergroups.create":       true,
+	"usergroups.update":       true,
+	"usergroups.enable":       true,
+	"usergroups.disable":      true,
+	"usergroups.users.update": true,
+}
+
+// isUsergroupWrite reports a user group write method, matched the way
+// Slack resolves method names (case-insensitive).
+func isUsergroupWrite(method string) bool {
+	return usergroupWriteMethods[strings.ToLower(strings.TrimSpace(method))]
 }
 
 // parseAllowlist reads the kvlist-backed allowlist config. The widget

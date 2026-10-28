@@ -19,12 +19,12 @@ func editorCtx(base string, cfg, input map[string]string) *connector.Ctx {
 	return connector.NewCtx(context.Background(), "id1", full, input, http.DefaultClient, nil, nil)
 }
 
-// twoRows is what the editor posts for "* allow 1 [lead]" + "integration-helm deny".
+// twoRows is what the editor posts for "* allow 1 [lead]" + "infra-helm deny".
 func twoRows(extra map[string]string) map[string]string {
 	in := map[string]string{
 		"row_count": "2",
 		"r_repo_0":  "*", "r_mode_0": "allow", "r_min_0": "1", "r_appr_0": "acc-lead", "r_names_0": "Lead Person",
-		"r_repo_1": "integration-helm", "r_mode_1": "deny", "r_min_1": "", "r_appr_1": "", "r_names_1": "",
+		"r_repo_1": "infra-helm", "r_mode_1": "deny", "r_min_1": "", "r_appr_1": "", "r_names_1": "",
 	}
 	for k, v := range extra {
 		in[k] = v
@@ -188,7 +188,7 @@ func TestRulesEditor_FillsMissingNames(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := connector.NewCtx(context.Background(), "id1",
-		map[string]string{"base_url": srv.URL, "default_workspace": "ws", "merge_rules": `[{"repo":"*","mode":"allow","min_approvals":"1","required_approvers":"acc-lead"},{"repo":"integration-helm","mode":"deny"}]`},
+		map[string]string{"base_url": srv.URL, "default_workspace": "ws", "merge_rules": `[{"repo":"*","mode":"allow","min_approvals":"1","required_approvers":"acc-lead"},{"repo":"infra-helm","mode":"deny"}]`},
 		map[string]string{}, srv.Client(), nil, nil)
 	out, _ := rulesEditor(c)
 	h := out.(map[string]any)["html"].(string)

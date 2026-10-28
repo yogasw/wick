@@ -41,8 +41,8 @@ type SpawnPrompt struct {
 	Schedule  bool
 	// Files keeps the HTML render formats (the Files panel is on).
 	Files bool
-	// UseGlobalPrompt: the operator prompt is system_prompt, not
-	// system_prompt_team (entity.AgentPersona.UseGlobalPrompt).
+	// UseGlobalPrompt mirrors entity.AgentPersona.UseGlobalPrompt; the
+	// prompt assembly no longer reads it.
 	UseGlobalPrompt bool
 	// TeamInstructions is the agent OWNER's Team prompt (Team settings),
 	// whoever sent the message; "" when they set none.

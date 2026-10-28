@@ -26,7 +26,7 @@ var FailoverTriggers = []string{FailoverTriggerLimit, FailoverTriggerAuth, Failo
 
 // MaxFailoverTargets caps a chain: each hop is a full re-spawn, so a long
 // chain only delays the error the user eventually sees.
-const MaxFailoverTargets = 3
+const MaxFailoverTargets = 6
 
 // Recheck window bounds, in minutes (one hour at most).
 const (

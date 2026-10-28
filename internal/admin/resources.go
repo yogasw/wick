@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"time"
 
 	adminview "github.com/yogasw/wick/internal/admin/view"
 	"github.com/yogasw/wick/internal/login"
@@ -56,7 +57,24 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	owner := adminview.ResourceOwnerEdit{Enabled: true, Users: h.userOptions(ctx)}
-	adminview.ResourcesAdminPage("Projects", "/admin/projects", h.decorateResourceRows(ctx, rows, allTags), allTags, owner, user).Render(ctx, w)
+	filter := adminview.ResourceFilter{Enabled: h.projectTrash != nil, Show: projectShow(r), Active: len(rows)}
+	if filter.Show == adminview.ShowDeleted {
+		rows = rows[:0]
+	} else {
+		rows = h.decorateResourceRows(ctx, rows, allTags)
+	}
+	if h.projectTrash != nil {
+		deleted, err := h.projectTrash.DeletedProjects(ctx)
+		if err != nil {
+			http.Error(w, "cannot list deleted projects: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		filter.Deleted = len(deleted)
+		if filter.Show != adminview.ShowActive {
+			rows = append(rows, deletedProjectRows(deleted, h.userLabels(ctx), time.Now())...)
+		}
+	}
+	adminview.ResourcesAdminPage("Projects", "/admin/projects", rows, allTags, owner, filter, user).Render(ctx, w)
 }
 
 func (h *Handler) setProjectTags(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +148,7 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 	if h.workflowOwner != nil {
 		owner = adminview.ResourceOwnerEdit{Enabled: true, Users: h.userOptions(ctx)}
 	}
-	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", h.decorateResourceRows(ctx, rows, allTags), allTags, owner, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", h.decorateResourceRows(ctx, rows, allTags), allTags, owner, adminview.ResourceFilter{}, user).Render(ctx, w)
 }
 
 func (h *Handler) setWorkflowTags(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +214,7 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	adminview.ResourcesAdminPage("Skills", "/admin/skills", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Skills", "/admin/skills", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, adminview.ResourceFilter{}, user).Render(ctx, w)
 }
 
 func (h *Handler) setSkillTags(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +278,7 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
-	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, adminview.ResourceFilter{}, user).Render(ctx, w)
 }
 
 func (h *Handler) setDataTableTags(w http.ResponseWriter, r *http.Request) {

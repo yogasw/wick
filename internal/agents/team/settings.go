@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -48,13 +49,42 @@ func (s *Store) SaveSettings(ctx context.Context, st *entity.TeamSettings) error
 	if err := ValidateTeamPrompt(st.Prompt); err != nil {
 		return err
 	}
+	prev, err := s.Settings(ctx, st.UserID)
+	if err != nil {
+		return err
+	}
 	st.UpdatedAt = time.Now().UTC()
 	// UpdateAll: a column added to entity.TeamSettings is saved without
 	// touching this list.
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}},
 		UpdateAll: true,
-	}).Create(st).Error
+	}).Create(st).Error; err != nil {
+		return err
+	}
+	promptHookMu.RLock()
+	hook := promptHook
+	promptHookMu.RUnlock()
+	if hook != nil && prev.Prompt != st.Prompt {
+		hook(ctx, st.UserID, prev.Prompt, st.Prompt)
+	}
+	return nil
+}
+
+// PromptHook is told that userID's Team instructions went from before to
+// after, once the save succeeded. Wired at boot to the prompt history.
+type PromptHook func(ctx context.Context, userID, before, after string)
+
+var (
+	promptHookMu sync.RWMutex
+	promptHook   PromptHook
+)
+
+// SetPromptHook wires h for every Store; nil turns it off.
+func SetPromptHook(h PromptHook) {
+	promptHookMu.Lock()
+	promptHook = h
+	promptHookMu.Unlock()
 }
 
 // idList joins ids for an error message, naming at most max of them.

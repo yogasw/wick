@@ -36,6 +36,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/slackmd"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 const (
@@ -132,6 +133,12 @@ type turn struct {
 	msgTS      string // ts of the user message — used for reactions
 	buf        strings.Builder
 	hasStarted bool // true after first TextDelta (banner already set)
+	// segStart is where the text after the turn's last tool call starts
+	// in buf, lastSeg the latest non-empty text before it. The reply a
+	// thread gets is that last text (replyText), not the narration the
+	// agent wrote between tools.
+	segStart int
+	lastSeg  string
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -229,6 +236,7 @@ type turn struct {
 func (t *turn) carryOver(old *turn) {
 	t.buf.WriteString(old.buf.String())
 	t.hasStarted = old.hasStarted
+	t.segStart, t.lastSeg = old.segStart, old.lastSeg
 	// Keep pointing at the live message: dropping these makes finalizeReply
 	// post a fresh message and strand the streamed one mid-word.
 	t.liveTS = old.liveTS
@@ -369,6 +377,18 @@ type Channel struct {
 	// handleReactionRemoved. In-memory only — switches reset on restart;
 	// re-react to re-arm. Guarded by mu.
 	autoReply map[string]bool
+
+	// listenWaits holds, per session key, the reply a listening thread is
+	// waiting out its delay on (listen.go). Lazily created; guarded by mu.
+	listenWaits map[string]*listenWait
+	// listenPromptSeen: per session key, the LISTEN.md instructions its
+	// process got in its system prompt (ListenPrompt).
+	listenPromptMu   sync.Mutex
+	listenPromptSeen map[string]string
+	// listenDispatchHook replaces the turn a held reply starts (tests).
+	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
+	// heldFn records where a held reply stands for the web UI (SetHeldFn).
+	heldFn HeldFn
 
 	// userTokenCache maps Slack user ID → resolved xoxp token.
 	// Avoids repeated connectorToken lookups on every send call.
@@ -933,6 +953,12 @@ var socketStartTimeout = 60 * time.Second
 // Start begins listening for Slack events. Blocks until ctx is cancelled
 // or Stop/Reload is called.
 func (s *Channel) Start(ctx context.Context) error {
+	// A draining process gave its channels to the successor: an instance
+	// added or switched on here now would listen beside it.
+	if upgrade.ChannelsReleased() {
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("not started — channels handed to the new build")
+		return nil
+	}
 	s.runMu.Lock()
 	s.halted.Store(false)
 	s.runMu.Unlock()
@@ -1798,6 +1824,16 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				// the 🤖 auto-reply switch never does (bot loop guard).
 				if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
 					s.handleMessage(ctx, ev, nil)
+					return
+				}
+				// Another bot answering in a listening thread is read, never
+				// answered: it only tells a held reply that someone spoke.
+				if ev.ThreadTimeStamp != "" && ev.ThreadTimeStamp != ev.TimeStamp {
+					author := ev.BotID
+					if author == "" {
+						author = ev.User
+					}
+					s.noteListenOther(s.sessionKey(ev.ThreadTimeStamp), author)
 				}
 				return
 			}
@@ -1847,9 +1883,23 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				if s.mentionsBot(ev.Text) {
 					return
 				}
-				if !s.autoReplyOn(s.sessionKey(threadKey(ev.ThreadTimeStamp, ev.TimeStamp))) {
+				sid := s.sessionKey(threadKey(ev.ThreadTimeStamp, ev.TimeStamp))
+				if !s.listening(sid, ev.Channel) {
 					return
 				}
+				// A listening thread: a bare "stop" is acted on at once (in
+				// handleMessage, after the access checks, quietly for a
+				// sender outside them); anything else waits out the delay.
+				var files []slackgo.File
+				if ev.Message != nil {
+					files = ev.Message.Files
+				}
+				if isStopCommand(ev.Text) {
+					s.dispatchListen(sid, ev, files, listenSettings{}, 0, false, false)
+				} else {
+					s.queueListenMessage(ctx, sid, ev, files)
+				}
+				return
 			}
 			// MessageEvent stashes a file_share's files under .Message
 			// (slackevents only populates the top-level Files field on
@@ -2009,7 +2059,17 @@ func (s *Channel) handleReactionAdded(ctx context.Context, ev *slackevents.React
 		return
 	}
 
+	// A thread already listening: the reactor clicked the bot's own 🤖
+	// (Slack adds theirs beside it, it cannot take the bot's away). Read it
+	// as the toggle it looks like — stop, and the bot takes its 🤖 down.
+	if s.listening(sessionID, channelID) {
+		s.ListenOff(sessionID, channelID, parentTS, "🤖 clicked by "+ev.User, false)
+		return
+	}
 	s.setAutoReply(sessionID, true)
+	if ls, ok := s.listenStore(); ok {
+		ls.SetListenThread(sessionID, agentchannels.ListenThread{})
+	}
 	// Arming a thread is the moment its replies start coming from automation
 	// rather than from someone typing, so record where they belong while the
 	// event still carries the channel. Without this the switch can be on for
@@ -2045,11 +2105,12 @@ func (s *Channel) handleReactionRemoved(ev *slackevents.ReactionRemovedEvent) {
 		return
 	}
 	sessionID := s.sessionKey(parentTS)
-	if !s.autoReplyOn(sessionID) {
+	if !s.listening(sessionID, ev.Item.Channel) {
 		return
 	}
-	s.setAutoReply(sessionID, false)
-	log.Info().Str("channel", "slack").Str("slack_channel", ev.Item.Channel).Str("thread_ts", parentTS).Str("user", ev.User).Msg("auto-reply switch OFF")
+	// Off, and the bot's own 🤖 goes too: otherwise the thread still shows
+	// the marker while nothing answers, and only the bot could remove it.
+	s.ListenOff(sessionID, ev.Item.Channel, parentTS, "🤖 removed by "+ev.User, false)
 }
 
 // isBotUser reports whether userID is this channel's own bot, so a reaction
@@ -2440,6 +2501,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 			return
 		}
 	} else if ok, reason, groupIDs := s.allowedSender(cfg, ev.User, ev.Channel); !ok {
+		// A reply in a listening thread was not addressed to the bot: a
+		// sender outside the allowlist is simply not answered, without the
+		// 🚫 and DM a direct request gets.
+		if _, listen := listenTurnFrom(ctx); listen {
+			log.Info().Str("channel", "slack").Str("user", ev.User).Str("reason", reason).
+				Msg("listen: sender not allowed; not answered")
+			return
+		}
 		log.Warn().Str("channel", "slack").
 			Str("user", ev.User).
 			Str("slack_channel", ev.Channel).
@@ -2507,6 +2576,22 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	dmMain := false
 	if id := s.dmMainSession(ev); id != "" {
 		sessionID, dmMain = id, true
+	}
+
+	// Listen mode, on a channel thread reply: a bare "stop" (with or without
+	// the mention) switches it off without the model; a turn that is not
+	// the listen path itself (a mention) answers now, so a reply held for
+	// the delay would only repeat it.
+	listenT, isListen := listenTurnFrom(ctx)
+	if !dmMain && ev.ChannelType != "im" && ev.ChannelType != "mpim" && ev.TimeStamp != threadTS {
+		if isStopCommand(ev.Text) && s.listening(sessionID, ev.Channel) {
+			s.ListenOff(sessionID, ev.Channel, threadTS, "stop word from "+ev.User, false)
+			s.postReply(ev.Channel, threadTS, "Oke, aku berhenti mendengarkan thread ini. Pasang 🤖 lagi atau minta aku listen kalau perlu.")
+			return
+		}
+		if !isListen {
+			s.cancelListenWait(sessionID)
+		}
 	}
 
 	// An Instant agent riding this bot answers when the channel is bound to
@@ -2666,6 +2751,16 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if hook := s.onSessionStart; hook != nil {
 			hook(sessionID, "slack", ctxText)
 		}
+	} else if isListen && !dmMain {
+		// A listening turn always reads the thread, up to now: what was said
+		// before the reply AND during its delay (someone else's answer is
+		// exactly what the agent must see). The reply itself is the turn's
+		// own text, so it is left out of the block.
+		now := slackTSNow()
+		if block := s.threadCatchUpUntil(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen, now); block != "" {
+			userText = block + "\n\n" + userText
+		}
+		s.persistThreadBindingSeen(sessionID, ev.Channel, threadTS, now)
 	} else if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS && cfg.ThreadCatchUpEnabled {
 		// An existing thread session only wakes on a mention or the 🤖
 		// switch: open the turn with what people said in between. A new
@@ -2674,6 +2769,9 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if block := s.threadCatchUp(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen); block != "" {
 			userText = block + "\n\n" + userText
 		}
+	}
+	if isListen {
+		userText = listenNote(listenT) + "\n\n" + userText
 	}
 
 	userCtx := agentchannels.WithSender(baseCtx, sender)
@@ -2690,7 +2788,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// mention. The marker doubles as the on/off switch — remove it to stop,
 	// re-add to resume (handleReactionRemoved / handleReactionAdded). DMs are
 	// already always-on, so they get neither the switch nor the marker.
-	if isNewSession && ev.ChannelType == "channel" && cfg.ReactionTriggerEnabled && reactionChannelAllowed(cfg, ev.Channel) {
+	if isNewSession && ev.ChannelType == "channel" && cfg.ReactionTriggerEnabled && reactionChannelAllowed(cfg, ev.Channel) && !listenManual(cfg, ev.Channel) {
 		s.setAutoReply(sessionID, true)
 		// threadTS is the parent message for a new thread; mark it.
 		s.setReaction(reactionTrigger, ev.Channel, threadTS, "")
@@ -2905,6 +3003,38 @@ func (s *Channel) stopStatusAnimation(t *turn) {
 	t.statusStop = nil
 }
 
+// liveStreamText: a turn's text is live-edited into the thread while it
+// streams. Off: the narration an agent writes between tool calls reached
+// the thread as the reply (the harness's own "say in a few words what you
+// are doing" nudges made it common), so the thread gets the turn's last
+// text once, at Done. Tests of the live-edit path switch it on.
+var liveStreamText = false
+
+// cutSegment closes the text written since the last tool call: a
+// non-empty one becomes lastSeg. Caller holds s.mu.
+func (t *turn) cutSegment() {
+	if seg := t.buf.String()[t.segStart:]; strings.TrimSpace(seg) != "" {
+		t.lastSeg = seg
+	}
+	t.segStart = t.buf.Len()
+}
+
+// replyText is the turn's reply: the text after its last tool call, or
+// the last non-empty text before it when the turn ended on a tool.
+// Caller holds s.mu.
+func (t *turn) replyText() string {
+	if seg := t.buf.String()[t.segStart:]; strings.TrimSpace(seg) != "" {
+		return seg
+	}
+	return t.lastSeg
+}
+
+// resetText empties the turn's text and its segments. Caller holds s.mu.
+func (t *turn) resetText() {
+	t.buf.Reset()
+	t.segStart, t.lastSeg = 0, ""
+}
+
 // startEditTicker launches a goroutine that flushes the accumulated text
 // buffer to the live Slack message every streamEditInterval, so the reply
 // grows in place (chat.update) rather than appearing once at the end. It is
@@ -3009,6 +3139,9 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 		return
 	}
 	raw := t.buf.String()
+	if !liveStreamText {
+		raw = t.replyText()
+	}
 	channelID := t.channelID
 	threadTS := t.threadTS
 	liveTS := t.liveTS
@@ -3018,7 +3151,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	// options line still streaming in is held back until it closes.
 	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw))))
 
-	if body == "" || body == lastSent {
+	if body == "" || body == lastSent || reactPending(body) {
 		return
 	}
 	// While streaming, only the first chunk is shown in the live message;
@@ -3169,6 +3302,14 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	case "error":
 		s.setReaction(reactionError, channelID, msgTS, "")
 		s.setAssistantStatus(channelID, threadTS, "")
+		if !isDirectChannel(channelID) {
+			// A channel thread is the requester's (often a client case):
+			// the agent's error stays on the dashboard, the thread gets
+			// the ❌ on the message that started the turn.
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).Str("error", text).
+				Msg("agent error not posted to the channel thread; see the session")
+			return
+		}
 		msg := "Agent error."
 		if text != "" {
 			msg = fmt.Sprintf("Agent error: %s", text)
@@ -3196,6 +3337,10 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
+	if name, ok := reactOnlyReply(text); ok {
+		s.reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name)
+		return
+	}
 	// Source tags become plain "(from Name)"; the raw tag never reaches
 	// the thread.
 	text = s.rewriteSources(sessionKey, text)
@@ -3306,7 +3451,7 @@ func (s *Channel) moveLiveBelow(sessionKey string) {
 		restart = cur.hasStarted
 	}
 	s.mu.Unlock()
-	if restart {
+	if restart && liveStreamText {
 		// The takeover stopped the old turn's ticker, and hasStarted is
 		// carried, so nothing else would re-post the text.
 		s.startEditTicker(sessionKey)
@@ -3475,7 +3620,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.NotifyState(sessionKey, "running", "")
 			// Begin live-editing the reply: post once now, then chat.update
 			// every streamEditInterval as more text streams in.
-			s.startEditTicker(sessionKey)
+			if liveStreamText {
+				s.startEditTicker(sessionKey)
+			}
 		}
 		// Streaming text → "Thinking" phase. setStatusLabel only repaints on a
 		// real change, so this is cheap on every delta.
@@ -3496,6 +3643,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Lock()
 		if t := s.turns[sessionKey]; t != nil {
 			t.interim.Tool(ev.ToolName, ev.ToolInput, ev.ToolUseID, hide)
+			t.cutSegment()
 		}
 		s.mu.Unlock()
 
@@ -3508,6 +3656,25 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			t.interim.Result(ev.ToolName, ev.ToolUseID, ev.Text)
 		}
 		s.mu.Unlock()
+
+	case event.Warning:
+		// A failover took the turn elsewhere: the failed provider's text
+		// leaves the thread, its live message too (dropLiveReply). The
+		// next provider's reply starts a live message of its own.
+		if !ev.FailedOver {
+			return
+		}
+		s.mu.Lock()
+		t := s.turns[sessionKey]
+		if t == nil {
+			s.mu.Unlock()
+			return
+		}
+		s.stopEditTicker(t)
+		t.resetText()
+		t.hasStarted = false
+		s.mu.Unlock()
+		s.dropLiveReply(sessionKey, "")
 
 	case event.Compaction, event.Notice:
 		// Something happened TO the session rather than in the reply. The
@@ -3536,7 +3703,10 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.stopStatusAnimation(t)
 		s.stopEditTicker(t)
 		text = t.buf.String()
-		t.buf.Reset()
+		if !liveStreamText {
+			text = t.replyText()
+		}
+		t.resetText()
 		t.hasStarted = false
 		t.running = false
 		interim := t.interim
@@ -3586,6 +3756,11 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			t.running = false
 			held = t.interim.Holding()
 			t.interim = agentchannels.InterimTurn{}
+			if !held {
+				// The failed turn's text is not posted by a later Done.
+				t.resetText()
+				t.hasStarted = false
+			}
 		}
 		s.mu.Unlock()
 		if t == nil {
@@ -4742,4 +4917,10 @@ func (s *Channel) dashboardURL(sessionID string) string {
 		return "Alamat dashboard belum diatur di Settings (app_url)."
 	}
 	return fmt.Sprintf("<%s/tools/agents/sessions/%s|Open session in the dashboard>", base, url.PathEscape(sessionID))
+}
+
+// isDirectChannel reports whether channelID is a direct message with the
+// bot (a "D…" id), not a channel or a group conversation.
+func isDirectChannel(channelID string) bool {
+	return strings.HasPrefix(channelID, "D")
 }

@@ -18,7 +18,19 @@ export type SlackSettingField = {
   note?: string;
 };
 /** owner_slack_* is the agent owner's Slack account, found by email only. */
-export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string };
+/** listen: which LISTEN.md files shape the agent's listen mode and what a
+    new thread gets from them (api_listen.go). */
+export type AgentListenInfo = {
+  wick_path: string;
+  wick_exists: boolean;
+  agent_path?: string;
+  agent_exists: boolean;
+  delay_sec: number;
+  scope: string;
+  on_team_reply: string;
+  instructions: string;
+};
+export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string; listen?: AgentListenInfo };
 export type PickerItem = { id: string; name: string };
 
 const enc = encodeURIComponent;
@@ -137,4 +149,55 @@ export function accessDimension(key: string): "people" | "bots" | "channels" {
   if (key.includes("bots")) return "bots";
   if (key.includes("channels")) return "channels";
   return "people";
+}
+
+/* ── Thread reply modes (Reaction Auto-Reply group) ─────────────────────
+   reply_mode + listen_delay_sec + auto_reply_delay_sec + channel_reply_rules
+   render as one block: two mode cards with their delay, then a per-channel
+   table. Mirrors internal/agents/channels/slack/listen_mode.go. */
+
+export type ReplyMode = "listen" | "auto_reply" | "manual";
+export type ReplyRule = { id: string; name: string; mode: ReplyMode; delay: string };
+
+/** The keys the reply-mode block draws itself; the generic loop skips them. */
+export const REPLY_MODE_KEYS = new Set(["reply_mode", "listen_delay_sec", "auto_reply_delay_sec", "channel_reply_rules"]);
+
+export const REPLY_MODE_LABEL: Record<ReplyMode, string> = {
+  listen: "👂 Listen",
+  auto_reply: "⚡ Auto-reply",
+  manual: "✋ Manual",
+};
+
+function normMode(m: unknown): ReplyMode {
+  const v = String(m ?? "").toLowerCase();
+  return v === "auto_reply" || v === "manual" ? v : "listen";
+}
+
+/** The stored rules, tolerant of an empty or broken value. */
+export function replyRules(raw: string | undefined): ReplyRule[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v)
+      ? v.filter((x) => x && typeof x.id === "string" && x.id).map((x) => ({
+          id: x.id, name: x.name || x.id, mode: normMode(x.mode), delay: x.delay == null ? "" : String(x.delay),
+        }))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** rules with a channel added (a new row starts in auto_reply: the reason
+    to add one is usually a debug channel), never twice. */
+export function addReplyRule(rules: ReplyRule[], ch: PickerItem, mode: ReplyMode = "auto_reply"): ReplyRule[] {
+  return rules.some((r) => r.id === ch.id) ? rules : [...rules, { id: ch.id, name: ch.name || ch.id, mode, delay: "" }];
+}
+
+/** A delay as typed: digits only, "" = the default for that mode. */
+export function cleanDelay(v: string): string {
+  const t = v.trim();
+  if (t === "") return "";
+  const n = Math.floor(Number(t));
+  return Number.isFinite(n) && n >= 0 ? String(Math.min(n, 900)) : "";
 }

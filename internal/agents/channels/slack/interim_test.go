@@ -189,6 +189,7 @@ func TestInterimDropDeletesLiveMessage(t *testing.T) {
 // turn's whole held text.
 func TestInterimDropDeleteFailsCompletesLiveMessage(t *testing.T) {
 	interimHooks(t, true, map[string]bool{"t1": true})
+	withLiveStream(t)
 	f := newLiveFake(t, true)
 	c := f.channel()
 	liveThenDelegate(c)
@@ -203,12 +204,13 @@ func TestInterimDropDeleteFailsCompletesLiveMessage(t *testing.T) {
 }
 
 // A turn that fails while holding posts its text, as before the hold.
+// In a direct message: a channel thread gets no error text.
 func TestInterimErrorPostsHeldText(t *testing.T) {
 	interimHooks(t, true, map[string]bool{"t1": true})
 	f := newFakeSlack(t)
 	c := &Channel{
 		api:   f.client(),
-		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
+		turns: map[string]*turn{"slack-t1": {channelID: "D1", threadTS: "1700000000.000100", running: true}},
 	}
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "team_message", ToolInput: `{"to":"@franky"}`, ToolUseID: "u1"})
 	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "u1", Text: `{"task_id":"t1","state":"working"}`})
@@ -227,5 +229,24 @@ func TestCarryOverKeepsInterim(t *testing.T) {
 	nt.carryOver(&old)
 	if !nt.interim.Holding() {
 		t.Fatal("the carried-over turn lost the hold")
+	}
+}
+
+// A failover's Warning deletes the live message the failed provider's
+// text was shown in; the next provider's answer is posted on its own.
+func TestFailedOverDropsTheLiveMessage(t *testing.T) {
+	f := newLiveFake(t, false)
+	c := f.channel()
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "You've hit your limit"})
+	c.flushLiveMessage("slack-t1")
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Warning, ErrorMsg: "a stopped", FailedOver: true})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "the answer on b"})
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Done})
+	calls := f.got()
+	if len(calls) != 3 || calls[0].method != "post" || calls[1].method != "delete" || calls[2].method != "post" {
+		t.Fatalf("want post, delete, post, got %+v", calls)
+	}
+	if got := callText(calls[2]); !strings.Contains(got, "the answer on b") || strings.Contains(got, "limit") {
+		t.Fatalf("answer posted %q", got)
 	}
 }

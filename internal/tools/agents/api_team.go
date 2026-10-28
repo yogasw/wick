@@ -91,8 +91,8 @@ type TeamAgentItem struct {
 	MentionFrom  string   `json:"mention_from"`
 	MentionAllow []string `json:"mention_allow"`
 	MaxHops      int      `json:"max_hops"`
-	// UseGlobalPrompt: spawns carry the global system_prompt instead of
-	// system_prompt_team (on for agents converted from a project).
+	// UseGlobalPrompt is stored but no longer read (every Team spawn
+	// carries system_prompt); kept for API compatibility.
 	UseGlobalPrompt bool `json:"use_global_prompt"`
 	// OwnProject: the agent's project is its own (Team tag), so
 	// ShowInProjects applies; a project it was pointed at always shows.
@@ -102,11 +102,16 @@ type TeamAgentItem struct {
 	ShowInProjects bool `json:"show_in_projects"`
 	// AllowProviderSwitch is the effective value (default applied).
 	AllowProviderSwitch bool `json:"allow_provider_switch"`
+	// ForceDefaultProvider: every chat is held to the default provider
+	// (team.SessionPolicy.ForceDefaultProvider).
+	ForceDefaultProvider bool `json:"force_default_provider"`
 	// ChannelShowTeammates is the effective value (default on).
 	ChannelShowTeammates bool `json:"channel_show_teammates"`
 	// ChannelHideInterim is the effective value (default on).
-	ChannelHideInterim bool                   `json:"channel_hide_interim"`
-	SuggestedPrompts   []team.SuggestedPrompt `json:"suggested_prompts"`
+	ChannelHideInterim bool `json:"channel_hide_interim"`
+	// StopAfterTeamTask is the effective value (default on).
+	StopAfterTeamTask bool                   `json:"stop_after_team_task"`
+	SuggestedPrompts  []team.SuggestedPrompt `json:"suggested_prompts"`
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
@@ -282,8 +287,10 @@ type teamAgentWriteReq struct {
 	RunAs                *string                 `json:"run_as"`
 	Disabled             *bool                   `json:"disabled"`
 	AllowProviderSwitch  *bool                   `json:"allow_provider_switch"`
+	ForceDefaultProvider *bool                   `json:"force_default_provider"`
 	ChannelShowTeammates *bool                   `json:"channel_show_teammates"`
 	ChannelHideInterim   *bool                   `json:"channel_hide_interim"`
+	StopAfterTeamTask    *bool                   `json:"stop_after_team_task"`
 	IsCaptain            *bool                   `json:"is_captain"`
 	UseGlobalPrompt      *bool                   `json:"use_global_prompt"`
 	MentionFrom          *string                 `json:"mention_from"`
@@ -427,6 +434,8 @@ var teamToolLabels = map[string][2]string{
 	"wick_compact":           {"Compact", "Summarise the conversation to free context."},
 	"wick_cli_token":         {"CLI token", "Mint a token for the wick CLI."},
 	"wick_session_workspace": {"Session workspace", "Add throwaway connectors for this conversation."},
+	"wick_slack_listen":      {"Slack listen", "Listen to a Slack thread and answer replies without a mention, or stop."},
+	"wick_session_link":      {"Linked sessions", "See and read the other sessions working on the same matter, and link new ones."},
 }
 
 // validateGrants rejects a checklist the owner could not have ticked: an
@@ -1077,9 +1086,11 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MentionAllow:         nonNilIDs(decodeIDList(p.MentionAllow)),
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
-		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
+		AllowProviderSwitch:  !team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy),
+		ForceDefaultProvider: team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy),
 		ChannelShowTeammates: team.ShowsTeammatesInChannels(p.ChannelShowTeammates),
 		ChannelHideInterim:   team.HidesInterimInChannels(p.ChannelHideInterim),
+		StopAfterTeamTask:    team.StopsAfterTeamTask(p.StopAfterTeamTask),
 		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
@@ -1595,9 +1606,17 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if req.UseGlobalPrompt != nil {
 		p.UseGlobalPrompt = *req.UseGlobalPrompt
 	}
-	if req.AllowProviderSwitch != nil {
-		v := *req.AllowProviderSwitch
-		p.AllowProviderSwitch = &v
+	// allow_provider_switch and force_default_provider are the two faces
+	// of one setting (team.LocksProvider); force wins when both come.
+	// Becoming locked sweeps the agent's chats once, after the save.
+	forceOn := false
+	if req.AllowProviderSwitch != nil || req.ForceDefaultProvider != nil {
+		lock := req.AllowProviderSwitch != nil && !*req.AllowProviderSwitch
+		if req.ForceDefaultProvider != nil {
+			lock = *req.ForceDefaultProvider
+		}
+		forceOn = lock && !team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy)
+		setProviderLock(&p, lock)
 	}
 	if req.ChannelShowTeammates != nil {
 		v := *req.ChannelShowTeammates
@@ -1606,6 +1625,10 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if req.ChannelHideInterim != nil {
 		v := *req.ChannelHideInterim
 		p.ChannelHideInterim = &v
+	}
+	if req.StopAfterTeamTask != nil {
+		v := *req.StopAfterTeamTask
+		p.StopAfterTeamTask = &v
 	}
 	if req.Features != nil {
 		p.Features = team.EncodeFeatures(*req.Features)
@@ -1647,7 +1670,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if p.ProjectID != "" {
 		if proj, ok := globalMgr.Registry().Project(p.ProjectID); ok {
 			meta := proj.Meta
-			oldProv, followDefault = meta.Defaults.Provider, req.Provider != nil || req.Model != nil
+			oldProv, followDefault = meta.Defaults.Provider, req.Provider != nil || req.Model != nil || forceOn
 			if applyProjectFields(&meta, req) {
 				if _, err := globalMgr.UpdateProject(c.Context(), p.ProjectID, meta); err != nil {
 					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1763,7 +1786,10 @@ func releaseTeamAgentProject(ctx context.Context, agent entity.AgentPersona, row
 			return nil
 		}
 	}
-	if purge {
+	// Purged only when the agent's owner owns the project too: a delete is
+	// the project owner's call (project.CanManage), so a project someone
+	// else owns is untagged and kept instead.
+	if purge && project.CanManage(pr.Meta, agent.OwnerUserID, false) {
 		return purgeProject(ctx, pr, "user")
 	}
 	meta := pr.Meta
@@ -2332,4 +2358,14 @@ func apiTeamAgentSkills(c *tool.Ctx) {
 		out = append(out, item{EffectiveSkill: s, Disabled: !s.Required && slices.Contains(off, s.Name)})
 	}
 	c.JSON(http.StatusOK, map[string]any{"items": out, "local_dir": localDir})
+}
+
+// setProviderLock stores agent p's "Provider in chats" setting
+// (team.LocksProvider) in both of its fields, so they never disagree.
+func setProviderLock(p *entity.AgentPersona, lock bool) {
+	allow := !lock
+	p.AllowProviderSwitch = &allow
+	pol := team.DecodeSessionPolicy(p.SessionPolicy)
+	pol.ForceDefaultProvider = lock
+	p.SessionPolicy = team.EncodeSessionPolicy(pol)
 }

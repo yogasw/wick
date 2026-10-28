@@ -127,10 +127,11 @@ func (h handlers) defSchema(c *connector.Ctx) (any, error) {
 			"headers":       "Map of header name → value template. Example: {\"Authorization\": \"Bearer {{.cfg.api_key}}\"}",
 			"body_template": "Optional body template (JSON, form-encoded, anything).",
 			"content_type":  "Optional Content-Type for the body.",
+			"multipart":     "Optional multipart/form-data body, mutually exclusive with body_template: {\"fields\": {name: value template}, \"files\": {name: path template}}. Each files entry must render to an ABSOLUTE path of a local file inside wick's agents dir (session/project files); its bytes are sent under that form field with the file's base name. Content-Type with boundary is set automatically. An empty rendered value skips that part. Example: {\"files\": {\"file\": \"{{.in.path}}\"}} with an input `path` (widget text, desc 'Absolute path under the agents dir'). Mark upload ops destructive.",
 		},
 		"templating": map[string]any{
 			"namespaces": "{{.cfg.<key>}} = instance config value (secrets arrive decrypted); {{.in.<key>}} = per-call input value.",
-			"functions":  "default, lower, upper, b64 (Basic-auth recipes), urlquery (ALWAYS use for query params: {{urlquery .in.q}}), js, printf. Nothing else — no exec, no file access.",
+			"functions":  "default, lower, upper, b64 (Basic-auth recipes), urlquery (ALWAYS use for query params: {{urlquery .in.q}}), js, printf. Nothing else — no exec, no file access (to send a local file use request.multipart.files).",
 			"strictness": "missingkey=error: referencing an undeclared key fails the call with a clear error. Rendered output capped at 1MB.",
 		},
 		"validation": []string{

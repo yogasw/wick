@@ -295,6 +295,18 @@ describe("UsageReport driven by a page filter", () => {
     // Dates win over a named window — asking for both would be ambiguous.
     expect(url).not.toContain("window=");
   });
+
+  it("narrows the ledger to the page's provider selection", async () => {
+    const fn = mockFetch(REPORT);
+    render(UsageReport, {
+      props: { base: "/t", range: "7d", channels: ["ui"], providers: ["claude/acct-a", "(none)"] },
+    });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+
+    const url = String(fn.mock.calls[0][0]);
+    expect(url).toContain("channels=ui");
+    expect(url).toContain(`providers=${encodeURIComponent("claude/acct-a,(none)")}`);
+  });
 });
 
 /* "Which provider" stops one level short of the question people actually

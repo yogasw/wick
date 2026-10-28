@@ -268,6 +268,24 @@ func (s *Store) Load(agentID string) (Config, bool, error) {
 	return c, true, nil
 }
 
+// List returns every Slack remote agent's settings.
+func (s *Store) List() ([]Config, error) {
+	var rows []entity.AgentChannel
+	if err := s.db.Where("type = ?", RowType).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]Config, 0, len(rows))
+	for _, r := range rows {
+		var c Config
+		if err := json.Unmarshal([]byte(r.Config), &c); err != nil {
+			continue
+		}
+		c.AgentID = r.Name
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 // Save upserts c's row.
 func (s *Store) Save(c Config) error {
 	c.UpdatedAt = time.Now().UTC()

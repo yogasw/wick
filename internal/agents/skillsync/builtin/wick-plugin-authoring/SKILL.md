@@ -140,6 +140,7 @@ Any kind can call wick: users, sessions, tickets, config, another connector's op
 | `rest.write` | `Rest` POST/PUT/PATCH/DELETE (destructive) | **OFF** | `rest` |
 | `db.read` | `Query` | **OFF** | `db` |
 | `db.write` | `Query` with `write=true` (destructive) | **OFF** | `db` |
+| `events.publish` | `Invoke` method `events.publish` (wakes `wake_on` watches) | allow | – |
 | `datadir` | none (declarative) | allow | – |
 | `net.listen` | none (declarative) | allow | – |
 

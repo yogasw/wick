@@ -84,6 +84,20 @@ export type UsageReport = Windowed & {
   by_model?: UsageSlice[];
   by_project: UsageSlice[];
   by_user: UsageSlice[];
+  /** The window over time, oldest first, quiet buckets as zeros. Absent
+      on an older server. */
+  trend?: TrendPoint[];
+  /** "hour", "day" or "month". */
+  trend_unit?: string;
+};
+
+/** One bucket of the trend. turns and sessions are what "per turn" and
+ *  "per conversation" divide by. */
+export type TrendPoint = {
+  key: string;
+  totals: UsageTotals;
+  turns: number;
+  sessions: number;
 };
 
 export const EMPTY_TOTALS: UsageTotals = {
@@ -144,13 +158,29 @@ export async function fetchProviderUsage(
 /** LedgerScope narrows the ledger the way a page's filter bar does. A
  *  page that filters its chart by channel has to filter its cost by the
  *  same channel, or the two numbers below one filter disagree. */
-export type LedgerScope = { channels?: string[]; instances?: string[] };
+export type LedgerScope = {
+  channels?: string[];
+  instances?: string[];
+  providers?: string[];
+  people?: string[];
+  models?: string[];
+  /** Condition rows, "<field>:<op>:<value>" each; see TextMatches on
+   *  the server. matchOp "or" joins them with OR, otherwise AND. */
+  match?: string[];
+  matchOp?: string;
+};
 
 function scopeQuery(scope: LedgerScope): string {
   const parts: string[] = [];
   if (scope.channels?.length) parts.push(`channels=${encodeURIComponent(scope.channels.join(","))}`);
   if (scope.instances?.length)
     parts.push(`instances=${encodeURIComponent(scope.instances.join(","))}`);
+  if (scope.providers?.length)
+    parts.push(`providers=${encodeURIComponent(scope.providers.join(","))}`);
+  if (scope.people?.length) parts.push(`people=${encodeURIComponent(scope.people.join(","))}`);
+  if (scope.models?.length) parts.push(`models=${encodeURIComponent(scope.models.join(","))}`);
+  for (const m of scope.match ?? []) parts.push(`match=${encodeURIComponent(m)}`);
+  if (scope.match && scope.match.length > 1 && scope.matchOp === "or") parts.push("match_op=or");
   return parts.length ? `&${parts.join("&")}` : "";
 }
 

@@ -61,7 +61,7 @@
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
-    disabled: boolean; allow_provider_switch: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; use_global_prompt: boolean; show_in_projects: boolean;
+    disabled: boolean; allow_provider_switch: boolean; force_default_provider: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; stop_after_team_task: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan; captain_policy: CaptainPolicy;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
@@ -74,7 +74,7 @@
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
-      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, use_global_prompt: !!a.use_global_prompt,
+      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, force_default_provider: !!a.force_default_provider, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, stop_after_team_task: a.stop_after_team_task !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can), captain_policy: captainPolicyOf(a.captain_policy),
@@ -324,8 +324,10 @@
     if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
+    if (d.force_default_provider !== !!saved.force_default_provider) p.force_default_provider = d.force_default_provider;
     if (d.channel_show_teammates !== (saved.channel_show_teammates !== false)) p.channel_show_teammates = d.channel_show_teammates;
     if (d.channel_hide_interim !== (saved.channel_hide_interim !== false)) p.channel_hide_interim = d.channel_hide_interim;
+    if (d.stop_after_team_task !== (saved.stop_after_team_task !== false)) p.stop_after_team_task = d.stop_after_team_task;
     if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
     if (d.show_in_projects !== (saved.show_in_projects ?? !saved.own_project)) p.show_in_projects = d.show_in_projects;
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
@@ -501,6 +503,12 @@
   });
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
+  // "Provider in chats": one setting, stored as allow_provider_switch and
+  // force_default_provider (the server keeps them in step).
+  const PROVIDER_LOCK_OPTIONS = [
+    { value: "locked", allow: false, label: "Locked to default", hint: "Every chat uses the provider above, chats that picked another one included, now and whenever the default changes. A chat running on a failover target stays there until failover brings it back." },
+    { value: "pick", allow: true, label: "Chat may pick", hint: "A chat can pick another provider before its first message, and another model of the same provider any time. The pick stays; it never changes the agent's default." },
+  ];
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
 </script>
 
@@ -1003,10 +1011,13 @@
     </div>
     {#if saved.own_project && draft.project_id === saved.project_id}
       <div data-testid="as-show-in-projects">
-        <Toggle checked={draft.show_in_projects} onChange={(v) => (draft.show_in_projects = v)} label="Keep the project in Agents → Projects" />
-        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          On: the project is listed in Agents → Projects as well as in Team. Off: only in Team (still reachable from this agent).
-        </p>
+        <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">Keep the project in Agents → Projects</span>
+            <span class="block text-xs text-black-800 dark:text-black-600">On: the project is listed in Agents → Projects as well as in Team. Off: only in Team (still reachable from this agent).</span>
+          </span>
+          <Toggle checked={draft.show_in_projects} onChange={(v) => (draft.show_in_projects = v)} label="Keep the project in Agents → Projects" />
+        </div>
       </div>
     {/if}
     <div>
@@ -1018,29 +1029,44 @@
         placeholder="Default project"
       />
     </div>
-    <div>
-      <Toggle checked={draft.use_global_prompt} onChange={(v) => (draft.use_global_prompt = v)} label="Use the global system prompt" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        On: this agent's chats carry the global system prompt (channel rules such as Slack formatting live there) instead of the Team agents prompt. On by default for an agent made from a project.
-      </p>
-    </div>
-    <div>
-      <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
-      </p>
+    <div class="space-y-2" role="radiogroup" aria-label="Provider in chats" data-testid="as-provider-lock">
+      <span class={label}>Provider in chats</span>
+      {#each PROVIDER_LOCK_OPTIONS as o (o.value)}
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.allow_provider_switch === o.allow ? 'border-green-500 bg-green-50 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
+          <input type="radio" name="provider-lock" class="mt-1" value={o.value} checked={draft.allow_provider_switch === o.allow} onchange={() => { draft.allow_provider_switch = o.allow; draft.force_default_provider = !o.allow; }} />
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
+            <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
+          </span>
+        </label>
+      {/each}
     </div>
     <div data-testid="as-show-teammates">
-      <Toggle checked={draft.channel_show_teammates} onChange={(v) => (draft.channel_show_teammates = v)} label="Show teammates in channels" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        When off, channels see one agent working; teammates and their names stay in the web view only.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Show teammates in channels</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">When off, channels see one agent working; teammates and their names stay in the web view only.</span>
+        </span>
+        <Toggle checked={draft.channel_show_teammates} onChange={(v) => (draft.channel_show_teammates = v)} label="Show teammates in channels" />
+      </div>
     </div>
     <div data-testid="as-hide-interim">
-      <Toggle checked={draft.channel_hide_interim} onChange={(v) => (draft.channel_hide_interim = v)} label="Hide in-between messages in channels" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Status lines the lead writes while teammates work stay out of Slack and Telegram; the final answer always posts.
-      </p>
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Hide in-between messages in channels</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">Status lines the lead writes while teammates work stay out of Slack and Telegram; the final answer always posts.</span>
+        </span>
+        <Toggle checked={draft.channel_hide_interim} onChange={(v) => (draft.channel_hide_interim = v)} label="Hide in-between messages in channels" />
+      </div>
+    </div>
+    <div data-testid="as-stop-after-team-task">
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Stop after answering a teammate</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">Once this agent answered a task another agent sent it, its process stops right away instead of idling until the idle timeout, so team exchanges do not pile up running agents. The chat resumes where it left off on its next message.</span>
+        </span>
+        <Toggle checked={draft.stop_after_team_task} onChange={(v) => (draft.stop_after_team_task = v)} label="Stop after answering a teammate" />
+      </div>
     </div>
     {@render dangerZone()}
   {/if}

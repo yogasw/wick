@@ -117,12 +117,31 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 	// Timing: run_at (one-shot) OR every (interval) OR cron (recurring).
 	every := argString(args, "every")
 	isWatch := strings.EqualFold(strings.TrimSpace(argString(args, "type")), entity.ScheduledTypeWatch)
-	if isWatch && strings.TrimSpace(every+argString(args, "cron")+argString(args, "run_at")) == "" {
+	wakeOn, err := schedule.NormalizeWakeOn(argString(args, "wake_on"))
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), scheduleToolName)
+		return
+	}
+	if wakeOn != "" && !isWatch {
+		rsp.ToolError(w, req.ID, "wake_on is only for type=watch", scheduleToolName)
+		return
+	}
+	noTiming := strings.TrimSpace(every+argString(args, "cron")+argString(args, "run_at")) == ""
+	wakeOnly := wakeOn != "" && noTiming
+	if wakeOn != "" && strings.TrimSpace(argString(args, "run_at")) != "" && strings.TrimSpace(every+argString(args, "cron")) == "" {
+		rsp.ToolError(w, req.ID, "wake_on takes every/cron (poll as well) or no timing at all (wait for events only), not run_at", scheduleToolName)
+		return
+	}
+	if isWatch && noTiming && !wakeOnly {
 		// A watch is one call: no timing given means "check every 10s".
 		every = schedule.MinWatchInterval.String()
 	}
-	spec, err := schedule.ParseWhen(argString(args, "run_at"), every, argString(args, "cron"), time.Now())
-	if err != nil {
+	var spec schedule.Spec
+	if wakeOnly {
+		// Waits for events only: recurring with no cadence; run_at is set
+		// to the time limit below.
+		spec = schedule.Spec{Recurring: true, FirstRunAt: time.Now()}
+	} else if spec, err = schedule.ParseWhen(argString(args, "run_at"), every, argString(args, "cron"), time.Now()); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), scheduleToolName)
 		return
 	}
@@ -197,6 +216,7 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 			CreatorIsAdmin: user != nil && user.IsAdmin(),
 			SessionIDs:     []string{SessionOf(r), target.SessionID},
 			ProjectID:      target.ProjectID,
+			WakeOn:         wakeOn,
 		}, time.Now())
 		if werr != nil {
 			rsp.ToolError(w, req.ID, werr.Error(), scheduleToolName)
@@ -221,6 +241,10 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		Type:            schedType,
 		Steps:           stepsJSON,
 		EndsAt:          endsAt,
+		WakeOn:          wakeOn,
+	}
+	if wakeOnly {
+		row.RunAt = schedule.WakeOnlyFirstRun(endsAt)
 	}
 	if spec.Recurring {
 		row.Kind = entity.ScheduledKindRecurring
@@ -949,6 +973,12 @@ func scheduleVM(m entity.ScheduledMessage) map[string]any {
 		vm["step_count"] = len(steps)
 		vm["steps"] = steps
 		vm["on_match"] = schedule.WatchOnMatch(m)
+		if m.WakeOn != "" {
+			vm["wake_on"] = m.WakeOn
+			if schedule.IsWakeOnly(m) {
+				vm["waits_for"] = "events only (no polling); next_run_at is the time limit"
+			}
+		}
 		if m.WatchNotified > 0 {
 			vm["notified"] = m.WatchNotified
 		}
@@ -981,7 +1011,7 @@ func scheduleTypeArgs(args map[string]any, spec schedule.Spec) (string, []schedu
 		if err != nil {
 			return "", nil, err
 		}
-		if err := schedule.ValidateSteps(steps); err != nil {
+		if err := schedule.ValidateStepsFor(steps, strings.TrimSpace(argString(args, "wake_on"))); err != nil {
 			return "", nil, err
 		}
 		if err := schedule.ValidateWatchTiming(spec.Recurring, spec.IntervalMs); err != nil {
@@ -1018,7 +1048,7 @@ func scheduleRescheduleSteps(r *http.Request, m entity.ScheduledMessage, args ma
 			return "", err
 		}
 	}
-	if err := schedule.ValidateSteps(steps); err != nil {
+	if err := schedule.ValidateStepsFor(steps, m.WakeOn); err != nil {
 		return "", err
 	}
 	if err := schedule.CheckBashAllowed(r.Context(), steps, []string{SessionOf(r), m.SessionID, m.SourceSessionID}, m.ProjectID, scheduleUserID(user)); err != nil {
@@ -1142,7 +1172,7 @@ func scheduleWatchTest(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 			return
 		}
 		if override, err = schedule.StepsFromArg(args["steps"]); err == nil {
-			err = schedule.ValidateSteps(override)
+			err = schedule.ValidateStepsFor(override, m.WakeOn)
 		}
 		if err == nil {
 			err = schedule.CheckBashAllowed(r.Context(), override, []string{SessionOf(r), m.SessionID, m.SourceSessionID}, m.ProjectID, scheduleUserID(user))
@@ -1189,6 +1219,14 @@ func scheduleWatchCreateNote(m entity.ScheduledMessage) string {
 		stop = "no time limit — it runs until it matches, fails or is cancelled"
 	}
 	wake := "It wakes you once, when the last step matches. "
+	if m.WakeOn != "" {
+		if schedule.IsWakeOnly(m) {
+			next, every = "when an event for "+m.WakeOn+" arrives (no polling)", "again on every further event"
+		} else {
+			every += ", plus right away on every event for " + m.WakeOn
+		}
+		wake = "Each event's payload is the first step's input (a check step reads it directly). " + wake
+	}
 	switch {
 	case m.Kind == entity.ScheduledKindOnce:
 		every, stop = "nothing more", "it runs ONCE and you get the result whatever it is"

@@ -15,7 +15,7 @@ import (
 
 const testRules = `[
  {"repo":"*","mode":"allow","min_approvals":"1","required_approvers":"acc-lead"},
- {"repo":"integration-helm","mode":"deny"}
+ {"repo":"infra-helm","mode":"deny"}
 ]`
 
 // prJSON builds the slice of GET pullrequests/{id} the rules read.
@@ -41,20 +41,20 @@ func mustRules(t *testing.T, raw string) []mergeRule {
 
 func TestMatchMergeRule_SpecificBeatsGlob(t *testing.T) {
 	rules := mustRules(t, testRules)
-	r, ok := matchMergeRule(rules, "qiscus", "integration-helm")
+	r, ok := matchMergeRule(rules, "acme", "infra-helm")
 	if !ok || r.Mode != "deny" {
-		t.Fatalf("integration-helm matched %+v, want the deny row", r)
+		t.Fatalf("infra-helm matched %+v, want the deny row", r)
 	}
-	r, ok = matchMergeRule(rules, "qiscus", "paragon-wa-flow-bot")
+	r, ok = matchMergeRule(rules, "acme", "client-wa-flow-bot")
 	if !ok || r.Repo != "*" {
-		t.Fatalf("paragon-wa-flow-bot matched %+v, want *", r)
+		t.Fatalf("client-wa-flow-bot matched %+v, want *", r)
 	}
-	r, ok = matchMergeRule(mustRules(t, `[{"repo":"qiscus/Integration-Helm","mode":"deny"}]`), "qiscus", "integration-helm")
+	r, ok = matchMergeRule(mustRules(t, `[{"repo":"acme/Infra-Helm","mode":"deny"}]`), "acme", "infra-helm")
 	if !ok || r.Mode != "deny" {
 		t.Fatal("workspace/slug rows must match case-insensitively")
 	}
-	if _, ok := matchMergeRule(mustRules(t, `[{"repo":"client-*"}]`), "qiscus", "integration-helm"); ok {
-		t.Fatal("client-* must not match integration-helm")
+	if _, ok := matchMergeRule(mustRules(t, `[{"repo":"client-*"}]`), "acme", "infra-helm"); ok {
+		t.Fatal("client-* must not match infra-helm")
 	}
 }
 
@@ -71,7 +71,7 @@ func TestParseMergeRules_FailsClosed(t *testing.T) {
 }
 
 func TestEvaluateMergeRule(t *testing.T) {
-	rule, _ := matchMergeRule(mustRules(t, testRules), "qiscus", "bot")
+	rule, _ := matchMergeRule(mustRules(t, testRules), "acme", "bot")
 	cases := []struct {
 		name   string
 		pr     map[string]any
@@ -86,7 +86,7 @@ func TestEvaluateMergeRule(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := evaluateMergeRule(rule, "qiscus", "bot", tc.pr)
+			v := evaluateMergeRule(rule, "acme", "bot", tc.pr)
 			if v.Allowed != tc.allow {
 				t.Fatalf("allowed = %v, checks %+v", v.Allowed, v.Checks)
 			}
@@ -99,8 +99,8 @@ func TestEvaluateMergeRule(t *testing.T) {
 
 func TestParsePRRef(t *testing.T) {
 	cases := map[string][3]string{
-		"https://bitbucket.org/qiscus/paragon-wa-flow-bot/pull-requests/113": {"qiscus", "paragon-wa-flow-bot", "113"},
-		"https://bitbucket.org/qiscus/integration-helm/pull-requests/2132/":  {"qiscus", "integration-helm", "2132"},
+		"https://bitbucket.org/acme/client-wa-flow-bot/pull-requests/113": {"acme", "client-wa-flow-bot", "113"},
+		"https://bitbucket.org/acme/infra-helm/pull-requests/2132/":  {"acme", "infra-helm", "2132"},
 		"repo/7":       {"ws", "repo", "7"},
 		"other/repo/7": {"other", "repo", "7"},
 	}
@@ -129,7 +129,7 @@ func TestMergePullRequest_RulesGateTheMerge(t *testing.T) {
 	}{
 		{"approved by lead", "bot", `{"state":"OPEN","reviewers":[{"uuid":"{l}","account_id":"acc-lead"}],"participants":[{"approved":true,"user":{"uuid":"{l}","account_id":"acc-lead"}}]}`, true, ""},
 		{"lead pending", "bot", `{"state":"OPEN","reviewers":[{"uuid":"{l}","account_id":"acc-lead","display_name":"Lead"}],"participants":[]}`, false, "Lead is on this pull request"},
-		{"denied repo", "integration-helm", ``, false, "denied by merge_rules"},
+		{"denied repo", "infra-helm", ``, false, "denied by merge_rules"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestMergePullRequest_RulesGateTheMerge(t *testing.T) {
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
-			if tc.repo == "integration-helm" && read {
+			if tc.repo == "infra-helm" && read {
 				t.Fatal("a denied repo must be refused without reading the PR")
 			}
 		})
@@ -193,10 +193,10 @@ func TestDefaultMergeRules(t *testing.T) {
 		}
 	}
 	rules := mustRules(t, def)
-	if r, _ := matchMergeRule(rules, "qiscus", "integration-helm"); r.Mode != "deny" {
-		t.Fatalf("integration-helm default = %+v", r)
+	if r, _ := matchMergeRule(rules, "acme", "infra-helm"); r.Mode != "deny" {
+		t.Fatalf("infra-helm default = %+v", r)
 	}
-	if r, _ := matchMergeRule(rules, "qiscus", "paragon-wa-flow-bot"); r.MinApprovals != 1 || len(r.RequiredApprovers) != 1 {
+	if r, _ := matchMergeRule(rules, "acme", "client-wa-flow-bot"); r.MinApprovals != 1 || len(r.RequiredApprovers) != 1 {
 		t.Fatalf("* default = %+v", r)
 	}
 }

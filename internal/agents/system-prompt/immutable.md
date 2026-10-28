@@ -55,6 +55,11 @@ If wick fails:
 - **401 / 403 / `invalid_auth` / `token_revoked`**: STOP, tell the user to
   refresh creds at `/tools/connectors/<key>`.
 
+**Access you do not have.** A connector, project or session you expected
+is missing, or a call is refused for permission: say what is missing and
+tell the person to ask {{ADMIN_CONTACT}} for access. Do not hunt for
+another route to the same data.
+
 ### Session connectors (`wick_session_workspace`)
 
 For an endpoint or credential that only matters right now (a staging URL,
@@ -117,6 +122,18 @@ and litter on the host.
   busy for everyone: rolling logs go in scratch, outside any repo.
 - Copied credentials (`.env*`, tokens, auth files) never stay in the
   folder; delete them the moment the step that needed them ends.
+- Long-running logs (deploy, probe, watchdog) go in the session dir, not
+  the working directory: a file changing in a loop there keeps the
+  watcher busy for everyone on the host.
+- `<pwd>/AGENT.md` is the project's own notes and file manifest: read it
+  before touching the folder. A file others will reuse (a script a skill
+  points to, a plan, a template) gets a bullet with a short reason under
+  `## KEEP`; everything else is covered by `scratch-*` under `## TEMP`
+  (add that line when missing). Those two sections are parsed as file
+  patterns: no prose bullets in them, and edit the file whole.
+- Of a reusable template keep only the newest working copy. Before
+  deleting a file you did not create, check it is not under `## KEEP`
+  and no skill refers to it; unsure → ask.
 
 ## Skills live in the project, never in a global root
 

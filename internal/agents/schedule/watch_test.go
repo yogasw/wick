@@ -100,7 +100,7 @@ func runSteps(t *testing.T, conn ConnectorExecutor, steps ...Step) (RunRecord, s
 		t.Fatalf("validate: %v", err)
 	}
 	m := entity.ScheduledMessage{ID: "sm_test", Message: "deploy done?"}
-	return executeWatch(context.Background(), m, steps, t.TempDir(), filepath.Join(t.TempDir(), "tick"), conn)
+	return executeWatch(context.Background(), m, steps, t.TempDir(), filepath.Join(t.TempDir(), "tick"), conn, nil)
 }
 
 func TestExecuteWatch_ExitCodeContract(t *testing.T) {
@@ -1093,7 +1093,7 @@ func TestExecuteWatch_FixedPathAndHomeOutsideSchedule(t *testing.T) {
 	if dir == "" || strings.Contains(dir, "schedules") {
 		t.Fatalf("tmp dir %q", dir)
 	}
-	executeWatch(context.Background(), m, []Step{{Kind: "bash", Script: "exit 0"}}, t.TempDir(), dir, nil)
+	executeWatch(context.Background(), m, []Step{{Kind: "bash", Script: "exit 0"}}, t.TempDir(), dir, nil, nil)
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("tmp dir left behind: %v", err)
 	}

@@ -42,6 +42,7 @@ import (
 	agentnotes "github.com/yogasw/wick/internal/agents/notes"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/promptguard"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/managedbin"
 	ompprovider "github.com/yogasw/wick/internal/agents/provider/omp"
@@ -53,6 +54,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionlink"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
@@ -294,6 +296,21 @@ func NewServer() *Server {
 	// module carries its pre-reflected Configs (Owner = meta.Key is
 	// stamped here) so per-module rows are seeded in the same pass.
 	configsSvc := configs.NewService(db)
+	// Operator prompts and Team instructions keep a version history: every
+	// write of a managed row, whichever door it came through, is recorded
+	// with the writer the context carries.
+	promptGuard := promptguard.New(db, configsSvc)
+	configsSvc.SetChangeHook(func(ctx context.Context, owner, key, before, after string) {
+		actor := promptguard.Actor{}
+		if u := login.GetUser(ctx); u != nil {
+			actor.UserID, actor.Name = u.ID, u.Name
+			if actor.Name == "" {
+				actor.Name = u.Email
+			}
+		}
+		promptGuard.OnConfigChange(ctx, owner, key, before, after, actor)
+	})
+	team.SetPromptHook(promptGuard.OnTeamPrompt)
 	toolPlugins.PublicBase = func() string { return strings.TrimRight(configsSvc.AppURL(), "/") }
 	var extraConfigs []entity.Config
 	for _, m := range modules {
@@ -758,8 +775,20 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
-	// A Team agent's session reads its own operator row instead, never
-	// system_prompt (see ClaudeFactory.composePrompt).
+	// Admin-managed security rules: every spawn, right after the
+	// immutable rules (see ClaudeFactory.composePrompt).
+	agentsFactory.PathGuardBinary = resolvedGateBin
+	agentsFactory.PathGuardLoader = func() (string, string) {
+		return configsSvc.GetOwned("agents", "path_guard"), configsSvc.GetOwned("agents", "path_guard_allow")
+	}
+	agentsFactory.AdminContactLoader = func() string {
+		return configsSvc.GetOwned("agents", "admin_contact")
+	}
+	agentsFactory.SecurityPromptLoader = func() string {
+		return configsSvc.GetOwned("agents", promptguard.KeySecurity)
+	}
+	// Team agents add their own row right after system_prompt (see
+	// ClaudeFactory.composePrompt).
 	agentsFactory.TeamSystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt_team")
 	}
@@ -1000,10 +1029,9 @@ func NewServer() *Server {
 	var teamSvc *team.Service
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent: maxConc,
-		// An automatic provider failover tells the same surfaces a manual
-		// switch does: the web UI gets the system turn, a channel thread
-		// (which shows no system turns) a line ahead of the continued
-		// reply — no Done, the turn is still running.
+		// An automatic provider failover (and its return) shows in the web
+		// UI as a system turn. A channel thread gets no notice: the turn
+		// just goes on there, on the next provider.
 		OnFailoverNotify: func(sid, name, chip string, steps []string) {
 			agentsBcast.PublishSystemTurn(sid, name, chip, steps)
 		},
@@ -1017,17 +1045,16 @@ func NewServer() *Server {
 				turnObserver.OnEvent(sid, name, ev)
 			}
 		},
-		// Its own message on the thread, not text folded into a reply: a
-		// return happens between turns, before the next reply starts.
-		OnFailoverReply: func(sid, name string, text string) {
-			channelReg.DispatchNotice(sid, "⚠️ "+text)
-		},
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
 		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
 		// An open turn (model thinking, slow API call, background job) is
 		// not killed on the short idle window, only after this much silence.
 		TurnIdleTimeout: agentpool.DefaultTurnIdleTimeout,
 		PreemptIdle:     preemptIdle,
+		// Read live, so the switch applies without a restart.
+		StopAfterMachineTurn: func() bool {
+			return configsSvc.GetOwned("agents", "stop_after_machine_turn") != "false"
+		},
 		// Per-user identity plumbing. A subprocess carries the MCP credential
 		// of whoever spawned it (baked into its argv), so the pool needs to
 		// know who each message is from to decide whether that process can be
@@ -1089,6 +1116,11 @@ func NewServer() *Server {
 		IdentityFixed: func(ctx context.Context, sessionID string) bool {
 			return teamSvc.IdentityFixed(ctx, sessionID)
 		},
+		// During a handover the channels move first: a message for a session
+		// whose turn the draining build still runs waits for that turn.
+		PredecessorHolds: func(sessionID string) bool {
+			return upgrade.PredecessorHolds(agentsLayout.BaseDir, sessionID)
+		},
 		Layout:          agentsLayout,
 		Factory:         agentsFactory,
 		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
@@ -1101,7 +1133,8 @@ func NewServer() *Server {
 		},
 		// Trend gate: hold a spawn while free memory is falling toward the
 		// floor, not only once it is under it.
-		SpawnHold: resourceGuard.HoldSpawns,
+		SpawnHold:       resourceGuard.HoldSpawns,
+		SpawnHoldReason: func() string { return resourceGuard.Status().Reason },
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 			// Also fires when the pool binds an unscoped session to a
@@ -1112,6 +1145,9 @@ func NewServer() *Server {
 			_ = agentsMgr.RefreshSession(sessionID)
 		},
 		OnSessionMeta: syncSessionMeta,
+		// Sessions linked to this one that are working right now, in front
+		// of each user turn (sessionlink).
+		TurnNote: func(sessionID string) string { return sessionlink.Note(agentsLayout, sessionID, time.Now()) },
 		// Ticket auto-join, then auto-create: both can key off the opening
 		// text, which is only knowable here — not when the session was
 		// created. A project with no rules costs one meta read.
@@ -1156,6 +1192,14 @@ func NewServer() *Server {
 			if joined.Joined {
 				log.Info().Str("session", sessionID).Str("ticket", joined.Ticket.ID).
 					Str("rule", joined.Rule).Msg("session auto-joined its thread's ticket")
+				// The ticket's owner session and this one now work the same
+				// matter: link them so each knows the other is there.
+				if owner := strings.TrimSpace(joined.Ticket.Fields[ticket.OwnerSessionField]); owner != "" && owner != sessionID {
+					if lerr := sessionlink.Link(agentsLayout, sessionID, owner, "same ticket "+joined.Ticket.ID); lerr == nil {
+						syncSessionMeta(sessionID)
+						syncSessionMeta(owner)
+					}
+				}
 				return
 			}
 			if len(joined.Ambiguous) > 0 {
@@ -1349,6 +1393,7 @@ func NewServer() *Server {
 	agentstool.SetAuth(authSvc)
 	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
+	agentstool.SetPromptGuard(promptGuard)
 	// Agents app: the MCP layer narrows an agent session's connector
 	// reach to that agent's checklist through this resolver.
 	teamSvc = team.NewService(db, agentsLayout)
@@ -1380,13 +1425,16 @@ func NewServer() *Server {
 		if !ok {
 			return agentpool.TeamLimits{}, false
 		}
+		bash := slices.Contains(lim.NativeTools, "Bash")
+		disabled := slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill)
 		return agentpool.TeamLimits{
 			AgentID:         lim.AgentID,
 			DisallowedTools: team.DisallowedClaudeTools(lim.NativeTools),
-			BashAllowed:     slices.Contains(lim.NativeTools, "Bash"),
+			BashAllowed:     bash,
 			BashRules:       lim.BashRules,
 			DefaultScope:    lim.ProjectDir,
-			DisabledSkills:  slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill),
+			// Host-admin skills are dropped for an agent without Bash.
+			DisabledSkills: skillsync.WithAdminSkillsOff(disabled, bash),
 		}, true
 	}
 	agentsession.ProjectAgent = func(projectID string) string {
@@ -1487,9 +1535,9 @@ func NewServer() *Server {
 		wfMgr.Router.SetGlobalConcurrency(n)
 	}
 	// connectorsSvc is constructed further down (line ~517) — the
-	// creds adapter is wired after that block so RowCreds can resolve
+	// executor is wired after that block so connector nodes can resolve
 	// rows from the live connectors service. Search for
-	// "SetRowCreds" below.
+	// "SetExecutor" below.
 	if provs, perr := wfsetup.NewCLIProviders(); perr == nil {
 		for _, p := range provs {
 			wfMgr.WithProvider(p)
@@ -1940,9 +1988,9 @@ func NewServer() *Server {
 	// 	return systemprompt.ConnectorCatalog(ready)
 	// }
 
-	// Workflow connector executor needs row credentials resolved
-	// from the connectors service — wire after the service is built.
-	wfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connectorsSvc))
+	// Workflow connector nodes run through the connectors service —
+	// wire after the service is built.
+	wfMgr.Connectors.SetExecutor(wfsetup.ConnectorsExecutor(connectorsSvc))
 	// Run identity-gated connector ops as the workflow owner — headless
 	// runs have no cookie session to stamp login.GetUser. See connector
 	// node executor.
@@ -2005,6 +2053,13 @@ func NewServer() *Server {
 		Tools:      allItems,
 		ToolsFn:    liveToolItems,
 		AppName:    appname.Resolve(),
+		Prompts:    promptGuard,
+		AgentOf: func(sessionID string) string {
+			if p := teamSvc.AgentFor(context.Background(), sessionID); p != nil {
+				return "@" + p.Handle
+			}
+			return ""
+		},
 	}))
 	connectors.Register(notifications.Module(notifications.Deps{
 		DB:   db,
@@ -2057,6 +2112,8 @@ func NewServer() *Server {
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
+	agentsFactory.ListenPromptLoader = channelReg.ListenPrompt
+	agentsFactory.LinkedSessionsLoader = func(sessionID string) string { return sessionlink.Prompt(agentsLayout, sessionID) }
 	// team_* tools only in a Team agent's session with a reachable teammate.
 	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
 		h := hub()
@@ -2246,6 +2303,11 @@ func NewServer() *Server {
 			// Record whether each reply reached its Slack thread, for the
 			// web UI's "Sent to Slack" status on the bubble.
 			slackCh.SetDeliveryFn(agentstool.RecordChannelDelivery)
+
+			// Show a reply listen mode is holding the moment it arrives.
+			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
+				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
+			})
 
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
@@ -2629,6 +2691,7 @@ func NewServer() *Server {
 			return out, true
 		}).
 		WithSchedule(scheduleStore).
+		WithThreadListen(channelReg.ThreadListen).
 		WithRefreshSession(func(id string) error {
 			syncSessionMeta(id)
 			return nil
@@ -3101,6 +3164,8 @@ func NewServer() *Server {
 	if agentsMgr != nil {
 		adminHandler.SetProjectWriter(agentsMgr)
 	}
+	// /admin/projects?show=deleted — deleted projects and their Restore.
+	adminHandler.SetProjectTrash(agentstool.ProjectTrash{})
 	// /admin/team-agents — share Team agents by tag.
 	adminHandler.SetTeamAgents(teamAgentLister{})
 	// /admin/workflows — same for a workflow's owner. Only the DB-backed
@@ -3583,7 +3648,7 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, resyncSessions: agentsMgr.Registry().ResyncFromDisk, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
 }
 
 type Server struct {
@@ -3602,6 +3667,10 @@ type Server struct {
 	// registry + broadcaster are in scope) and reused by Run to wire
 	// the agentctl refresh_session handler. nil before agents boot.
 	syncSessionMeta func(sessionID string)
+	// resyncSessions takes session meta the draining predecessor wrote
+	// after this process loaded its registry (Registry.ResyncFromDisk).
+	// Run calls it once the intake baton is held. nil before agents boot.
+	resyncSessions func() int
 	// customConn learns the listen port in Run, so SSO JWTs a custom MCP
 	// connector mints for wick's loopback address are recognised.
 	customConn *customconn.Service
@@ -3643,10 +3712,13 @@ type Server struct {
 	// intakeReady closes once this process holds the intake baton, i.e. once
 	// it is the process allowed to accept NEW work (channel listeners, cron,
 	// scheduled messages). During a graceful upgrade the successor parks here
-	// until the draining parent is finished, so exactly one process is ever
-	// consuming Slack events. Read by the single-node `all` entrypoint, which
-	// must hold its job scheduler back for the same reason.
+	// until the draining parent is finished; channel listeners alone may start
+	// earlier, when the parent offers them (channelsOnce). Read by the
+	// single-node `all` entrypoint, which must hold its job scheduler back.
 	intakeReady chan struct{}
+	// channelsOnce starts the channel listeners once, from whichever comes
+	// first: the predecessor's offer or the intake baton.
+	channelsOnce sync.Once
 	// teamHub builds the Team A2A hub on first use. Run builds it once the
 	// intake baton is held, so tasks a restart left working are settled
 	// without waiting for someone to touch a team feature.
@@ -3679,8 +3751,28 @@ func (s *Server) JobsSvc() *manager.Service { return s.jobsSvc }
 // watchTelegram methods — Reload semantics now live inside each
 // channel's ConfigSource.
 func (s *Server) startChannels(ctx context.Context) {
-	s.channelReg.StartAll(ctx)
-	go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+	s.startChannelListeners(ctx)
+	s.startIntakeWatchers(ctx)
+}
+
+// startChannelListeners starts the channel instances (Slack sockets,
+// Telegram polling) and their config hot-reload, once per process. During a
+// handover it runs before the intake baton is ours — as soon as the
+// draining predecessor offers its channels (see upgrade.ReleaseChannels).
+func (s *Server) startChannelListeners(ctx context.Context) {
+	s.channelsOnce.Do(func() {
+		s.channelReg.StartAll(ctx)
+		go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+		if s.agentsLayout.BaseDir != "" {
+			upgrade.MarkChannelsTaken(s.agentsLayout.BaseDir)
+		}
+	})
+}
+
+// startIntakeWatchers starts what must run in one process only and so
+// moves with the intake baton: background-set replay and the workflow
+// watcher.
+func (s *Server) startIntakeWatchers(ctx context.Context) {
 	if s.bgSets != nil {
 		go replayBackgroundSets(ctx, s.bgSets)
 	}
@@ -4110,6 +4202,30 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// random and double-fire every cron; parking instead means intake moves
 	// exactly once, at the moment the old process exits.
 	batonCh := make(chan *upgrade.IntakeBaton, 1)
+	intakeHeld := make(chan struct{})
+	if upg.Enabled() && upg.IsChild() && s.agentsLayout.BaseDir != "" {
+		// Channels need not wait for the baton: the draining predecessor
+		// offers them as soon as it starts draining, so new messages reach
+		// this build at once instead of the one being replaced.
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-intakeHeld:
+					return
+				case <-t.C:
+				}
+				if upgrade.PredecessorReleasedChannels(s.agentsLayout.BaseDir) {
+					logger.Info().Msg("intake: previous process released its channels — starting them here")
+					s.startChannelListeners(ctx)
+					return
+				}
+			}
+		}()
+	}
 	go func() {
 		if upg.Enabled() && upg.IsChild() {
 			logger.Info().Msg("intake: waiting for the previous process to finish draining")
@@ -4122,7 +4238,13 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			return
 		}
 		batonCh <- baton
+		close(intakeHeld)
 		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
+		if s.resyncSessions != nil && upg.IsChild() {
+			// The predecessor is gone now; whatever turns it ran since our
+			// boot read only reached disk.
+			go s.resyncSessions()
+		}
 		s.startChannels(ctx)
 		if s.teamHub != nil {
 			// Off the intake path: reading the task store back is disk I/O.
@@ -4404,6 +4526,36 @@ func turnSessions(p *agentpool.Pool) []string {
 	return out
 }
 
+// channelsHandoverWait bounds how long a draining process waits for the
+// successor to take its channels, and channelsOverlap how long both listen
+// before this one stops. Vars for tests.
+var (
+	channelsHandoverWait = 2 * time.Minute
+	channelsOverlap      = 5 * time.Second
+)
+
+// handOverChannels stops this draining process's channel listeners once the
+// successor has started its own (upgrade.ChannelsTakenByOther). Until then
+// both listen; briefly sharing a socket loses nothing, a gap would. A
+// successor that never takes them — an older binary, after a rollback — gets
+// them the old way: this process keeps listening until it exits. Sending is
+// untouched either way, so a reply still being written goes out.
+func (s *Server) handOverChannels(logger *zerolog.Logger, dir string) {
+	deadline := time.Now().Add(channelsHandoverWait)
+	for !upgrade.ChannelsTakenByOther(dir) {
+		if time.Now().After(deadline) {
+			logger.Warn().Msg("upgrade: successor did not take the channels — keeping them until this process exits")
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	time.Sleep(channelsOverlap)
+	if s.channelReg != nil {
+		s.channelReg.StopAll()
+	}
+	logger.Info().Msg("upgrade: channels handed to the successor — this process takes no new messages")
+}
+
 // drainForUpgrade runs in the OLD process once a successor has taken over the
 // listener. It is the whole point of the feature: instead of killing agents
 // mid-turn, this process stops answering HTTP and then simply waits for its
@@ -4414,11 +4566,12 @@ func turnSessions(p *agentpool.Pool) []string {
 //  1. HTTP down first — the successor already holds the same socket, so every
 //     new request (including MCP calls from our own agents) is served there.
 //  2. Wait for the pool. Nothing is signalled; a ten-minute debug run keeps
-//     running and still posts its reply to Slack, because this process also
-//     keeps its channel listeners for the whole drain.
+//     running and still posts its reply to Slack. Its channel LISTENERS move
+//     to the successor right away (handOverChannels), so new messages are
+//     answered by the new build; sending stays here until the turn ends.
 //  3. Release the intake baton LAST. The successor is parked on it and starts
-//     its Slack listeners the moment it is free, so intake moves exactly once
-//     — never split across two binaries, never absent.
+//     cron, workflows and scheduled messages the moment it is free, so those
+//     move exactly once — never split across two binaries, never absent.
 func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, batonCh chan *upgrade.IntakeBaton) {
 	logger.Info().Msg("upgrade: successor is serving — draining this process (nothing is killed)")
 	// Stop watching the binary. The successor holds the socket and runs its
@@ -4473,6 +4626,12 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	// names who is blocking without ever saying why.
 	drainDir := s.agentsLayout.BaseDir
 	drainStarted := time.Now()
+	// Offer the channels to the successor before the first record goes
+	// out, so that record already carries the offer.
+	if drainDir != "" {
+		upgrade.ReleaseChannels()
+		go s.handOverChannels(logger, drainDir)
+	}
 	stopPublish := make(chan struct{})
 	go func() {
 		t := time.NewTicker(3 * time.Second)

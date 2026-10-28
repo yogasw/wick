@@ -142,6 +142,9 @@ const (
 	// ConnectorRunSourcePlugin marks runs a plugin made through the Host
 	// API (ExecuteConnector), as the acting user it resolved.
 	ConnectorRunSourcePlugin ConnectorRunSource = "plugin"
+	// ConnectorRunSourceWorkflow marks runs a workflow connector node made,
+	// as the workflow's owner.
+	ConnectorRunSourceWorkflow ConnectorRunSource = "workflow"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.

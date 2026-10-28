@@ -8,7 +8,7 @@ export function linkifyText(s: string): string {
   const slackLinks: { url: string; label: string }[] = [];
   s = slackLinkCapture(s, slackLinks);
   s = esc(s);
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="underline break-all" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="underline break-all" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="underline break-all" target="_blank" rel="noopener">$2</a>');
   s = emojiShortcodes(s);
   return slackLinkExpand(s, slackLinks, "underline break-all");
@@ -156,9 +156,9 @@ function inlineMarkdown(s: string): string {
      still carry emphasis or code. */
   const anchors: string[] = [];
   const park = (html: string) => `\x00A${anchors.push(html) - 1}\x00`;
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label, href) =>
+  s = s.replace(/\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label, href) =>
     park(`<a href="${href}" class="${LINK_CLASS}" target="_blank" rel="noopener">`) + label + park("</a>"));
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, href: string) => {
+  s = s.replace(/\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\(([^)\s]+)\)/g, (m, label, href: string) => {
     /* Any other scheme (javascript:, data:) stays inert text; only a
        session-relative path becomes an in-app file link. */
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return m;
@@ -256,13 +256,16 @@ export function renderMarkdown(text: string): string {
     const f = lists.pop();
     if (!f) return;
     const tag = f.ordered ? "ol" : "ul";
-    const marker = f.ordered ? "list-decimal" : lists.length > 0 ? "list-[circle]" : "list-disc";
-    const cls = `class="${marker} list-outside pl-6 space-y-0.5 ${lists.length > 0 ? "mt-0.5" : "my-1"}"`;
+    /* Nested bullets are circles, set inline: the arbitrary list-[circle]
+       class never reached the built stylesheet, so they showed no marker. */
+    const marker = f.ordered ? "list-decimal" : lists.length > 0 ? "" : "list-disc";
+    const circle = !f.ordered && lists.length > 0 ? ' style="list-style-type:circle"' : "";
+    const cls = `${circle} class="${marker} list-outside pl-6 space-y-0.5 ${lists.length > 0 ? "mt-0.5" : "my-1"}"`;
     const start = f.ordered && f.start !== 1 ? ` start="${f.start}"` : "";
     const items = f.items
       .map((it) => `<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(it.text.join(" "))}${it.children}</li>`)
       .join("");
-    const html = `<${tag}${start} ${cls}>${items}</${tag}>`;
+    const html = `<${tag}${start}${cls}>${items}</${tag}>`;
     const parent = lists[lists.length - 1];
     if (parent) parent.items[parent.items.length - 1].children += html;
     else out.push(html);

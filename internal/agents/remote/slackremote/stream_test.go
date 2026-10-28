@@ -275,3 +275,59 @@ func TestRouterTakesOlderEditedMessage(t *testing.T) {
 		})
 	}
 }
+
+// A process that never ran the turn (another generation during an
+// upgrade, or after a restart) still knows a saved target's reply as the
+// remote's, so it is not dispatched as a mention to an agent here.
+func TestRouterOwnsSavedTargetWithoutTurn(t *testing.T) {
+	r := NewRouter()
+	reply := Message{Channel: "C01TESTCHAN", TS: "20.0", ThreadTS: "10.0", User: "UREMOTE", BotID: "BREMOTE"}
+	if r.Owns(reply) {
+		t.Fatal("no targets wired: not owned")
+	}
+	r.SetTargets(func() ([]Config, error) {
+		return []Config{
+			{Target: TargetChannel, Channel: "C01TESTCHAN", MentionID: "UREMOTE"},
+			{Target: TargetDM, User: "UDMBOT"},
+		}, nil
+	})
+	if !r.Owns(reply) {
+		t.Fatal("saved target's bot reply in its channel must be owned")
+	}
+	for name, m := range map[string]Message{
+		"other channel": {Channel: "C02OTHER", TS: "20.0", ThreadTS: "10.0", User: "UREMOTE", BotID: "BREMOTE"},
+		"other bot":     {Channel: "C01TESTCHAN", TS: "20.0", ThreadTS: "10.0", User: "UOTHER", BotID: "BOTHER"},
+		"a person":      {Channel: "C01TESTCHAN", TS: "20.0", ThreadTS: "10.0", User: "UREMOTE"},
+	} {
+		if r.Owns(m) {
+			t.Fatalf("%s: must not be owned", name)
+		}
+	}
+	if !r.Owns(Message{Channel: "D01TEST", TS: "1.0", User: "UDMBOT", BotID: "BDM"}) {
+		t.Fatal("DM target's bot reply must be owned")
+	}
+}
+
+// A saved channel target that opens a thread itself (a top-level message,
+// e.g. mentioning an agent here) is starting its own conversation, not
+// replying to a turn: neither that message nor its later messages in the
+// same thread are owned. Its messages in other threads still are.
+func TestRouterLeavesThreadsSavedTargetOpened(t *testing.T) {
+	r := NewRouter()
+	r.SetTargets(func() ([]Config, error) {
+		return []Config{{Target: TargetChannel, Channel: "C01TESTCHAN", MentionID: "UREMOTE"}}, nil
+	})
+	opener := Message{Channel: "C01TESTCHAN", TS: "30.0", User: "UREMOTE", BotID: "BREMOTE", Text: "<@UAGENT> please check"}
+	if r.Owns(opener) {
+		t.Fatal("top-level message from the target must not be owned")
+	}
+	if r.Owns(Message{Channel: "C01TESTCHAN", TS: "30.0", ThreadTS: "30.0", User: "UREMOTE", BotID: "BREMOTE"}) {
+		t.Fatal("thread parent echoed with its own ts must not be owned")
+	}
+	if r.Owns(Message{Channel: "C01TESTCHAN", TS: "31.0", ThreadTS: "30.0", User: "UREMOTE", BotID: "BREMOTE", Text: "<@UAGENT> follow-up"}) {
+		t.Fatal("follow-up in the thread the target opened must not be owned")
+	}
+	if !r.Owns(Message{Channel: "C01TESTCHAN", TS: "41.0", ThreadTS: "40.0", User: "UREMOTE", BotID: "BREMOTE"}) {
+		t.Fatal("reply in a thread the target did not open must stay owned")
+	}
+}

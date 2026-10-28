@@ -38,7 +38,7 @@ open?" and "what is mine?" — the questions a filter can answer.
 
 ```
 ticket_search query="webhook 401"
-ticket_search query="paragon" status=open mine=true
+ticket_search query="webhook" status=open mine=true
 ```
 
 It matches the id, the title, the **description** and the field values,

@@ -11,6 +11,8 @@ describe("rosterActivity", () => {
     expect(rosterActivity(rosterStatus({ ...row, status: "running", current_action: "Bash" }))).toBe("tool");
     expect(rosterActivity(rosterStatus({ ...row, subagents_working: ["helper"] }))).toBe("tool");
     expect(rosterActivity(rosterStatus({ ...row, status: "running", kind: "a2a-remote" }))).toBe("remote");
+    expect(rosterActivity(rosterStatus({ ...row, team_waiting: ["helper"] }))).toBe("remote");
+    expect(rosterActivity(rosterStatus({ ...row, replying_to: "helper" }))).toBe("thinking");
   });
 
   test("waiting on the person outranks working", () => {

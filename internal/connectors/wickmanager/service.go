@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/promptguard"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -36,6 +37,12 @@ type Deps struct {
 	// AppName is the per-binary basename used to resolve userconfig
 	// paths (~/.<appName>/config.json). Filled from app.BuildAppName.
 	AppName string
+	// Prompts is the operator-prompt history and approval service behind
+	// the prompt_* ops. Nil (stdio mode) = those ops answer unavailable.
+	Prompts *promptguard.Service
+	// AgentOf names the Team agent ("@handle") a session belongs to, ""
+	// for none. Optional; only labels who proposed a prompt change.
+	AgentOf func(sessionID string) string
 }
 
 type handlers struct {
@@ -543,6 +550,12 @@ func (h *handlers) toolSetConfig(c *connector.Ctx) (any, error) {
 		logOpDiff(user, "tool_set_config", args, before, after, err, time.Since(start))
 	}()
 	if err != nil {
+		return nil, err
+	}
+	// The operator prompts change only through prompt_set, which waits
+	// for an admin's click; this door would skip it.
+	if key == promptguard.ConfigOwner && promptguard.Managed(configKey) {
+		err = errManagedPrompt
 		return nil, err
 	}
 	t, ok := h.findTool(key)

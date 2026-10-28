@@ -159,6 +159,35 @@ type ResourceAdminRow struct {
 	// remote set to "Only me"). The row is listed so an admin sees it exists,
 	// but it shows no access badge and no tag picker.
 	Locked string
+	// Deleted, when set, makes this a deleted project waiting in the trash:
+	// a Deleted badge, who deleted it and when, days left, and Restore in
+	// place of the owner picker and tag controls.
+	Deleted *DeletedInfo
+}
+
+// DeletedInfo is what a deleted Projects row shows.
+type DeletedInfo struct {
+	Key      string // trash entry, the Restore target
+	By       string // who deleted it, as a person
+	At       time.Time
+	DaysLeft int // until the retention sweep removes it for good
+	Chats    int
+}
+
+// The Projects filter: ?show=active (default), deleted or all.
+const (
+	ShowActive  = "active"
+	ShowDeleted = "deleted"
+	ShowAll     = "all"
+)
+
+// ResourceFilter is the Active / Deleted / All switch over the table.
+// Only Projects enables it; the other surfaces have no trash.
+type ResourceFilter struct {
+	Enabled bool
+	Show    string
+	Active  int
+	Deleted int
 }
 
 // ConnectionRow is the view model for one (user, OAuth client) grant

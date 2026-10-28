@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { speakerLabel } from "../ticketSession.js";
   import TraceNote from "./TraceNote.svelte";
   import type { TraceFiles } from "../api/files.js";
@@ -41,6 +42,10 @@
   import { teammatesHiddenNote, TEAMMATES_HIDDEN_TIP } from "../teammatesBusy.js";
   import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
   import { renderWithSourceTags } from "../sourceTags.js";
+  import { splitWickPreamble } from "../wickPreamble.js";
+  import type { ListenHold } from "../listenHolds.js";
+  import { delayText } from "../api/listen.js";
+  import HoverCard from "./HoverCard.svelte";
 
   type Props = {
     turn: ConversationTurn;
@@ -86,8 +91,13 @@
     jumpPending?: boolean;
     /** A later assistant answer exists in the thread (P60 S2 guard 2). */
     laterAnswer?: boolean;
+    /** The Slack listen / auto-reply hold this user turn came from. */
+    listenHold?: ListenHold;
+    /** A group thread: the speaker row carries the clock and this (the
+        "open in …'s chat" link) instead of each taking a line of its own. */
+    speakerAside?: Snippet;
   };
-  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, speakerAside }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -207,6 +217,35 @@
     return { text: body(raw.slice(0, at)), note: raw.slice(at + 2) };
   });
   const routedHandles = $derived(routed.note.match(/@[a-z0-9-]+/g) ?? []);
+  /* A Slack reply's [listen mode] note and thread catch-up block are for
+     the agent: the bubble keeps the person's words, the rest folds into
+     chips above it. */
+  const preamble = $derived(isUser && !teamFrom ? splitWickPreamble(routed.text) : null);
+  const bubbleText = $derived(preamble ? preamble.body : routed.text);
+  let preambleOpen = $state<"" | "catchup">("");
+
+  /* A held Slack reply's detail lives on its timestamp: when wick got it,
+     how long it was held, where it went. The [listen mode] note gives the
+     mode and hold when no listen_held row was linked (older history). */
+  const heldCard = $derived.by(() => {
+    if (!isUser || (!listenHold && !preamble?.listen)) return null;
+    const auto = listenHold ? listenHold.mode === "auto_reply" : preamble?.listenMode === "auto";
+    const held = listenHold?.heldFor || preamble?.listenLabel.match(/held (\S+)/)?.[1] || (listenHold?.delaySec ? delayText(listenHold.delaySec) : "");
+    const at = listenHold?.startedMs ? new Date(listenHold.startedMs) : turn.ts ? new Date(turn.ts) : null;
+    const rows: [string, string][] = [];
+    if (at && !isNaN(at.getTime())) rows.push(["Received", at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })]);
+    rows.push(["Held for", held || "not held"], ["Then", "Passed to the agent"], ["Via", "Slack"]);
+    return { title: (auto ? "Auto-reply" : "Listen") + " · this message", rows };
+  });
+  let stampEl: HTMLSpanElement | undefined = $state();
+  let stampHover = $state(false);
+
+  /* A hold that never reached the agent: the server's reason, short. */
+  const holdProblem = $derived(
+    turn.kind === "listen_held"
+      ? (turn.text ?? "").replace(/^(Auto-reply|Listen) · /, "").replace(/^not passed on: /, "Not passed to the agent: ").replace(/^dropped: /, "Dropped: ")
+      : "",
+  );
 
   /* Whether this user turn came from somebody other than the person reading.
      A session can be written into by several people — a colleague on the same
@@ -277,6 +316,8 @@
      renders). Reads `ts` (RFC3339 from history) first, falls back to
      `timestamp` (epoch ms on client-built live turns). */
   const stamp = $derived(turnTime(turn));
+  /* The speaker row already shows the clock (a group thread's speakerAside). */
+  const stampOnSpeaker = $derived(!!speakerAside && !!speaker && !showMeta);
 
   /* Reply: who the chip names and what it previews. Display only — the
      server rebuilds both from the stored turn when the reply is sent. */
@@ -618,6 +659,14 @@
         <InputRequestCard {turn} />
       {:else if turn.kind === "provider_failover" || turn.kind === "provider_return"}
         <ProviderFailoverCard {turn} />
+      {:else if turn.kind === "listen_held"}
+        <!-- Only a hold that ended badly reaches here (listenHolds.ts): the
+             reply never got to the agent, so it stays visible, in red. No
+             button: there is no API to hand a dropped reply over again. -->
+        <div data-testid="listen-problem" class="inline-flex items-start gap-1.5 rounded-lg border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
+          <svg viewBox="0 0 16 16" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8.75 1.75 3.25 9.25h4.5l-.5 5 5.5-7.5h-4.5l.5-5z"></path></svg>
+          <span class="whitespace-pre-wrap break-words min-w-0">{turn.extras?.mode === "auto_reply" ? "Auto-reply" : "Listen"}: {holdProblem}</span>
+        </div>
       {:else if isSystemEvent}
         <!-- A server-recorded event (agent created, access changed, a Team
              handoff, a refused mention, …): one chip, drawn from the
@@ -671,60 +720,60 @@
        chip: the surface and the sender tell it apart from an answer (no
        background) and from a person's message (green, on the right). -->
   <div class="flex min-w-0 justify-start group" data-testid={teamFrom ? "teammate-card" : "system-card"} data-kind={teamFrom ? teamFrom.kind : systemSrc?.key}>
-    <div class="w-full min-w-0 rounded-xl bg-white-200 px-3 py-2.5 dark:bg-navy-700">
+    <div class="w-full min-w-0 rounded-xl bg-white-300 px-3 py-2.5 dark:bg-navy-700">
       <div class="flex min-w-0 items-center gap-2 text-[12.5px] leading-5">
         {#if teamFrom}
           {#if teamFrom.handle}
             <AgentAvatar kind={teamFromAgent?.kind} image={teamFromAgent?.image} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
           {:else}
-            <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">🤝</span>
+            <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-100 text-[11px] dark:bg-navy-600">🤝</span>
           {/if}
           <span data-testid="team-sender-chip" title={teamFrom.handle ? `${teamFrom.name} (@${teamFrom.handle}) · Team agent` : "Replies from several teammates"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span>
         {:else if systemSrc}
-          <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-300 text-[11px] dark:bg-navy-600">{systemSrc.icon}</span>
+          <span aria-hidden="true" class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white-100 text-[11px] dark:bg-navy-600">{systemSrc.icon}</span>
           <span data-testid="source-chip" title={"Posted by " + systemSrc.label + ", not typed by a person"} class="min-w-0 truncate font-semibold text-black-900 dark:text-white-100">{systemSrc.label === "cli" ? "CLI" : systemSrc.label.charAt(0).toUpperCase() + systemSrc.label.slice(1)}</span>
         {/if}
         {#if teamFrom?.kind === "revision"}
           <!-- A revision of a task (amend_task): one muted line, no status —
                it is the same task, not a new one. -->
-          <span data-testid="card-revision" title={"Revision of task " + teamFrom.taskId} class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">↻ revision {teamFrom.revision}{teamFrom.replace ? " · replaces the brief" : ""}{stamp ? " · " + stamp : ""}</span>
+          <span data-testid="card-revision" title={"Revision of task " + teamFrom.taskId} class="shrink-0 text-[11.5px] text-black-800 dark:text-black-600">↻ revision {teamFrom.revision}{teamFrom.replace ? " · replaces the brief" : ""}{stamp ? " · " + stamp : ""}</span>
         {:else if stamp}
-          <span class="shrink-0 text-[11.5px] text-black-700 dark:text-black-600">{stamp}</span>
+          <span class="shrink-0 text-[11.5px] text-black-800 dark:text-black-600">{stamp}</span>
         {/if}
-        <span class="flex-1"></span>
-        {#if teamFrom && cardStatus}
-          <span data-testid="card-status" class="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-black-700 dark:text-black-600">
-            <span aria-hidden="true" class={"h-[7px] w-[7px] rounded-full " + cardStatus.dot}></span>{cardStatus.label}
-          </span>
-        {/if}
-        {#if teamFrom?.handle && onOpenAgent}
-          <button type="button" data-testid="card-open" onclick={() => onOpenAgent?.(teamFrom.handle)} title={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} aria-label={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} class="shrink-0 rounded-md px-1 text-[13px] text-black-700 hover:bg-white-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:bg-navy-600">↗</button>
-        {/if}
-      </div>
-      {#if teamFrom}
-        <div
-          use:enrich={cardBody}
-          class={"wick-prose wick-prose-sm mt-0.5 min-w-0 break-words text-black-900 dark:text-white-100" + (cardFolds && !cardOpen ? " max-h-[4.8em] overflow-hidden" : "")}
-        >
-          {@html renderMarkdown(cardBody)}
-        </div>
-      {:else}
-        <div data-testid="system-card-body" class={"mt-0.5 min-w-0 whitespace-pre-wrap text-[13px] leading-relaxed text-black-700 [overflow-wrap:anywhere] dark:text-black-600" + (cardFolds && !cardOpen ? " line-clamp-3" : "")}>{@html linkifyText(cardBody)}</div>
-      {/if}
-      {#if cardFolds}
-        <FoldToggle open={cardOpen} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
-      {/if}
-      {#if canReply}
-        <div class="flex justify-end">
+        {#if canReply}
+          <!-- Reply sits by the time, as under an answer, so the card has no
+               extra row for it and it never stacks on "Show more". -->
           <button
             type="button"
             data-testid="reply-action"
             aria-label="Reply to this message"
             title="Reply"
             onclick={startReply}
-            class="inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-none text-black-700 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
+            class="inline-flex shrink-0 items-center gap-0.5 rounded px-1 text-[11.5px] leading-none text-black-800 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
           >↩ Reply</button>
+        {/if}
+        <span class="flex-1"></span>
+        {#if teamFrom && cardStatus}
+          <span data-testid="card-status" class="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-black-800 dark:text-black-600">
+            <span aria-hidden="true" class={"h-[7px] w-[7px] rounded-full " + cardStatus.dot}></span>{cardStatus.label}
+          </span>
+        {/if}
+        {#if teamFrom?.handle && onOpenAgent}
+          <button type="button" data-testid="card-open" onclick={() => onOpenAgent?.(teamFrom.handle)} title={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} aria-label={teamFrom.taskId ? "Open task " + teamFrom.taskId : `Open the chat with @${teamFrom.handle}`} class="shrink-0 rounded-md px-1 text-[13px] text-black-800 hover:bg-white-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:bg-navy-600">↗</button>
+        {/if}
+      </div>
+      {#if teamFrom}
+        <div
+          use:enrich={cardBody}
+          class={"wick-prose wick-prose-sm mt-0.5 min-w-0 break-words text-black-900 dark:text-white-100 [&_code]:bg-white-100 dark:[&_code]:bg-navy-600" + (cardFolds && !cardOpen ? " max-h-[4.8em] overflow-hidden" : "")}
+        >
+          {@html renderMarkdown(cardBody)}
         </div>
+      {:else}
+        <div data-testid="system-card-body" class={"mt-0.5 min-w-0 whitespace-pre-wrap text-[13px] leading-relaxed text-black-800 [overflow-wrap:anywhere] dark:text-black-600" + (cardFolds && !cardOpen ? " line-clamp-3" : "")}>{@html linkifyText(cardBody)}</div>
+      {/if}
+      {#if cardFolds}
+        <FoldToggle open={cardOpen} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
       {/if}
     </div>
   </div>
@@ -885,6 +934,23 @@
               <span class="max-w-full truncate">{replyPreview(q.excerpt)}</span>
             </button>
           {/if}
+          <!-- The [listen mode] note has no chip: its detail is on the
+               timestamp below the bubble (heldCard). -->
+          {#if preamble && preamble.catchUp}
+            <div class="flex max-w-full flex-col items-end gap-1" data-testid="wick-preamble">
+              <div class="flex flex-wrap justify-end gap-1">
+                {#if preamble.catchUp}
+                  <button type="button" data-testid="catchup-chip" aria-expanded={preambleOpen === "catchup"}
+                    onclick={() => (preambleOpen = preambleOpen === "catchup" ? "" : "catchup")}
+                    class="inline-flex items-center gap-1 rounded-full border border-white-400 bg-white-200 px-2 py-0.5 text-[11px] text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600"
+                  >🧵 {preamble.catchUpCount || ""} {preamble.catchUpCount === 1 ? "message" : "messages"} in the thread</button>
+                {/if}
+              </div>
+              {#if preambleOpen}
+                <div data-testid="wick-preamble-detail" class="max-h-60 max-w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-left text-xs text-black-800 [overflow-wrap:anywhere] dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{preamble.catchUp}</div>
+              {/if}
+            </div>
+          {/if}
           {#if command}
             <!-- A command, not a line of chat: monospace on a quiet surface
                  with a prompt caret, so it reads as something that was RUN.
@@ -900,7 +966,7 @@
               </svg>
               /{command}
             </span>
-          {:else}
+          {:else if bubbleText}
           <!-- Green is "you". Someone else writing into this session gets a
                neutral surface instead, so the two are distinguishable at a
                glance rather than only by reading the name above them. -->
@@ -911,7 +977,7 @@
                 ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
                 : "bg-green-500 text-white-100")}
           >
-            {@html linkifyText(routed.text)}
+            {@html linkifyText(bubbleText)}
           </div>
           {/if}
         </div>
@@ -929,7 +995,14 @@
         {/if}
         {#if stamp || canReply}
           <span class={"flex items-center gap-1 " + (teamFrom ? "self-start" : "self-end")}>
-          {#if stamp}
+          {#if stamp && heldCard}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <span bind:this={stampEl} data-testid="held-stamp" tabindex="0" role="note" aria-label={heldCard.title}
+            onmouseenter={() => (stampHover = true)} onmouseleave={() => (stampHover = false)}
+            onfocus={() => (stampHover = true)} onblur={() => (stampHover = false)}
+            class="cursor-help border-b border-dashed border-black-500 text-[10px] leading-none text-black-500 hover:border-black-900 hover:text-black-900 dark:border-black-600 dark:text-black-600 dark:hover:border-white-100 dark:hover:text-white-100">{stamp}</span>
+          {#if stampHover}<HoverCard anchor={stampEl} title={heldCard.title} rows={heldCard.rows} testid="held-card" />{/if}
+          {:else if stamp}
           <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
           {/if}
           {#if canReply}
@@ -965,6 +1038,10 @@
             ><span class="font-medium text-black-900 dark:text-white-100">{speakerName}</span
             >{#if viaMention}<span class="opacity-70">{via ? " · via @" + via : " · via mention"}</span>{/if}</span
           >
+          {#if speakerAside}
+            {#if stamp}<span class="shrink-0 opacity-70">{stamp}</span>{/if}
+            {@render speakerAside()}
+          {/if}
         </span>
       {/if}
       {#if showTraceToggle}
@@ -1061,7 +1138,7 @@
         {#if isLateReply(turn)}
           <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
         {/if}
-        {#if (stamp && !showMeta) || isSilentReply || canReply}
+        {#if (stamp && !showMeta && !stampOnSpeaker) || isSilentReply || canReply}
           <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">
             {#if isSilentReply}
               <svg data-testid="silent-flag" viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Silent — kept out of channels & notifications; shown here only">
@@ -1071,7 +1148,7 @@
                 <line x1="2" y1="2" x2="22" y2="22"></line>
               </svg>
             {/if}
-            {#if stamp && !showMeta}<span>{stamp}</span>{/if}
+            {#if stamp && !showMeta && !stampOnSpeaker}<span>{stamp}</span>{/if}
             {#if canReply}
             <button
               type="button"

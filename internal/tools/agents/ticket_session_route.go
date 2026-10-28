@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,18 +13,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
 /* An ordinary ticket session (PLAN-team-tickets T12b): ONE home agent —
-   the session's own agent, run as its owner — plus @mentions. It is not
-   a group: nobody is added or removed. The home agent answers only its
-   owner; a mention, or anyone else's message, reaches ONE agent of the
-   sender's own (the one named, else their Captain), run as the sender in
-   a backing session and posted into the thread under its owner. The
-   room's rules are reused as they are: foreignMentions, the run slots,
-   groupRun, roomPrompt. */
+   the session's own agent — plus @mentions. It is not a group: nobody is
+   added or removed. A ticket only adds the session to its project's
+   shared work, so, as in any project session, everyone who may open it
+   carries it on with the home agent, files included, each turn run as its
+   sender (the pool respawns the agent under a new caller). Only a sender
+   other than the owner naming an agent of their own reaches that ONE
+   agent instead, run as the sender in a backing session and posted into
+   the thread under its owner. The room's rules are reused as they are:
+   foreignMentions, the run slots, groupRun, roomPrompt. */
 
 // isTicketSession reports whether sess is an ordinary ticket session:
 // on a ticket, and neither a room, a group chat nor a backing session.
@@ -33,38 +33,32 @@ func isTicketSession(sess session.Session) bool {
 	return team.IsTicketSession(sess.Meta)
 }
 
-// errTicketSessionFiles refuses files from anyone but a ticket session's
-// owner: only the home agent takes them.
-const errTicketSessionFiles = "files go to this session's own agent only — send the text alone to reach your agent"
-
-// ticketSessionOwner reports whether the caller is ticket session sess's
-// owner — the one person its home agent answers, and whose Stop reaches
-// its run. An ownerless session has none.
-func ticketSessionOwner(c *tool.Ctx, sess session.Session) bool {
-	actor := actorID(c)
-	return actor != "" && actor == sess.Meta.UserID
-}
+// errTicketSessionFiles refuses files on a message that reaches the
+// sender's own agent: only the home agent takes them.
+const errTicketSessionFiles = "files go to this session's own agent only — send them without an @mention"
 
 // ticketSessionHomeReachable reports whether the caller's Stop, Dequeue
-// or Cancel reaches ticket session sess's own run: its owner; anyone who
-// may open it when it has no owner; anyone in a channel session (Slack and
-// the like), whose agent answers everyone there anyway; and whoever sees
-// every session.
+// or Cancel reaches ticket session sess's own run: anyone who may open the
+// session, since anyone who may open it may also talk to its home agent.
 func ticketSessionHomeReachable(c *tool.Ctx, sess session.Session) bool {
-	if ticketSessionOwner(c, sess) || sess.Meta.UserID == "" || sess.Meta.Origin != session.OriginUI {
-		return true
-	}
-	u := login.GetUser(c.Context())
-	return u == nil || u.CanSeeAllSessions() || (u.IsAdmin() && adminSeeAll())
+	return ownsSession(c, sess)
 }
 
-// ticketSessionRefusesFiles reports whether files sent to session id must
-// be refused before they are saved: an ordinary ticket session, and the
-// sender not its owner (anything they send reaches their own agent, which
-// takes no files).
-func ticketSessionRefusesFiles(c *tool.Ctx, id string) bool {
+// ticketSessionRefusesFiles reports whether files sent with text to
+// session id must be refused before they are saved: an ordinary ticket
+// session, and text naming the sender's own agent rather than the home
+// one (a backing run takes no files).
+func ticketSessionRefusesFiles(c *tool.Ctx, id, text string) bool {
 	sess, ok := globalMgr.Registry().Session(id)
-	return ok && isTicketSession(sess) && !ticketSessionOwner(c, sess)
+	if !ok || !isTicketSession(sess) {
+		return false
+	}
+	sender := actorID(c)
+	if sender == "" {
+		return false
+	}
+	_, own := ownTeamPeers(c.Context(), sender)
+	return !planTicketSessionMessage(text, sess.Meta.UserID, sender, personHandle(c.Context(), sender), own).Home
 }
 
 // ticketSessionPlan is who a message in a ticket session reaches.
@@ -72,13 +66,9 @@ type ticketSessionPlan struct {
 	// Home: the session's own agent answers, through its own run.
 	Home bool
 	// Target answers instead (HasTarget), in a backing session run as the
-	// sender. Captain marks the sender's own Captain answering a message
-	// with no @ in someone else's session; Default the project default
-	// standing in for a sender with no Captain.
+	// sender.
 	Target    teamlink.Peer
 	HasTarget bool
-	Captain   bool
-	Default   bool
 	// Foreign: someone else's agents named; Unknown: handles that are none
 	// of the sender's agents; Refused: the sender's disabled agents named;
 	// Extra: further agents named — one message reaches one agent.
@@ -89,8 +79,9 @@ type ticketSessionPlan struct {
 }
 
 // planTicketSessionMessage routes text from sender in a ticket session
-// owned by owner ("" = nobody: everyone is answered by their own). own is the sender's own Team agents; senderHandle their
-// person handle, so "@yoga/research" from yoga is their own @research.
+// owned by owner ("" = nobody). own is the sender's own Team agents;
+// senderHandle their person handle, so "@yoga/research" from yoga is their
+// own @research.
 func planTicketSessionMessage(text, owner, sender, senderHandle string, own []teamlink.Peer) ticketSessionPlan {
 	if owner != "" && sender == owner {
 		// The owner talks to their own agent as in any session: its
@@ -138,29 +129,9 @@ func planTicketSessionMessage(text, owner, sender, senderHandle string, own []te
 	if len(hit) > 0 || len(plan.Foreign) > 0 || len(plan.Unknown) > 0 {
 		return plan // only refusals: nobody runs
 	}
-	// Someone else (or anyone, in a session with no owner), no @: their
-	// own Captain answers; nobody is left
-	// without an answer, so with no Captain the project default does, run
-	// as them.
-	for _, p := range own {
-		if p.IsCaptain && !p.Disabled {
-			plan.Target, plan.HasTarget, plan.Captain = p, true, true
-			return plan
-		}
-	}
-	plan.HasTarget, plan.Default = true, true
+	// Anyone else, no @: the home agent carries on, run as them.
+	plan.Home = true
 	return plan
-}
-
-// spokeIn reports whether agentID, working for owner, already has a turn
-// in turns.
-func spokeIn(turns []store.ConversationTurn, agentID, owner string) bool {
-	for _, t := range turns {
-		if t.Speaker != nil && t.Speaker.AgentID == agentID && t.Speaker.OwnerID == owner {
-			return true
-		}
-	}
-	return false
 }
 
 // ticketSessionTurnOwner is whose a ticket session turn is: as in a room,
@@ -180,8 +151,8 @@ func ticketSessionTurnOwner(owner string) func(store.ConversationTurn) string {
 
 // sendTicketSessionMessage is POST /sessions/{id}/send on an ordinary
 // ticket session. It returns false when the session's own agent answers
-// as usual (not a ticket session, or the owner with no @ for anyone
-// else); otherwise it has answered the request.
+// as usual (not a ticket session, or a message for the home agent);
+// otherwise it has answered the request.
 func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, hasFiles bool) bool {
 	if !isTicketSession(sess) || globalMgr == nil {
 		return false
@@ -193,6 +164,12 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 	_, own := ownTeamPeers(c.Context(), sender)
 	plan := planTicketSessionMessage(text, sess.Meta.UserID, sender, personHandle(c.Context(), sender), own)
 	if plan.Home {
+		// Anyone else carries the session on only from inside its project:
+		// having spoken in the session grants none.
+		if sender != sess.Meta.UserID && !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, nil) {
+			c.JSON(http.StatusForbidden, map[string]string{"error": "you have no access to this session's project"})
+			return true
+		}
 		return false
 	}
 	if hasFiles {
@@ -208,10 +185,6 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return true
 	}
-	if plan.Default {
-		plan.Target = roomHomePeer(sess.Meta.ProjectID)
-	}
-
 	var runCtx context.Context
 	var runStarted, runRelease func()
 	if plan.HasTarget {
@@ -230,16 +203,7 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 	}()
 	backing := map[string]string{}
 	if plan.HasTarget {
-		var id string
-		if plan.Default {
-			id, err = roomDefaultBacking(c, sess.ID, sess.Meta.ProjectID)
-		} else {
-			id, err = groupBacking(c, sess.ID, plan.Target.ID)
-		}
-		if errors.Is(err, errNoProjectAgent) {
-			c.JSON(http.StatusForbidden, map[string]string{"error": err.Error()})
-			return true
-		}
+		id, err := groupBacking(c, sess.ID, plan.Target.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return true
@@ -264,12 +228,6 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 	if err := recordGroupTurn(sess.ID, turn); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return true
-	}
-	by := roomActorHandle(c)
-	if plan.Captain && !spokeIn(history, plan.Target.ID, sender) {
-		name := systemLineName(plan.Target.Name, plan.Target.Handle)
-		emitSystemEvent(sess.ID, store.KindGroupMemberAdded, fmt.Sprintf("%s · %s joined · by %s", name, by, by),
-			map[string]string{"agent_id": plan.Target.ID, "handle": plan.Target.Handle, "owner_id": sender})
 	}
 	emitTicketSessionRefusals(c, plan, own, history)
 	if plan.HasTarget {

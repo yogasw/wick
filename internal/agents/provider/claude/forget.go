@@ -32,27 +32,42 @@ func EncodeWorkspace(cwd string) string {
 // Callers pass only folders wick owns — a project's managed cwd. A custom
 // path belongs to the user, and so does claude's history of it.
 func ForgetWorkspace(configDir, cwd string) error {
-	cwd = filepath.Clean(strings.TrimSpace(cwd))
-	if configDir == "" || cwd == "" || cwd == "." || cwd == string(filepath.Separator) {
-		return fmt.Errorf("claude: refusing to forget workspace %q in %q", cwd, configDir)
-	}
-	root := filepath.Join(configDir, "projects")
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	dirs, err := WorkspaceDirs(configDir, cwd)
 	if err != nil {
 		return err
 	}
-	name := EncodeWorkspace(cwd)
 	var errs []error
-	for _, e := range entries {
-		if !e.IsDir() || (e.Name() != name && !strings.HasPrefix(e.Name(), name+"-")) {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
+	for _, d := range dirs {
+		if err := os.RemoveAll(d); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// WorkspaceDirs lists, as absolute paths, the folders ForgetWorkspace
+// would remove, so a caller can move them aside (the project trash)
+// instead. A missing `projects/` folder is no folders, not an error.
+func WorkspaceDirs(configDir, cwd string) ([]string, error) {
+	cwd = filepath.Clean(strings.TrimSpace(cwd))
+	if configDir == "" || cwd == "" || cwd == "." || cwd == string(filepath.Separator) {
+		return nil, fmt.Errorf("claude: refusing to forget workspace %q in %q", cwd, configDir)
+	}
+	root := filepath.Join(configDir, "projects")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	name := EncodeWorkspace(cwd)
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || (e.Name() != name && !strings.HasPrefix(e.Name(), name+"-")) {
+			continue
+		}
+		out = append(out, filepath.Join(root, e.Name()))
+	}
+	return out, nil
 }

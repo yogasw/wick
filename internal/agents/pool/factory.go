@@ -2,6 +2,7 @@ package pool
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -122,6 +123,15 @@ type ClaudeFactory struct {
 	// name the chat paired with sessionID at each Team teammate, "" for
 	// none (nothing is appended).
 	LinkedChatsLoader func(sessionID string) string
+	// LinkedSessionsLoader (optional) returns the "Linked sessions"
+	// section: the sessions linked to this one when its process starts
+	// (sessionlink), "" for none. Live state rides on each turn instead.
+	LinkedSessionsLoader func(sessionID string) string
+
+	// ListenPromptLoader (optional) returns the channel's listen-mode
+	// section for sessionID (Slack: the listen rules and LISTEN.md), ""
+	// for none.
+	ListenPromptLoader func(sessionID string) string
 
 	// TeamPromptLoader (optional) returns the Team part of the prompt for
 	// sessionID: the Team overlay plus "Who you are" for a Team agent's
@@ -149,9 +159,31 @@ type ClaudeFactory struct {
 	// (see TeamLimits); false outside the Team.
 	TeamLimitsLoader func(sessionID string) (TeamLimits, bool)
 
+	// AdminContactLoader (optional) returns the `admin_contact` config
+	// row: whom the built-in rules tell people to ask for missing access.
+	// Empty = "the wick admin".
+	AdminContactLoader func() string
+
+	// PathGuardLoader (optional) returns the `path_guard` mode ("off" or
+	// "block") and the `path_guard_allow` exceptions, read per spawn.
+	// Nil = no path guard.
+	PathGuardLoader func() (mode, allow string)
+
+	// PathGuardBinary is the gate binary the path guard hook runs. Set on
+	// its own because the guard must hold even when the approval gate is
+	// off (gate_enabled=false or bypass permissions). Empty = fall back to
+	// the approval gate's binary.
+	PathGuardBinary string
+
+	// SecurityPromptLoader (optional) returns the `system_prompt_security`
+	// config row: admin-managed security rules every spawn carries right
+	// after the immutable rules — project, Team and sub-agent sessions
+	// alike. Empty = no section.
+	SecurityPromptLoader func() string
+
 	// TeamSystemPromptLoader (optional) returns the `system_prompt_team`
-	// config row: the operator prompt of Team agent sessions, in place of
-	// SystemPromptLoader. Empty = no operator prompt at all.
+	// config row: a Team-only addition placed right after the shared
+	// `system_prompt` in Team agent sessions. Empty = nothing added.
 	TeamSystemPromptLoader func() string
 
 	// SpawnLogger (optional) writes one jsonl per spawn under
@@ -518,6 +550,24 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		}
 	}
 
+	// Path guard: claude spawns get a hook that refuses any tool call
+	// into another agent's project or session (see gate.PathGuardSpec).
+	pathGuardSettings := ""
+	guardBin := f.PathGuardBinary
+	if guardBin == "" {
+		guardBin = gateBin
+	}
+	if pType == provider.TypeClaude && guardBin != "" && opt.Workspace != "" && f.PathGuardLoader != nil {
+		if mode, allow := f.PathGuardLoader(); mode != "off" {
+			spec := f.pathGuardSpec(opt, allow)
+			if p, err := gate.WritePathGuard(f.Layout.SessionDir(opt.SessionID), guardBin, spec); err != nil {
+				log.Warn().Err(err).Str("session", opt.SessionID).Msg("agents.spawn: path guard not installed")
+			} else {
+				pathGuardSettings = p
+			}
+		}
+	}
+
 	// Memory guard, resolved per instance: the global ceiling is the
 	// default, and an instance may set its own — higher OR lower. See
 	// config.ResolveAgentLimitMB for why this is not a min().
@@ -563,9 +613,10 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		OnSpawn: func(binary string, argv []string, env []string, pid int, firstMsg string) {
 			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},
-		Instance:   &insCopy,
-		GateBinary: spawnGateBin,
-		Preset:     presetContent,
+		Instance:          &insCopy,
+		GateBinary:        spawnGateBin,
+		PathGuardSettings: pathGuardSettings,
+		Preset:            presetContent,
 		// Only the wick provider reads this (it rebuilds prompts from
 		// conversation.jsonl); the CLI providers resume from their own
 		// transcript and ignore it.
@@ -948,8 +999,8 @@ type TeamSpawn struct {
 	Schedule  bool
 	// Files keeps the HTML render formats (systemprompt.TeamGates.Files).
 	Files bool
-	// UseGlobalPrompt swaps system_prompt_team for the global
-	// system_prompt (an agent converted from a project keeps its rules).
+	// UseGlobalPrompt is no longer read: every Team spawn carries
+	// system_prompt. Kept so callers and stored agents still compile.
 	UseGlobalPrompt bool
 	// TeamInstructions is the owner's Team prompt, for every agent in
 	// their Team; "" = no "## Team instructions" section.
@@ -960,6 +1011,7 @@ type TeamSpawn struct {
 // wins on conflict:
 //
 //  1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+//     1b. "## Security rules" (`system_prompt_security`, every session)
 //  2. Team overlay + "Who you are" (Team sessions)
 //  3. connector catalog
 //  4. preset body (per-preset persona)
@@ -971,12 +1023,13 @@ type TeamSpawn struct {
 // config below tries to relax.
 //
 // A Team agent's own session is assembled differently: immutable (with
-// its gated sections cut to the agent's access) → Team overlay + "Who
-// you are" → "Your access" → catalog → preset → `system_prompt_team` →
-// "## Team instructions" (the owner's Team settings, skipped when empty)
-// → "## Your persona" → session block. The operator prompt moves BEFORE
-// the persona so it no longer talks over it, and the persona is the last
-// word before the session block.
+// its gated sections cut to the agent's access) → security rules → Team overlay + "Who
+// you are" → "Your access" → catalog → preset → `system_prompt` (the
+// shared base) → `system_prompt_team` (Team-only addition, skipped when
+// empty) → "## Team instructions" (the owner's Team settings, skipped
+// when empty) → "## Your persona" → session block. The operator prompts
+// come BEFORE the persona so they do not talk over it, and the persona is
+// the last word before the session block.
 func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) string {
 	var ts TeamSpawn
 	isTeam := false
@@ -996,12 +1049,22 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		b.WriteString(s)
 	}
 	add := func(s string) { addRaw(strings.TrimSpace(s)) }
+	// The admin's security rules come right after wick's own, in every
+	// kind of session, so nothing operator- or persona-written sits
+	// above them.
+	security := ""
+	if f.SecurityPromptLoader != nil {
+		if sp := strings.TrimSpace(f.SecurityPromptLoader()); sp != "" {
+			security = "## Security rules\n\n" + sp
+		}
+	}
 	if isTeam {
 		add(systemprompt.ImmutableForTeam(providerType, systemprompt.TeamGates{
 			Subagents: ts.Subagents,
 			Schedule:  ts.Schedule,
 			Files:     ts.Files,
 		}))
+		add(security)
 		add(ts.Prompt)
 		add(ts.Access)
 	} else {
@@ -1011,6 +1074,7 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		// session's parentage, which the pool read off meta; a role or
 		// preset cannot override it.
 		addRaw(systemprompt.ImmutableFor(providerType, opt.IsSubAgent))
+		add(security)
 		if f.TeamPromptLoader != nil {
 			add(f.TeamPromptLoader(opt.SessionID, opt.IsSubAgent))
 		}
@@ -1024,18 +1088,13 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		}
 	}
 	if isTeam {
-		// Team sessions never fall back to `system_prompt`: that row holds
-		// the operator's rules for the default support agent (session
-		// titles, Slack identity, file policy), which is exactly what made
-		// a Team agent behave like that agent instead of its persona.
-		// Empty `system_prompt_team` means no operator prompt at all.
-		// An agent converted from a project opts back in to
-		// `system_prompt`, where its channels' rules live.
-		if ts.UseGlobalPrompt {
-			if f.SystemPromptLoader != nil {
-				add(f.SystemPromptLoader())
-			}
-		} else if f.TeamSystemPromptLoader != nil {
+		// `system_prompt` is the base every session shares, Team agents
+		// included; `system_prompt_team` only adds the Team-specific part
+		// right after it (empty = nothing added).
+		if f.SystemPromptLoader != nil {
+			add(f.SystemPromptLoader())
+		}
+		if f.TeamSystemPromptLoader != nil {
 			add(f.TeamSystemPromptLoader())
 		}
 		// The owner's own words for all their agents: after the operator
@@ -1072,6 +1131,13 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 	}
 	addRaw(identity)
 
+	if f.ListenPromptLoader != nil && !opt.IsSubAgent {
+		add(f.ListenPromptLoader(opt.SessionID))
+	}
+	if f.LinkedSessionsLoader != nil && !opt.IsSubAgent {
+		add(f.LinkedSessionsLoader(opt.SessionID))
+	}
+
 	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
 	// A ticket accumulates notes for as long as the work lasts, so
 	// inlining them would charge that growing cost on every turn forever;
@@ -1080,5 +1146,63 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 	if f.TicketPointerLoader != nil {
 		add(f.TicketPointerLoader(opt.SessionID))
 	}
-	return b.String()
+	// Who to ask for access is the operator's to name (admin_contact);
+	// the built-in rule only carries the placeholder.
+	contact := ""
+	if f.AdminContactLoader != nil {
+		contact = f.AdminContactLoader()
+	}
+	return systemprompt.ResolveAdminContact(b.String(), contact)
+}
+
+// pathGuardSpec is the guard of one spawn: the projects and sessions
+// roots are closed except for the spawn's own project and session, and
+// the operator's exceptions. An exception line is "<path>" (every
+// agent) or "<project id> <path>" (that project only); "#" comments.
+func (f *ClaudeFactory) pathGuardSpec(opt FactoryOptions, allow string) gate.PathGuardSpec {
+	real := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	projects := real(f.Layout.ProjectsDir())
+	sessions := real(f.Layout.SessionsDir())
+	spec := gate.PathGuardSpec{
+		Guarded: []string{projects, sessions},
+		Allow:   []string{real(f.Layout.SessionDir(opt.SessionID))},
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		spec.Home = h
+	}
+	ownProject := ""
+	ws := real(opt.Workspace)
+	if rel, err := filepath.Rel(projects, ws); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		ownProject = strings.Split(filepath.ToSlash(rel), "/")[0]
+		spec.Allow = append(spec.Allow, filepath.Join(projects, ownProject))
+	} else {
+		spec.Allow = append(spec.Allow, ws)
+	}
+	for _, line := range strings.Split(allow, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		path := fields[len(fields)-1]
+		if len(fields) > 1 && fields[0] != ownProject {
+			continue
+		}
+		if strings.HasPrefix(path, "~") && spec.Home != "" {
+			path = filepath.Join(spec.Home, strings.TrimPrefix(path, "~"))
+		}
+		if strings.ContainsAny(path, "*?[") {
+			// A pattern is matched segment by segment (gate.underPattern);
+			// it is not a path to resolve.
+			spec.Allow = append(spec.Allow, filepath.Clean(path))
+			continue
+		}
+		spec.Allow = append(spec.Allow, real(path))
+	}
+	return spec
 }

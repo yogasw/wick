@@ -97,7 +97,16 @@ type MemoryDefaults struct {
 func DeriveMemoryDefaults(totalRAMBytes uint64, maxConcurrent int) MemoryDefaults {
 	totalMB := int(totalRAMBytes / (1024 * 1024))
 
-	budget := totalMB - reserveOSMB - reserveWickMB
+	minFree := totalMB / 8
+	if minFree < floorMB {
+		minFree = floorMB
+	}
+
+	// The free-memory floor is carved out too, never only the OS reserve:
+	// ValidateMemoryBudget refuses total + wick reserve + floor above RAM,
+	// so a budget that left the floor out was a suggestion the save itself
+	// rejected ("Apply suggested values" failed on every 8 GB host).
+	budget := totalMB - max(reserveOSMB, minFree) - reserveWickMB
 	if budget < floorMB {
 		budget = floorMB
 	}
@@ -116,11 +125,6 @@ func DeriveMemoryDefaults(totalRAMBytes uint64, maxConcurrent int) MemoryDefault
 	}
 	if tool < toolFloorMB {
 		tool = toolFloorMB
-	}
-
-	minFree := totalMB / 8
-	if minFree < floorMB {
-		minFree = floorMB
 	}
 
 	return MemoryDefaults{

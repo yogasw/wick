@@ -86,6 +86,16 @@ func queueReason(queueLen int, hold bool, events []resourceguard.Event, safePct,
 	return &OverviewQueueReasonDTO{Kind: "waiting", Since: since}
 }
 
+// withHoldReason fills a guard hold that no near_hang event explains —
+// a hold for a load from outside wick emits none — with what the guard
+// sees right now, so the Queue card names it instead of guessing.
+func withHoldReason(r *OverviewQueueReasonDTO, reason string) *OverviewQueueReasonDTO {
+	if r != nil && r.Kind == "guard_hold" && r.Detail == "" {
+		r.Detail = reason
+	}
+	return r
+}
+
 // apiOverview handles GET /api/overview and returns the queue + active session
 // lists the caller is allowed to see.
 func apiOverview(c *tool.Ctx) {
@@ -154,8 +164,9 @@ func apiOverview(c *tool.Ctx) {
 			Active:   globalPool.Active(),
 			PoolMax:  globalPool.MaxConcurrent(),
 			QueueLen: globalPool.QueueLen(),
-			QueueReason: queueReason(globalPool.QueueLen(), resourceGuard.HoldSpawns(), resourceGuard.History(),
+			QueueReason: withHoldReason(queueReason(globalPool.QueueLen(), resourceGuard.HoldSpawns(), resourceGuard.History(),
 				memGuardInt("resource_guard_safe_pct"), globalPool.Active(), globalPool.MaxConcurrent(), oldest),
+				resourceGuard.Status().Reason),
 		},
 	})
 }

@@ -3,10 +3,12 @@ package admin
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/usagereport"
 )
@@ -96,6 +98,59 @@ func (h *Handler) userDisplayName(id string) string {
 	return ledgerNames.names[id]
 }
 
+// parseConditions reads the page's condition builder off the query, with
+// people and projects resolvable by the names the page shows for them.
+func (h *Handler) parseConditions(q url.Values) usagereport.TextMatches {
+	m := usagereport.ParseTextMatches(q["match"], q.Get("match_in"), q.Get("match_mode"), q.Get("match_op"))
+	if !m.Empty() {
+		m.Alias = h.conditionAlias
+	}
+	return m
+}
+
+// conditionAlias names an id: a person's display name, a project's name.
+func (h *Handler) conditionAlias(field, key string) []string {
+	switch field {
+	case usagereport.MatchInPerson:
+		if n := h.userDisplayName(key); n != "" {
+			return []string{n}
+		}
+	case usagereport.MatchInProject:
+		if n := projectDisplayName(key); n != "" {
+			return []string{n}
+		}
+	}
+	return nil
+}
+
+// projectDisplayName is a project's name, cached like ledgerNames: a
+// condition over the project asks for it once per conversation.
+var projectNames struct {
+	mu    sync.Mutex
+	at    time.Time
+	names map[string]string
+}
+
+func projectDisplayName(id string) string {
+	if id == "" {
+		return ""
+	}
+	projectNames.mu.Lock()
+	defer projectNames.mu.Unlock()
+	if projectNames.names == nil || time.Since(projectNames.at) > ledgerNamesTTL {
+		m := map[string]string{}
+		if ids, err := project.List(agentsLayout); err == nil {
+			for _, pid := range ids {
+				if p, err := project.Load(agentsLayout, pid); err == nil && p.Meta.Name != "" {
+					m[pid] = p.Meta.Name
+				}
+			}
+		}
+		projectNames.names, projectNames.at = m, time.Now()
+	}
+	return projectNames.names[id]
+}
+
 // ledgerTags resolves a session from the analytics fact cache: channel,
 // instance, project, owner and title, all already parsed.
 func ledgerTags(id string) store.SessionTags {
@@ -115,8 +170,12 @@ func ledgerTags(id string) store.SessionTags {
 		ProjectID: project,
 		UserID:    owner,
 		Label:     m.Label,
+		Agent:     m.Agent,
 		Channel:   m.Channel,
 		Instance:  m.InstanceKey,
+		Providers: m.providerKeys(),
+		People:    m.People,
+		Models:    m.Models,
 	}
 }
 
@@ -130,7 +189,14 @@ func (h *Handler) analyticsLedgerJSON(w http.ResponseWriter, r *http.Request) {
 	force := q.Get("refresh") == "1"
 	// The page's own filter, applied to the ledger too: one filter bar,
 	// one answer below it.
-	sc := usagereport.Scope{Channels: csv(q.Get("channels")), Instances: csv(q.Get("instances"))}
+	sc := usagereport.Scope{
+		Channels:  csv(q.Get("channels")),
+		Instances: csv(q.Get("instances")),
+		Providers: csv(q.Get("providers")),
+		People:    csv(q.Get("people")),
+		Models:    csv(q.Get("models")),
+		Text:      h.parseConditions(q),
+	}
 
 	// Everything after /ledger/ is either "usage" (the fleet) or
 	// "<type>/<name>/usage" (one provider).

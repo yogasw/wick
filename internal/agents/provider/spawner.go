@@ -159,6 +159,11 @@ type SpawnOptions struct {
 	// sub-package doesn't have to repeat the resolution dance.
 	GateBinary string
 
+	// PathGuardSettings is a claude `--settings` file that installs the
+	// path guard hook (gate.WritePathGuard). Empty = no guard. Only the
+	// claude spawner reads it.
+	PathGuardSettings string
+
 	// Preset is the system prompt content injected via --append-system-prompt
 	// when non-empty. Each provider spawner decides how to pass it to the
 	// underlying CLI. The value is never written to spawn logs — Argv() strips it.

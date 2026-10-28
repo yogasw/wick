@@ -158,7 +158,12 @@ func repoRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	dir := filepath.Dir(file)
+	// The walk below does not follow a symlinked root: from a checkout
+	// reached through a symlink it would scan nothing and pass vacuously.
+	dir, err := filepath.EvalSymlinks(filepath.Dir(file))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", filepath.Dir(file), err)
+	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir

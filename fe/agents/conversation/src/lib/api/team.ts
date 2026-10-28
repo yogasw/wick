@@ -84,10 +84,16 @@ export type AgentItem = {
   /** Whether the chat may pick another provider/model (server applies
       the default: Captain on, others off). */
   allow_provider_switch?: boolean;
+  /** "Keep every chat on the default provider" (default off): chats are
+      held to the default, hand picks included, except one on a failover
+      stand-in. Older servers omit it. */
+  force_default_provider?: boolean;
   /** "Show teammates in channels" (default on). Older servers omit it. */
   channel_show_teammates?: boolean;
   /** "Hide in-between messages in channels" (default on). Older servers omit it. */
   channel_hide_interim?: boolean;
+  /** "Stop after answering a teammate" (default on). Older servers omit it. */
+  stop_after_team_task?: boolean;
   /** "Manage other agents" (agents.* ops), default applied: on for the
       Captain, off for the rest. Older servers omit it. */
   manage_agents?: boolean;
@@ -261,8 +267,10 @@ export type AgentWrite = Partial<{
   run_as: "caller" | "owner";
   disabled: boolean;
   allow_provider_switch: boolean;
+  force_default_provider: boolean;
   channel_show_teammates: boolean;
   channel_hide_interim: boolean;
+  stop_after_team_task: boolean;
   is_captain: boolean;
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;

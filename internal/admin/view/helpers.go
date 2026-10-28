@@ -2,6 +2,7 @@ package view
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -85,4 +86,15 @@ func userOptionsHave(users []UserOption, id string) bool {
 		}
 	}
 	return false
+}
+
+// daysLeftLabel is how long a deleted project stays restorable.
+func daysLeftLabel(days int) string {
+	switch {
+	case days <= 0:
+		return "Removed permanently within a day"
+	case days == 1:
+		return "1 day left"
+	}
+	return fmt.Sprintf("%d days left", days)
 }

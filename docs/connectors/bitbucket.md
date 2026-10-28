@@ -106,6 +106,12 @@ Set `inline_to` **or** `inline_from`, not both; `inline_to` wins if both are giv
     close_source_branch: true
 ```
 
+## Merge rules
+
+`merge_pull_request` checks the rules on the config page (**Merge rules** panel) before every merge, reading the PR as it is right now. Each row names a repository (slug or `workspace/slug`, `*` wildcard), a mode (`deny` refuses every merge into it), the approvals the PR needs, and required approvers who must have approved when they are a reviewer or participant. A repository no row matches merges without checks, so keep a `*` row as the default.
+
+Required approvers are found by name: the search runs as you type (workspace members, or people on recent pull requests when the token cannot read the member list). **Test merge rules** judges a pasted PR against the saved rules without merging.
+
 ## See also
 
 - [Connector Module](/guide/connector-module) — module contract.
