@@ -1305,6 +1305,7 @@
         onRoute={(t) => go({ tickets: t })}
         onOpenSession={(id, project) => void openTicketSession(id, project)}
         captainName={agents.find((a) => a.is_captain)?.name ?? ""}
+        projectAgentName={(pid) => agents.find((a) => a.project_id === pid && !a.disabled)?.name ?? ""}
         onTicketTitle={(p, t, title) => { ticketTitles[`${p}/${t}`] = title; }}
       />
     </div>

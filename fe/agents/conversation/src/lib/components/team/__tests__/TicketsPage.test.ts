@@ -61,11 +61,11 @@ const options = () => [
   { id: "p3", name: "No board", ticketEnabled: false },
 ];
 
-function mount(selected: string[] | null, route = {}) {
+function mount(selected: string[] | null, route = {}, extra: Record<string, unknown> = {}) {
   const onPicked = vi.fn();
   const onRoute = vi.fn();
   const onOpenSession = vi.fn();
-  render(TicketsPage, { props: { base: "/tools/agents", selected, route, onPicked, onRoute, onOpenSession } });
+  render(TicketsPage, { props: { base: "/tools/agents", selected, route, onPicked, onRoute, onOpenSession, ...extra } });
   return { onPicked, onRoute, onOpenSession };
 }
 
@@ -337,6 +337,14 @@ describe("TicketsPage", () => {
     expect(screen.queryByTestId("ticket-room-note")).toBeNull();
     expect(screen.getByTestId("ticket-composer")).toBeTruthy();
     expect(screen.getByTestId("ticket-composer-responder").textContent).toContain("your Captain");
+  });
+
+  test("a ticket in one of my agents' projects names that agent, not the Captain", async () => {
+    mount(["p1"], { project: "p1", ticket: "T-7" }, { projectAgentName: (pid: string) => (pid === "p1" ? "Helper" : "") });
+    await screen.findByText("First chat");
+    const who = screen.getByTestId("ticket-composer-responder").textContent ?? "";
+    expect(who).toContain("Helper");
+    expect(who).not.toContain("your Captain");
   });
 
   test("the composer floats under the ticket's own scroll and names the ticket by its title", async () => {

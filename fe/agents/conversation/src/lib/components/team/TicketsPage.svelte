@@ -59,11 +59,14 @@
     onOpenSession?: (sessionId: string, projectId?: string) => void;
     /** The caller's Captain, named on the ticket page's composer. */
     captainName?: string;
+    /** The caller's own agent of a project ("" = none): a Team ticket
+        chat there is answered by it, not the Captain. */
+    projectAgentName?: (projectId: string) => string;
     /** The open ticket's title once read, for the host's "← <title>"
         back link on a chat opened from it. */
     onTicketTitle?: (project: string, ticket: string, title: string) => void;
   };
-  let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession, captainName = "", onTicketTitle }: Props = $props();
+  let { base, selected, loadError: settingsError = "", onRetry, onProjects, route, onPicked, onRoute, onOpenSession, captainName = "", projectAgentName, onTicketTitle }: Props = $props();
 
   /* The last list read names the boards at once; the fresh one replaces it. */
   let projects = $state<ProjectOption[] | null>(cachedProjectOptions() ?? null);
@@ -462,7 +465,7 @@
           />
         </div>
         <!-- The same composer as Agents › Projects; here the new session
-             answers as the caller's Captain. -->
+             answers as the caller's agent of the project, else their Captain. -->
         {#if ticketProject}
           <!-- Centred on the main column, never under the fields rail:
                the same grid as TicketDetail. -->
@@ -476,6 +479,7 @@
                 ticketLabel={ticketTitle}
                 teamCaptain
                 {captainName}
+                projectAgentName={projectAgentName?.(ticketProject.id) ?? ""}
                 onCreated={(sid) => openSession(sid, route.project)}
               />
             </div>
@@ -564,7 +568,7 @@
         </div>
       {/if}
       <!-- The same floating composer as a project's own board: a new
-           session in one of the picked projects, answered by the Captain. -->
+           session in one of the picked projects, answered by its agent or the Captain. -->
       {#if boardComposerProject}
         <div class="shrink-0" data-testid="tickets-board-composer">
           <TicketComposer
@@ -574,6 +578,7 @@
             ticketId={null}
             teamCaptain
             {captainName}
+            projectAgentName={projectAgentName?.(boardComposerProject.id) ?? ""}
             projectChoices={boardComposerChoices}
             onProjectChange={(id) => { boardComposerPick = id; }}
             onCreated={(sid) => openSession(sid, boardComposerProject?.id)}

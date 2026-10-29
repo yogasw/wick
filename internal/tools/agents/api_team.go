@@ -2174,6 +2174,28 @@ func ownCaptain(ctx context.Context, uid string) (entity.AgentPersona, bool) {
 	return captainIn(rows)
 }
 
+// ticketResponder is who answers a chat started from Team › Tickets: the
+// caller's own enabled agent whose project the ticket is in, else their
+// Captain. A ticket in an agent's project then gets that agent, not a
+// Captain working out of someone else's folder.
+func ticketResponder(ctx context.Context, uid, projectID string) (entity.AgentPersona, bool) {
+	if globalTeam == nil || uid == "" {
+		return entity.AgentPersona{}, false
+	}
+	rows, err := globalTeam.List(ctx, uid)
+	if err != nil {
+		return entity.AgentPersona{}, false
+	}
+	if projectID != "" {
+		for _, p := range rows {
+			if p.ProjectID == projectID && !p.Disabled {
+				return p, true
+			}
+		}
+	}
+	return captainIn(rows)
+}
+
 // captainIn is the enabled Captain among rows, if any.
 func captainIn(rows []entity.AgentPersona) (entity.AgentPersona, bool) {
 	for _, p := range rows {
