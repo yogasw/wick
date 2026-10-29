@@ -10,16 +10,40 @@ import (
 
 // A reply that is only "[react :pray:]" (or "[react:pray]") becomes a
 // reaction on the message that woke the turn instead of a post: a thank-you
-// gets an emoji, not a sentence.
-var reactReplyRe = regexp.MustCompile(`^\[react[:\s]\s*:?([a-z0-9_+'\-]+(?:::skin-tone-[2-6])?):?\s*\]$`)
+// gets an emoji, not a sentence. The marker may also open a longer reply on a
+// line of its own: the reaction is added and the rest is posted as usual. An
+// explicit ts ("[react :pray: 1700000000.000100]") targets that message of the
+// same channel instead, for a turn that answers several held messages.
+var reactReplyRe = regexp.MustCompile(`^\[react[:\s]\s*:?([a-z0-9_+'\-]+(?:::skin-tone-[2-6])?):?(?:\s+(\d+\.\d+))?\s*\]$`)
+
+// reactMarker splits a reply whose first line is a react marker into the
+// emoji name, the optional target ts and the text after that line.
+func reactMarker(text string) (name, ts, rest string, ok bool) {
+	text = strings.TrimSpace(text)
+	first, rest, _ := strings.Cut(text, "\n")
+	m := reactReplyRe.FindStringSubmatch(strings.ToLower(strings.TrimSpace(first)))
+	if m == nil {
+		return "", "", text, false
+	}
+	return m[1], m[2], strings.TrimSpace(rest), true
+}
 
 // reactOnlyReply reports the emoji name when text is just a react marker.
 func reactOnlyReply(text string) (string, bool) {
-	m := reactReplyRe.FindStringSubmatch(strings.ToLower(strings.TrimSpace(text)))
-	if m == nil {
+	name, _, rest, ok := reactMarker(text)
+	if !ok || rest != "" {
 		return "", false
 	}
-	return m[1], true
+	return name, true
+}
+
+// dropReactLine returns text without a leading react marker line, so the
+// marker never reaches the thread as literal text.
+func dropReactLine(text string) string {
+	if _, _, rest, ok := reactMarker(text); ok {
+		return rest
+	}
+	return text
 }
 
 // reactPending reports a streaming reply that may still turn out to be a
@@ -34,12 +58,25 @@ func reactPending(body string) bool {
 // posted already.
 func (s *Channel) reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name string) {
 	s.mu.Lock()
-	msgTS := ""
 	if cur := s.turns[sessionKey]; cur != nil {
-		msgTS = cur.msgTS
 		cur.liveTS, cur.lastSent = "", ""
 	}
 	s.mu.Unlock()
+	s.reactTo(sessionKey, channelID, threadTS, liveTS, "", name)
+}
+
+// reactTo puts name on targetTS, or on the turn's waking message (the
+// thread's top when that is unknown) when targetTS is empty. A non-empty
+// liveTS is deleted first.
+func (s *Channel) reactTo(sessionKey, channelID, threadTS, liveTS, targetTS, name string) {
+	msgTS := targetTS
+	if msgTS == "" {
+		s.mu.Lock()
+		if cur := s.turns[sessionKey]; cur != nil {
+			msgTS = cur.msgTS
+		}
+		s.mu.Unlock()
+	}
 	if msgTS == "" {
 		msgTS = threadTS
 	}

@@ -3149,7 +3149,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	s.mu.Unlock()
 	// Outside s.mu: naming the sources reads the Team roster. A tag or an
 	// options line still streaming in is held back until it closes.
-	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw))))
+	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, dropReactLine(stripSilentMarker(raw)))))
 
 	if body == "" || body == lastSent || reactPending(body) {
 		return
@@ -3337,9 +3337,15 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
-	if name, ok := reactOnlyReply(text); ok {
-		s.reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name)
-		return
+	if name, ts, rest, ok := reactMarker(text); ok {
+		if rest == "" && ts == "" {
+			s.reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name)
+			return
+		}
+		// The marker opens a longer reply (or names its own target): react,
+		// then post the rest as usual. The live message carries that rest.
+		s.reactTo(sessionKey, channelID, threadTS, "", ts, name)
+		text = rest
 	}
 	// Source tags become plain "(from Name)"; the raw tag never reaches
 	// the thread.
@@ -3495,7 +3501,7 @@ func (s *Channel) dropLiveReply(sessionKey, text string) {
 		s.mu.Unlock()
 		return
 	}
-	body := s.rewriteSources(sessionKey, stripSilentMarker(text))
+	body := s.rewriteSources(sessionKey, dropReactLine(stripSilentMarker(text)))
 	if body == "" || body == lastSent {
 		return
 	}
