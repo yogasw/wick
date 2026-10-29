@@ -3582,6 +3582,33 @@ func (s *Channel) setAssistantStatusWithLoading(channelID, threadTS, status stri
 	}
 }
 
+// reopenTurn marks a finished turn entry as running again when the session
+// starts a new turn nobody typed in the thread: a teammate's result waking
+// the lead, a workflow re-run, a schedule, a reply from the web UI. Only an
+// inbound Slack message (or SendToThreadSession) creates a fresh entry, so
+// without this the entry stays at running=false from the previous Done and
+// startStatusAnimation refuses to paint: the agent works for minutes and the
+// thread shows no thinking banner at all.
+//
+// Called only for a turn's activity events, never for Done/Error or a relayed
+// sub-agent's status, so a turn that really ended is not revived by them.
+func (s *Channel) reopenTurn(sessionKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.turns[sessionKey]
+	if t == nil || t.running || t.channelID == "" {
+		return
+	}
+	t.running = true
+	t.lastActivity = time.Now()
+	t.staleShown = false
+	t.statusLabel = ""
+	t.trace = nil
+	// This turn's banner owns the thread now; the background one comes back
+	// at its Done (startBackgroundBanner) if anything is still out there.
+	t.stopBackgroundBanner()
+}
+
 // OnAgentEvent satisfies channels.AgentEventReceiver.
 func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	// Progress relayed from a sub-agent: paint whose work it is and stop. Only
@@ -3606,6 +3633,10 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	// Same reason as NotifyState: without a turn every case below is a no-op,
 	// so a turn this process did not receive would stream into nothing.
 	s.ensureTurn(sessionKey)
+	switch ev.Type {
+	case event.TextDelta, event.Thinking, event.ToolUse, event.ToolResult:
+		s.reopenTurn(sessionKey)
+	}
 
 	switch ev.Type {
 	case event.TextDelta:
