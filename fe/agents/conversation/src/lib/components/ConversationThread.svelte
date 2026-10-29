@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { reactionsByTurn } from "../reactMarker.js";
   import TraceNote from "./TraceNote.svelte";
   import { onMount } from "svelte";
   import type { ConversationTurn, LiveTurn, TeamTaskItem, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
@@ -212,6 +213,9 @@
     return out;
   });
 
+  /* A reply's [react :x:] marker shows as a chip on the message it reacted to. */
+  const reactionsAt = $derived(reactionsByTurn(shownTurns));
+
   const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
   /* grouped §3 live asst-meta over the block: "Captain · 10:02 · split
      the question into 4 tasks — summary comes when they're back", from
@@ -361,7 +365,7 @@
           <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
         </div>
       {:else}
-      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} />
+      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} reactions={reactionsAt[i]} />
       {/if}
     </div>
   {/each}

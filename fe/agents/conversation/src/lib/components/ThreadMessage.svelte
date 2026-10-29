@@ -46,6 +46,7 @@
   import type { ListenHold } from "../listenHolds.js";
   import { delayText } from "../api/listen.js";
   import HoverCard from "./HoverCard.svelte";
+  import { splitReactMarker, emojiGlyph } from "../reactMarker.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -96,8 +97,10 @@
     /** A group thread: the speaker row carries the clock and this (the
         "open in …'s chat" link) instead of each taking a line of its own. */
     speakerAside?: Snippet;
+    /** Emoji a later reply's [react :x:] marker put on this user turn. */
+    reactions?: string[];
   };
-  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, speakerAside }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, speakerAside, reactions = [] }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -165,10 +168,14 @@
      suppressed (the flag above only reads the opening), but the plumbing still
      must not be shown, so line-opening markers are stripped too. One
      mid-sentence is the agent talking about the marker and is left alone. */
+  /* A reply opened with a [react :x:] line answered with a Slack reaction:
+     the marker is plumbing, shown as a chip on the message it reacted to
+     (ConversationThread), or on this reply when it names another ts. */
+  const reactMarker = $derived(isUser || isSystem ? null : splitReactMarker(turn.text));
   const displayText = $derived(
     isUser || isSystem
       ? (turn.text ?? "")
-      : (turn.text ?? "")
+      : (reactMarker ? reactMarker.rest : (turn.text ?? ""))
           .replace(/^\s*\[silent\]\s*/i, "")
           .replace(/^[ \t]*\[silent\][ \t]*/gim, ""),
   );
@@ -981,6 +988,13 @@
           </div>
           {/if}
         </div>
+        {#if reactions.length > 0}
+          <span data-testid="reaction-chips" class={"flex flex-wrap gap-1 " + (teamFrom ? "self-start" : "self-end")}>
+            {#each reactions as name}
+              <span title={`Reacted :${name}: in Slack`} class="inline-flex items-center rounded-full border border-white-300 bg-white-100 px-1.5 py-px text-xs leading-5 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100">{emojiGlyph(name)}</span>
+            {/each}
+          </span>
+        {/if}
         {#if routedHandles.length > 0}
           <span
             data-testid="routed-chip"
@@ -1169,6 +1183,11 @@
              only the user's turns wear a bubble. Slightly larger text + roomy
              line-height for comfortable long-form reading. A [silent] reply is
              the same plain text, marked by the muted-bell chip above. -->
+        {#if reactMarker?.ts}
+          <span data-testid="reaction-ts-chip" title={`Reacted :${reactMarker.name}: on Slack message ${reactMarker.ts}`} class="inline-flex w-fit items-center gap-1 rounded-full border border-white-300 bg-white-100 px-2 py-px text-[11px] text-black-700 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">
+            <span class="text-xs">{emojiGlyph(reactMarker.name)}</span> reacted in Slack
+          </span>
+        {/if}
         <div use:enrich={displayText} onwick-imagecard-open={onImageCardOpen} class={"wick-prose px-0.5 text-black-900 dark:text-white-100 break-words" + (showMeta ? " wick-prose-sm" : "")}>
           {#each cardSegments as seg}
             {#if seg.kind === "card" && cardMode(seg.card.id, turn.turn_id, cards) !== "none"}
