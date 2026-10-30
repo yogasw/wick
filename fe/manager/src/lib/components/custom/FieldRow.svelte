@@ -11,8 +11,10 @@
     field: DraftField;
     onChange: () => void;
     onRemove: () => void;
+    /** Config field (not an op input): shows the session lock toggle. */
+    config?: boolean;
   };
-  let { field, onChange, onRemove }: Props = $props();
+  let { field, onChange, onRemove, config = false }: Props = $props();
 
   function set<K extends keyof DraftField>(k: K, v: DraftField[K]) {
     field[k] = v;
@@ -81,5 +83,11 @@
       <input type="checkbox" class="accent-green-500" checked={field.secret} onchange={(e) => set("secret", (e.target as HTMLInputElement).checked)} aria-label="Secret" />
       <span class="text-xs font-medium text-black-800 dark:text-black-600">Secret</span>
     </label>
+    {#if config}
+      <label class="flex cursor-pointer select-none items-center gap-2" title="A session connector cannot set this field and always uses the default, so the agent cannot override it.">
+        <input type="checkbox" class="accent-green-500" checked={!!field.session_locked} onchange={(e) => set("session_locked", (e.target as HTMLInputElement).checked)} aria-label="Lock in session" />
+        <span class="text-xs font-medium text-black-800 dark:text-black-600">Lock in session</span>
+      </label>
+    {/if}
   </div>
 </div>

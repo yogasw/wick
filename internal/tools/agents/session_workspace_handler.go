@@ -34,6 +34,9 @@ type wsFieldVM struct {
 	Options  []string `json:"options,omitempty"`
 	Required bool     `json:"required"`
 	Help     string   `json:"help,omitempty"`
+	// Locked marks a field the admin pinned to the base default: shown
+	// read-only, never writable from a session.
+	Locked bool `json:"locked,omitempty"`
 }
 
 // wsInstanceVM is one session instance card in the Config tab.
@@ -77,6 +80,14 @@ func wsBuildFields(specs []entity.Config, cfg map[string]string) []wsFieldVM {
 			Set:      set,
 			Required: sp.Required,
 			Help:     sp.Description,
+			Locked:   sp.SessionLocked,
+		}
+		vals := cfg
+		if sp.SessionLocked {
+			// A stored value (if any) is ignored at runtime — show the
+			// default that actually applies.
+			vals = nil
+			f.Set = false
 		}
 		switch {
 		case sp.IsSecret:
@@ -84,10 +95,10 @@ func wsBuildFields(specs []entity.Config, cfg map[string]string) []wsFieldVM {
 		case sp.Type == "dropdown" && sp.Options != "":
 			f.Type = "dropdown"
 			f.Options = strings.Split(sp.Options, "|")
-			f.Value = wsValueOr(cfg, sp.Key, sp.Value)
+			f.Value = wsValueOr(vals, sp.Key, sp.Value)
 		default:
 			f.Type = "text"
-			f.Value = wsValueOr(cfg, sp.Key, sp.Value)
+			f.Value = wsValueOr(vals, sp.Key, sp.Value)
 		}
 		fields = append(fields, f)
 	}
@@ -332,6 +343,10 @@ func sessionWorkspaceSetUI(c *tool.Ctx) {
 		sp, known := specByKey[k]
 		if !known {
 			c.Error(http.StatusBadRequest, "unknown config key: "+k)
+			return
+		}
+		if sp.SessionLocked {
+			c.Error(http.StatusBadRequest, "config key "+k+" is locked by the admin and cannot be set in a session")
 			return
 		}
 		v = strings.TrimSpace(v)

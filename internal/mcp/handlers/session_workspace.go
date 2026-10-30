@@ -216,8 +216,8 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 	if raw, ok := args["values"].(map[string]any); ok && len(raw) > 0 {
 		vals = StringifyArgs(raw)
 		for k := range vals {
-			if _, known := specByKey[k]; !known {
-				rsp.ToolError(w, req.ID, "unknown config key: "+k, sessionWorkspaceToolName)
+			if msg := sessionConfigKeyError(specByKey, k); msg != "" {
+				rsp.ToolError(w, req.ID, msg, sessionWorkspaceToolName)
 				return
 			}
 		}
@@ -387,8 +387,8 @@ func sessionWorkspaceSetConfig(w http.ResponseWriter, req RPCRequest, rsp Respon
 	// Reject unknown keys up front — a typo shouldn't silently no-op.
 	values := StringifyArgs(rawValues)
 	for k := range values {
-		if _, known := specByKey[k]; !known {
-			rsp.ToolError(w, req.ID, "unknown config key: "+k, sessionWorkspaceToolName)
+		if msg := sessionConfigKeyError(specByKey, k); msg != "" {
+			rsp.ToolError(w, req.ID, msg, sessionWorkspaceToolName)
 			return
 		}
 	}
@@ -522,7 +522,7 @@ func openConfigModal(r *http.Request, svc *connectors.Service, layout agentconfi
 	specByKey := make(map[string]entity.Config, len(mod.Configs))
 	fields := make([]askuser.Field, 0, len(mod.Configs))
 	for _, sp := range mod.Configs {
-		if sp.Hidden {
+		if sp.Hidden || sp.SessionLocked {
 			continue
 		}
 		if len(wanted) > 0 && !wanted[sp.Key] {
@@ -603,7 +603,7 @@ func storeSessionConfig(svc *connectors.Service, layout agentconfig.Layout, sess
 	toStore := make(map[string]string, len(values))
 	for k, v := range values {
 		sp, ok := specByKey[k]
-		if !ok || v == "" {
+		if !ok || v == "" || sp.SessionLocked {
 			continue
 		}
 		if sp.IsSecret && !enc.IsMasterToken(v) && !enc.IsToken(v) {
@@ -631,6 +631,20 @@ func storeSessionConfig(svc *connectors.Service, layout agentconfig.Layout, sess
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// sessionConfigKeyError explains why k may not be written on a session
+// instance — an unknown key (a typo shouldn't silently no-op) or one the
+// admin locked against session overrides — or returns "" when it may.
+func sessionConfigKeyError(specByKey map[string]entity.Config, k string) string {
+	sp, known := specByKey[k]
+	switch {
+	case !known:
+		return "unknown config key: " + k
+	case sp.SessionLocked:
+		return fmt.Sprintf("config key %q is locked by the admin: a session connector always uses the base default and cannot override it", k)
+	}
+	return ""
 }
 
 func askAllowedOK(askAllowed func(string) (bool, string), sessionID string) (bool, string) {

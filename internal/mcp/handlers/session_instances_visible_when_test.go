@@ -71,8 +71,14 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 		t.Fatalf("search total = %d, want 1 (open)", total)
 	}
 	target := &connectors.SessionInstanceTarget{BaseKey: "vwsess", Label: "S", Config: inst.Config}
-	if _, _, err := sessionInstanceDetail(svc, target, inst.ID, "pdf"); err == nil {
-		t.Fatal("wick_get pdf must be refused on browser=chromium")
+	// pdf is switched off by config: listed with a reason, no tool_id or schema.
+	off, _, err := sessionInstanceDetail(svc, target, inst.ID, "pdf")
+	if err != nil {
+		t.Fatalf("wick_get pdf: %v", err)
+	}
+	if len(off.Tools) != 1 || off.Tools[0].ToolID != "" || off.Tools[0].InputSchema != nil ||
+		!strings.Contains(off.Tools[0].Unavailable, "browser = moli") {
+		t.Fatalf("pdf on chromium must read as unavailable: %+v", off.Tools)
 	}
 	if _, _, err := sessionInstanceDetail(svc, target, inst.ID, "picker"); err == nil {
 		t.Fatal("wick_get must not expose a config-only op")
@@ -85,8 +91,8 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 	for _, tool := range detail.Tools {
 		keys = append(keys, tool.Name)
 	}
-	if got := strings.Join(keys, ","); got != "Open" {
-		t.Fatalf("category ops = %q, want Open", got)
+	if got := strings.Join(keys, ","); got != "Open,PDF" {
+		t.Fatalf("category ops = %q, want Open,PDF (PDF unavailable)", got)
 	}
 
 	// browser=moli: pdf joins.

@@ -321,7 +321,7 @@
             <p class="text-xs text-black-700 dark:text-black-600">No fields yet.</p>
           {/if}
           {#each draft.configs as field, i (i)}
-            <FieldRow {field} {onChange} onRemove={() => removeConfig(i)} />
+            <FieldRow {field} {onChange} onRemove={() => removeConfig(i)} config />
           {/each}
         </div>
       </section>

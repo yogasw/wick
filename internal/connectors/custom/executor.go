@@ -101,6 +101,7 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 				Description: op.Description,
 				Input:       FieldsToConfigs(op.Inputs),
 				Destructive: op.Destructive,
+				VisibleWhen: strings.TrimSpace(op.VisibleWhen),
 				Execute:     exec,
 				Docs:        wickdocs.Docs{},
 			})

@@ -50,6 +50,7 @@ function normalizeField(f: Partial<DraftField>): DraftField {
     required: !!f.required,
     default: f.default ?? "",
     desc: f.desc ?? "",
+    ...(f.session_locked ? { session_locked: true } : {}),
   };
 }
 
@@ -62,6 +63,7 @@ function normalizeOp(op: Partial<DraftOp>): DraftOp {
     inputs: (op.inputs ?? []).map(normalizeField),
     mcp_source: op.mcp_source,
   };
+  if (op.visible_when) out.visible_when = op.visible_when;
   if (!op.mcp_source && !op.request) {
     out.request = { method: "GET", url_template: "", headers: {}, body_template: "", content_type: "" };
   } else if (op.request) {

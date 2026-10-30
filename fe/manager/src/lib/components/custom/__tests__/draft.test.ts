@@ -58,6 +58,17 @@ describe("normalize", () => {
     expect(op.request?.method).toBe("POST");
     expect(op.request?.headers).toEqual({});
   });
+
+  it("keeps the session lock and the op config switch", () => {
+    const d = normalize({
+      configs: [{ key: "mode", session_locked: true } as never],
+      ops: [{ ops: [{ key: "x", visible_when: "mode:write", request: { method: "POST", url_template: "/u" } }] } as never],
+    });
+    expect(d.configs[0].session_locked).toBe(true);
+    expect(d.ops[0].ops[0].visible_when).toBe("mode:write");
+    const plain = normalize({ configs: [{ key: "a" } as never] });
+    expect(plain.configs[0].session_locked).toBeUndefined();
+  });
 });
 
 describe("serialize", () => {

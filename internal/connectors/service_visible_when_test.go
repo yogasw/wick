@@ -92,7 +92,7 @@ func TestVisibleWhenExecuteGuard(t *testing.T) {
 		return err
 	}
 	for _, src := range []entity.ConnectorRunSource{entity.ConnectorRunSourceMCP, entity.ConnectorRunSourcePlugin, entity.ConnectorRunSourceSchedule} {
-		if err := run(src); err == nil || !strings.Contains(err.Error(), "requires browser:moli") {
+		if err := run(src); err == nil || !strings.Contains(err.Error(), "needs browser = moli") {
 			t.Fatalf("source %s: want visible_when refusal, got %v", src, err)
 		}
 	}
@@ -126,7 +126,7 @@ func TestVisibleWhenExecuteSessionInstance(t *testing.T) {
 		return err
 	}
 	// No browser saved on the session instance: the module default applies.
-	if err := run(map[string]string{}); err == nil || !strings.Contains(err.Error(), "not available on this instance") {
+	if err := run(map[string]string{}); err == nil || !strings.Contains(err.Error(), "turned off by this connector's config") {
 		t.Fatalf("want refusal, got %v", err)
 	}
 	if err := run(map[string]string{"browser": "moli"}); err != nil {
@@ -141,5 +141,56 @@ func TestBuiltinModulesValidate(t *testing.T) {
 		if err := connector.ValidateModule(mod); err != nil {
 			t.Errorf("%s: %v", mod.Meta.Key, err)
 		}
+	}
+}
+
+// A session instance's test action is reachable by the agent, so the
+// config switch holds there too, unlike a real row's manager test path.
+func TestVisibleWhenSessionTestSourceRefused(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newSvcWithModule(t, nil, visibleWhenModule())
+	_, err := svc.Execute(ctx, ExecuteParams{
+		ConnectorID:     "sw_test",
+		OperationKey:    "pdf",
+		Source:          entity.ConnectorRunSourceTest,
+		SessionInstance: &SessionInstanceTarget{BaseKey: "vwstub", Label: "sw", Config: map[string]string{}},
+	})
+	if err == nil {
+		t.Fatal("session test source must not bypass visible_when")
+	}
+}
+
+// A SessionLocked field ignores whatever a session stored and runs with
+// the module default, so the op it gates stays off.
+func TestSessionLockedFieldKeepsDefault(t *testing.T) {
+	ctx := context.Background()
+	mod := visibleWhenModule()
+	for i := range mod.Configs {
+		mod.Configs[i].SessionLocked = true
+	}
+	svc, _ := newSvcWithModule(t, nil, mod)
+	_, err := svc.Execute(ctx, ExecuteParams{
+		ConnectorID:     "sw_test",
+		OperationKey:    "pdf",
+		Source:          entity.ConnectorRunSourceMCP,
+		SessionInstance: &SessionInstanceTarget{BaseKey: "vwstub", Label: "sw", Config: map[string]string{"browser": "moli"}},
+	})
+	if err == nil {
+		t.Fatal("locked field: stored override must be ignored")
+	}
+}
+
+func TestConfigOffOps(t *testing.T) {
+	ctx := context.Background()
+	svc, id := newSvcWithModule(t, nil, visibleWhenModule())
+	off := svc.ConfigOffOps(ctx, id, "vwstub")
+	if len(off) != 1 || !strings.Contains(off["pdf"], "needs browser = moli") {
+		t.Fatalf("want pdf listed as config-off, got %v", off)
+	}
+	if err := svc.Update(ctx, id, "VW", map[string]string{"browser": "moli"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if off := svc.ConfigOffOps(ctx, id, "vwstub"); len(off) != 0 {
+		t.Fatalf("browser=moli: want none off, got %v", off)
 	}
 }

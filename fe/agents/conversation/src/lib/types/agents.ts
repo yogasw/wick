@@ -507,6 +507,8 @@ export type WsField = {
   options?: string[];
   value?: string;
   help?: string;
+  /** Pinned by the admin to the base default — read-only in a session. */
+  locked?: boolean;
 };
 
 export type WsInstance = {

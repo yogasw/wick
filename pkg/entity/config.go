@@ -54,6 +54,13 @@ type Config struct {
 	// so it never gets a widget or a "required" badge. Code still loads and
 	// saves it like any other row.
 	Internal bool `gorm:"-" json:"internal,omitempty"`
+	// SessionLocked keeps the row out of reach of session-workspace
+	// clones: neither the agent (set_config / add values) nor the session
+	// Config tab may write it, and a session instance always runs with
+	// the module default. Not persisted. Lets an admin pin a value the
+	// agent must not override for itself — e.g. the field an op's
+	// VisibleWhen reads, so a write op switched off stays off.
+	SessionLocked bool `gorm:"-" json:"session_locked,omitempty"`
 	// ColOptions holds per-column select options for kvlist rows. Not persisted.
 	// Key = column name; Value = pipe-separated "label::value" pairs (or just
 	// "value" when label == value). The kvlist component renders a <select>

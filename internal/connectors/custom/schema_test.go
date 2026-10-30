@@ -35,6 +35,42 @@ func TestValidateDraft(t *testing.T) {
 	}{
 		{name: "valid http draft", mutate: func(d *Draft) {}},
 		{
+			name: "valid op switch",
+			mutate: func(d *Draft) {
+				d.Configs = append(d.Configs, DefField{Key: "mode", Widget: "dropdown", Options: "read|write", Default: "read", SessionLocked: true})
+				d.Ops[0].Ops[0].VisibleWhen = "mode:write"
+			},
+		},
+		{
+			name:    "op switch on unknown field",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "mode:write" },
+			wantErr: "unknown config field",
+		},
+		{
+			name:    "op switch on secret field",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "token:x" },
+			wantErr: "secret field",
+		},
+		{
+			name:    "op switch without values",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "base_url:" },
+			wantErr: "lists no value",
+		},
+		{
+			name:    "op switch malformed",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "base_url" },
+			wantErr: "must be <config_field>",
+		},
+		{
+			name: "op switch on mcp op",
+			mutate: func(d *Draft) {
+				d.Ops[0].Ops[0].Request = nil
+				d.Ops[0].Ops[0].MCPSource = &MCPSource{ServerID: "srv-1", ToolName: "list_pets"}
+				d.Ops[0].Ops[0].VisibleWhen = "base_url:x"
+			},
+			wantErr: "only supported on API operations",
+		},
+		{
 			name: "valid mcp draft",
 			mutate: func(d *Draft) {
 				d.Ops[0].Ops[0].Request = nil

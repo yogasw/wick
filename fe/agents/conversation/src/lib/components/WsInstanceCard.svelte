@@ -191,6 +191,9 @@
             {#if field.set}
               <span class="ml-1 text-[10px] text-green-600 dark:text-green-400">• set</span>
             {/if}
+            {#if field.locked}
+              <span class="ml-1 text-[10px] text-black-700 dark:text-black-600" title="Locked by the admin: a session connector always uses the default">🔒 locked</span>
+            {/if}
           </label>
 
           {#if field.type === "dropdown"}
@@ -199,6 +202,7 @@
               class={INPUT_CLASS}
               bind:value={fieldValues[field.key]}
               data-field={field.key}
+              disabled={field.locked}
             >
               {#each (field.options ?? []) as opt (opt)}
                 <option value={opt}>{opt}</option>
@@ -214,6 +218,7 @@
                 ? (field.set ? "•••• set" : (field.placeholder ?? "Enter to set"))
                 : (field.placeholder ?? "")}
               autocomplete={field.secret ? "new-password" : undefined}
+              disabled={field.locked}
               data-field={field.key}
               data-secret={field.secret ? "true" : undefined}
             />

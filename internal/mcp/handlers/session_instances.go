@@ -235,15 +235,21 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 		label = mod.Meta.Name + " (session)"
 	}
 	// Session instances have no per-op disable state — every op the
-	// instance's config exposes is enabled.
+	// instance's config exposes is enabled; the rest are listed as
+	// switched off by config.
 	visible := sessionOpVisible(mod, target.Config)
 	shown := map[string]bool{}
+	off := map[string]string{}
 	for _, op := range mod.AllOps() {
 		shown[op.Key] = visible(op)
+		if !shown[op.Key] && !op.ConfigOnly {
+			off[op.Key] = connectors.ConfigOffReason(op)
+		}
 	}
 	detail, err := buildConnectorDetail(mod, instanceID, label, "", selector,
 		func(opKey string) string { return FormatToolID(instanceID, opKey) },
-		func(opKey string) bool { return shown[opKey] })
+		func(opKey string) bool { return shown[opKey] },
+		func(opKey string) string { return off[opKey] })
 	if err != nil {
 		return connectorDetail{}, true, err
 	}
@@ -264,7 +270,7 @@ func sessionOpVisible(mod connector.Module, cfg map[string]string) func(connecto
 			return true
 		}
 		if vals == nil {
-			vals = connector.EffectiveConfigValues(mod, cfg)
+			vals = connector.EffectiveConfigValues(mod, connector.SessionConfig(mod, cfg))
 		}
 		return connector.OpVisible(op, vals)
 	}
