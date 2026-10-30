@@ -581,3 +581,14 @@ func sessionWorkspaceRemoveUI(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, map[string]any{"removed": removed})
 }
+
+// publishWorkspaceChanged nudges every open Config tab of the session to
+// re-read its workspace. A connector added or filled in by the agent, by
+// another tab, or reaped by the sweeper otherwise stayed invisible until a
+// page reload.
+func publishWorkspaceChanged(sessionID string) {
+	if globalBcast == nil || sessionID == "" {
+		return
+	}
+	globalBcast.PublishRaw(sessionID, "", "workspace", "")
+}

@@ -37,6 +37,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
@@ -113,7 +114,10 @@ func SetPool(p *pool.Pool) {
 }
 
 // SetBroadcaster wires in the SSE event broadcaster.
-func SetBroadcaster(b *Broadcaster) { globalBcast = b }
+func SetBroadcaster(b *Broadcaster) {
+	globalBcast = b
+	sessionworkspace.SetOnChange(publishWorkspaceChanged)
+}
 
 // SetLayout wires in the on-disk layout used for direct file reads.
 //

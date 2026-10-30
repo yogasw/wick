@@ -43,6 +43,14 @@ func IsInstanceID(id string) bool { return strings.HasPrefix(id, IDPrefix) }
 // changes at human speed (a modal submit), never in a hot path.
 var mu sync.Mutex
 
+// onChange is told the session id after every persisted change, so an
+// open Config tab can re-read the workspace instead of waiting for a page
+// reload. Set once at startup; nil means nobody is listening.
+var onChange func(sessionID string)
+
+// SetOnChange registers the change listener (see onChange).
+func SetOnChange(fn func(sessionID string)) { onChange = fn }
+
 // Instance is one ephemeral connector clone scoped to a session.
 type Instance struct {
 	ID      string `json:"id"`       // "sw_<uuid>"
@@ -70,8 +78,8 @@ type Instance struct {
 type Tombstone struct {
 	Label     string `json:"label"`
 	BaseKey   string `json:"base_key"`
-	DeletedAt string `json:"deleted_at"`        // RFC3339
-	Reason    string `json:"reason,omitempty"`  // e.g. "session idle"
+	DeletedAt string `json:"deleted_at"`       // RFC3339
+	Reason    string `json:"reason,omitempty"` // e.g. "session idle"
 }
 
 // Workspace is the full per-session document. Tombstones records instances
@@ -319,6 +327,7 @@ func save(layout agentconfig.Layout, sessionID string, ws Workspace) error {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove session workspace: %w", err)
 		}
+		notifyChange(sessionID)
 		return nil
 	}
 	b, err := json.MarshalIndent(ws, "", "  ")
@@ -328,5 +337,14 @@ func save(layout agentconfig.Layout, sessionID string, ws Workspace) error {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("write session workspace: %w", err)
 	}
+	notifyChange(sessionID)
 	return nil
+}
+
+// notifyChange runs while mu is held, so the listener must not call back
+// into this package; publishing an SSE event does not.
+func notifyChange(sessionID string) {
+	if fn := onChange; fn != nil {
+		fn(sessionID)
+	}
 }
