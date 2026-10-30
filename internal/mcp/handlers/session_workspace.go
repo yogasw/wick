@@ -148,6 +148,9 @@ type instanceVM struct {
 	Label   string   `json:"label"`
 	Status  string   `json:"status"` // ready | needs_setup
 	Missing []string `json:"missing_keys,omitempty"`
+	// Locked lists the config keys the admin pinned to the base default:
+	// set_config / add values refuse them, so the agent knows up front.
+	Locked []string `json:"locked_keys,omitempty"`
 }
 
 func sessionWorkspaceVM(svc *connectors.Service, in sessionworkspace.Instance) instanceVM {
@@ -160,6 +163,9 @@ func sessionWorkspaceVM(svc *connectors.Service, in sessionworkspace.Instance) i
 	// AND the base spec ships no default — same rule as sessionConfigStatus,
 	// so a defaulted required field never blocks a fresh instance.
 	for _, sp := range mod.Configs {
+		if sp.SessionLocked && !sp.Hidden {
+			vm.Locked = append(vm.Locked, sp.Key)
+		}
 		if sp.Hidden || !sp.Required {
 			continue
 		}

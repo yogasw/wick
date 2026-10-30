@@ -36,6 +36,11 @@ func vwSessionModule() connector.Module {
 
 func newVWSessionSvc(t *testing.T) *connectors.Service {
 	t.Helper()
+	return newVWSessionSvcWith(t, vwSessionModule())
+}
+
+func newVWSessionSvcWith(t *testing.T, mod connector.Module) *connectors.Service {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: postgres.NewLogLevel("silent")})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +54,7 @@ func newVWSessionSvc(t *testing.T) *connectors.Service {
 	}
 	svc := connectors.NewServiceFromDB(db)
 	svc.SetConfigs(cfgs)
-	if err := svc.Bootstrap(context.Background(), []connector.Module{vwSessionModule()}); err != nil {
+	if err := svc.Bootstrap(context.Background(), []connector.Module{mod}); err != nil {
 		t.Fatal(err)
 	}
 	return svc
@@ -106,5 +111,31 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 	}
 	if _, total := sessionInstanceSummaries(svc, layout, sid); total != 3 {
 		t.Fatalf("summary total = %d, want 3 (1 + 2)", total)
+	}
+}
+
+// A session-locked field is announced up front (locked_keys), refused on
+// write, and ignored at runtime even when a value was stored anyway.
+func TestSessionLockedConfig(t *testing.T) {
+	mod := vwSessionModule()
+	mod.Configs[0].SessionLocked = true
+	svc := newVWSessionSvcWith(t, mod)
+
+	vm := sessionWorkspaceVM(svc, sessionworkspace.Instance{ID: "sw_x", BaseKey: "vwsess"})
+	if strings.Join(vm.Locked, ",") != "browser" {
+		t.Fatalf("locked_keys = %v, want [browser]", vm.Locked)
+	}
+	specs := map[string]entity.Config{"browser": mod.Configs[0]}
+	if msg := sessionConfigKeyError(specs, "browser"); !strings.Contains(msg, "locked") {
+		t.Fatalf("want locked refusal, got %q", msg)
+	}
+	if msg := sessionConfigKeyError(specs, "nope"); !strings.Contains(msg, "unknown config key") {
+		t.Fatalf("want unknown key, got %q", msg)
+	}
+	visible := sessionOpVisible(mod, map[string]string{"browser": "moli"})
+	for _, op := range mod.AllOps() {
+		if op.Key == "pdf" && visible(op) {
+			t.Fatal("stored override of a locked field must not switch pdf on")
+		}
 	}
 }
