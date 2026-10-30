@@ -320,15 +320,18 @@ func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.N
 	// when the node actually picked a provider — an empty field means
 	// "inherit", and stamping the registry default would take a reused
 	// session over.
+	//
+	// A model id resolves against one instance, so it rides only with an
+	// explicit provider; empty leaves the session's pin untouched. A
+	// session a failover moved off the node's provider stays on its
+	// stand-in until the return home (SetNodeProvider).
 	if prov != nil && strings.TrimSpace(n.Provider) != "" {
+		model := strings.TrimSpace(n.Model)
 		if key := agentProviderKey(prov); key != "" {
-			if err := e.Pool.SetAgentProvider(sessionID, "default", key); err != nil {
+			if err := e.Pool.SetNodeProvider(sessionID, "default", key, model); err != nil {
 				return fmt.Errorf("set provider: %w", err)
 			}
-		}
-		// A model id resolves against one instance, so it rides only with
-		// an explicit provider. Empty leaves the session's pin untouched.
-		if model := strings.TrimSpace(n.Model); model != "" {
+		} else if model != "" {
 			if err := e.Pool.SetModelID(sessionID, "default", model); err != nil {
 				return fmt.Errorf("set model: %w", err)
 			}

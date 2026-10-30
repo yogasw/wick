@@ -2195,13 +2195,13 @@ func (p *Pool) SetThinkingTokens(sessionID, agentName, v string) error {
 	return session.SetThinkingTokens(p.cfg.Layout, sessionID, agentName, v)
 }
 
-// SetAgentProvider repoints the session's agent entry at a provider
-// instance ("type/name", e.g. "claude/work") so the next spawn resolves
-// that instance's binary and env. Used by a workflow agent node, whose
-// provider is chosen per node rather than per session. No-op when the
-// entry does not exist — create it first (SetMaxTurns does).
-func (p *Pool) SetAgentProvider(sessionID, agentName, providerKey string) error {
-	return session.SetAgentProvider(p.cfg.Layout, sessionID, agentName, providerKey)
+// SetNodeProvider repoints the session's agent entry at a workflow agent
+// node's provider ("type/name") and model, so the next spawn resolves
+// them; an agent a failover moved off that provider stays on its
+// stand-in (session.SetNodeProvider). No-op when the entry does not
+// exist — create it first (SetMaxTurns does).
+func (p *Pool) SetNodeProvider(sessionID, agentName, providerKey, modelID string) error {
+	return session.SetNodeProvider(p.cfg.Layout, sessionID, agentName, providerKey, modelID)
 }
 
 // SetModelID pins a model id on the session's agent entry (creating it if

@@ -203,3 +203,51 @@ func TestUpdateAgentsConcurrentWritersKeepEveryUpdate(t *testing.T) {
 		t.Fatal("a failed update wrote")
 	}
 }
+
+// A workflow node re-applying its provider leaves an agent a failover
+// moved off that provider on its stand-in; the node's model becomes the
+// home's.
+func TestSetNodeProviderKeepsStandIn(t *testing.T) {
+	layout := newLayout(t)
+	if _, err := Create(context.Background(), layout, CreateOptions{ID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = AddAgent(layout, "n1", "default", "claude/b")
+	_ = SetFailoverState(layout, "n1", "default", FailoverState{HomeProvider: "claude/a", HomeModelID: "opus", StandIns: []string{"claude/b"}})
+	if err := SetNodeProvider(layout, "n1", "default", "claude/a", "sonnet"); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := Load(layout, "n1")
+	a := sess.Agents[0]
+	if a.Provider != "claude/b" || a.ModelID != "" || a.Failover == nil || a.Failover.HomeProvider != "claude/a" ||
+		a.Failover.HomeModelID != "sonnet" || len(a.Failover.StandIns) != 1 {
+		t.Fatalf("stand-in not kept: %+v / %+v", a, a.Failover)
+	}
+}
+
+// Another provider on the node, or an agent on its home, is repointed
+// like SetAgentProvider, model included.
+func TestSetNodeProviderRepoints(t *testing.T) {
+	layout := newLayout(t)
+	if _, err := Create(context.Background(), layout, CreateOptions{ID: "n2"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = AddAgent(layout, "n2", "default", "claude/b")
+	_ = SetFailoverState(layout, "n2", "default", FailoverState{HomeProvider: "claude/a", StandIns: []string{"claude/b"}})
+	if err := SetNodeProvider(layout, "n2", "default", "codex/c", "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := Load(layout, "n2")
+	a := sess.Agents[0]
+	if a.Provider != "codex/c" || a.ModelID != "gpt-5" || a.Failover == nil || a.Failover.HomeProvider != "codex/c" ||
+		a.Failover.HomeModelID != "gpt-5" || a.Failover.StandIns != nil {
+		t.Fatalf("not repointed: %+v / %+v", a, a.Failover)
+	}
+	if err := SetNodeProvider(layout, "n2", "default", "codex/c", ""); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ = Load(layout, "n2")
+	if a := sess.Agents[0]; a.Provider != "codex/c" || a.ModelID != "gpt-5" {
+		t.Fatalf("empty model must keep the pin: %+v", a)
+	}
+}
