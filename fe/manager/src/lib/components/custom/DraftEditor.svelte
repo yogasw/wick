@@ -12,7 +12,7 @@
   import FieldRow from "./FieldRow.svelte";
   import OpCard from "./OpCard.svelte";
   import IconPicker from "../icon/IconPicker.svelte";
-  import { newField, newOp, newCategory, allOps, serialize } from "./draft.js";
+  import { newField, newOp, newCategory, allOps, serialize, configGroups } from "./draft.js";
   import type { Draft } from "$lib/types.js";
 
   type Step = "meta" | "configs" | "ops";
@@ -39,6 +39,16 @@
 
   function addConfig() {
     draft.configs = [...draft.configs, newField()];
+    onChange();
+  }
+
+  let groupedConfigs = $derived(configGroups(draft.configs));
+
+  /* Lock or unlock every field of one group in session at once. */
+  function lockGroup(title: string, locked: boolean) {
+    for (const f of draft.configs) {
+      if ((f.group ?? "").trim() === title) f.session_locked = locked || undefined;
+    }
     onChange();
   }
 
@@ -320,8 +330,20 @@
           {#if draft.configs.length === 0}
             <p class="text-xs text-black-700 dark:text-black-600">No fields yet.</p>
           {/if}
-          {#each draft.configs as field, i (i)}
-            <FieldRow {field} {onChange} onRemove={() => removeConfig(i)} config />
+          {#each groupedConfigs as g (g.title)}
+            {#if groupedConfigs.length > 1 || g.title}
+              {@const allLocked = g.items.every((x) => x.field.session_locked)}
+              <div class="flex items-center justify-between gap-3 pt-2" data-testid="config-group">
+                <p class="text-xs font-semibold uppercase tracking-wide text-black-800 dark:text-black-600">{g.title || "Ungrouped"}</p>
+                <label class="flex cursor-pointer select-none items-center gap-2" title="Lock every field of this group: a session connector always uses their defaults.">
+                  <input type="checkbox" class="accent-green-500" checked={allLocked} onchange={(e) => lockGroup(g.title, (e.target as HTMLInputElement).checked)} aria-label="Lock group in session" />
+                  <span class="text-xs font-medium text-black-800 dark:text-black-600">Lock group in session</span>
+                </label>
+              </div>
+            {/if}
+            {#each g.items as item (item.i)}
+              <FieldRow field={item.field} {onChange} onRemove={() => removeConfig(item.i)} config />
+            {/each}
           {/each}
         </div>
       </section>

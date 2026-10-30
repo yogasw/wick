@@ -177,8 +177,11 @@
   <!-- Body -->
   {#if isOpen}
     <div class="p-3 space-y-3" data-testid="card-body">
-      {#each (instance.fields ?? []) as field (field.key)}
+      {#each (instance.fields ?? []) as field, fi (field.key)}
         {@const fieldId = `ws-${instance.id}-${field.key}`}
+        {#if field.group && field.group !== (instance.fields ?? [])[fi - 1]?.group}
+          <p class="pt-1 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600" data-testid="ws-field-group">{field.group}</p>
+        {/if}
         <div>
           <label
             for={fieldId}

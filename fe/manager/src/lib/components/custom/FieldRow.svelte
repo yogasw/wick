@@ -55,6 +55,12 @@
         <span class="mb-1 block text-[11px] font-medium text-black-800 dark:text-black-600">Description</span>
         <TextInput value={field.desc} onChange={(v) => set("desc", v)} placeholder="what this field is for" ariaLabel="Field description" />
       </div>
+      {#if config}
+        <div class="min-w-0">
+          <span class="mb-1 block text-[11px] font-medium text-black-800 dark:text-black-600">Group</span>
+          <TextInput value={field.group ?? ""} onChange={(v) => set("group", v.trim())} placeholder="e.g. Access (optional)" ariaLabel="Field group" />
+        </div>
+      {/if}
     </div>
     <button
       type="button"

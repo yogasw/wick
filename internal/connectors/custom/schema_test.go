@@ -42,6 +42,11 @@ func TestValidateDraft(t *testing.T) {
 			},
 		},
 		{
+			name:    "group with separator",
+			mutate:  func(d *Draft) { d.Configs[0].Group = "Access|desc" },
+			wantErr: "must not contain '|'",
+		},
+		{
 			name: "locked required field without default",
 			mutate: func(d *Draft) {
 				d.Configs[0].SessionLocked = true
@@ -392,5 +397,12 @@ func TestFieldsToConfigs(t *testing.T) {
 	}
 	if out[0].Key != "a" || out[1].Key != "b" || !out[1].IsSecret {
 		t.Errorf("got %+v", out)
+	}
+}
+
+func TestDefFieldGroupToConfig(t *testing.T) {
+	c := DefField{Key: "mode", Group: " Access ", SessionLocked: true}.ToConfig()
+	if c.Group != "Access" || !c.SessionLocked {
+		t.Fatalf("got group=%q locked=%v", c.Group, c.SessionLocked)
 	}
 }

@@ -337,6 +337,9 @@ export interface DraftField {
   /** Config fields only: a session-workspace clone cannot set this field
       and always runs with `default`. */
   session_locked?: boolean;
+  /** Config fields only: section title on the Settings page and the
+      session Config tab. */
+  group?: string;
 }
 
 export interface DraftOpRequest {

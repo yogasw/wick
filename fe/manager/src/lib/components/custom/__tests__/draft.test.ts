@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalize, serialize, newField, newOp } from "../draft.js";
+import { normalize, serialize, newField, newOp, configGroups } from "../draft.js";
 import type { Draft } from "$lib/types.js";
 
 describe("normalize", () => {
@@ -97,5 +97,22 @@ describe("newField / newOp", () => {
     const op = newOp();
     expect(op.request?.method).toBe("GET");
     expect(op.inputs).toEqual([]);
+  });
+});
+
+describe("configGroups", () => {
+  it("buckets fields by group in first-seen order and keeps their indexes", () => {
+    const d = normalize({
+      configs: [
+        { key: "base_url", group: "Connection" },
+        { key: "mode", group: "Access" },
+        { key: "api_key", group: "Connection" },
+        { key: "loose" },
+      ] as never,
+    });
+    const g = configGroups(d.configs);
+    expect(g.map((x) => x.title)).toEqual(["Connection", "Access", ""]);
+    expect(g[0].items.map((x) => x.i)).toEqual([0, 2]);
+    expect(d.configs[1].group).toBe("Access");
   });
 });

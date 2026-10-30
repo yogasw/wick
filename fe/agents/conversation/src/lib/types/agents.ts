@@ -509,6 +509,8 @@ export type WsField = {
   help?: string;
   /** Pinned by the admin to the base default — read-only in a session. */
   locked?: boolean;
+  /** Section title; the card draws a heading where it changes. */
+  group?: string;
 };
 
 export type WsInstance = {

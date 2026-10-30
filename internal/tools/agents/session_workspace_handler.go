@@ -37,6 +37,9 @@ type wsFieldVM struct {
 	// Locked marks a field the admin pinned to the base default: shown
 	// read-only, never writable from a session.
 	Locked bool `json:"locked,omitempty"`
+	// Group is the section title (entity.Config.Group without its
+	// "|desc|state" tail); the tab draws a heading where it changes.
+	Group string `json:"group,omitempty"`
 }
 
 // wsInstanceVM is one session instance card in the Config tab.
@@ -81,6 +84,7 @@ func wsBuildFields(specs []entity.Config, cfg map[string]string) []wsFieldVM {
 			Required: sp.Required,
 			Help:     sp.Description,
 			Locked:   sp.SessionLocked,
+			Group:    strings.TrimSpace(strings.SplitN(sp.Group, "|", 2)[0]),
 		}
 		vals := cfg
 		if sp.SessionLocked {

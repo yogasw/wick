@@ -43,6 +43,10 @@ type DefField struct {
 	// setting this field — it always runs with Default. Off by default,
 	// so the agent can override everything as before.
 	SessionLocked bool `json:"session_locked,omitempty"`
+	// Group (configs only) is the section title the field is listed
+	// under on the instance Settings page and the session Config tab —
+	// entity.Config.Group, the same as a Go connector's `group=` tag.
+	Group string `json:"group,omitempty"`
 }
 
 // allowedWidgets is the subset of the wick widget grammar a custom def
@@ -70,6 +74,7 @@ func (f DefField) ToConfig() entity.Config {
 		Description:   f.Desc,
 		Hidden:        f.Hidden,
 		SessionLocked: f.SessionLocked,
+		Group:         strings.TrimSpace(f.Group),
 	}
 }
 
@@ -397,6 +402,13 @@ func ValidateDraft(d *Draft) error {
 	}
 	if err := ValidateFields(d.Configs); err != nil {
 		return fmt.Errorf("configs: %w", err)
+	}
+	// "|" separates a group's title from its description and fold state
+	// (entity.EffectiveGroup); a custom field names the title only.
+	for _, f := range d.Configs {
+		if strings.Contains(f.Group, "|") {
+			return fmt.Errorf("config %q: group %q must not contain '|'", f.Key, f.Group)
+		}
 	}
 	// A locked field runs with its default in every session, so a required
 	// one without a default would leave each session instance unusable.
