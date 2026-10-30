@@ -42,6 +42,13 @@ func TestValidateDraft(t *testing.T) {
 			},
 		},
 		{
+			name: "locked required field without default",
+			mutate: func(d *Draft) {
+				d.Configs[0].SessionLocked = true
+			},
+			wantErr: "needs a default",
+		},
+		{
 			name:    "op switch on unknown field",
 			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "mode:write" },
 			wantErr: "unknown config field",

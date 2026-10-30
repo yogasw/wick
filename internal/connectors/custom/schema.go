@@ -398,6 +398,13 @@ func ValidateDraft(d *Draft) error {
 	if err := ValidateFields(d.Configs); err != nil {
 		return fmt.Errorf("configs: %w", err)
 	}
+	// A locked field runs with its default in every session, so a required
+	// one without a default would leave each session instance unusable.
+	for _, f := range d.Configs {
+		if f.SessionLocked && f.Required && strings.TrimSpace(f.Default) == "" {
+			return fmt.Errorf("config %q is required and locked in session, so it needs a default", f.Key)
+		}
+	}
 	if len(FlattenOps(d.Ops)) == 0 {
 		return fmt.Errorf("at least one operation is required")
 	}
