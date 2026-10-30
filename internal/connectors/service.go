@@ -1833,7 +1833,7 @@ func (s *Service) decryptInstanceConfig(config map[string]string, callerUserID s
 // base module registers no hook, so the caller can fall back to running
 // a real operation as the probe. callerUserID decrypts wick_enc_ tokens
 // the same way as RunHealthCheck.
-func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string, callerUserID string) ([]connector.OpHealth, error) {
+func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config, lockSeals map[string]string, callerUserID string) ([]connector.OpHealth, error) {
 	mod, ok := s.Module(baseKey)
 	if !ok {
 		return nil, fmt.Errorf("no implementation registered for base connector key %q", baseKey)
@@ -1841,7 +1841,7 @@ func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, insta
 	if mod.HealthCheck == nil {
 		return nil, ErrNoHealthCheck
 	}
-	cfg, err := s.decryptInstanceConfig(connector.SessionConfig(mod, config), callerUserID)
+	cfg, err := s.decryptInstanceConfig(s.ResolveSessionConfig(mod, instanceID, config, lockSeals), callerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -1927,6 +1927,51 @@ type SessionInstanceTarget struct {
 	BaseKey string
 	Label   string
 	Config  map[string]string
+	// LockSeals are the instance's seals for session-locked keys a human
+	// set (sessionworkspace.Instance.LockSeals).
+	LockSeals map[string]string
+}
+
+// sessionLockPlain is what a lock seal encrypts: the instance, key and
+// value it vouches for, so a seal cannot be moved to another instance,
+// key or value.
+func sessionLockPlain(instanceID, key, value string) string {
+	return "wick-session-lock\x00" + instanceID + "\x00" + key + "\x00" + value
+}
+
+// SealSessionLock vouches that a human set key=value on a session
+// instance. Only the session Config tab calls it; the agent's paths
+// refuse locked keys outright.
+func (s *Service) SealSessionLock(instanceID, key, value string) (string, error) {
+	if s.enc == nil || s.enc.Disabled() {
+		return "", fmt.Errorf("encryption is disabled on this server — a locked value cannot be sealed")
+	}
+	return s.enc.EncryptMaster(sessionLockPlain(instanceID, key, value))
+}
+
+// ResolveSessionConfig is the config a session instance runs with: its
+// stored values, except that a session-locked key keeps its stored value
+// only when a human set it (a valid seal) — otherwise the module default
+// applies.
+func (s *Service) ResolveSessionConfig(mod connector.Module, instanceID string, stored, seals map[string]string) map[string]string {
+	out := connector.SessionConfig(mod, stored)
+	if s.enc == nil || s.enc.Disabled() {
+		return out
+	}
+	for _, c := range mod.Configs {
+		if !c.SessionLocked {
+			continue
+		}
+		v, ok := stored[c.Key]
+		seal := seals[c.Key]
+		if !ok || seal == "" {
+			continue
+		}
+		if plain, err := s.enc.DecryptMaster(seal); err == nil && plain == sessionLockPlain(instanceID, c.Key, v) {
+			out[c.Key] = v
+		}
+	}
+	return out
 }
 
 // ExecuteResult carries the outcome of one Execute call. Returned
@@ -2140,7 +2185,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// row per field, owner = "connector:{id}").
 	var configs map[string]string
 	if virtual {
-		configs = connector.SessionConfig(mod, p.SessionInstance.Config)
+		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
 	} else {
 		configs = s.LoadConfigs(*c)
 	}

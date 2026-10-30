@@ -34,8 +34,8 @@ type wsFieldVM struct {
 	Options  []string `json:"options,omitempty"`
 	Required bool     `json:"required"`
 	Help     string   `json:"help,omitempty"`
-	// Locked marks a field the admin pinned to the base default: shown
-	// read-only, never writable from a session.
+	// Locked marks a field the agent may not set: only a human edits it
+	// here (the value is sealed), else it runs with the default.
 	Locked bool `json:"locked,omitempty"`
 	// Group is the section title (entity.Config.Group without its
 	// "|desc|state" tail); the tab draws a heading where it changes.
@@ -86,13 +86,9 @@ func wsBuildFields(specs []entity.Config, cfg map[string]string) []wsFieldVM {
 			Locked:   sp.SessionLocked,
 			Group:    strings.TrimSpace(strings.SplitN(sp.Group, "|", 2)[0]),
 		}
+		// cfg is resolved (ResolveSessionConfig): a locked key is present
+		// only when a human set it here, else the default shows.
 		vals := cfg
-		if sp.SessionLocked {
-			// A stored value (if any) is ignored at runtime — show the
-			// default that actually applies.
-			vals = nil
-			f.Set = false
-		}
 		switch {
 		case sp.IsSecret:
 			f.Type = "secret"
@@ -199,8 +195,9 @@ func wsInstanceToVM(in sessionworkspace.Instance) wsInstanceVM {
 		return vm
 	}
 	specs := mod.Configs
-	vm.Fields = wsBuildFields(specs, in.Config)
-	vm.Status = wsStatus(specs, in.Config)
+	cfg := globalConnectors.ResolveSessionConfig(mod, in.ID, in.Config, in.LockSeals)
+	vm.Fields = wsBuildFields(specs, cfg)
+	vm.Status = wsStatus(specs, cfg)
 	return vm
 }
 
@@ -281,17 +278,11 @@ func sessionWorkspaceAddUI(c *tool.Ctx) {
 func sessionWorkspaceInstanceUI(c *tool.Ctx) {
 	sid := c.PathValue("id")
 	cid := c.PathValue("cid")
-	inst, specs, ok := wsResolve(c, sid, cid)
+	inst, _, ok := wsResolve(c, sid, cid)
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, wsInstanceVM{
-		ID:      inst.ID,
-		BaseKey: inst.BaseKey,
-		Label:   inst.Label,
-		Status:  wsStatus(specs, inst.Config),
-		Fields:  wsBuildFields(specs, inst.Config),
-	})
+	c.JSON(http.StatusOK, wsInstanceToVM(inst))
 }
 
 // wsResolve loads an instance + its base module config specs, writing the
@@ -349,13 +340,13 @@ func sessionWorkspaceSetUI(c *tool.Ctx) {
 			c.Error(http.StatusBadRequest, "unknown config key: "+k)
 			return
 		}
-		if sp.SessionLocked {
-			c.Error(http.StatusBadRequest, "config key "+k+" is locked by the admin and cannot be set in a session")
-			return
-		}
 		v = strings.TrimSpace(v)
 		if v == "" {
 			continue // empty = leave as-is
+		}
+		if strings.ContainsRune(v, 0) {
+			c.Error(http.StatusBadRequest, "config "+k+": value must not contain a NUL byte")
+			return
 		}
 		if sp.IsSecret && !enc.IsMasterToken(v) {
 			e := globalConnectors.Enc()
@@ -376,9 +367,29 @@ func sessionWorkspaceSetUI(c *tool.Ctx) {
 		c.JSON(http.StatusOK, map[string]any{"applied": []string{}})
 		return
 	}
+	// A locked key set here was set by a human: seal it so the runtime
+	// honours it (a value written any other way stays ignored).
+	seals := map[string]string{}
+	for k, v := range toStore {
+		if !specByKey[k].SessionLocked {
+			continue
+		}
+		seal, err := globalConnectors.SealSessionLock(inst.ID, k, v)
+		if err != nil {
+			c.Error(http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		seals[k] = seal
+	}
 	if err := sessionworkspace.SetConfig(globalLayout, sid, inst.ID, toStore); err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if len(seals) > 0 {
+		if err := sessionworkspace.SetLockSeals(globalLayout, sid, inst.ID, seals); err != nil {
+			c.Error(http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	keys := make([]string, 0, len(toStore))
 	for k := range toStore {
@@ -409,6 +420,23 @@ func sessionWorkspaceDuplicateUI(c *tool.Ctx) {
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	// Seals are bound to the instance id: re-seal the locked values a
+	// human had set on the original, so the copy keeps them.
+	if mod, ok := globalConnectors.Module(inst.BaseKey); ok {
+		resolved := globalConnectors.ResolveSessionConfig(mod, inst.ID, inst.Config, inst.LockSeals)
+		seals := map[string]string{}
+		for _, sp := range mod.Configs {
+			if v, set := resolved[sp.Key]; sp.SessionLocked && set {
+				if seal, err := globalConnectors.SealSessionLock(copyInst.ID, sp.Key, v); err == nil {
+					seals[sp.Key] = seal
+				}
+			}
+		}
+		if len(seals) > 0 {
+			_ = sessionworkspace.SetLockSeals(globalLayout, sid, copyInst.ID, seals)
+			copyInst.LockSeals = seals
+		}
 	}
 	c.JSON(http.StatusOK, wsInstanceToVM(copyInst))
 }
@@ -479,7 +507,7 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 			UserID:       user.ID,
 			IsAdmin:      user.IsAdmin(),
 			SessionInstance: &connectors.SessionInstanceTarget{
-				BaseKey: inst.BaseKey, Label: inst.Label, Config: cfg,
+				BaseKey: inst.BaseKey, Label: inst.Label, Config: cfg, LockSeals: inst.LockSeals,
 			},
 		})
 		if execErr != nil {
@@ -490,7 +518,7 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 		return
 	}
 
-	report, err := globalConnectors.HealthCheckSessionInstance(c.Context(), inst.BaseKey, inst.ID, cfg, user.ID)
+	report, err := globalConnectors.HealthCheckSessionInstance(c.Context(), inst.BaseKey, inst.ID, cfg, inst.LockSeals, user.ID)
 	if err != nil {
 		if err == connectors.ErrNoHealthCheck {
 			c.JSON(http.StatusOK, map[string]any{"ok": false, "no_health_check": true, "note": "No health check — pass ?operation= to run a real call."})

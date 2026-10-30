@@ -42,9 +42,10 @@ func SessionInstanceForID(layout agentconfig.Layout, sessionID, connectorID stri
 		return nil, false, fmt.Errorf("session connector %q not found in this session", connectorID)
 	}
 	return &connectors.SessionInstanceTarget{
-		BaseKey: inst.BaseKey,
-		Label:   inst.Label,
-		Config:  inst.Config,
+		BaseKey:   inst.BaseKey,
+		Label:     inst.Label,
+		Config:    inst.Config,
+		LockSeals: inst.LockSeals,
 	}, true, nil
 }
 
@@ -123,7 +124,7 @@ func sessionInstanceSummaries(svc *connectors.Service, layout agentconfig.Layout
 		if !ok {
 			continue
 		}
-		visible := sessionOpVisible(mod, in.Config)
+		visible := sessionOpVisible(mod, svc.ResolveSessionConfig(mod, in.ID, in.Config, in.LockSeals))
 		count := 0
 		for _, op := range mod.AllOps() {
 			if visible(op) {
@@ -178,7 +179,7 @@ func sessionInstanceSearch(svc *connectors.Service, layout agentconfig.Layout, s
 			label = mod.Meta.Name + " (session)"
 		}
 		matched := make([]searchTool, 0)
-		visible := sessionOpVisible(mod, in.Config)
+		visible := sessionOpVisible(mod, svc.ResolveSessionConfig(mod, in.ID, in.Config, in.LockSeals))
 		ops := mod.AllOps()
 		for i := range ops {
 			op := ops[i]
@@ -237,7 +238,7 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 	// Session instances have no per-op disable state — every op the
 	// instance's config exposes is enabled; the rest are listed as
 	// switched off by config.
-	visible := sessionOpVisible(mod, target.Config)
+	visible := sessionOpVisible(mod, svc.ResolveSessionConfig(mod, instanceID, target.Config, target.LockSeals))
 	shown := map[string]bool{}
 	off := map[string]string{}
 	for _, op := range mod.AllOps() {
@@ -257,7 +258,7 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 }
 
 // sessionOpVisible reports whether a session instance exposes an op to the
-// agent: config-only helpers never (as on real rows), and a VisibleWhen op
+// agent, given its resolved config (Service.ResolveSessionConfig): config-only helpers never (as on real rows), and a VisibleWhen op
 // only while the instance's config — module defaults for unsaved fields —
 // satisfies it. Execute applies the same predicate.
 func sessionOpVisible(mod connector.Module, cfg map[string]string) func(connector.Operation) bool {
@@ -270,7 +271,7 @@ func sessionOpVisible(mod connector.Module, cfg map[string]string) func(connecto
 			return true
 		}
 		if vals == nil {
-			vals = connector.EffectiveConfigValues(mod, connector.SessionConfig(mod, cfg))
+			vals = connector.EffectiveConfigValues(mod, cfg)
 		}
 		return connector.OpVisible(op, vals)
 	}

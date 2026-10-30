@@ -148,8 +148,9 @@ type instanceVM struct {
 	Label   string   `json:"label"`
 	Status  string   `json:"status"` // ready | needs_setup
 	Missing []string `json:"missing_keys,omitempty"`
-	// Locked lists the config keys the admin pinned to the base default:
-	// set_config / add values refuse them, so the agent knows up front.
+	// Locked lists the config keys only a human may set (session Config
+	// tab): set_config / add values refuse them, so the agent knows up
+	// front.
 	Locked []string `json:"locked_keys,omitempty"`
 }
 
@@ -442,9 +443,10 @@ func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest
 			IPAddress:    ClientIP(r),
 			UserAgent:    r.Header.Get("User-Agent"),
 			SessionInstance: &connectors.SessionInstanceTarget{
-				BaseKey: inst.BaseKey,
-				Label:   inst.Label,
-				Config:  inst.Config,
+				BaseKey:   inst.BaseKey,
+				Label:     inst.Label,
+				Config:    inst.Config,
+				LockSeals: inst.LockSeals,
 			},
 		})
 		out := map[string]any{"session_id": sessionID, "connector_id": cid, "operation": opKey}
@@ -460,7 +462,7 @@ func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest
 	}
 
 	// Default: base module HealthCheck.
-	report, err := svc.HealthCheckSessionInstance(r.Context(), inst.BaseKey, inst.ID, inst.Config, user.ID)
+	report, err := svc.HealthCheckSessionInstance(r.Context(), inst.BaseKey, inst.ID, inst.Config, inst.LockSeals, user.ID)
 	if err != nil {
 		if err == connectors.ErrNoHealthCheck {
 			writeWorkspaceResult(w, req, rsp, map[string]any{
@@ -612,6 +614,9 @@ func storeSessionConfig(svc *connectors.Service, layout agentconfig.Layout, sess
 		if !ok || v == "" || sp.SessionLocked {
 			continue
 		}
+		if strings.ContainsRune(v, 0) {
+			return nil, fmt.Errorf("config %q: value must not contain a NUL byte", k)
+		}
 		if sp.IsSecret && !enc.IsMasterToken(v) && !enc.IsToken(v) {
 			e := svc.Enc()
 			if e == nil || e.Disabled() {
@@ -648,7 +653,7 @@ func sessionConfigKeyError(specByKey map[string]entity.Config, k string) string 
 	case !known:
 		return "unknown config key: " + k
 	case sp.SessionLocked:
-		return fmt.Sprintf("config key %q is locked by the admin: a session connector always uses the base default and cannot override it", k)
+		return fmt.Sprintf("config key %q is locked for the agent: only a human can change it, in the session Config tab", k)
 	}
 	return ""
 }

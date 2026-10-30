@@ -292,4 +292,22 @@ describe("WsInstanceCard", () => {
     expect(screen.queryByText(/no changes/i)).toBeDefined();
   });
 
+
+  test("a field locked for the agent stays editable by the human and says so", async () => {
+    const inst: WsInstance = {
+      id: "cid-lock",
+      label: "Locked",
+      status: "ready",
+      fields: [{ key: "mode", label: "mode", type: "dropdown", options: ["read", "write"], value: "read", locked: true }],
+    };
+    const onSave = vi.fn();
+    render(WsInstanceCard, { props: makeProps({ instance: inst, open: true, onSave }) });
+    expect(screen.getByText("🔒 AI can't change")).toBeDefined();
+    const select = document.querySelector('[data-field="mode"]') as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    await fireEvent.change(select, { target: { value: "write" } });
+    const saveBtn = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+    await fireEvent.click(saveBtn);
+    expect(onSave).toHaveBeenCalledWith("cid-lock", { mode: "write" });
+  });
 });

@@ -55,12 +55,12 @@ type Config struct {
 	// saves it like any other row.
 	Internal bool `gorm:"-" json:"internal,omitempty"`
 	// SessionLocked is set from the `wick:"session_locked"` tag (or a
-	// custom connector field's "Lock in session"). It keeps the row out of
-	// reach of session-workspace clones: neither the agent (set_config /
-	// add values) nor the session Config tab may write it, and a session
-	// instance always runs with the module default. Not persisted. Pins a
-	// value the agent must not override for itself — e.g. the field an
-	// op's VisibleWhen reads, so a write op switched off stays off.
+	// custom connector field's "Lock in session"). The agent cannot set it
+	// on a session-workspace clone (set_config / add values refuse it); a
+	// human can, in the session Config tab, which seals the value. Unsealed,
+	// the clone runs with the module default. Not persisted. Keeps the agent
+	// from overriding a value for itself — e.g. the field an op's
+	// VisibleWhen reads, so it cannot switch its own write ops on.
 	SessionLocked bool `gorm:"-" json:"session_locked,omitempty"`
 	// ColOptions holds per-column select options for kvlist rows. Not persisted.
 	// Key = column name; Value = pipe-separated "label::value" pairs (or just

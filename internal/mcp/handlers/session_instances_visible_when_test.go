@@ -132,7 +132,7 @@ func TestSessionLockedConfig(t *testing.T) {
 	if msg := sessionConfigKeyError(specs, "nope"); !strings.Contains(msg, "unknown config key") {
 		t.Fatalf("want unknown key, got %q", msg)
 	}
-	visible := sessionOpVisible(mod, map[string]string{"browser": "moli"})
+	visible := sessionOpVisible(mod, svc.ResolveSessionConfig(mod, "sw_x", map[string]string{"browser": "moli"}, nil))
 	for _, op := range mod.AllOps() {
 		if op.Key == "pdf" && visible(op) {
 			t.Fatal("stored override of a locked field must not switch pdf on")

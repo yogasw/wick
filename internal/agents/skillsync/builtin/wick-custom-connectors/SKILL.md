@@ -127,12 +127,13 @@ the user asks for that control:
   `visible_when: "mode:write"` on every write op: a `read` instance keeps
   those ops listed in `wick_get` as `unavailable` (with the reason, no
   `tool_id`) and refuses to execute them.
-- **`configs[].session_locked`** (with `allow_session_config`) — a session
-  clone cannot set the field and always runs with its `default`; the agent
-  sees it in `locked_keys` and `set_config` refuses it. Lock `mode` and
-  `base_url` when the agent must not switch itself to write or redirect the
-  calls; leave credentials unlocked so a session can bring its own key. A
-  locked required field needs a default. The builder can lock a whole group.
+- **`configs[].session_locked`** (with `allow_session_config`) — the agent
+  cannot set the field on a session clone (`locked_keys`, `set_config`
+  refuses it); a human can, in the Session Workspace tab. Until a human does,
+  it runs with its `default`. Lock `mode` so the agent cannot switch itself
+  to write, and `base_url` so it cannot redirect the calls; leave
+  credentials unlocked so the agent can fill them. A locked required field
+  needs a default. The builder can lock a whole group.
 
 Say in the plan which ops carry a switch and which configs are locked.
 

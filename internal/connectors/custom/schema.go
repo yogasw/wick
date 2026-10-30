@@ -39,9 +39,9 @@ type DefField struct {
 	// still seeded and readable at runtime) — used for machine-managed
 	// values like OAuth tokens.
 	Hidden bool `json:"hidden,omitempty"`
-	// SessionLocked (configs only) stops a session-workspace clone from
-	// setting this field — it always runs with Default. Off by default,
-	// so the agent can override everything as before.
+	// SessionLocked (configs only): the agent cannot set this field on a
+	// session-workspace clone; a human can in the session Config tab.
+	// Unset by a human it runs with Default. Off by default.
 	SessionLocked bool `json:"session_locked,omitempty"`
 	// Group (configs only) is the section title the field is listed
 	// under on the instance Settings page and the session Config tab —

@@ -84,7 +84,7 @@ func (h handlers) defSchema(c *connector.Ctx) (any, error) {
 			"required_configs":   "required:true makes the instance show needs_setup until filled. Mark base URL + credentials required; optional tuning knobs not.",
 			"config_groups":      "With more than a handful of configs, give each a `group` title (\"Connection\", \"Access\", …): the Settings page and the session Config tab list them per group. Tell the user how you grouped them.",
 			"op_switches":        "Only when the user wants ops switched on/off per instance (e.g. read-only instances): add a dropdown config such as mode (read|write, default read) and set visible_when \"mode:write\" on every write op. Off ops stay listed in wick_get as unavailable and refuse to execute. Leave visible_when empty otherwise.",
-			"session_lock":       "Only for defs with allow_session_config: session_locked:true on a config stops a session clone (and the agent) from overriding it — the session always runs with `default`. Lock the field an op switch reads (mode) and anything the agent must not redirect (base_url). Credentials normally stay unlocked so a session can bring its own key. A locked required field needs a default.",
+			"session_lock":       "Only for defs with allow_session_config: session_locked:true on a config stops the AGENT from setting it on a session clone; a human can still change it in the Session Workspace tab, and until then it runs with `default`. Lock the field an op switch reads (mode) and anything the agent must not redirect (base_url). Credentials normally stay unlocked so the agent can fill them. A locked required field needs a default.",
 		},
 		"draft_shape": map[string]any{
 			"key":                  "Lowercase slug (a-z0-9_-), unique across built-in and custom connectors, IMMUTABLE after create. 'custom' is reserved.",
@@ -112,7 +112,7 @@ func (h handlers) defSchema(c *connector.Ctx) (any, error) {
 			"default":        "Optional seed value.",
 			"desc":           "Help text — for inputs this is what the LLM reads to fill the field, so describe format and give an example.",
 			"group":          "configs only. Optional section title (no '|'); fields sharing it are listed together.",
-			"session_locked": "configs only. bool. true = a session-workspace clone cannot set this field and always uses `default`; the agent gets it in locked_keys and set_config refuses it. Default false.",
+			"session_locked": "configs only. bool. true = the agent cannot set this field on a session-workspace clone (locked_keys; set_config refuses it); a human can, in the Session Workspace tab. Unset by a human, it uses `default`. Default false.",
 		},
 		"op_fields": map[string]any{
 			"visible_when": "API (request) ops only. Optional \"<config_key>:<a|b>\" — the op is on only while the instance's config holds one of those values. The config must be declared and not secret.",

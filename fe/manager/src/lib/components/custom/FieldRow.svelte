@@ -90,7 +90,7 @@
       <span class="text-xs font-medium text-black-800 dark:text-black-600">Secret</span>
     </label>
     {#if config}
-      <label class="flex cursor-pointer select-none items-center gap-2" title="A session connector cannot set this field and always uses the default, so the agent cannot override it.">
+      <label class="flex cursor-pointer select-none items-center gap-2" title="The agent cannot set this field on a session connector; a human can, in the Session Workspace tab. Until then the default applies.">
         <input type="checkbox" class="accent-green-500" checked={!!field.session_locked} onchange={(e) => set("session_locked", (e.target as HTMLInputElement).checked)} aria-label="Lock in session" />
         <span class="text-xs font-medium text-black-800 dark:text-black-600">Lock in session</span>
       </label>

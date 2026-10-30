@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/wickdocs"
@@ -192,5 +193,44 @@ func TestConfigOffOps(t *testing.T) {
 	}
 	if off := svc.ConfigOffOps(ctx, id, "vwstub"); len(off) != 0 {
 		t.Fatalf("browser=moli: want none off, got %v", off)
+	}
+}
+
+// A locked key a human set in the session Config tab carries a seal and is
+// honoured; the same value without a seal, or with a seal made for another
+// instance, falls back to the default.
+func TestSessionLockedSealedValue(t *testing.T) {
+	ctx := context.Background()
+	encSvc, err := enc.New(testEncKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := visibleWhenModule()
+	for i := range mod.Configs {
+		mod.Configs[i].SessionLocked = true
+	}
+	svc, _ := newSvcWithModule(t, encSvc, mod)
+	run := func(id string, seals map[string]string) error {
+		_, err := svc.Execute(ctx, ExecuteParams{
+			ConnectorID:     id,
+			OperationKey:    "pdf",
+			Source:          entity.ConnectorRunSourceMCP,
+			SessionInstance: &SessionInstanceTarget{BaseKey: "vwstub", Label: "sw", Config: map[string]string{"browser": "moli"}, LockSeals: seals},
+		})
+		return err
+	}
+	seal, err := svc.SealSessionLock("sw_a", "browser", "moli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run("sw_a", map[string]string{"browser": seal}); err != nil {
+		t.Fatalf("sealed human value must apply: %v", err)
+	}
+	if err := run("sw_b", map[string]string{"browser": seal}); err == nil {
+		t.Fatal("a seal moved to another instance must not apply")
+	}
+	other, _ := svc.SealSessionLock("sw_a", "browser", "chromium")
+	if err := run("sw_a", map[string]string{"browser": other}); err == nil {
+		t.Fatal("a seal for another value must not apply")
 	}
 }

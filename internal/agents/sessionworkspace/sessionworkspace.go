@@ -51,6 +51,11 @@ type Instance struct {
 	// Config holds the instance's config field values. Secret fields are
 	// wick_cenc_ master tokens; non-secret fields are plaintext.
 	Config map[string]string `json:"config"`
+	// LockSeals holds, per session-locked config key, the server's seal of
+	// the value a human set in the Config tab (see connectors.Service.
+	// SealSessionLock). A locked key without a valid seal runs with the
+	// module default, so editing this file cannot unlock it.
+	LockSeals map[string]string `json:"lock_seals,omitempty"`
 	// CreatedBy is "ai" (added via the MCP tool) or "user" (added in the
 	// Config tab) — drives the "agent added this, please fill it" notice.
 	CreatedBy string `json:"created_by,omitempty"`
@@ -228,6 +233,30 @@ func SetConfig(layout agentconfig.Layout, sessionID, instanceID string, values m
 		}
 		for k, v := range values {
 			ws.Instances[i].Config[k] = v
+		}
+		return save(layout, sessionID, ws)
+	}
+	return fmt.Errorf("session instance %q not found: %w", instanceID, os.ErrNotExist)
+}
+
+// SetLockSeals merges seals for human-set locked config keys into an
+// instance and persists.
+func SetLockSeals(layout agentconfig.Layout, sessionID, instanceID string, seals map[string]string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	ws, err := Load(layout, sessionID)
+	if err != nil {
+		return err
+	}
+	for i := range ws.Instances {
+		if ws.Instances[i].ID != instanceID {
+			continue
+		}
+		if ws.Instances[i].LockSeals == nil {
+			ws.Instances[i].LockSeals = map[string]string{}
+		}
+		for k, v := range seals {
+			ws.Instances[i].LockSeals[k] = v
 		}
 		return save(layout, sessionID, ws)
 	}

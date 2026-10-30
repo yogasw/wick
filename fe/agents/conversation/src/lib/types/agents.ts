@@ -507,7 +507,7 @@ export type WsField = {
   options?: string[];
   value?: string;
   help?: string;
-  /** Pinned by the admin to the base default — read-only in a session. */
+  /** The agent may not set it; a human can, here. */
   locked?: boolean;
   /** Section title; the card draws a heading where it changes. */
   group?: string;

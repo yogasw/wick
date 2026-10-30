@@ -335,7 +335,7 @@
               {@const allLocked = g.items.every((x) => x.field.session_locked)}
               <div class="flex items-center justify-between gap-3 pt-2" data-testid="config-group">
                 <p class="text-xs font-semibold uppercase tracking-wide text-black-800 dark:text-black-600">{g.title || "Ungrouped"}</p>
-                <label class="flex cursor-pointer select-none items-center gap-2" title="Lock every field of this group: a session connector always uses their defaults.">
+                <label class="flex cursor-pointer select-none items-center gap-2" title="Lock every field of this group for the agent: only a human can change them in the Session Workspace tab.">
                   <input type="checkbox" class="accent-green-500" checked={allLocked} onchange={(e) => lockGroup(g.title, (e.target as HTMLInputElement).checked)} aria-label="Lock group in session" />
                   <span class="text-xs font-medium text-black-800 dark:text-black-600">Lock group in session</span>
                 </label>

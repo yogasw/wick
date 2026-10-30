@@ -61,11 +61,11 @@ Do not try to work around this by guessing credentials or calling the op anyway.
 
 The division of labour matters: **you create the blank instance, the user fills in the config through a UI form.** You never see the values. The instance shows up in `wick_list` for that session only and dies with the session.
 
-An admin can pin some config fields: they come back in the instance's `locked_keys`, the session always uses the admin's default for them, and `set_config` / `add values` refuse them. Do not try another route to change one — tell the user it is locked and needs an admin.
+Some config fields are locked for you: they come back in the instance's `locked_keys` and `set_config` / `add values` refuse them. Only a human can change them, in the **Session Workspace tab** of this session; until then they run with the default. So when the work needs one changed (e.g. `mode` → `write` to unlock write ops): create the session instance, fill everything else yourself, then ask the user to switch that field in the Session Workspace tab and tell you when done. Do not reach for a saved instance or an admin unlock for this, and do not try another route around the lock.
 
 ## Operations switched off by config
 
-An instance's own config can switch an operation off (e.g. a `mode` field set to `read` turns the write ops off). `wick_get` still lists such an op, with an `unavailable` reason and no `tool_id`; a category shows them as `unavailable_tools`. You cannot call it — executing it fails with the same reason. Tell the user which config value it needs; changing that value is an admin's call, not something to work around with a session instance.
+An instance's own config can switch an operation off (e.g. a `mode` field set to `read` turns the write ops off). `wick_get` still lists such an op, with an `unavailable` reason and no `tool_id`; a category shows them as `unavailable_tools`. You cannot call it — executing it fails with the same reason. Tell the user which config value it needs. On a session instance where that field is in `locked_keys`, the user switches it in the Session Workspace tab; on a saved instance, on its Connectors page.
 
 ## Batch execution
 
