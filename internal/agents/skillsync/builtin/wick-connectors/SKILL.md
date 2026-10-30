@@ -61,6 +61,12 @@ Do not try to work around this by guessing credentials or calling the op anyway.
 
 The division of labour matters: **you create the blank instance, the user fills in the config through a UI form.** You never see the values. The instance shows up in `wick_list` for that session only and dies with the session.
 
+An admin can pin some config fields: they come back in the instance's `locked_keys`, the session always uses the admin's default for them, and `set_config` / `add values` refuse them. Do not try another route to change one — tell the user it is locked and needs an admin.
+
+## Operations switched off by config
+
+An instance's own config can switch an operation off (e.g. a `mode` field set to `read` turns the write ops off). `wick_get` still lists such an op, with an `unavailable` reason and no `tool_id`; a category shows them as `unavailable_tools`. You cannot call it — executing it fails with the same reason. Tell the user which config value it needs; changing that value is an admin's call, not something to work around with a session instance.
+
 ## Batch execution
 
 `wick_execute` accepts a `calls` array instead of a single `tool_id`/`params`, running several operations in one round-trip. Use it when the calls are independent — it saves latency, not correctness. Sequential work that depends on earlier results still needs separate calls.
