@@ -23,7 +23,7 @@ type AgentAccessHistory struct {
 	// ApprovalID is the approval_request card's id; "" for a direct save.
 	ApprovalID string `gorm:"type:varchar(64);not null;default:'';index" json:"approval_id"`
 	// SessionID is the session the approval card sits in.
-	SessionID string `gorm:"type:varchar(64);not null;default:''" json:"session_id"`
+	SessionID string `gorm:"type:varchar(128);not null;default:''" json:"session_id"`
 	// DecidedBy names the person who accepted or declined a proposal.
 	DecidedBy string    `gorm:"type:varchar(128);not null;default:''" json:"decided_by"`
 	At        time.Time `gorm:"not null;index" json:"at"`
