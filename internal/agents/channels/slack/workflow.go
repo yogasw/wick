@@ -204,6 +204,9 @@ type slackWorkflowAPI interface {
 
 // WorkflowSend dispatches one outbound op against the live Slack API.
 func (s *Channel) WorkflowSend(ctx context.Context, op string, args map[string]any) (any, error) {
+	if connectOnlyMode() {
+		return nil, fmt.Errorf("Slack connection-only mode blocks workflow actions")
+	}
 	if !s.IsConfigured() {
 		return nil, fmt.Errorf("slack channel not configured")
 	}

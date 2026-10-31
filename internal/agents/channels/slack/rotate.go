@@ -140,6 +140,9 @@ type tokenRefresh struct {
 
 // exchangeRefreshToken trades refreshToken for a new access + refresh pair.
 func exchangeRefreshToken(ctx context.Context, baseURL, clientID, clientSecret, refreshToken string) (tokenRefresh, error) {
+	if connectOnlyMode() {
+		return tokenRefresh{}, errors.New("Slack connection-only mode blocks token refresh")
+	}
 	form := url.Values{
 		"client_id":     {clientID},
 		"client_secret": {clientSecret},
@@ -337,7 +340,7 @@ func (s *Channel) setPairLocked(p rotatedPair) {
 	if !p.expiresAt.IsZero() {
 		s.cfg.AppTokenExpiresAt = p.expiresAt.UTC().Format(time.RFC3339)
 	}
-	s.api = slackgo.New(s.cfg.BotToken, slackgo.OptionAppLevelToken(p.access))
+	s.api = slackgo.New(s.cfg.BotToken, slackgo.OptionAppLevelToken(p.access), slackgo.OptionHTTPClient(restrictedSlackHTTPClient()))
 }
 
 // adoptStored switches to the stored pair when it is newer than the one in

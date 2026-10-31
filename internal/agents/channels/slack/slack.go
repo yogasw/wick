@@ -794,7 +794,7 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	teamName, teamDomain := s.teamName, s.teamDomain
 	s.cfgMu.Unlock()
 
-	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
+	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken), slackgo.OptionHTTPClient(restrictedSlackHTTPClient()))
 	socket := newSocketClient(api)
 
 	// The identity is CACHED — seeded from the channel row at boot and
@@ -1711,6 +1711,9 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 // The Slack channel itself has no agent-session role for slash
 // commands — they exist purely to be workflow-driven.
 func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashCommand) {
+	if dmOnlyRestricted() {
+		return
+	}
 	defer agentchannels.RecoverPanic("slack", "slash command")
 	s.emitWorkflow(ctx, "command", map[string]any{
 		"user":         cmd.UserID,
@@ -1724,7 +1727,17 @@ func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashComma
 }
 
 func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsAPIEvent) {
+	if connectOnlyMode() {
+		return
+	}
 	defer agentchannels.RecoverPanic("slack", "events api")
+	// Restrict before remote routing, workflow emission, or visible rejection.
+	if dmOnlyRestricted() {
+		ev, ok := outer.InnerEvent.Data.(*slackevents.MessageEvent)
+		if outer.Type != slackevents.CallbackEvent || !ok || !dmOnlyMessageAllowed(ev) {
+			return
+		}
+	}
 	switch outer.Type {
 	case slackevents.CallbackEvent:
 		chType := ""
@@ -2473,6 +2486,12 @@ func (s *Channel) snapshot() agentconfig.SlackChannelConfig {
 const notReadyReply = "Agent is not ready, try again in a moment."
 
 func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, files []slackgo.File) {
+	if connectOnlyMode() {
+		return
+	}
+	if !dmOnlyMessageAllowed(ev) {
+		return
+	}
 	threadTS := ev.ThreadTimeStamp
 	if threadTS == "" {
 		threadTS = ev.TimeStamp
@@ -4146,7 +4165,7 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 	// Fetch first 50 workspace members for a username→user_id directory.
 	// 3-second timeout; failure is non-fatal — section is omitted.
 	var memberEntries []string
-	membersCtx, membersCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	membersCtx, membersCancel := context.WithTimeout(context.Background(), 8*time.Second) // Slack users.list can exceed 3s
 	defer membersCancel()
 	if members, err := api.GetUsersContext(membersCtx, slackgo.GetUsersOptionLimit(50)); err == nil {
 		for _, m := range members {
@@ -4325,6 +4344,9 @@ func (s *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 }
 
 func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionCallback) {
+	if dmOnlyRestricted() {
+		return
+	}
 	defer agentchannels.RecoverPanic("slack", "interaction")
 	// Workflow surface first — emit a typed event for every interaction
 	// type so workflows can route by callback_id / action_id without
