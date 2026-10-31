@@ -4165,7 +4165,7 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 	// Fetch first 50 workspace members for a username→user_id directory.
 	// 3-second timeout; failure is non-fatal — section is omitted.
 	var memberEntries []string
-	membersCtx, membersCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	membersCtx, membersCancel := context.WithTimeout(context.Background(), 8*time.Second) // Slack users.list can exceed 3s
 	defer membersCancel()
 	if members, err := api.GetUsersContext(membersCtx, slackgo.GetUsersOptionLimit(50)); err == nil {
 		for _, m := range members {
