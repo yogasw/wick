@@ -7,6 +7,8 @@ description: Use when the user asks how wick agents work — sessions, projects,
 
 An **agent** in wick is a CLI coding assistant (Claude Code, Codex, Gemini) or the in-process `wick` provider, run as a subprocess against a folder, reachable from several channels at once. Everything it does happens inside a **session**.
 
+For Codex, **Providers → instance → Configuration → sandbox_mode** selects `read-only`, `workspace-write`, or `danger-full-access` for the next turn. An unset mode retains the existing `danger-full-access` default. Changing it requires the existing sandbox permission and does not change tool approval policy.
+
 ## The mental model
 
 Four things, in order of how often you touch them:

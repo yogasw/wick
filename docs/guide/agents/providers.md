@@ -34,6 +34,8 @@ Each instance carries:
 
 The default seed: when the instance list is empty, [`Load`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L89) auto-creates one default per type whose `Name` equals the type. So a fresh install always shows three cards (`claude/claude`, `codex/codex`, `gemini/gemini`).
 
+Codex instances expose `sandbox_mode` in **Providers → instance → Configuration**. Choose `read-only`, `workspace-write`, or `danger-full-access` and save the field. The value applies to the next turn. Existing instances without an explicit value retain their current `danger-full-access` default. This filesystem setting does not change tool approvals or grant permission to edit it: the existing sandbox owner permission still applies.
+
 ## Instance names and the type/name key
 
 Every provider instance is identified by a `type/name` key — the type plus a slash plus the instance name. Examples: `claude/claude` (the default), `claude/work`, `codex/fast`. This key is what project defaults, the composer's [provider chip](../agents#composer), and `agents.json` store.
