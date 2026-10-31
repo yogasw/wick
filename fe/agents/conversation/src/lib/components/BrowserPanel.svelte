@@ -247,29 +247,124 @@
     });
   }
 
+  /* Auto-reconnect: a dropped socket (network blip, laptop sleep, wick
+   * restart) is retried with backoff while the view is still wanted; a
+   * socket that stays open but stops answering is caught by the heartbeat.
+   * After the retries run out, clicking the status reconnects. */
+  const RETRY_MAX = 8;
+  const HEARTBEAT_MS = 15000;
+  let wantLive = false; // the user picked a session/tab and has not left it
+  let retries = 0;
+  let retryTimer: number | null = null;
+  let heartbeatTimer: number | null = null;
+  let missedBeats = 0;
+
+  function clearRetry() {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  function startHeartbeat(sock: WebSocket) {
+    stopHeartbeat();
+    missedBeats = 0;
+    heartbeatTimer = window.setInterval(() => {
+      if (ws !== sock || paused) return;
+      sendCmd("Runtime.evaluate", { expression: "1" }).then(
+        () => (missedBeats = 0),
+        () => {
+          // Two silent beats: the socket is open but dead. Drop it; onclose
+          // schedules the reconnect.
+          if (++missedBeats >= 2 && ws === sock) sock.close();
+        },
+      );
+    }, HEARTBEAT_MS);
+  }
+
+  function scheduleReconnect() {
+    clearRetry();
+    if (!wantLive || !instanceId || !sessionId) return;
+    if (retries >= RETRY_MAX) {
+      statusText = "disconnected";
+      return;
+    }
+    const delay = Math.min(15000, 1000 * 2 ** retries);
+    retries++;
+    statusText = `reconnecting… (${retries}/${RETRY_MAX})`;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      openSocket();
+    }, delay);
+  }
+
+  // Manual reconnect (click on the status): start over with a fresh budget.
+  function reconnectNow() {
+    if (!instanceId || !sessionId) return;
+    retries = 0;
+    connect();
+  }
+
   function connect() {
     disconnect();
     if (!instanceId || !sessionId) return;
+    wantLive = true;
+    openSocket();
+  }
+
+  function openSocket() {
+    closeSocket();
     statusText = "connecting…";
     const sock = new WebSocket(wsURL(instanceId, sessionId, tabIndex));
     ws = sock;
     sock.onopen = () => {
+      if (ws !== sock) return;
       connected = true;
+      retries = 0;
       statusText = "live";
       send("Page.enable");
       applyViewport(); // sizes the viewport, then starts the screencast
+      startHeartbeat(sock);
     };
     sock.onmessage = (ev) => onCdpMessage(ev.data);
     sock.onerror = () => {
-      statusText = "connection error";
+      if (ws === sock) statusText = "connection error";
     };
     sock.onclose = () => {
+      if (ws !== sock) return; // replaced or closed on purpose
+      ws = null;
       connected = false;
-      if (statusText === "live") statusText = "disconnected";
+      stopHeartbeat();
+      rejectPending();
+      if (wantLive) scheduleReconnect();
+      else statusText = "disconnected";
     };
   }
 
+  function rejectPending() {
+    for (const [, p] of pendingCmds) {
+      clearTimeout(p.timer);
+      p.reject(new Error("disconnected"));
+    }
+    pendingCmds.clear();
+  }
+
+  // Leaving the view on purpose (session change, close, unmount): no retries.
   function disconnect() {
+    wantLive = false;
+    clearRetry();
+    closeSocket();
+  }
+
+  function closeSocket() {
+    stopHeartbeat();
     if (ws) {
       const s = ws;
       // Stop the screencast and pause+mute page media BEFORE closing, so a
@@ -301,11 +396,7 @@
       clearTimeout(ackTimer);
       ackTimer = null;
     }
-    for (const [, p] of pendingCmds) {
-      clearTimeout(p.timer);
-      p.reject(new Error("disconnected"));
-    }
-    pendingCmds.clear();
+    rejectPending();
   }
 
   const startScreencast = () =>
@@ -339,7 +430,12 @@
 
   function onVisibility() {
     if (document.hidden) pauseStream();
+    else if (wantLive && !connected) reconnectNow(); // dropped while away (laptop sleep)
     else resumeStream();
+  }
+
+  function onOnline() {
+    if (wantLive && !connected) reconnectNow();
   }
 
   // Emulate a viewport matching the on-screen box (÷ zoom), so the page renders
@@ -715,11 +811,13 @@
     // Pause the stream when the tab/window is hidden so a background video
     // doesn't keep streaming (and playing audio) while you're on another page.
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
     // Esc closes the right-click menu.
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtxMenu(); };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
       document.removeEventListener("keydown", onKey);
       disconnect();
       resizeObs?.disconnect();
@@ -922,9 +1020,22 @@
       >Full</button>
     </div>
 
-    <span class={"rounded-full px-2 py-0.5 text-[10px] font-medium " + (connected ? "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600")}>
-      {statusText || "idle"}
-    </span>
+    {#if connected || !sessionId}
+      <span class={"rounded-full px-2 py-0.5 text-[10px] font-medium " + (connected ? "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600")}>
+        {statusText || "idle"}
+      </span>
+    {:else}
+      <button
+        type="button"
+        title="Reconnect to the live browser"
+        class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 hover:bg-green-50 hover:text-green-700 dark:bg-navy-700 dark:text-black-600 dark:hover:bg-green-900 dark:hover:text-green-300"
+        onclick={reconnectNow}
+        data-testid="browser-reconnect"
+      >
+        <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" /></svg>
+        {statusText || "disconnected"}
+      </button>
+    {/if}
 
     <!-- Zoom: sizes the emulated viewport (out = more page fits). -->
     <div class="flex items-center gap-0.5 rounded-lg border border-white-400 dark:border-navy-600 p-0.5">
@@ -1092,9 +1203,21 @@
       data-testid="browser-canvas"
     ></canvas>
     {#if !connected}
-      <div class="absolute inset-0 flex items-center justify-center text-xs text-white-300 pointer-events-none">
-        {statusText || "not connected"}
-      </div>
+      {#if sessionId}
+        <button
+          type="button"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-1 text-xs text-white-300 hover:text-white-100"
+          onclick={reconnectNow}
+          data-testid="browser-reconnect-overlay"
+        >
+          <span>{statusText || "disconnected"}</span>
+          <span class="text-[11px] underline underline-offset-2">Click to reconnect</span>
+        </button>
+      {:else}
+        <div class="absolute inset-0 flex items-center justify-center text-xs text-white-300 pointer-events-none">
+          {statusText || "not connected"}
+        </div>
+      {/if}
     {/if}
   </div>
 {/snippet}
