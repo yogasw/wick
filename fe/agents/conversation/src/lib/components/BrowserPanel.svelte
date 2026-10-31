@@ -31,6 +31,10 @@
   let tabIndex = $state(0);
 
   let loadingInstances = $state(true);
+  let loadingSessions = $state(false);
+  // Bumped per loadSessions call so a slow, older response can't overwrite a
+  // newer one (e.g. after switching instance mid-request).
+  let sessionsSeq = 0;
   let busy = $state(false);
 
   /* ── live view state ──────────────────────────────────────────── */
@@ -141,13 +145,18 @@
     }
   }
 
-  async function loadSessions() {
+  async function loadSessions(quiet = false) {
+    const seq = ++sessionsSeq;
     if (!instanceId) {
       sessions = [];
+      loadingSessions = false;
       return;
     }
+    const inst = instanceId;
+    if (!quiet) loadingSessions = true;
     try {
-      const res = await run(listSessions(instanceId).pipe(Effect.provide(WickClientLayer)));
+      const res = await run(listSessions(inst).pipe(Effect.provide(WickClientLayer)));
+      if (seq !== sessionsSeq || inst !== instanceId) return; // superseded
       sessions = res.sessions;
       maxTabs = res.maxTabs;
       // Keep a valid selection.
@@ -156,8 +165,21 @@
         sessionId = "";
       }
     } catch (e) {
-      onError(`List sessions: ${errMsg(e)}`);
+      if (!quiet && seq === sessionsSeq) onError(`List sessions: ${errMsg(e)}`);
+    } finally {
+      if (seq === sessionsSeq) loadingSessions = false;
     }
+  }
+
+  // Pick an instance from the event's own value: the bind:value update and the
+  // onchange handler aren't guaranteed to run in that order, so reading
+  // instanceId here could still see the old (empty) value and list nothing.
+  function selectInstance(id: string) {
+    disconnect();
+    instanceId = id;
+    sessionId = "";
+    sessions = [];
+    void loadSessions();
   }
 
   async function spawn() {
@@ -444,9 +466,10 @@
   // kept at 1: we control apparent size via the viewport dimensions, not DPR.
   function applyViewport() {
     if (!connected || !viewportEl) return;
-    const rect = viewportEl.getBoundingClientRect();
-    const w = Math.max(320, Math.round(rect.width / zoom));
-    const h = Math.max(240, Math.round(rect.height / zoom));
+    // clientWidth/Height exclude the border: using the outer rect made every
+    // frame 2px taller than the box, which grew the box, which grew the frame.
+    const w = Math.max(320, Math.round(viewportEl.clientWidth / zoom));
+    const h = Math.max(240, Math.round(viewportEl.clientHeight / zoom));
     send("Emulation.setDeviceMetricsOverride", {
       width: w,
       height: h,
@@ -815,7 +838,12 @@
     // Esc closes the right-click menu.
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtxMenu(); };
     document.addEventListener("keydown", onKey);
+    // Sessions opened elsewhere (an agent's tool call) appear without Refresh.
+    const poll = setInterval(() => {
+      if (!document.hidden && instanceId && !busy && !loadingSessions) void loadSessions(true);
+    }, 5000);
     return () => {
+      clearInterval(poll);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", onOnline);
       document.removeEventListener("keydown", onKey);
@@ -855,7 +883,7 @@
       <select
         class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
         bind:value={instanceId}
-        onchange={() => { disconnect(); sessionId = ""; loadSessions(); }}
+        onchange={(e) => selectInstance(e.currentTarget.value)}
         data-testid="browser-instance"
       >
         <option value="">Select an instance…</option>
@@ -875,9 +903,10 @@
           >{busy ? "Working…" : "New session"}</button>
           <button
             type="button"
-            class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-700 dark:text-white-200 hover:border-green-400 transition-colors"
-            onclick={loadSessions}
-          >Refresh</button>
+            class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-700 dark:text-white-200 hover:border-green-400 transition-colors disabled:opacity-50"
+            disabled={loadingSessions}
+            onclick={() => loadSessions()}
+          >{loadingSessions ? "Loading…" : "Refresh"}</button>
         </div>
 
         {#if sessions.length > 0}
@@ -894,6 +923,8 @@
               <option value={s.session_id} title={`${s.session_id} · ${s.browser}`}>{shortSid(s.session_id)} · {s.browser}</option>
             {/each}
           </select>
+        {:else if loadingSessions}
+          <p class="text-xs text-black-700 dark:text-black-600 pt-1" data-testid="browser-sessions-loading">Loading sessions…</p>
         {:else}
           <p class="text-xs text-black-700 dark:text-black-600 pt-1">No live sessions. Open one to start.</p>
         {/if}
@@ -907,7 +938,7 @@
       {@render toolbar()}
       {@render addressBar()}
       {@render tabSwitcher()}
-      {@render screen("max-h-[60vh]")}
+      {@render screen("h-[60vh]")}
       {@render fullHint()}
     </div>
   {/if}
