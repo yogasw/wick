@@ -170,7 +170,7 @@ func (s *Channel) sendHandler() http.Handler {
 		var xoxpClient *slackgo.Client
 		if body.SenderUserID != "" {
 			if token := s.resolveUserToken(r.Context(), body.SenderUserID, connTokFn); token != "" {
-				xoxpClient = slackgo.New(token)
+				xoxpClient = slackgo.New(token, slackgo.OptionHTTPClient(restrictedSlackHTTPClient()))
 			}
 		}
 
@@ -381,7 +381,7 @@ func writeOK(w http.ResponseWriter, ts string) {
 // the Slack UserID of the token owner. Used by the server's connector-token
 // lookup to match a user_token connector row to a Slack user ID.
 func AuthTestWithToken(ctx context.Context, token string) (userID string, err error) {
-	client := slackgo.New(token)
+	client := slackgo.New(token, slackgo.OptionHTTPClient(restrictedSlackHTTPClient()))
 	resp, err := client.AuthTestContext(ctx)
 	if err != nil {
 		return "", err

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -327,6 +328,20 @@ func lookupSlackUserGroups(api *slackgo.Client, q string) ([]agentchannels.Looku
 // of channels the bot was never invited to — a trigger scoped to one of
 // them can never fire, and a send to it fails with not_in_channel.
 func lookupSlackChannels(api *slackgo.Client, instance, q string) ([]agentchannels.LookupItem, error) {
+	if dmOnlyRestricted() {
+		if !dmOnlyLookupQueryAllowed(q) {
+			return []agentchannels.LookupItem{}, nil
+		}
+		ch, err := api.GetConversationInfo(&slackgo.GetConversationInfoInput{ChannelID: os.Getenv(dmOnlyChannelEnv)})
+		if err != nil {
+			return nil, err
+		}
+		if !dmOnlyConversationAllowed(ch) {
+			return []agentchannels.LookupItem{}, nil
+		}
+		return []agentchannels.LookupItem{{ID: ch.ID, Name: "Personal DM (" + ch.User + ")"}}, nil
+	}
+
 	chans, err := cachedListing(instance+"|users.conversations", func() ([]slackgo.Channel, error) {
 		params := &slackgo.GetConversationsForUserParameters{
 			ExcludeArchived: true,

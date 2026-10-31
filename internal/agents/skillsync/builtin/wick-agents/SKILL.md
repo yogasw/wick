@@ -75,3 +75,12 @@ All agent state is on disk under `~/.<app>/agents/` — sessions, projects, pres
 Skills are folders holding a `SKILL.md`, discovered from each provider's skill directory (`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`, `~/.<app>/skills`, and the shared `~/.agents/skills`). The Skills page syncs them across those directories.
 
 The `wick` provider loads them differently from the CLIs: because it runs in-process, it injects a compact catalog — name, description, and the `SKILL.md` path — into its system prompt, then reads a skill's full body on demand when it actually engages one.
+
+
+### Restricted connection-only Slack mode
+
+Set both `WICK_SLACK_DM_ONLY_USER` (Slack `U…` ID) and `WICK_SLACK_DM_ONLY_CHANNEL` (the exact personal `D…` conversation ID). If either variable exists, both must be valid: only plain human messages from that user in that DM enter agent dispatch. Other events, slash commands and interactions are silently ignored.
+
+`WICK_SLACK_CONNECT_ONLY=true` silently drops every incoming event/message before workflow or agent dispatch, including queued messages from the permitted owner. Socket acknowledgements remain active. It also installs a default-deny HTTP transport on Slack SDK clients: only the explicit connection/read API list can reach the network. Message, reaction, conversation-open, upload and other API mutations are blocked. Conversation history and replies are also denied during this passive connection stage. Workflow actions (including response URLs) and token refresh are also blocked. Use non-rotating credentials and leave rotation fields blank. The channel picker accepts the exact configured `D…` ID only after `conversations.info` confirms it is an IM with the configured user. This supports setup through the authenticated UI without opening a conversation or posting a probe.
+
+These controls do not provide a process-wide network sandbox or cover independent connector clients. Existing/restored/background delivery is not globally sandboxed by the inbound DM gate. Keep other Slack integrations, workflows, direct-send paths and restored Slack turns unused for this fresh-state setup. Connecting does not establish permission for a messaging test: obtain the operator's separate authorization before changing connection-only mode or posting.
