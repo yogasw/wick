@@ -507,6 +507,10 @@ export type WsField = {
   options?: string[];
   value?: string;
   help?: string;
+  /** The agent may not set it; a human can, here. */
+  locked?: boolean;
+  /** Section title; the card draws a heading where it changes. */
+  group?: string;
 };
 
 export type WsInstance = {

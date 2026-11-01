@@ -138,3 +138,46 @@ func TestStaleThresholdLeavesRoomForNormalToolCalls(t *testing.T) {
 			staleActivityAfter, statusAnimInterval)
 	}
 }
+
+// 4. A NEW turn on a thread whose last turn ended gets its banner back. Only an
+// inbound Slack message created a fresh (running) entry, so a turn nobody typed
+// in the thread — a teammate's result waking the lead, a workflow re-run —
+// worked for minutes with no thinking banner at all.
+func TestNewTurnWithoutSlackMessageReopensBanner(t *testing.T) {
+	for _, ev := range []event.AgentEvent{
+		{Type: event.Thinking},
+		{Type: event.ToolUse, ToolName: "Read"},
+		{Type: event.TextDelta, Text: "x"},
+	} {
+		c := &Channel{turns: map[string]*turn{
+			"slack-123": {channelID: "C1", threadTS: "1.1", running: false, statusLabel: "Reading old.go"},
+		}}
+
+		c.OnAgentEvent("slack-123", ev)
+
+		c.mu.Lock()
+		got := c.turns["slack-123"]
+		running, ticking := got.running, got.statusTicker != nil
+		c.stopStatusAnimation(got)
+		c.stopEditTicker(got)
+		c.mu.Unlock()
+		if !running || !ticking {
+			t.Fatalf("%s on an ended turn: running=%v ticker=%v, want both", ev.Type, running, ticking)
+		}
+	}
+}
+
+// A sub-agent relayed after Done is NOT a new turn of the lead: it stays out.
+func TestRelayedSubAgentDoesNotReopenEndedTurn(t *testing.T) {
+	c := &Channel{turns: map[string]*turn{
+		"slack-123": {channelID: "C1", threadTS: "1.1", running: false},
+	}}
+
+	c.OnAgentEvent("slack-123", event.AgentEvent{Type: event.ToolUse, SubAgent: "researcher", ToolName: "Read"})
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if got := c.turns["slack-123"]; got.running || got.statusTicker != nil {
+		t.Fatal("a relayed sub-agent event must not reopen the lead's ended turn")
+	}
+}

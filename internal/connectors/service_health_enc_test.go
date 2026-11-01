@@ -93,14 +93,14 @@ func TestHealthCheckSessionInstance_DecryptsUnderCallerKey(t *testing.T) {
 	require.NoError(t, err)
 	cfg := map[string]string{"token": tok}
 
-	report, err := svc.HealthCheckSessionInstance(context.Background(), "health-enc", "sw_1", cfg, "u1")
+	report, err := svc.HealthCheckSessionInstance(context.Background(), "health-enc", "sw_1", cfg, nil, "u1")
 	require.NoError(t, err)
 	require.Equal(t, plain, seen)
 	require.True(t, report[0].OK)
 
 	for _, caller := range []string{"u2", ""} {
 		seen = ""
-		report, err = svc.HealthCheckSessionInstance(context.Background(), "health-enc", "sw_1", cfg, caller)
+		report, err = svc.HealthCheckSessionInstance(context.Background(), "health-enc", "sw_1", cfg, nil, caller)
 		require.NoError(t, err, "caller %q", caller)
 		require.True(t, enc.IsToken(seen), "caller %q should see ciphertext", caller)
 		require.False(t, report[0].OK, "caller %q", caller)

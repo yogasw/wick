@@ -30,7 +30,8 @@
   }
 
   type Tab = "general" | "subagents";
-  let tab = $state<Tab>("general");
+  // ?tab=subagents deep-links here from a chat's sub-agent panel.
+  let tab = $state<Tab>(new URLSearchParams(window.location.search).get("tab") === "subagents" ? "subagents" : "general");
 
   // A project that does not exist yet has nothing to scope roles to, so
   // the tab strip only appears once the project has been created.

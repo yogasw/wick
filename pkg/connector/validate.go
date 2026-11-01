@@ -67,6 +67,22 @@ func EffectiveConfigValues(mod Module, stored map[string]string) map[string]stri
 	return vals
 }
 
+// SessionConfig is the config a session-workspace instance runs with:
+// its stored values minus every SessionLocked field, so those always fall
+// back to the module default whatever a session managed to store.
+func SessionConfig(mod Module, stored map[string]string) map[string]string {
+	out := make(map[string]string, len(stored))
+	for k, v := range stored {
+		out[k] = v
+	}
+	for _, c := range mod.Configs {
+		if c.SessionLocked {
+			delete(out, c.Key)
+		}
+	}
+	return out
+}
+
 // OpVisible reports whether op's VisibleWhen holds for vals (normally the
 // output of EffectiveConfigValues). An op without VisibleWhen is visible.
 func OpVisible(op Operation, vals map[string]string) bool {

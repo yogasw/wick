@@ -43,6 +43,14 @@ func IsInstanceID(id string) bool { return strings.HasPrefix(id, IDPrefix) }
 // changes at human speed (a modal submit), never in a hot path.
 var mu sync.Mutex
 
+// onChange is told the session id after every persisted change, so an
+// open Config tab can re-read the workspace instead of waiting for a page
+// reload. Set once at startup; nil means nobody is listening.
+var onChange func(sessionID string)
+
+// SetOnChange registers the change listener (see onChange).
+func SetOnChange(fn func(sessionID string)) { onChange = fn }
+
 // Instance is one ephemeral connector clone scoped to a session.
 type Instance struct {
 	ID      string `json:"id"`       // "sw_<uuid>"
@@ -51,6 +59,11 @@ type Instance struct {
 	// Config holds the instance's config field values. Secret fields are
 	// wick_cenc_ master tokens; non-secret fields are plaintext.
 	Config map[string]string `json:"config"`
+	// LockSeals holds, per session-locked config key, the server's seal of
+	// the value a human set in the Config tab (see connectors.Service.
+	// SealSessionLock). A locked key without a valid seal runs with the
+	// module default, so editing this file cannot unlock it.
+	LockSeals map[string]string `json:"lock_seals,omitempty"`
 	// CreatedBy is "ai" (added via the MCP tool) or "user" (added in the
 	// Config tab) — drives the "agent added this, please fill it" notice.
 	CreatedBy string `json:"created_by,omitempty"`
@@ -65,8 +78,8 @@ type Instance struct {
 type Tombstone struct {
 	Label     string `json:"label"`
 	BaseKey   string `json:"base_key"`
-	DeletedAt string `json:"deleted_at"`        // RFC3339
-	Reason    string `json:"reason,omitempty"`  // e.g. "session idle"
+	DeletedAt string `json:"deleted_at"`       // RFC3339
+	Reason    string `json:"reason,omitempty"` // e.g. "session idle"
 }
 
 // Workspace is the full per-session document. Tombstones records instances
@@ -234,6 +247,30 @@ func SetConfig(layout agentconfig.Layout, sessionID, instanceID string, values m
 	return fmt.Errorf("session instance %q not found: %w", instanceID, os.ErrNotExist)
 }
 
+// SetLockSeals merges seals for human-set locked config keys into an
+// instance and persists.
+func SetLockSeals(layout agentconfig.Layout, sessionID, instanceID string, seals map[string]string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	ws, err := Load(layout, sessionID)
+	if err != nil {
+		return err
+	}
+	for i := range ws.Instances {
+		if ws.Instances[i].ID != instanceID {
+			continue
+		}
+		if ws.Instances[i].LockSeals == nil {
+			ws.Instances[i].LockSeals = map[string]string{}
+		}
+		for k, v := range seals {
+			ws.Instances[i].LockSeals[k] = v
+		}
+		return save(layout, sessionID, ws)
+	}
+	return fmt.Errorf("session instance %q not found: %w", instanceID, os.ErrNotExist)
+}
+
 // SetLabel renames an instance. Returns an os.ErrNotExist-wrapped error
 // when the instance is gone. Empty label is rejected — the caller should
 // fall back to a default before calling.
@@ -290,6 +327,7 @@ func save(layout agentconfig.Layout, sessionID string, ws Workspace) error {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove session workspace: %w", err)
 		}
+		notifyChange(sessionID)
 		return nil
 	}
 	b, err := json.MarshalIndent(ws, "", "  ")
@@ -299,5 +337,14 @@ func save(layout agentconfig.Layout, sessionID string, ws Workspace) error {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("write session workspace: %w", err)
 	}
+	notifyChange(sessionID)
 	return nil
+}
+
+// notifyChange runs while mu is held, so the listener must not call back
+// into this package; publishing an SSE event does not.
+func notifyChange(sessionID string) {
+	if fn := onChange; fn != nil {
+		fn(sessionID)
+	}
 }

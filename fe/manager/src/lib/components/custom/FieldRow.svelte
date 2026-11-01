@@ -11,8 +11,10 @@
     field: DraftField;
     onChange: () => void;
     onRemove: () => void;
+    /** Config field (not an op input): shows the session lock toggle. */
+    config?: boolean;
   };
-  let { field, onChange, onRemove }: Props = $props();
+  let { field, onChange, onRemove, config = false }: Props = $props();
 
   function set<K extends keyof DraftField>(k: K, v: DraftField[K]) {
     field[k] = v;
@@ -53,6 +55,12 @@
         <span class="mb-1 block text-[11px] font-medium text-black-800 dark:text-black-600">Description</span>
         <TextInput value={field.desc} onChange={(v) => set("desc", v)} placeholder="what this field is for" ariaLabel="Field description" />
       </div>
+      {#if config}
+        <div class="min-w-0">
+          <span class="mb-1 block text-[11px] font-medium text-black-800 dark:text-black-600">Group</span>
+          <TextInput value={field.group ?? ""} onChange={(v) => set("group", v.trim())} placeholder="e.g. Access (optional)" ariaLabel="Field group" />
+        </div>
+      {/if}
     </div>
     <button
       type="button"
@@ -81,5 +89,11 @@
       <input type="checkbox" class="accent-green-500" checked={field.secret} onchange={(e) => set("secret", (e.target as HTMLInputElement).checked)} aria-label="Secret" />
       <span class="text-xs font-medium text-black-800 dark:text-black-600">Secret</span>
     </label>
+    {#if config}
+      <label class="flex cursor-pointer select-none items-center gap-2" title="The agent cannot set this field on a session connector; a human can, in the Session Workspace tab. Until then the default applies.">
+        <input type="checkbox" class="accent-green-500" checked={!!field.session_locked} onchange={(e) => set("session_locked", (e.target as HTMLInputElement).checked)} aria-label="Lock in session" />
+        <span class="text-xs font-medium text-black-800 dark:text-black-600">Lock in session</span>
+      </label>
+    {/if}
   </div>
 </div>

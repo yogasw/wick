@@ -37,6 +37,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
@@ -113,7 +114,10 @@ func SetPool(p *pool.Pool) {
 }
 
 // SetBroadcaster wires in the SSE event broadcaster.
-func SetBroadcaster(b *Broadcaster) { globalBcast = b }
+func SetBroadcaster(b *Broadcaster) {
+	globalBcast = b
+	sessionworkspace.SetOnChange(publishWorkspaceChanged)
+}
 
 // SetLayout wires in the on-disk layout used for direct file reads.
 //
@@ -1778,13 +1782,13 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
-	// Team › Tickets starts a ticket's chat as the caller's own Captain
-	// (team_captain=1). Resolved here, never taken from the form, so a
-	// request cannot start a session as anyone else's agent; no Captain
-	// leaves an ordinary session of the project.
+	// Team › Tickets starts a ticket's chat as the caller's own agent of
+	// that project, else their Captain (team_captain=1). Resolved here,
+	// never taken from the form, so a request cannot start a session as
+	// anyone else's agent; neither leaves an ordinary session of the project.
 	agentID := ""
 	if c.Form("team_captain") == "1" {
-		if p, ok := ownCaptain(c.Context(), actorID(c)); ok {
+		if p, ok := ticketResponder(c.Context(), actorID(c), projectID); ok {
 			agentID = p.ID
 			if key, ok := remoteProviderKey(p); ok {
 				prov, modelID = key, ""

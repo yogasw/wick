@@ -36,6 +36,11 @@ func vwSessionModule() connector.Module {
 
 func newVWSessionSvc(t *testing.T) *connectors.Service {
 	t.Helper()
+	return newVWSessionSvcWith(t, vwSessionModule())
+}
+
+func newVWSessionSvcWith(t *testing.T, mod connector.Module) *connectors.Service {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: postgres.NewLogLevel("silent")})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +54,7 @@ func newVWSessionSvc(t *testing.T) *connectors.Service {
 	}
 	svc := connectors.NewServiceFromDB(db)
 	svc.SetConfigs(cfgs)
-	if err := svc.Bootstrap(context.Background(), []connector.Module{vwSessionModule()}); err != nil {
+	if err := svc.Bootstrap(context.Background(), []connector.Module{mod}); err != nil {
 		t.Fatal(err)
 	}
 	return svc
@@ -71,8 +76,14 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 		t.Fatalf("search total = %d, want 1 (open)", total)
 	}
 	target := &connectors.SessionInstanceTarget{BaseKey: "vwsess", Label: "S", Config: inst.Config}
-	if _, _, err := sessionInstanceDetail(svc, target, inst.ID, "pdf"); err == nil {
-		t.Fatal("wick_get pdf must be refused on browser=chromium")
+	// pdf is switched off by config: listed with a reason, no tool_id or schema.
+	off, _, err := sessionInstanceDetail(svc, target, inst.ID, "pdf")
+	if err != nil {
+		t.Fatalf("wick_get pdf: %v", err)
+	}
+	if len(off.Tools) != 1 || off.Tools[0].ToolID != "" || off.Tools[0].InputSchema != nil ||
+		!strings.Contains(off.Tools[0].Unavailable, "browser = moli") {
+		t.Fatalf("pdf on chromium must read as unavailable: %+v", off.Tools)
 	}
 	if _, _, err := sessionInstanceDetail(svc, target, inst.ID, "picker"); err == nil {
 		t.Fatal("wick_get must not expose a config-only op")
@@ -85,8 +96,8 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 	for _, tool := range detail.Tools {
 		keys = append(keys, tool.Name)
 	}
-	if got := strings.Join(keys, ","); got != "Open" {
-		t.Fatalf("category ops = %q, want Open", got)
+	if got := strings.Join(keys, ","); got != "Open,PDF" {
+		t.Fatalf("category ops = %q, want Open,PDF (PDF unavailable)", got)
 	}
 
 	// browser=moli: pdf joins.
@@ -100,5 +111,31 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 	}
 	if _, total := sessionInstanceSummaries(svc, layout, sid); total != 3 {
 		t.Fatalf("summary total = %d, want 3 (1 + 2)", total)
+	}
+}
+
+// A session-locked field is announced up front (locked_keys), refused on
+// write, and ignored at runtime even when a value was stored anyway.
+func TestSessionLockedConfig(t *testing.T) {
+	mod := vwSessionModule()
+	mod.Configs[0].SessionLocked = true
+	svc := newVWSessionSvcWith(t, mod)
+
+	vm := sessionWorkspaceVM(svc, sessionworkspace.Instance{ID: "sw_x", BaseKey: "vwsess"})
+	if strings.Join(vm.Locked, ",") != "browser" {
+		t.Fatalf("locked_keys = %v, want [browser]", vm.Locked)
+	}
+	specs := map[string]entity.Config{"browser": mod.Configs[0]}
+	if msg := sessionConfigKeyError(specs, "browser"); !strings.Contains(msg, "locked") {
+		t.Fatalf("want locked refusal, got %q", msg)
+	}
+	if msg := sessionConfigKeyError(specs, "nope"); !strings.Contains(msg, "unknown config key") {
+		t.Fatalf("want unknown key, got %q", msg)
+	}
+	visible := sessionOpVisible(mod, svc.ResolveSessionConfig(mod, "sw_x", map[string]string{"browser": "moli"}, nil))
+	for _, op := range mod.AllOps() {
+		if op.Key == "pdf" && visible(op) {
+			t.Fatal("stored override of a locked field must not switch pdf on")
+		}
 	}
 }

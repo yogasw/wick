@@ -35,7 +35,7 @@ type PromptChange struct {
 	ActorAgent  string `gorm:"type:varchar(128);not null;default:''" json:"actor_agent"`
 	Reason      string `gorm:"type:text;not null;default:''" json:"reason"`
 	// SessionID is the session the approval card sits in.
-	SessionID string `gorm:"type:varchar(64);not null;default:''" json:"session_id"`
+	SessionID string `gorm:"type:varchar(128);not null;default:''" json:"session_id"`
 	// DecidedBy names the admin who accepted or declined a proposal.
 	DecidedBy string     `gorm:"type:varchar(128);not null;default:''" json:"decided_by"`
 	At        time.Time  `gorm:"not null;index" json:"at"`

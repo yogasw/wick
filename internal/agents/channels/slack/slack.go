@@ -3149,7 +3149,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	s.mu.Unlock()
 	// Outside s.mu: naming the sources reads the Team roster. A tag or an
 	// options line still streaming in is held back until it closes.
-	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw))))
+	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, dropReactLine(stripSilentMarker(raw)))))
 
 	if body == "" || body == lastSent || reactPending(body) {
 		return
@@ -3337,9 +3337,15 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
-	if name, ok := reactOnlyReply(text); ok {
-		s.reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name)
-		return
+	if name, ts, rest, ok := reactMarker(text); ok {
+		if rest == "" && ts == "" {
+			s.reactInsteadOfReply(sessionKey, channelID, threadTS, liveTS, name)
+			return
+		}
+		// The marker opens a longer reply (or names its own target): react,
+		// then post the rest as usual. The live message carries that rest.
+		s.reactTo(sessionKey, channelID, threadTS, "", ts, name)
+		text = rest
 	}
 	// Source tags become plain "(from Name)"; the raw tag never reaches
 	// the thread.
@@ -3495,7 +3501,7 @@ func (s *Channel) dropLiveReply(sessionKey, text string) {
 		s.mu.Unlock()
 		return
 	}
-	body := s.rewriteSources(sessionKey, stripSilentMarker(text))
+	body := s.rewriteSources(sessionKey, dropReactLine(stripSilentMarker(text)))
 	if body == "" || body == lastSent {
 		return
 	}
@@ -3576,6 +3582,33 @@ func (s *Channel) setAssistantStatusWithLoading(channelID, threadTS, status stri
 	}
 }
 
+// reopenTurn marks a finished turn entry as running again when the session
+// starts a new turn nobody typed in the thread: a teammate's result waking
+// the lead, a workflow re-run, a schedule, a reply from the web UI. Only an
+// inbound Slack message (or SendToThreadSession) creates a fresh entry, so
+// without this the entry stays at running=false from the previous Done and
+// startStatusAnimation refuses to paint: the agent works for minutes and the
+// thread shows no thinking banner at all.
+//
+// Called only for a turn's activity events, never for Done/Error or a relayed
+// sub-agent's status, so a turn that really ended is not revived by them.
+func (s *Channel) reopenTurn(sessionKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.turns[sessionKey]
+	if t == nil || t.running || t.channelID == "" {
+		return
+	}
+	t.running = true
+	t.lastActivity = time.Now()
+	t.staleShown = false
+	t.statusLabel = ""
+	t.trace = nil
+	// This turn's banner owns the thread now; the background one comes back
+	// at its Done (startBackgroundBanner) if anything is still out there.
+	t.stopBackgroundBanner()
+}
+
 // OnAgentEvent satisfies channels.AgentEventReceiver.
 func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	// Progress relayed from a sub-agent: paint whose work it is and stop. Only
@@ -3600,6 +3633,10 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	// Same reason as NotifyState: without a turn every case below is a no-op,
 	// so a turn this process did not receive would stream into nothing.
 	s.ensureTurn(sessionKey)
+	switch ev.Type {
+	case event.TextDelta, event.Thinking, event.ToolUse, event.ToolResult:
+		s.reopenTurn(sessionKey)
+	}
 
 	switch ev.Type {
 	case event.TextDelta:

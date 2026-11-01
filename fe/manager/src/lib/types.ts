@@ -334,6 +334,12 @@ export interface DraftField {
   required: boolean;
   default: string;
   desc: string;
+  /** Config fields only: a session-workspace clone cannot set this field
+      and always runs with `default`. */
+  session_locked?: boolean;
+  /** Config fields only: section title on the Settings page and the
+      session Config tab. */
+  group?: string;
 }
 
 export interface DraftOpRequest {
@@ -357,6 +363,9 @@ export interface DraftOp {
   inputs: DraftField[];
   request?: DraftOpRequest;
   mcp_source?: DraftMCPSource;
+  /** API ops only: "<config_field>:<a|b>" — the op is switched off while
+      the instance's config holds another value. */
+  visible_when?: string;
 }
 
 /* A titled section grouping a custom connector's operations. Mirrors the

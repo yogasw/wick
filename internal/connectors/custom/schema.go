@@ -39,6 +39,14 @@ type DefField struct {
 	// still seeded and readable at runtime) — used for machine-managed
 	// values like OAuth tokens.
 	Hidden bool `json:"hidden,omitempty"`
+	// SessionLocked (configs only): the agent cannot set this field on a
+	// session-workspace clone; a human can in the session Config tab.
+	// Unset by a human it runs with Default. Off by default.
+	SessionLocked bool `json:"session_locked,omitempty"`
+	// Group (configs only) is the section title the field is listed
+	// under on the instance Settings page and the session Config tab —
+	// entity.Config.Group, the same as a Go connector's `group=` tag.
+	Group string `json:"group,omitempty"`
 }
 
 // allowedWidgets is the subset of the wick widget grammar a custom def
@@ -57,14 +65,16 @@ func (f DefField) ToConfig() entity.Config {
 		widget = "text"
 	}
 	return entity.Config{
-		Key:         f.Key,
-		Value:       f.Default,
-		Type:        widget,
-		Options:     f.Options,
-		IsSecret:    f.Secret || widget == "secret",
-		Required:    f.Required,
-		Description: f.Desc,
-		Hidden:      f.Hidden,
+		Key:           f.Key,
+		Value:         f.Default,
+		Type:          widget,
+		Options:       f.Options,
+		IsSecret:      f.Secret || widget == "secret",
+		Required:      f.Required,
+		Description:   f.Desc,
+		Hidden:        f.Hidden,
+		SessionLocked: f.SessionLocked,
+		Group:         strings.TrimSpace(f.Group),
 	}
 }
 
@@ -253,6 +263,11 @@ type DefOp struct {
 	Inputs      []DefField `json:"inputs"`
 	Request     *OpRequest `json:"request,omitempty"`
 	MCPSource   *MCPSource `json:"mcp_source,omitempty"`
+	// VisibleWhen switches the op on/off from the instance's own config,
+	// "<field>:<a|b|c>" (connector.Operation.VisibleWhen). While the field
+	// holds another value the op is listed as unavailable and Execute
+	// refuses it. API (request) ops only.
+	VisibleWhen string `json:"visible_when,omitempty"`
 	// Category is the section title this op belongs to, carried from a
 	// live MCP tool's _meta.category so toolsToCats can re-group the flat
 	// op list. Transient for MCP defs (rebuilt each probe); curl/manual
@@ -388,6 +403,20 @@ func ValidateDraft(d *Draft) error {
 	if err := ValidateFields(d.Configs); err != nil {
 		return fmt.Errorf("configs: %w", err)
 	}
+	// "|" separates a group's title from its description and fold state
+	// (entity.EffectiveGroup); a custom field names the title only.
+	for _, f := range d.Configs {
+		if strings.Contains(f.Group, "|") {
+			return fmt.Errorf("config %q: group %q must not contain '|'", f.Key, f.Group)
+		}
+	}
+	// A locked field runs with its default in every session, so a required
+	// one without a default would leave each session instance unusable.
+	for _, f := range d.Configs {
+		if f.SessionLocked && f.Required && strings.TrimSpace(f.Default) == "" {
+			return fmt.Errorf("config %q is required and locked in session, so it needs a default", f.Key)
+		}
+	}
 	if len(FlattenOps(d.Ops)) == 0 {
 		return fmt.Errorf("at least one operation is required")
 	}
@@ -416,6 +445,9 @@ func ValidateDraft(d *Draft) error {
 			if err := ValidateFields(op.Inputs); err != nil {
 				return fmt.Errorf("op %q inputs: %w", op.Key, err)
 			}
+			if err := validateOpVisibleWhen(op, d.Configs); err != nil {
+				return err
+			}
 			switch {
 			case op.Request != nil && op.MCPSource != nil:
 				return fmt.Errorf("op %q: request and mcp_source are mutually exclusive", op.Key)
@@ -443,6 +475,44 @@ func ValidateDraft(d *Draft) error {
 		return fmt.Errorf("health check expected value is set but no health check operation is chosen")
 	}
 	return nil
+}
+
+// validateOpVisibleWhen checks an op's config switch the way
+// connector.ValidateModule does for built-ins: "<field>:<a|b|c>" naming a
+// declared, non-secret config field with at least one value. Only API
+// ops may carry one — MCP ops are rebuilt from tools/list on every probe.
+func validateOpVisibleWhen(op DefOp, configs []DefField) error {
+	vw := strings.TrimSpace(op.VisibleWhen)
+	if vw == "" {
+		return nil
+	}
+	if op.MCPSource != nil {
+		return fmt.Errorf("op %q: visible_when is only supported on API operations", op.Key)
+	}
+	key, values, ok := strings.Cut(vw, ":")
+	if !ok {
+		return fmt.Errorf("op %q: visible_when %q must be <config_field>:<a|b|c>", op.Key, vw)
+	}
+	key = strings.TrimSpace(key)
+	var field *DefField
+	for i := range configs {
+		if configs[i].Key == key {
+			field = &configs[i]
+			break
+		}
+	}
+	if field == nil {
+		return fmt.Errorf("op %q: visible_when %q names unknown config field %q", op.Key, vw, key)
+	}
+	if field.Secret || field.Widget == "secret" {
+		return fmt.Errorf("op %q: visible_when %q must not depend on secret field %q", op.Key, vw, key)
+	}
+	for _, v := range strings.Split(values, "|") {
+		if strings.TrimSpace(v) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("op %q: visible_when %q lists no value", op.Key, vw)
 }
 
 func mustJSON(v any) string {

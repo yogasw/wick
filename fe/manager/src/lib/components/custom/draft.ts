@@ -50,6 +50,8 @@ function normalizeField(f: Partial<DraftField>): DraftField {
     required: !!f.required,
     default: f.default ?? "",
     desc: f.desc ?? "",
+    ...(f.session_locked ? { session_locked: true } : {}),
+    ...(f.group ? { group: f.group } : {}),
   };
 }
 
@@ -62,6 +64,7 @@ function normalizeOp(op: Partial<DraftOp>): DraftOp {
     inputs: (op.inputs ?? []).map(normalizeField),
     mcp_source: op.mcp_source,
   };
+  if (op.visible_when) out.visible_when = op.visible_when;
   if (!op.mcp_source && !op.request) {
     out.request = { method: "GET", url_template: "", headers: {}, body_template: "", content_type: "" };
   } else if (op.request) {
@@ -117,4 +120,21 @@ export function serialize(d: Draft): Draft {
     configs: d.configs,
     ops: d.ops,
   };
+}
+
+/* configGroups buckets config fields by group title in first-seen order,
+   keeping each field's index in d.configs so edits address the right row.
+   Ungrouped fields share the "" bucket. */
+export function configGroups(fields: DraftField[]): { title: string; items: { field: DraftField; i: number }[] }[] {
+  const out: { title: string; items: { field: DraftField; i: number }[] }[] = [];
+  fields.forEach((field, i) => {
+    const title = (field.group ?? "").trim();
+    let g = out.find((x) => x.title === title);
+    if (!g) {
+      g = { title, items: [] };
+      out.push(g);
+    }
+    g.items.push({ field, i });
+  });
+  return out;
 }

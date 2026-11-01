@@ -35,6 +35,9 @@
     teamTasks?: TeamTaskItem[];
     teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     onOpenAgent?: (handle: string) => void;
+    /** Where the roles these sub-agents spawn from are edited (provider,
+        model, turns). Absent → the ⋯ menu offers no link. */
+    rolesHref?: string;
   };
 
   let {
@@ -51,6 +54,7 @@
     teamTasks = [],
     teamAgents = {},
     onOpenAgent = undefined,
+    rolesHref = undefined,
   }: Props = $props();
 
   function teamStateCls(state: string): string {
@@ -282,7 +286,7 @@
     class="flex items-center justify-between gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3"
   >
     <span class="text-xs font-semibold text-black-900 dark:text-white-100">Sub-agents</span>
-    {#if subAgents.length > 0}
+    {#if subAgents.length > 0 || rolesHref}
       <div class="relative -my-2 -mr-2" bind:this={menuWrapEl}>
         <button
           type="button"
@@ -323,6 +327,17 @@
                 </div>
               </div>
             {:else}
+              {#if rolesHref}
+                <a
+                  role="menuitem"
+                  href={rolesHref}
+                  class="flex min-h-10 w-full items-center gap-2 px-3 text-left text-sm text-black-900 transition-colors hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700"
+                >
+                  <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke-linecap="round"></path></svg>
+                  Manage sub-agent roles
+                </a>
+              {/if}
+              {#if subAgents.length > 0}
               <button
                 type="button"
                 role="menuitem"
@@ -333,6 +348,7 @@
                 <svg viewBox="0 0 16 16" class="h-3 w-3" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
                 Stop all ({liveCount} running)
               </button>
+              {/if}
             {/if}
           </div>
         {/if}

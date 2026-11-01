@@ -907,6 +907,11 @@
   // provider instance's own default model applies.
   let activeModelID = $state("");
   let activeProjectId = $state<string | null>(null);
+  // Sub-agent roles are edited where they are scoped: the project's
+  // Sub-agents tab, or the global roles page for a chat with no project.
+  const rolesHref = $derived(
+    activeProjectId ? `${base}/projects/${encodeURIComponent(activeProjectId)}?tab=subagents` : `${base}/agent-profiles`,
+  );
 
   /* ── approval error state ─────────────────────────────────────── */
   let approvalError = $state("");
@@ -1724,6 +1729,14 @@
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Coalesce: one save can touch the workspace file more than once (config,
+     then lock seals), and each write publishes its own event. */
+  let workspaceReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleWorkspaceReload() {
+    if (workspaceReloadTimer) clearTimeout(workspaceReloadTimer);
+    workspaceReloadTimer = setTimeout(() => { workspaceReloadTimer = null; loadWorkspace(); }, 300);
+  }
+
   function loadSchedules() {
     if (agentMode?.chatOnly) return;
     run(listSchedules(base, sessionId).pipe(Effect.provide(WickClientLayer)))
@@ -2265,6 +2278,7 @@
       if (isReconnect(sseStatus, s)) {
         scheduleSubAgentReload();
         loadTeamTasks();
+        scheduleWorkspaceReload();
       }
       sseStatus = s;
     });
@@ -2341,6 +2355,10 @@
         // there, so without its own event the panel would sit on a stale
         // list until something unrelated triggered a fetch.
         scheduleTodoReload();
+      } else if (ev.type === "workspace") {
+        // A session connector was added, filled in, renamed or removed —
+        // by the agent, another tab, or the idle sweeper.
+        scheduleWorkspaceReload();
       } else if (ev.type === "team_task") {
         // A task this chat sent changed state (Needs you, a reply, …).
         const t = parseTeamTaskEvent(ev.data);
@@ -2673,6 +2691,9 @@
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
     railTab = railTab === tab ? null : tab;
+    // Opening Config always re-reads it: a base connector edited in the
+    // admin pages publishes nothing to this session.
+    if (railTab === "workspace") loadWorkspace();
     // Any deliberate click hands the rail back to the user, so a finishing
     // checklist no longer closes it under them.
     todosAutoOpened = false;
@@ -3753,6 +3774,7 @@
           {teamTasks}
           teamAgents={teamAgentsByHandle}
           onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
+          {rolesHref}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -3979,6 +4001,7 @@
               {teamTasks}
               teamAgents={teamAgentsByHandle}
               onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
+              {rolesHref}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -4252,6 +4275,7 @@
     row={selectedSubAgentRow}
     onClose={() => { selectedSubAgent = null; }}
     onChanged={loadSubAgents}
+    {rolesHref}
   />
 {/if}
 

@@ -35,6 +35,54 @@ func TestValidateDraft(t *testing.T) {
 	}{
 		{name: "valid http draft", mutate: func(d *Draft) {}},
 		{
+			name: "valid op switch",
+			mutate: func(d *Draft) {
+				d.Configs = append(d.Configs, DefField{Key: "mode", Widget: "dropdown", Options: "read|write", Default: "read", SessionLocked: true})
+				d.Ops[0].Ops[0].VisibleWhen = "mode:write"
+			},
+		},
+		{
+			name:    "group with separator",
+			mutate:  func(d *Draft) { d.Configs[0].Group = "Access|desc" },
+			wantErr: "must not contain '|'",
+		},
+		{
+			name: "locked required field without default",
+			mutate: func(d *Draft) {
+				d.Configs[0].SessionLocked = true
+			},
+			wantErr: "needs a default",
+		},
+		{
+			name:    "op switch on unknown field",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "mode:write" },
+			wantErr: "unknown config field",
+		},
+		{
+			name:    "op switch on secret field",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "token:x" },
+			wantErr: "secret field",
+		},
+		{
+			name:    "op switch without values",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "base_url:" },
+			wantErr: "lists no value",
+		},
+		{
+			name:    "op switch malformed",
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].VisibleWhen = "base_url" },
+			wantErr: "must be <config_field>",
+		},
+		{
+			name: "op switch on mcp op",
+			mutate: func(d *Draft) {
+				d.Ops[0].Ops[0].Request = nil
+				d.Ops[0].Ops[0].MCPSource = &MCPSource{ServerID: "srv-1", ToolName: "list_pets"}
+				d.Ops[0].Ops[0].VisibleWhen = "base_url:x"
+			},
+			wantErr: "only supported on API operations",
+		},
+		{
 			name: "valid mcp draft",
 			mutate: func(d *Draft) {
 				d.Ops[0].Ops[0].Request = nil
@@ -349,5 +397,12 @@ func TestFieldsToConfigs(t *testing.T) {
 	}
 	if out[0].Key != "a" || out[1].Key != "b" || !out[1].IsSecret {
 		t.Errorf("got %+v", out)
+	}
+}
+
+func TestDefFieldGroupToConfig(t *testing.T) {
+	c := DefField{Key: "mode", Group: " Access ", SessionLocked: true}.ToConfig()
+	if c.Group != "Access" || !c.SessionLocked {
+		t.Fatalf("got group=%q locked=%v", c.Group, c.SessionLocked)
 	}
 }

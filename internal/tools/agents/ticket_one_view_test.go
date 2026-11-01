@@ -69,6 +69,41 @@ func TestOwnCaptain(t *testing.T) {
 	}
 }
 
+// A ticket chat in one of the caller's agent projects is answered by
+// that agent; elsewhere (no agent, someone else's, disabled) the Captain.
+func TestTicketResponderPrefersProjectAgent(t *testing.T) {
+	withTeamWorld(t)
+	for _, p := range []string{"pcap", "pown", "poff", "pother", "pplain"} {
+		seedTeamProject(t, p, "alice")
+	}
+	captain := &entity.AgentPersona{OwnerUserID: "alice", Handle: "captain", ProjectID: "pcap", AllowedConnectors: "[]", IsCaptain: true}
+	if err := globalTeam.Create(context.Background(), captain); err != nil {
+		t.Fatal(err)
+	}
+	own := seedTeamAgent(t, "alice", "helper", "pown")
+	off := seedTeamAgent(t, "alice", "sleeper", "poff")
+	off.Disabled = true
+	if err := globalTeam.Update(context.Background(), &off); err != nil {
+		t.Fatal(err)
+	}
+	seedTeamAgent(t, "bob", "other", "pother")
+
+	for _, tc := range []struct{ project, want string }{
+		{"pown", own.ID},
+		{"poff", captain.ID},
+		{"pother", captain.ID},
+		{"pplain", captain.ID},
+		{"", captain.ID},
+	} {
+		if p, ok := ticketResponder(context.Background(), "alice", tc.project); !ok || p.ID != tc.want {
+			t.Errorf("project %q: responder = %q %v, want %q", tc.project, p.ID, ok, tc.want)
+		}
+	}
+	if _, ok := ticketResponder(context.Background(), "bob", "pown"); ok {
+		t.Error("bob has no agent on pown and no Captain; none must be borrowed")
+	}
+}
+
 // A Captain chat on a ticket carries its ticket and project to the
 // Team drawer's chip; a plain chat carries none.
 func TestTeamAgentSessionItemNamesTicket(t *testing.T) {

@@ -87,11 +87,14 @@ type searchResult struct {
 }
 
 type toolDetail struct {
-	ToolID      string `json:"tool_id"`
+	ToolID      string `json:"tool_id,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Destructive bool   `json:"destructive"`
 	Category    string `json:"category,omitempty"`
+	// Unavailable is set for an op the instance's config switched off: it
+	// is listed so the agent knows it exists, but has no tool_id to call.
+	Unavailable string `json:"unavailable,omitempty"`
 	// InputSchema is a pointer so it can be omitted in list mode
 	// (wick_get without a category). It is populated only when the caller
 	// scopes the request to a single category.
@@ -103,6 +106,9 @@ type categoryDetail struct {
 	Category    string `json:"category"`
 	Description string `json:"description"`
 	TotalTools  int    `json:"total_tools"`
+	// UnavailableTools counts the category's ops the instance's config
+	// switched off — listed with a reason when the category is opened.
+	UnavailableTools int `json:"unavailable_tools,omitempty"`
 }
 
 type connectorDetail struct {
@@ -418,7 +424,10 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		}
 		return FormatToolID(row.ID, opKey)
 	}
-	detail, err := buildConnectorDetail(mod, row.ID, row.Label, row.Description, selector, toolIDFor, func(opKey string) bool { return states[opKey] })
+	off := svc.ConfigOffOps(r.Context(), row.ID, row.Key)
+	detail, err := buildConnectorDetail(mod, row.ID, row.Label, row.Description, selector, toolIDFor,
+		func(opKey string) bool { return states[opKey] },
+		func(opKey string) string { return off[opKey] })
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
@@ -445,10 +454,11 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 // A selector that matches neither a category nor an op key is an error.
 //
 // enabled reports whether an op key is currently enabled for this instance;
-// toolIDFor builds the tool_id for an op key (account suffix handled by the
+// offReason, for an op that is not, says why when its config switched it
+// off ("" = keep it out of the listing); toolIDFor builds the tool_id for an op key (account suffix handled by the
 // caller). Sharing this between the DB-row and session-instance paths keeps
 // the two from drifting.
-func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selector string, toolIDFor func(opKey string) string, enabled func(opKey string) bool) (connectorDetail, error) {
+func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selector string, toolIDFor func(opKey string) string, enabled func(opKey string) bool, offReason func(opKey string) string) (connectorDetail, error) {
 	detail := connectorDetail{ID: id, Connector: label, Description: mod.Meta.Description, OperatorNote: strings.TrimSpace(operatorNote)}
 	selector = strings.TrimSpace(selector)
 
@@ -459,6 +469,10 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 				continue
 			}
 			if !enabled(op.Key) {
+				if reason := offReason(op.Key); reason != "" {
+					detail.Tools = append(detail.Tools, unavailableTool(mod, op, reason))
+					return detail, nil
+				}
 				return connectorDetail{}, fmt.Errorf("operation %q is disabled on this connector", selector)
 			}
 			schema := ConfigsToJSONSchema(op.Input)
@@ -483,6 +497,9 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 			cat := mod.Operations[i]
 			for _, op := range cat.Ops {
 				if !enabled(op.Key) {
+					if reason := offReason(op.Key); reason != "" {
+						detail.Tools = append(detail.Tools, unavailableTool(mod, op, reason))
+					}
 					continue
 				}
 				detail.Tools = append(detail.Tools, toolDetail{
@@ -507,6 +524,9 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 	if !hasNamedCategories(mod) {
 		for _, op := range mod.AllOps() {
 			if !enabled(op.Key) {
+				if reason := offReason(op.Key); reason != "" {
+					detail.Tools = append(detail.Tools, unavailableTool(mod, op, reason))
+				}
 				continue
 			}
 			detail.Tools = append(detail.Tools, toolDetail{
@@ -519,21 +539,37 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 		return detail, nil
 	}
 	for _, cat := range mod.Operations {
-		count := 0
+		count, off := 0, 0
 		for _, op := range cat.Ops {
-			if enabled(op.Key) {
+			switch {
+			case enabled(op.Key):
 				count++
+			case offReason(op.Key) != "":
+				off++
 			}
 		}
-		if count > 0 {
+		if count > 0 || off > 0 {
 			detail.Categories = append(detail.Categories, categoryDetail{
-				Category:    cat.Title,
-				Description: cat.Description,
-				TotalTools:  count,
+				Category:         cat.Title,
+				Description:      cat.Description,
+				TotalTools:       count,
+				UnavailableTools: off,
 			})
 		}
 	}
 	return detail, nil
+}
+
+// unavailableTool lists an op its config switched off: name and reason,
+// no tool_id or schema, so it reads as "exists, not callable here".
+func unavailableTool(mod connector.Module, op connector.Operation, reason string) toolDetail {
+	return toolDetail{
+		Name:        op.Name,
+		Description: op.Description,
+		Destructive: op.Destructive,
+		Category:    mod.CategoryOf(op.Key),
+		Unavailable: reason,
+	}
 }
 
 // firstNonEmpty returns the first arg value (by key, in order) that is a
