@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -741,12 +742,59 @@ func syncAgentSlack(ctx context.Context, p entity.AgentPersona) {
 	if channelWirer != nil {
 		channelWirer(ch)
 	}
+	runCtx := agentSlackRuns.add(ctx, ch)
 	go func() {
+		defer agentSlackRuns.done(ch)
 		defer agentchannels.RecoverPanic("slack", key)
-		if err := ch.Start(ctx); err != nil {
+		if err := ch.Start(runCtx); err != nil {
 			log.Warn().Str("instance", key).Err(err).Msg("team: agent slack instance stopped")
 		}
 	}()
+}
+
+// agentSlackRuns tracks the bots syncAgentSlack started, so they can be
+// stopped and waited for: Stop only cancels a run, and a run still going
+// keeps reading globalDB through its token callbacks.
+var agentSlackRuns = &slackRunSet{live: map[*agentslack.Channel]context.CancelFunc{}}
+
+type slackRunSet struct {
+	mu   sync.Mutex
+	wg   sync.WaitGroup
+	live map[*agentslack.Channel]context.CancelFunc
+}
+
+// add registers ch and returns the context its run must use; cancelling
+// it ends the run even when Start has not begun yet.
+func (s *slackRunSet) add(ctx context.Context, ch *agentslack.Channel) context.Context {
+	runCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.live[ch] = cancel
+	s.wg.Add(1)
+	s.mu.Unlock()
+	return runCtx
+}
+
+func (s *slackRunSet) done(ch *agentslack.Channel) {
+	s.mu.Lock()
+	if cancel, ok := s.live[ch]; ok {
+		cancel()
+		delete(s.live, ch)
+	}
+	s.mu.Unlock()
+	s.wg.Done()
+}
+
+// stopAll stops every tracked bot and waits until each run has returned.
+func (s *slackRunSet) stopAll() {
+	s.mu.Lock()
+	running := make(map[*agentslack.Channel]context.CancelFunc, len(s.live))
+	maps.Copy(running, s.live)
+	s.mu.Unlock()
+	for ch, cancel := range running {
+		cancel()
+		ch.Stop()
+	}
+	s.wg.Wait()
 }
 
 // RegisterAgentSlackInstances adds every enabled agent's bot to the

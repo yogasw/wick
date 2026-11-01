@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
@@ -517,6 +518,23 @@ type ListWorkflowRunsInput struct {
 	Owner   string `wick:"required;desc=Repository owner."`
 	Repo    string `wick:"required;desc=Repository name."`
 	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// ListRunJobsInput lists the jobs of one workflow run.
+type ListRunJobsInput struct {
+	Owner string `wick:"required;desc=Repository owner."`
+	Repo  string `wick:"required;desc=Repository name."`
+	RunID int64  `wick:"required;desc=Workflow run ID (from list_workflow_runs or the run URL /actions/runs/<id>)."`
+}
+
+// GetJobLogInput fetches the plain-text log of one Actions job.
+type GetJobLogInput struct {
+	Owner     string `wick:"required;desc=Repository owner."`
+	Repo      string `wick:"required;desc=Repository name."`
+	JobID     int64  `wick:"required;desc=Job ID (from list_run_jobs or the job URL /job/<id>)."`
+	Grep      string `wick:"desc=Optional regular expression. When set, only matching lines plus context are returned instead of the tail."`
+	Context   int    `wick:"desc=Lines of context around each grep match. Default: 5."`
+	TailBytes int    `wick:"desc=Return at most this many bytes from the END of the log (or of the grep result). Default: 60000."`
 }
 
 // DispatchWorkflowInput triggers a workflow_dispatch event.
@@ -1646,7 +1664,7 @@ func Operations() []connector.Category {
 		// ── ACTIONS ──────────────────────────────────────────────────
 		connector.Cat(
 			"Actions",
-			"List GitHub Actions workflows and runs, and trigger workflow dispatches.",
+			"List GitHub Actions workflows, runs and jobs, read job logs, and trigger workflow dispatches.",
 			connector.Op(
 				"list_workflows",
 				"List Workflows",
@@ -1682,6 +1700,48 @@ func Operations() []connector.Category {
 					},
 					PairWith:    []string{"connector:github.list_workflows", "connector:github.dispatch_workflow"},
 					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
+				},
+			),
+			connector.Op(
+				"list_run_jobs",
+				"List Run Jobs",
+				"List the jobs of one workflow run, with the steps that failed.",
+				ListRunJobsInput{},
+				listRunJobs,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"total_count": "Number of jobs in the run.",
+						"jobs":        "Array of {id, name, status, conclusion, html_url, failed_steps}.",
+					},
+					Quirks: []string{
+						"Trimmed to the fields above; failed_steps names the steps whose conclusion is failure.",
+						"Pass a job id to get_job_log to read why it failed.",
+					},
+					PairWith:    []string{"connector:github.list_workflow_runs", "connector:github.get_job_log"},
+					InputSample: `{"owner":"abc","repo":"web","run_id":123456789}`,
+				},
+			),
+			connector.Op(
+				"get_job_log",
+				"Get Job Log",
+				"Read the plain-text log of one GitHub Actions job: its tail, or only the lines matching a pattern.",
+				GetJobLogInput{},
+				getJobLog,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"log":         "Log text: the tail, or the grep matches with context (groups separated by \"--\").",
+						"truncated":   "true when the text was cut to tail_bytes (the beginning was dropped).",
+						"matches":     "Number of matching lines when grep is set.",
+						"bytes":       "Length in bytes of the returned log string.",
+						"total_bytes": "Size of the whole log that was read.",
+					},
+					Quirks: []string{
+						"Logs exist only after the job finished and expire with the run's retention (GitHub answers 410 / 404).",
+						"Every line starts with an ISO timestamp, as GitHub serves it.",
+						"For a failed test run try grep \"--- FAIL|DATA RACE|panic:|^FAIL\".",
+					},
+					PairWith:    []string{"connector:github.list_run_jobs", "connector:github.list_workflow_runs"},
+					InputSample: `{"owner":"abc","repo":"web","job_id":987654321,"grep":"--- FAIL|panic:"}`,
 				},
 			),
 			connector.OpDestructive(
@@ -2827,6 +2887,125 @@ func listWorkflowRuns(c *connector.Ctx) (any, error) {
 	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/actions/runs", owner, repo)) +
 		fmt.Sprintf("?per_page=%d", perPage)
 	return doRequest(c, "GET", u, nil)
+}
+
+func listRunJobs(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	runID := strings.TrimSpace(c.Input("run_id"))
+	if runID == "" {
+		return nil, fmt.Errorf("run_id is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/actions/runs/%s/jobs", owner, repo, runID)) + "?per_page=100"
+	raw, err := doRequest(c, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	m, _ := raw.(map[string]any)
+	list, _ := m["jobs"].([]any)
+	jobs := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		j, _ := item.(map[string]any)
+		failed := []string{}
+		steps, _ := j["steps"].([]any)
+		for _, st := range steps {
+			s, _ := st.(map[string]any)
+			if s["conclusion"] == "failure" {
+				name, _ := s["name"].(string)
+				failed = append(failed, name)
+			}
+		}
+		jobs = append(jobs, map[string]any{
+			"id":           j["id"],
+			"name":         j["name"],
+			"status":       j["status"],
+			"conclusion":   j["conclusion"],
+			"html_url":     j["html_url"],
+			"failed_steps": failed,
+		})
+	}
+	return map[string]any{"total_count": m["total_count"], "jobs": jobs}, nil
+}
+
+func getJobLog(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	jobID := strings.TrimSpace(c.Input("job_id"))
+	if jobID == "" {
+		return nil, fmt.Errorf("job_id is required")
+	}
+	var re *regexp.Regexp
+	if pattern := strings.TrimSpace(c.Input("grep")); pattern != "" {
+		if re, err = regexp.Compile(pattern); err != nil {
+			return nil, fmt.Errorf("grep: %w", err)
+		}
+	}
+	tail := firstNonZero(c.InputInt("tail_bytes"), 60000)
+	ctxLines := 5
+	if strings.TrimSpace(c.Input("context")) != "" {
+		ctxLines = c.InputInt("context")
+	}
+
+	// GitHub answers with a 302 to a short-lived storage URL.
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/actions/jobs/%s/logs", owner, repo, jobID))
+	log, err := doRequestRedirectText(c, u, 64<<20)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"total_bytes": len(log)}
+	if re != nil {
+		var matches int
+		log, matches = grepWithContext(log, re, ctxLines)
+		out["matches"] = matches
+	}
+	truncated := false
+	if len(log) > tail {
+		log = "…[log truncated]\n" + log[len(log)-tail:]
+		truncated = true
+	}
+	out["log"] = log
+	out["truncated"] = truncated
+	out["bytes"] = len(log)
+	return out, nil
+}
+
+// grepWithContext returns the lines of text matching re, each with ctx
+// lines before and after, merging overlapping windows and separating
+// groups with "--" the way grep -C does.
+func grepWithContext(text string, re *regexp.Regexp, ctx int) (string, int) {
+	if ctx < 0 {
+		ctx = 0
+	}
+	lines := strings.Split(text, "\n")
+	keep := make([]bool, len(lines))
+	matches := 0
+	for i, line := range lines {
+		if !re.MatchString(line) {
+			continue
+		}
+		matches++
+		for j := max(0, i-ctx); j <= min(len(lines)-1, i+ctx); j++ {
+			keep[j] = true
+		}
+	}
+	var b strings.Builder
+	prev := -2
+	for i, k := range keep {
+		if !k {
+			continue
+		}
+		if prev >= 0 && i != prev+1 {
+			b.WriteString("--\n")
+		}
+		b.WriteString(lines[i])
+		b.WriteByte('\n')
+		prev = i
+	}
+	return b.String(), matches
 }
 
 func dispatchWorkflow(c *connector.Ctx) (any, error) {

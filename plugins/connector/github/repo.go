@@ -142,3 +142,57 @@ func doRequestText(c *connector.Ctx, method, url, accept string, body any) (stri
 
 	return string(raw), nil
 }
+
+// doRequestRedirectText GETs an endpoint that answers with a redirect to a
+// pre-signed download URL (job logs, artifacts) and returns up to limit
+// bytes of the target. The redirect is followed by hand so the token is
+// never sent to the download host, whatever the client's redirect policy.
+func doRequestRedirectText(c *connector.Ctx, url string, limit int64) (string, error) {
+	req, err := http.NewRequestWithContext(c.Context(), "GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	token := strings.TrimSpace(c.Cfg("token"))
+	if token == "" {
+		return "", fmt.Errorf("token is not configured for this connector instance")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	noFollow := *c.HTTP
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		loc, err := resp.Location()
+		if err != nil {
+			return "", fmt.Errorf("github %d without a usable Location: %w", resp.StatusCode, err)
+		}
+		dl, err := http.NewRequestWithContext(c.Context(), "GET", loc.String(), nil)
+		if err != nil {
+			return "", fmt.Errorf("build download request: %w", err)
+		}
+		resp, err = c.HTTP.Do(dl)
+		if err != nil {
+			return "", fmt.Errorf("download %s: %w", loc.Host, err)
+		}
+		defer resp.Body.Close()
+	}
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var ghErr struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &ghErr); err == nil && ghErr.Message != "" {
+			return "", &apiError{Status: resp.StatusCode, Message: ghErr.Message}
+		}
+		return "", &apiError{Status: resp.StatusCode, Message: strings.TrimSpace(string(raw))}
+	}
+	return string(raw), nil
+}

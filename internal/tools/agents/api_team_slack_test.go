@@ -47,7 +47,12 @@ func withAgentSlackWorld(t *testing.T) {
 	}))
 	prevDB, prevURL := globalDB, slackAPIURL
 	globalDB, slackAPIURL = db, srv.URL+"/"
-	t.Cleanup(func() { globalDB, slackAPIURL = prevDB, prevURL; srv.Close() })
+	t.Cleanup(func() {
+		// Bots a test brought online still read globalDB: end them first.
+		agentSlackRuns.stopAll()
+		globalDB, slackAPIURL = prevDB, prevURL
+		srv.Close()
+	})
 }
 
 func connectSlack(t *testing.T, u *entity.User, agentID string, body map[string]any) *httptest.ResponseRecorder {

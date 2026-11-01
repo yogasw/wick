@@ -143,7 +143,7 @@ func TestOperations(t *testing.T) {
 	for _, c := range Operations() {
 		ops = append(ops, c.Ops...)
 	}
-	assert.Len(t, ops, 64)
+	assert.Len(t, ops, 66)
 	keys := make([]string, len(ops))
 	for i, op := range ops {
 		keys[i] = op.Key
@@ -164,7 +164,7 @@ func TestOperations(t *testing.T) {
 		"get_commit", "compare_commits",
 		"search_issues", "search_repos", "search_code",
 		"list_collaborators", "create_repo", "update_repo",
-		"list_workflows", "list_workflow_runs", "dispatch_workflow",
+		"list_workflows", "list_workflow_runs", "list_run_jobs", "get_job_log", "dispatch_workflow",
 		"list_hooks", "create_hook",
 		"list_rulesets", "get_ruleset", "get_branch_rules", "list_environments", "get_environment",
 		"validate_repo_setup", "token_access",
@@ -1037,4 +1037,102 @@ func TestCreateHook(t *testing.T) {
 	config := captured["config"].(map[string]any)
 	assert.Equal(t, "https://example.com/hook", config["url"])
 	assert.Equal(t, "json", config["content_type"])
+}
+
+func TestListRunJobsTrimsAndListsFailedSteps(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total_count": 1,
+			"jobs": []map[string]any{{
+				"id": 42, "name": "unit", "status": "completed", "conclusion": "failure",
+				"html_url": "https://example.com/job/42", "runner_name": "noise",
+				"steps": []map[string]any{
+					{"name": "checkout", "conclusion": "success"},
+					{"name": "test", "conclusion": "failure"},
+				},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newCtx(
+		map[string]string{"base_url": srv.URL, "token": "ghp_test"},
+		map[string]string{"owner": "octocat", "repo": "hello", "run_id": "99"},
+	)
+	result, err := listRunJobs(c)
+	require.NoError(t, err)
+	assert.Equal(t, "/repos/octocat/hello/actions/runs/99/jobs", gotPath)
+
+	jobs := result.(map[string]any)["jobs"].([]map[string]any)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, []string{"test"}, jobs[0]["failed_steps"])
+	assert.NotContains(t, jobs[0], "runner_name")
+}
+
+func TestGetJobLogFollowsRedirectWithoutToken(t *testing.T) {
+	logText := "line 1\nline 2\n--- FAIL: TestX\nline 4\nline 5\n"
+	var storageAuth string
+	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		storageAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(logText))
+	}))
+	t.Cleanup(storage.Close)
+	var gotPath string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		http.Redirect(w, r, storage.URL+"/blob", http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+
+	c := newCtx(
+		map[string]string{"base_url": api.URL, "token": "ghp_test"},
+		map[string]string{"owner": "octocat", "repo": "hello", "job_id": "7"},
+	)
+	result, err := getJobLog(c)
+	require.NoError(t, err)
+	assert.Equal(t, "/repos/octocat/hello/actions/jobs/7/logs", gotPath)
+	assert.Empty(t, storageAuth, "token must not reach the storage host")
+
+	m := result.(map[string]any)
+	assert.Equal(t, logText, m["log"])
+	assert.Equal(t, false, m["truncated"])
+}
+
+func TestGetJobLogGrepAndTail(t *testing.T) {
+	logText := "a\nb\nc\n--- FAIL: TestX\nd\ne\nf\ng\nh\npanic: boom\ni\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(logText))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newCtx(
+		map[string]string{"base_url": srv.URL, "token": "ghp_test"},
+		map[string]string{"owner": "o", "repo": "r", "job_id": "1", "grep": "--- FAIL|panic:", "context": "1"},
+	)
+	result, err := getJobLog(c)
+	require.NoError(t, err)
+	m := result.(map[string]any)
+	assert.Equal(t, 2, m["matches"])
+	assert.Equal(t, "c\n--- FAIL: TestX\nd\n--\nh\npanic: boom\ni\n", m["log"])
+
+	c = newCtx(
+		map[string]string{"base_url": srv.URL, "token": "ghp_test"},
+		map[string]string{"owner": "o", "repo": "r", "job_id": "1", "tail_bytes": "4"},
+	)
+	result, err = getJobLog(c)
+	require.NoError(t, err)
+	m = result.(map[string]any)
+	assert.Equal(t, true, m["truncated"])
+	assert.Equal(t, "…[log truncated]\n"+logText[len(logText)-4:], m["log"])
+}
+
+func TestGetJobLogRejectsBadPattern(t *testing.T) {
+	c := newCtx(
+		map[string]string{"base_url": "http://unused", "token": "ghp_test"},
+		map[string]string{"owner": "o", "repo": "r", "job_id": "1", "grep": "("},
+	)
+	_, err := getJobLog(c)
+	require.Error(t, err)
 }
