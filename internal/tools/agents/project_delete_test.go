@@ -15,14 +15,18 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 )
 
-// stubForget records the cwds purgeProject asks to forget instead of
-// touching the provider config dirs of the machine running the test.
+// stubForget records the cwds purgeProject looks up provider history for,
+// instead of touching the provider config dirs of the machine running the
+// test. It reports no history folders.
 func stubForget(t *testing.T) *[]string {
 	t.Helper()
 	var got []string
-	prev := forgetWorkspaceFn
-	forgetWorkspaceFn = func(_ context.Context, cwd string) { got = append(got, cwd) }
-	t.Cleanup(func() { forgetWorkspaceFn = prev })
+	prev := workspaceHistoryFn
+	workspaceHistoryFn = func(_ context.Context, cwd string) map[string][]string {
+		got = append(got, cwd)
+		return nil
+	}
+	t.Cleanup(func() { workspaceHistoryFn = prev })
 	return &got
 }
 

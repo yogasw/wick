@@ -248,3 +248,17 @@ func joinImmutable(base, extra string) string {
 func resolve(s string) string {
 	return strings.ReplaceAll(s, "{{app}}", appname.Resolve())
 }
+
+// AdminContactToken is the one placeholder the immutable rules keep past
+// assembly: whom to ask for missing access is operator config, read per
+// spawn, so the factory resolves it with ResolveAdminContact.
+const AdminContactToken = "{{ADMIN_CONTACT}}"
+
+// ResolveAdminContact fills AdminContactToken in text; an empty contact
+// reads "the wick admin".
+func ResolveAdminContact(text, contact string) string {
+	if contact = strings.TrimSpace(contact); contact == "" {
+		contact = "the wick admin"
+	}
+	return strings.ReplaceAll(text, AdminContactToken, contact)
+}

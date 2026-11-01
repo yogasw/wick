@@ -146,7 +146,12 @@ type AgentEvent struct {
 	// shown like any text but is not the model's output: the turn has
 	// not produced anything because of it.
 	Synthetic bool
-	Raw       string // verbatim source line
+	// FailedOver marks the Warning that stands for the Error of a turn a
+	// provider failover took over (provider/agent.go askFailover). The
+	// turn's text so far is the failed provider's: channels drop what
+	// they hold of it, the turn goes on on the next provider.
+	FailedOver bool
+	Raw        string // verbatim source line
 	// RemoteNote labels how a remote agent's turn ended (Done only):
 	// "ended without marker", "follow-up", "late reply".
 	RemoteNote string

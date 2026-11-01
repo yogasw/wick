@@ -200,7 +200,7 @@
 </script>
 
 <DrawerHeader title="Connections" subtitle="@{agent.handle}" avatar={agent.avatar} {onClose} />
-<div class="flex shrink-0 gap-1 overflow-x-auto border-b border-white-300 px-4 dark:border-navy-600" role="tablist" aria-label="Connections" data-testid="conn-tabs">
+<div class="flex shrink-0 gap-1 overflow-x-auto overflow-y-hidden border-b border-white-300 px-4 pt-1 [scrollbar-width:none] dark:border-navy-600 [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Connections" data-testid="conn-tabs">
   {#each CONN_TABS as t, i (t.key)}
     {@const st = states[t.key] ?? "off"}
     <button

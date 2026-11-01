@@ -11,8 +11,10 @@
   import {
     getAgentSlackSettings, setAgentSlackSetting, lookupAgentSlack, settingGroups, pickerItems, isVisible,
     peopleChoice, peopleValues, accessSummary, isOpenToWorkspace, hiddenPeople, accessDimension, OPTION_LABEL,
-    type SlackSettingField, type PickerItem, type PeopleChoice,
+    REPLY_MODE_KEYS, REPLY_MODE_LABEL, replyRules, addReplyRule, cleanDelay,
+    type SlackSettingField, type PickerItem, type PeopleChoice, type AgentListenInfo, type ReplyMode, type ReplyRule,
   } from "../../slackAccess.js";
+  import { delayText } from "../../api/listen.js";
 
   type Props = { base: string; agent: AgentItem; onSummary?: (summary: string, open: boolean) => void };
   let { base, agent, onSummary }: Props = $props();
@@ -29,13 +31,15 @@
   let ownerID = $state("");
   let ownerName = $state("");
   let ownerHandle = $state("");
+  let listen = $state<AgentListenInfo | null>(null);
   let loadError = $state("");
   let saveState = $state<"" | "saving" | "saved" | "error">("");
   let customPeople = $state(false);
   let queries = $state<Record<string, string>>({});
   let results = $state<Record<string, PickerItem[]>>({});
 
-  function apply(s: { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string }) {
+  function apply(s: { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string; listen?: AgentListenInfo }) {
+    listen = s.listen ?? null;
     fields = s.fields;
     values = Object.fromEntries(s.fields.map((f) => [f.key, f.value]));
     ownerID = s.owner_slack_id ?? "";
@@ -101,6 +105,36 @@
   const shown = (f: SlackSettingField) =>
     isVisible(f, values) && !(f.group === "Access Control" && PEOPLE_KEYS.has(f.key) && choice !== "custom");
   const label = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+  /* Reply-mode block: see REPLY_MODE_KEYS. */
+  const MODE_TONE: Record<ReplyMode, string> = {
+    listen: "!border-green-500 !text-green-600 dark:!text-green-400",
+    auto_reply: "!border-blue-500 !text-blue-600 dark:!text-blue-400",
+    manual: "!border-amber-500 !text-amber-600 dark:!text-amber-400",
+  };
+  const rules = $derived(replyRules(values.channel_reply_rules));
+  const defaultMode = $derived<ReplyMode>(values.reply_mode === "auto_reply" ? "auto_reply" : "listen");
+  let ruleQuery = $state("");
+  let ruleResults = $state<PickerItem[]>([]);
+  const saveRules = (next: ReplyRule[]) => save([["channel_reply_rules", JSON.stringify(next)]]);
+  const setRule = (id: string, patch: Partial<ReplyRule>) => saveRules(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  async function searchRuleChannel(q: string) {
+    ruleQuery = q;
+    if (!q.trim()) { ruleResults = []; return; }
+    try {
+      const r = await runApi(lookupAgentSlack(base, agent.id, "slack.channels", q));
+      if (ruleQuery === q) ruleResults = r.items.filter((it) => !rules.some((x) => x.id === it.id));
+    } catch {
+      ruleResults = [];
+    }
+  }
+  function addRule(it: PickerItem) {
+    void saveRules(addReplyRule(rules, it));
+    ruleQuery = "";
+    ruleResults = [];
+  }
+  /* The listen delay a thread gets when nothing below sets one. */
+  const listenDefaultHint = $derived(listen ? delayText(listen.delay_sec) : "LISTEN.md");
 </script>
 
 <div class="mt-4 space-y-3" data-testid="slack-settings">
@@ -144,14 +178,105 @@
             </section>
           {/each}
         {:else}
+          {#if g.title === "Reaction Auto-Reply" && listen}{@render listenInfo(listen)}{/if}
           {#each g.fields as f (f.key)}
-            {#if shown(f)}{@render field(f)}{/if}
+            {#if f.key === "reply_mode"}
+              {#if shown(f)}{@render replyModes()}{/if}
+            {:else if REPLY_MODE_KEYS.has(f.key)}
+              <!-- drawn by replyModes -->
+            {:else if f.key === "listen_manual_channels" && !pickerItems(values[f.key]).length}
+              <!-- replaced by the manual mode of a channel rule; shown only while it still lists channels -->
+            {:else if shown(f)}{@render field(f)}{/if}
           {/each}
         {/if}
       </div>
     </details>
   {/each}
 </div>
+
+{#snippet listenInfo(l: AgentListenInfo)}
+  <section class="space-y-1 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="listen-info">
+    <p class={legend}>Listen mode in effect</p>
+    <p class="text-xs text-black-900 dark:text-white-100" data-testid="listen-effective">Delay {delayText(l.delay_sec)} · scope {l.scope} · when someone else answers: {l.on_team_reply}</p>
+    <p class={muted}>
+      @{agent.handle}'s LISTEN.md:
+      {#if l.agent_path}<code class="break-all">{l.agent_path}</code>{l.agent_exists ? "" : " (not created yet: the wick default applies alone)"}{:else}no project folder{/if}
+    </p>
+    <p class={muted}>Wick default: {#if l.wick_exists}<code class="break-all">{l.wick_path}</code>{:else}built-in (put a LISTEN.md at <code class="break-all">{l.wick_path}</code> to replace it){/if}</p>
+    <p class={muted}>Frontmatter keys: delay, scope (thread | channel | all), on_team_reply (review | skip), replace_default; the text below them is the instructions. It goes into the agent's system prompt when its process starts; an edit made while it runs rides along with its next listen message.</p>
+    <details>
+      <summary class="cursor-pointer {muted}">Instructions in effect</summary>
+      <p class="mt-1 whitespace-pre-line {muted}" data-testid="listen-info-instructions">{l.instructions}</p>
+    </details>
+  </section>
+{/snippet}
+
+{#snippet delayBox(key: string, value: string, placeholder: string, onSave: (v: string) => void)}
+  <label class="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white-300 px-1.5 py-0.5 text-xs text-black-800 dark:border-navy-600 dark:text-black-600" title="Delay before the reply goes to the agent, in seconds">
+    <svg viewBox="0 0 20 20" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 6v4l2.5 2" /></svg>
+    <input data-testid="delay-{key}" type="number" min="0" max="900" class="w-12 bg-transparent text-right text-black-900 focus:outline-none dark:text-white-100" {value} {placeholder}
+      onchange={(e) => onSave(cleanDelay(e.currentTarget.value))} />
+    <span>s</span>
+  </label>
+{/snippet}
+
+{#snippet replyModes()}
+  <section class="min-w-0 space-y-3" data-testid="reply-modes">
+    <div data-field="reply_mode">
+      <p class={legend}>Default mode</p>
+      <div class="mt-1 flex flex-wrap gap-2">
+        {#each [["listen", "Held for the delay, then the agent answers only what is meant for it ([silent] otherwise). For client groups and card threads."], ["auto_reply", "Always answered, like a mention. Waits only to merge a burst of replies into one turn. For debug threads."]] as [m, hint] (m)}
+          <div class="min-w-0 flex-1 basis-56 rounded-lg border px-3 py-2 {defaultMode === m ? 'border-green-500 ring-1 ring-green-500' : 'border-white-300 dark:border-navy-600'}" data-testid="mode-card" data-mode={m}>
+            <label class="flex items-center gap-2 text-xs font-semibold text-black-900 dark:text-white-100">
+              <input type="radio" name="reply-mode-{agent.id}" checked={defaultMode === m} onchange={() => save([["reply_mode", m]])} />
+              {REPLY_MODE_LABEL[m as ReplyMode]}
+            </label>
+            <div class="mt-1 flex items-center gap-2 text-xs text-black-800 dark:text-black-600">
+              {m === "listen" ? "Delay" : "Merge delay"}
+              {#if m === "listen"}
+                <span data-field="listen_delay_sec">{@render delayBox("listen_delay_sec", values.listen_delay_sec ?? "", listenDefaultHint.replace(/s$/, ""), (v) => save([["listen_delay_sec", v]]))}</span>
+              {:else}
+                <span data-field="auto_reply_delay_sec">{@render delayBox("auto_reply_delay_sec", values.auto_reply_delay_sec ?? "", "3", (v) => save([["auto_reply_delay_sec", v]]))}</span>
+              {/if}
+            </div>
+            <p class="mt-1 {muted}">{hint}</p>
+          </div>
+        {/each}
+      </div>
+    </div>
+    <div data-field="channel_reply_rules">
+      <p class={legend}>Channel rules <span class="font-normal {muted}">— over the default mode and delay; an empty delay uses the default</span></p>
+      <!-- A wrapping list, not a table: the name may shrink (truncated, full
+           name in the tooltip) and, when the drawer is too narrow for one
+           line, the controls drop below it instead of widening the drawer. -->
+      <div class="mt-1 min-w-0 text-xs" data-testid="reply-rules">
+        {#each rules as r (r.id)}
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-white-300 py-1.5 dark:border-navy-600" data-testid="reply-rule" data-channel={r.id}>
+            <span class="min-w-0 flex-1 basis-40 truncate text-black-900 dark:text-white-100" title={r.name}>{r.name}</span>
+            <div class="ml-auto flex shrink-0 items-center gap-1.5">
+              <select class="{input} !w-[7.5rem] font-medium {MODE_TONE[r.mode]}" value={r.mode} onchange={(e) => setRule(r.id, { mode: e.currentTarget.value as ReplyMode })} aria-label="Mode for {r.name}">
+                {#each ["listen", "auto_reply", "manual"] as m (m)}<option value={m}>{REPLY_MODE_LABEL[m as ReplyMode]}</option>{/each}
+              </select>
+              {@render delayBox("rule-" + r.id, r.delay, r.mode === "auto_reply" ? (values.auto_reply_delay_sec || "3") : (values.listen_delay_sec || listenDefaultHint.replace(/s$/, "")), (v) => setRule(r.id, { delay: v }))}
+              <button type="button" class="rounded-md p-1 text-black-700 hover:bg-neg-400/10 hover:text-neg-400 dark:text-black-600" aria-label="Remove rule for {r.name}" title="Remove rule" onclick={() => saveRules(rules.filter((x) => x.id !== r.id))}>
+                <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5.5 5.5l.8 10.2a1.5 1.5 0 0 0 1.5 1.3h4.4a1.5 1.5 0 0 0 1.5-1.3l.8-10.2M8.5 9v5M11.5 9v5" /></svg>
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
+      <input class="mt-1 {input}" placeholder="+ Add channel… (search)" value={ruleQuery} oninput={(e) => searchRuleChannel(e.currentTarget.value)} data-testid="reply-rule-search" />
+      {#if ruleResults.length}
+        <ul class="mt-1 rounded-lg border border-white-300 dark:border-navy-600">
+          {#each ruleResults as it (it.id)}
+            <li><button type="button" class="w-full px-2 py-1 text-left text-xs text-black-900 dark:text-white-100" onclick={() => addRule(it)}>{it.name} <span class={muted}>{it.id}</span></button></li>
+          {/each}
+        </ul>
+      {/if}
+      <p class="mt-1 {muted}">✋ Manual: a new thread never starts on its own; someone puts 🤖 on it or asks the agent to listen. A thread can still be switched with "listen" or "stop". An @mention is always answered at once.</p>
+    </div>
+  </section>
+{/snippet}
 
 {#snippet field(f: SlackSettingField)}
   <div data-field={f.key}>

@@ -269,7 +269,7 @@ export type FolderView = {
   last_active: string | null;
 };
 
-/** whoLine is "Paragon, KPJ thinking…": two names, then +N. */
+/** whoLine is "Alpha, Beta thinking…": two names, then +N. */
 export function whoLine(list: Pick<AgentItem, "name">[], verb: string): string {
   const names = list.slice(0, 2).map((a) => a.name).join(", ");
   return `${names}${list.length > 2 ? ` +${list.length - 2}` : ""} ${verb}…`;

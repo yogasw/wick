@@ -602,6 +602,9 @@ func workflowRegistryAPI(c *tool.Ctx) {
 		})
 	}
 	connectors := []map[string]any{}
+	// The instances a node may name, per module: the caller's ready,
+	// accessible rows — the same set the palette drills offer.
+	instancesByKey := gatherConnectorData(c)
 	for _, info := range globalWorkflowMgr.MCP.ConnectorsList() {
 		mod, modOK := globalWorkflowMgr.Connectors.Module(info.Module)
 		var modOps []connector.Operation
@@ -631,10 +634,15 @@ func workflowRegistryAPI(c *tool.Ctx) {
 			}
 			ops = append(ops, row)
 		}
+		instances := []map[string]any{}
+		for _, inst := range instancesByKey[info.Module] {
+			instances = append(instances, map[string]any{"id": inst.Row.ID, "label": inst.Row.Label})
+		}
 		connectors = append(connectors, map[string]any{
-			"module": info.Module,
-			"name":   info.Name,
-			"ops":    ops,
+			"module":    info.Module,
+			"name":      info.Name,
+			"ops":       ops,
+			"instances": instances,
 		})
 	}
 	// Narrowed to the instances the caller may choose — the same access

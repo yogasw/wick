@@ -101,6 +101,7 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 				Description: op.Description,
 				Input:       FieldsToConfigs(op.Inputs),
 				Destructive: op.Destructive,
+				VisibleWhen: strings.TrimSpace(op.VisibleWhen),
 				Execute:     exec,
 				Docs:        wickdocs.Docs{},
 			})
@@ -548,7 +549,15 @@ func executeHTTP(c *connector.Ctx, recipe OpRequest, cfgFields []DefField, inKey
 	}
 
 	var body io.Reader
-	if recipe.BodyTemplate != "" {
+	contentType := recipe.ContentType
+	switch {
+	case recipe.Multipart != nil:
+		buf, ct, err := buildMultipart(recipe.Multipart, cfg, in)
+		if err != nil {
+			return nil, err
+		}
+		body, contentType = buf, ct
+	case recipe.BodyTemplate != "":
 		rendered, err := renderTemplate("body", recipe.BodyTemplate, cfg, in)
 		if err != nil {
 			return nil, err
@@ -567,8 +576,8 @@ func executeHTTP(c *connector.Ctx, recipe OpRequest, cfgFields []DefField, inKey
 		}
 		req.Header.Set(k, v)
 	}
-	if recipe.ContentType != "" && body != nil {
-		req.Header.Set("Content-Type", recipe.ContentType)
+	if contentType != "" && body != nil {
+		req.Header.Set("Content-Type", contentType)
 	}
 
 	resp, err := c.HTTP.Do(req)

@@ -2,6 +2,7 @@ package agents
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -36,6 +37,10 @@ type wickSessionRow struct {
 	// in. ProjectID set with Project empty = the project could not be read.
 	ProjectID string `json:"project_id,omitempty"`
 	Project   string `json:"project,omitempty"`
+	// Agent is the Team agent the session belongs to ("@handle" plus its
+	// name), so two claude rows tell apart which agent each one is. Empty
+	// for a session of no Team agent.
+	Agent string `json:"agent,omitempty"`
 	// Detected is true when a well-formed wick_sub_ token was found. A row
 	// whose title or project is empty despite Detected is a wick session
 	// the page could not resolve, which the page flags rather than hiding.
@@ -234,12 +239,19 @@ func detectWickSession(pid int) (wickSessionRow, bool) {
 	if !ok {
 		return wickSessionRow{}, false
 	}
-	row := wickSessionRow{SessionID: c.SessionID, Detected: true}
 	if c.SessionID == "" {
-		return row, true
+		return wickSessionRow{Detected: true}, true
 	}
-	ids := []string{c.SessionID}
-	if root := rootSessionID(c.SessionID); root != c.SessionID {
+	return describeWickSession(c.SessionID), true
+}
+
+// describeWickSession labels sessionID: its title, project and Team agent.
+// Also used for rows the pool owns, which know their session but not what
+// it is; two "claude" rows otherwise read the same.
+func describeWickSession(sessionID string) wickSessionRow {
+	row := wickSessionRow{SessionID: sessionID, Detected: true}
+	ids := []string{sessionID}
+	if root := rootSessionID(sessionID); root != sessionID {
 		ids = append(ids, root)
 	}
 	for _, id := range ids {
@@ -259,5 +271,11 @@ func detectWickSession(pid int) (wickSessionRow, bool) {
 			row.Project = strings.TrimSpace(p.Meta.Name)
 		}
 	}
-	return row, true
+	for _, id := range ids {
+		if a := globalTeam.AgentFor(context.Background(), id); a != nil {
+			row.Agent = "@" + a.Handle
+			break
+		}
+	}
+	return row
 }

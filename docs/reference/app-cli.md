@@ -230,6 +230,11 @@ last of it settles. An idle agent subprocess holds nothing and never blocks the 
 known time, and is unset by default. It is read at process start, so changing it needs a
 `restart` rather than a `reload` — a successor inherits its parent's environment.
 
+Channel listeners (Slack, Telegram) move to the new process as soon as the drain starts, so new
+messages are answered by the new build while the old one finishes its turns. A message for a
+session whose turn is still running in the old process waits until that turn ends. Cron,
+workflows and scheduled messages move when the old process exits.
+
 Every 15 seconds a drain logs what is still outstanding, by name, so a long wait reads as
 "finishing a run" instead of a hang. The same list is on the System page
 (`/admin/advanced/software-update`) as **Running now**, next to a **Force swap** control for an

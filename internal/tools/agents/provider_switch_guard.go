@@ -10,7 +10,10 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-func init() { provider.SwitchGuard = sessionSwitchGuard }
+func init() {
+	provider.SwitchGuard = sessionSwitchGuard
+	provider.FailoverGuard = sessionFailoverGuard
+}
 
 // agentForbidsSwitch reports whether sess is a Team agent's chat whose
 // agent keeps its provider (allow_provider_switch off). Any origin
@@ -23,7 +26,7 @@ func agentForbidsSwitch(ctx context.Context, sess session.Session) bool {
 	if err != nil {
 		return false
 	}
-	return !team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain)
+	return team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy)
 }
 
 // sessionSwitchGuard is provider.SwitchGuard: the gates of the switch
@@ -42,7 +45,43 @@ func sessionSwitchGuard(ctx context.Context, sessionID, tag string) error {
 	if agentForbidsSwitch(ctx, sess) {
 		return errors.New(errProviderSetByAgent)
 	}
-	if sess.Meta.UserID == "" {
+	return ownerProviderAccess(ctx, sess, tag)
+}
+
+// sessionFailoverGuard is provider.FailoverGuard: only provider access.
+// The agent's "keeps its provider" setting is for people picking a
+// provider; a failover runs the chain the owner set on the instance, so a
+// kept-provider agent must not stall on a spent account. In a Team
+// agent's chat the access checked is the AGENT OWNER's: the agent runs on
+// the owner's providers, so whoever wrote in the channel does not narrow
+// where it may fail over to.
+func sessionFailoverGuard(ctx context.Context, sessionID, tag string) error {
+	if globalMgr == nil {
+		return nil
+	}
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok {
+		return nil
+	}
+	userID := sess.Meta.UserID
+	if globalTeam != nil && sess.Meta.AgentID != "" {
+		if p, err := globalTeam.Get(ctx, sess.Meta.AgentID); err == nil && p.OwnerUserID != "" {
+			userID = p.OwnerUserID
+		}
+	}
+	return userProviderAccess(ctx, userID, tag)
+}
+
+// ownerProviderAccess refuses tag when the session's owner may not use
+// that provider. A session with no owner is let through.
+func ownerProviderAccess(ctx context.Context, sess session.Session, tag string) error {
+	return userProviderAccess(ctx, sess.Meta.UserID, tag)
+}
+
+// userProviderAccess refuses tag when user userID may not use that
+// provider. No user is let through, as an owner-less workflow is.
+func userProviderAccess(ctx context.Context, userID, tag string) error {
+	if userID == "" {
 		return nil
 	}
 	key, _ := splitProviderModel(tag)
@@ -50,7 +89,7 @@ func sessionSwitchGuard(ctx context.Context, sessionID, tag string) error {
 	if !ok {
 		return nil
 	}
-	u, err := lookupWorkflowOwner(ctx, sess.Meta.UserID)
+	u, err := lookupWorkflowOwner(ctx, userID)
 	if err != nil || u == nil || !userCanAccessProvider(ctx, u, t, name) {
 		return errors.New(errNoProviderAccess(tag))
 	}

@@ -378,11 +378,17 @@ func LoadSessionUsage(layout config.Layout, sessionID string) (*SessionUsage, er
 // in session meta.json, which this package must not import (the session
 // package already depends on store), so the caller supplies them.
 type SessionTags struct {
+	// ID is the session's own id, filled by the roll-up rather than by the
+	// resolver, so a filter can match on it. Filter-only.
+	ID        string `json:"-"`
 	ProjectID string
 	UserID    string
 	// Label is the session's own title, so a ledger row can name the
 	// conversation instead of printing eight characters of uuid.
 	Label string
+	// Agent is the session's active agent, for the page's conditions.
+	// Filter-only.
+	Agent string `json:"-"`
 	// Channel and Instance are where the conversation came from ("slack",
 	// "ui") and which bot of that channel. They exist so a page that
 	// filters by channel can filter its token figures by the same thing —
@@ -390,6 +396,15 @@ type SessionTags struct {
 	// different slices side by side.
 	Channel  string
 	Instance string
+	// Providers is every provider key the session ran on, so the same
+	// page can narrow its token figures by account as well. Filter-only,
+	// so it stays out of the serialised roll-up.
+	Providers []string `json:"-"`
+	// People is everyone who took part, creator first, and Models every
+	// model the session's agents were pinned to — the page's people and
+	// model filters, applied to the token figures too.
+	People []string `json:"-"`
+	Models []string `json:"-"`
 }
 
 // UsageFilter bounds a roll-up: in time, and by which sessions count at
@@ -399,6 +414,19 @@ type UsageFilter struct {
 	Since time.Time
 	Until time.Time
 	Keep  func(SessionTags) bool
+	// Bucket, when set, names the time bucket a turn falls in ("2026-10-27",
+	// "2026-10-27 15:00") and turns the roll-up's Trend on. The caller
+	// picks the grain and the timezone; the roll-up only sums.
+	Bucket func(time.Time) string
+}
+
+// TrendBucket is one slice of the Trend: what the turns inside it spent,
+// how many there were, and in how many sessions — the last two are what
+// "per turn" and "per conversation" divide by.
+type TrendBucket struct {
+	Totals   UsageTotals `json:"totals"`
+	Turns    int         `json:"turns"`
+	Sessions int         `json:"sessions"`
 }
 
 // SessionUse is one session's line in a provider's ledger: how much it
@@ -448,6 +476,11 @@ type UsageRollup struct {
 	Partial bool `json:"partial,omitempty"`
 	// PartialSessions counts them, so the note can be specific.
 	PartialSessions int `json:"partial_sessions,omitempty"`
+	// Trend is the window split by UsageFilter.Bucket, keyed by bucket.
+	// Built from the per-turn trail, so a session whose trail no longer
+	// reaches back is short in its oldest buckets — the same caveat as
+	// Partial. Nil when no Bucket was asked for.
+	Trend map[string]*TrendBucket `json:"trend,omitempty"`
 }
 
 // TotalsSince sums this provider's flows from `since` onwards.
@@ -632,6 +665,9 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		Since:            since,
 		Until:            until,
 	}
+	if f.Bucket != nil {
+		out.Trend = map[string]*TrendBucket{}
+	}
 	for _, id := range sessionIDs {
 		su, err := LoadSessionUsage(layout, id)
 		if err != nil {
@@ -645,6 +681,7 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		if tags != nil {
 			t = tags(id)
 		}
+		t.ID = id
 		if f.Keep != nil && !f.Keep(t) {
 			continue
 		}
@@ -702,6 +739,9 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		}
 		if counted {
 			out.SessionTagsByID[id] = t
+			if f.Bucket != nil {
+				addTrend(out.Trend, su, since, until, f.Bucket)
+			}
 		}
 	}
 	// Newest first: "where is this provider used" is asked about what is
@@ -717,6 +757,41 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		out.ProviderSessions[name] = rows
 	}
 	return out, nil
+}
+
+// addTrend files one session's turns into their buckets, counting the
+// session once per bucket it spent in.
+func addTrend(trend map[string]*TrendBucket, su *SessionUsage, since, until time.Time, bucket func(time.Time) string) {
+	seen := map[string]bool{}
+	for _, p := range su.Providers {
+		for _, pt := range p.Series {
+			if !since.IsZero() && pt.At.Before(since) {
+				continue
+			}
+			if !until.IsZero() && pt.At.After(until) {
+				continue
+			}
+			// Level-only points (compaction) spent nothing: not a turn.
+			if pt.Input == 0 && pt.CacheRead == 0 && pt.CacheWrite == 0 && pt.Output == 0 {
+				continue
+			}
+			k := bucket(pt.At)
+			b := trend[k]
+			if b == nil {
+				b = &TrendBucket{}
+				trend[k] = b
+			}
+			b.Totals.Add(UsageTotals{
+				Input: pt.Input, CacheRead: pt.CacheRead, CacheWrite: pt.CacheWrite,
+				Output: pt.Output, CostUSD: pt.CostUSD,
+			})
+			b.Turns++
+			if !seen[k] {
+				seen[k] = true
+				b.Sessions++
+			}
+		}
+	}
 }
 
 // ModelRowKey names one (provider, model) row, and SplitModelRowKey reads

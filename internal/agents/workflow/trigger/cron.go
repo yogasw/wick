@@ -10,8 +10,11 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
 
-// CronScheduler ticks every minute and fires workflow cron triggers
-// whose schedule matches the current minute. Registered workflows are
+// CronScheduler ticks every second and fires workflow cron triggers
+// whose schedule matches the current second. A 5-field schedule
+// (min hour dom mon dow) fires at second 0 of a matching minute; a
+// 6-field one puts seconds first (sec min hour dom mon dow), so
+// "*/30 * * * * *" fires every 30 seconds. Registered workflows are
 // kept in sync with the Router — call Sync(workflows) whenever a
 // workflow is registered, hot-reloaded, or unregistered.
 //
@@ -27,7 +30,16 @@ type CronScheduler struct {
 	cron   map[string][]cronEntry // id → entries
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// last is the most recent second tick() evaluated, so a late tick
+	// catches up the seconds it slept through instead of skipping them.
+	last time.Time
 }
+
+// maxCatchUp bounds how many missed seconds one tick replays (a long
+// GC pause or a suspended host), so waking up does not burst a
+// minute-old backlog of runs.
+const maxCatchUp = 60 * time.Second
 
 type cronEntry struct {
 	Schedule  string
@@ -43,7 +55,7 @@ func NewCronScheduler(r *Router) *CronScheduler {
 	}
 }
 
-// Start launches the minute-tick goroutine. Cancel ctx to stop.
+// Start launches the second-tick goroutine. Cancel ctx to stop.
 func (c *CronScheduler) Start(ctx context.Context) {
 	cctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
@@ -95,11 +107,10 @@ func (c *CronScheduler) Unsync(id string) {
 
 func (c *CronScheduler) loop(ctx context.Context) {
 	defer close(c.done)
-	// Align first tick to top-of-minute so a workflow scheduled for
-	// HH:MM fires within a few hundred ms of HH:MM:00.
-	now := c.clock()
-	toNextMinute := time.Until(now.Truncate(time.Minute).Add(time.Minute))
-	timer := time.NewTimer(toNextMinute)
+	// Align every tick to the top of the next second so a workflow
+	// scheduled for HH:MM:SS fires within a few ms of it. The timer is
+	// re-armed from the clock each time, so ticks never drift.
+	timer := time.NewTimer(untilNextSecond(c.clock()))
 	defer timer.Stop()
 	for {
 		select {
@@ -107,27 +118,63 @@ func (c *CronScheduler) loop(ctx context.Context) {
 			return
 		case <-timer.C:
 			c.tick()
-			timer.Reset(time.Minute)
+			timer.Reset(untilNextSecond(c.clock()))
 		}
 	}
 }
 
+func untilNextSecond(now time.Time) time.Duration {
+	return now.Truncate(time.Second).Add(time.Second).Sub(now)
+}
+
 func (c *CronScheduler) tick() {
-	now := c.clock()
+	due := c.dueSeconds(c.clock())
+	if len(due) == 0 {
+		return
+	}
 	c.mu.RLock()
 	snap := make(map[string][]cronEntry, len(c.cron))
 	for k, v := range c.cron {
 		snap[k] = v
 	}
 	c.mu.RUnlock()
+	for _, at := range due {
+		c.fireAt(snap, at)
+	}
+}
+
+// dueSeconds returns the seconds to evaluate at now: every second since
+// the previous call (at most maxCatchUp back), or none when this second
+// was already evaluated.
+func (c *CronScheduler) dueSeconds(now time.Time) []time.Time {
+	now = now.Truncate(time.Second)
+	if !c.last.IsZero() && !c.last.Before(now) {
+		return nil
+	}
+	from := now
+	if !c.last.IsZero() {
+		from = c.last.Add(time.Second)
+		if now.Sub(from) > maxCatchUp {
+			from = now.Add(-maxCatchUp)
+		}
+	}
+	c.last = now
+	var out []time.Time
+	for at := from; !at.After(now); at = at.Add(time.Second) {
+		out = append(out, at)
+	}
+	return out
+}
+
+func (c *CronScheduler) fireAt(snap map[string][]cronEntry, at time.Time) {
 	for id, entries := range snap {
 		for _, e := range entries {
-			if !cronMatchesNow(e.Schedule, now) {
+			if !cronMatchesNow(e.Schedule, at) {
 				continue
 			}
 			evt := workflow.Event{
 				Type: string(workflow.TriggerCron),
-				At:   now.UTC(),
+				At:   at.UTC(),
 			}
 			if err := c.router.RunNow(context.Background(), id, evt); err != nil {
 				log.Warn().Str("wf_id", id).Err(err).Msg("workflow cron: enqueue failed")
@@ -138,13 +185,23 @@ func (c *CronScheduler) tick() {
 	}
 }
 
-// ── 5-field cron matcher ─────────────────────────────────────────────
-// Mirrors internal/pkg/worker/server.go (kept local to avoid the
-// reverse dep — workflow shouldn't import internal/pkg/worker).
+// ── 5/6-field cron matcher ───────────────────────────────────────────
+// The 5-field part mirrors internal/pkg/worker/server.go (kept local to
+// avoid the reverse dep — workflow shouldn't import internal/pkg/worker).
 
 func cronMatchesNow(expr string, now time.Time) bool {
 	fields := splitFields(expr)
-	if len(fields) != 5 {
+	switch len(fields) {
+	case 5:
+		if now.Second() != 0 {
+			return false
+		}
+	case 6:
+		if !fieldMatches(fields[0], now.Second(), 0, 59) {
+			return false
+		}
+		fields = fields[1:]
+	default:
 		return false
 	}
 	values := [5]int{now.Minute(), now.Hour(), now.Day(), int(now.Month()), int(now.Weekday())}

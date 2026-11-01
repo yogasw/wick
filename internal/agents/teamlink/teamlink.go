@@ -193,6 +193,10 @@ type Peer struct {
 	// for the owner's own main chat, a recipient's id for an agent shared
 	// with them (see SharedDirectory).
 	ChatUser string
+	// StopAfterTask: the agent's process is stopped once it answered a
+	// task, instead of idling until the idle timeout (see
+	// team.StopsAfterTeamTask).
+	StopAfterTask bool
 }
 
 // Label is how a peer is named in framing and replies.

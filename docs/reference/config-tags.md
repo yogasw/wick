@@ -74,6 +74,7 @@ type Config struct {
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
 | `internal` | Never render the field on any config page, dedicated pages included (they do render `hidden` rows). For values wick writes for itself, e.g. a token expiry. The row is still seeded, loaded and saved by code. Not persisted. |
 | `group=Title` / `group=Title\|Description` / `group=Title\|Description\|collapsed` | Group fields into a titled card on the admin Settings page. All fields sharing the same `Title` are rendered together under one card, in first-seen order. Fields with no `group` fall into the default "Configuration" card. The optional `Description` (pipe-separated) is written once at the top of the card — use it for a one-sentence summary of the group's purpose. A 3rd `\|collapsed` segment makes the card **start collapsed** (click the header to expand) — use for advanced/rarely-edited groups so the page opens clean; `Title\|\|collapsed` collapses with no description. The admin setting `config_groups_collapsed` (on by default) starts every named card collapsed anyway; `\|open` as the 3rd segment keeps a card open regardless, and the default Configuration card is never collapsed by it. Only the group's **first-seen** field needs to carry the description / collapsed flag. Not persisted. Pure presentation. |
+| `session_locked` | The agent cannot set the field on a session-workspace clone: it gets it in `locked_keys` and `set_config` refuses it. A human can still change it in the session Config tab (the value is sealed server-side, so editing the workspace file does not count); until then the session runs with the default. Use it on a value the agent must not override for itself — e.g. the field an `Operation.VisibleWhen` reads. Not persisted. Custom connectors: the builder "Lock in session". |
 
 ## Key derivation
 
@@ -182,6 +183,7 @@ type Config struct {
 |-----------|-----------------|
 | `data-op="__select" data-arg="<value>"` | Store `<value>` as this field's value (reserved — no op call). |
 | `data-op="<opKey>" data-arg="<value>"` | Run connector op `<opKey>` (with `<value>` passed as its argument) via `/test`, then **re-fetch** the HTML so state updates. |
+| `data-op-input="<opKey>" data-arg="<value>"` on an `<input>` | Run `<opKey>` **while the operator types**, debounced 400 ms — a search box with no Search button. The field is never disabled and keeps its text and caret; an answer that lands after newer typing is dropped. |
 
 ```go
 // Example browser_status op output — the connector owns all layout + logic:
@@ -190,6 +192,10 @@ type Config struct {
 ```
 
 So a Download button installs then refreshes; a row click selects. No SSE — long actions are covered by the re-fetch (poll the status op yourself inside a loop if you want live progress). The markup is admin-only server content rendered in the admin Settings page, so it is `{@html}`-rendered directly; keep it to connector-authored markup, never user input.
+
+**Re-renders keep typing, not stale state** — a response is patched into the live markup rather than replacing it. A visible field the operator changed keeps its text; a field still showing what it was rendered with, and every `type="hidden"` input, take the new value. So state the connector carries in hidden inputs (a row count, an id list) is always what the last render sent.
+
+**When it renders** — on mount and when the field's own value changes; never because the markup changed (an op whose HTML holds a timestamp does not re-fetch itself). A widget inside a collapsed config group (`group=Title|Desc|collapsed`) renders only when the group is opened, and again on each re-open, so live probes run only for panels somebody looks at.
 
 **Named inputs** — any element with a `name` inside the widget's markup is collected as `input.<name>` when an op runs, so a connector can render its own form (e.g. a textarea, a checkbox-based policy editor) and read what the user entered. Collection follows plain HTML form semantics: text/textarea/select send `.value`; a checkbox or radio sends its `value` attribute (default `"on"`) **only when checked** — unchecked contributes nothing, so a boolean setting must be read as "key present", not "value truthy".
 

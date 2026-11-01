@@ -16,6 +16,11 @@ type Host interface {
 	MemAvailable() (availMB, totalMB int, ok bool)
 	// PSI is the avg10 "some" and "full" pressure for memory or cpu.
 	PSI(resource string) (some10, full10 float64, ok bool)
+	// OwnMemPSI is the avg10 "full" memory pressure of wick's own part
+	// of the machine — the user manager holding the daemon and every
+	// agent — so a stall inside another service's cgroup (one at its own
+	// memory limit) can be told apart from one wick suffers.
+	OwnMemPSI() (full10 float64, ok bool)
 	// CPUTimes is the host-wide busy and total jiffies from /proc/stat
 	// (busy = user+nice+system+irq+softirq+steal; total adds idle+iowait),
 	// so busy % is a delta between two samples — not a load average.

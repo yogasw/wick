@@ -63,6 +63,10 @@ type Event struct {
 	// event.AgentEvent.ContextUsed); 0 means this event said nothing
 	// about the window.
 	ContextUsed int `json:"context_used,omitempty"`
+	// FailedOver marks the warning of a turn a provider failover took
+	// over (event.AgentEvent.FailedOver): collectors drop the text they
+	// hold of that turn, the failed provider's.
+	FailedOver bool `json:"failed_over,omitempty"`
 }
 
 func (e Event) JSON() string {
@@ -184,6 +188,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		payload.At = now
 	case event.Error, event.Warning:
 		payload.Data = ev.ErrorMsg
+		payload.FailedOver = ev.FailedOver
 	}
 	log.Debug().
 		Str("session", sessionID).

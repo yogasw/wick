@@ -231,6 +231,73 @@ type SessionChecker interface {
 	SetThreadBinding(sessionID string, b ThreadBinding)
 }
 
+// ListenThread is what a "listen" request stored on one chat thread
+// session (Slack listen mode). See session.Meta.ListenPrompt.
+type ListenThread struct {
+	Prompt   string
+	DelaySec *int
+	Stopped  bool
+}
+
+// ListenStore is optionally implemented by the SessionChecker (the pool):
+// the per-thread listen state, the LISTEN.md documents that shape a
+// session's listening, and the channels a bot listens to as a whole
+// (scope "channel"). A checker without it leaves listen mode to the plain
+// auto-reply switch.
+type ListenStore interface {
+	ListenThread(sessionID string) ListenThread
+	SetListenThread(sessionID string, lt ListenThread)
+	// ListenDocs returns the wick-wide default LISTEN.md and the one in
+	// the session's project folder ("" when absent).
+	ListenDocs(sessionID string) (wickDefault, agent string)
+	// ListenChannel / SetListenChannel: whether instance listens to every
+	// thread it has in chatID (scope "channel").
+	ListenChannel(instance, chatID string) bool
+	SetListenChannel(instance, chatID string, on bool)
+}
+
+// ListenRequest is the wick_slack_listen tool's input: Action is on, off or
+// status. Instructions and DelaySec (nil = the agent's LISTEN.md delay) are
+// read by on; WholeChannel by off, to also stop a channel scope.
+type ListenRequest struct {
+	Action       string
+	Instructions string
+	DelaySec     *int
+	WholeChannel bool
+}
+
+// ListenResult is the thread's listen state after the request.
+type ListenResult struct {
+	Listening    bool   `json:"listening"`
+	ChannelID    string `json:"channel_id"`
+	ThreadTS     string `json:"thread_ts"`
+	DelaySec     int    `json:"delay_sec"`
+	Scope        string `json:"scope"`
+	OnTeamReply  string `json:"on_team_reply"`
+	Instructions string `json:"instructions,omitempty"`
+	// ThreadPrompt is the part of Instructions this thread's own "listen"
+	// request added, so a UI can edit it without the LISTEN.md layers.
+	ThreadPrompt string `json:"thread_prompt,omitempty"`
+	// Mode is how a reply in the thread is treated now: auto_reply, listen
+	// or manual (not listening: only a mention is answered). ChannelMode
+	// is the channel's own mode (its rule, else the bot default), the one
+	// a switch to auto_reply / listen changes. HoldSec is what a reply is
+	// held for in Mode.
+	Mode        string `json:"mode,omitempty"`
+	ChannelMode string `json:"channel_mode,omitempty"`
+	ChannelName string `json:"channel_name,omitempty"`
+	HoldSec     int    `json:"hold_sec"`
+}
+
+// ThreadListener is implemented by a channel with listen mode (Slack).
+type ThreadListener interface {
+	OwnsSession(sessionID string) bool
+	ThreadListen(sessionID string, req ListenRequest) (ListenResult, error)
+	// ListenPrompt is the system-prompt section a spawn of sessionID gets:
+	// the listen rules and the agent's LISTEN.md, "" when it has none.
+	ListenPrompt(sessionID string) string
+}
+
 // ThreadBinding is the chat location a session's replies belong to.
 type ThreadBinding struct {
 	Channel  string // adapter name: "slack", "telegram"

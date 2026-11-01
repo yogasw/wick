@@ -125,6 +125,26 @@ func WrapArgv(bin string, args []string, o Opts) (string, []string) {
 	return "systemd-run", argv
 }
 
+// RuntimeMemoryArgs is the `systemctl --user set-property --runtime` argv
+// that puts the slice's memory controls back to what RenderSlice writes.
+//
+// A runtime drop-in (/run/user/<uid>/systemd/user.control/agents.slice.d,
+// left by any earlier `systemctl set-property`) outranks the unit file, so
+// rewriting the unit alone does not undo it. One such leftover held
+// MemoryHigh at 2.3 GB for weeks on a host whose unit said infinity: every
+// agent stalled on reclaim once they summed past it, the host's memory
+// pressure read 93% with half the RAM free, and spawns were held for an
+// hour. Only the memory keys are set: the CPU ones are the resource guard's
+// own runtime throttle.
+func RuntimeMemoryArgs(l SliceLimits) []string {
+	max := "infinity"
+	if l.AggregateMB > 0 {
+		max = strconv.Itoa(l.AggregateMB) + "M"
+	}
+	return []string{"--user", "set-property", "--runtime", SliceName,
+		"MemoryHigh=infinity", "MemorySwapMax=0", "MemoryMax=" + max}
+}
+
 // RenderSlice returns the slice unit body carrying the configured
 // controls. Every zero field is omitted, so a zero SliceLimits renders a
 // slice that groups agents for measurement and constrains nothing.

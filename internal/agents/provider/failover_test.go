@@ -222,7 +222,7 @@ func TestPickTargetDefaultsToHealthRegistry(t *testing.T) {
 }
 
 func TestFailoverHelpers(t *testing.T) {
-	if FailoverHopCap(1) != 1 || FailoverHopCap(5) != MaxFailoverTargets {
+	if FailoverHopCap(1) != 1 || FailoverHopCap(5) != 5 || FailoverHopCap(9) != MaxFailoverTargets {
 		t.Fatal("FailoverHopCap")
 	}
 	for k, want := range map[event.ErrKind]string{

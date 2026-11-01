@@ -1,7 +1,7 @@
 export { default as ConfirmDialog } from "./ConfirmDialog.svelte";
 export { default as DeleteProjectDialog } from "./DeleteProjectDialog.svelte";
-export type { DeleteProjectPreview } from "./delete-project.js";
-export { canConfirmDelete, deleteProjectBody, needsTypedName } from "./delete-project.js";
+export type { DeleteGates, DeleteProjectPreview, Sum } from "./delete-project.js";
+export { canConfirmDelete, DELETE_CONSENT, deleteProjectBody, makeSums, sumAnswered, TRASH_DAYS } from "./delete-project.js";
 export { default as ToastHost } from "./ToastHost.svelte";
 export { default as Select } from "./Select.svelte";
 export type { SelectOption } from "./select-types.js";
@@ -58,6 +58,7 @@ export { dropdownOptions, isVisible, isToggle } from "./config-types.js";
 export type { ModelCaps, CapabilityDisplayMode } from "./capability-types.js";
 export { CAP_DESCRIPTORS, capDescriptor, fmtTokens, hasAnyCaps } from "./capability-types.js";
 export { default as UsageReport } from "./UsageReport.svelte";
+export { default as TokenTrend } from "./TokenTrend.svelte";
 export {
   compactTokens,
   formatCost,
@@ -74,6 +75,7 @@ export type {
   SessionUse,
   WindowOption,
   ProviderUsageDetail,
+  TrendPoint,
 } from "./usageReport.js";
 export {
   contextMeter,

@@ -30,6 +30,8 @@ type WatchCreate struct {
 	// session asking and the target.
 	SessionIDs []string
 	ProjectID  string
+	// WakeOn is the event subscription, if any (lets a check step be first).
+	WakeOn string
 }
 
 // WatchOwner is the owner of a new row. A watch runs code and connector
@@ -48,7 +50,7 @@ func WatchOwner(isWatch bool, creatorUserID, scopeOwner string) string {
 // ends_at (nil = no time limit: a run_at watch, "off", or a cron watch
 // without one). The cap is fail-closed: a count that cannot be read refuses.
 func (s *Store) PrepareWatch(ctx context.Context, in WatchCreate, now time.Time) (string, *time.Time, error) {
-	if err := ValidateSteps(in.Steps); err != nil {
+	if err := ValidateStepsFor(in.Steps, in.WakeOn); err != nil {
 		return "", nil, err
 	}
 	if err := ValidateWatchTiming(in.Spec.Recurring, in.Spec.IntervalMs); err != nil {

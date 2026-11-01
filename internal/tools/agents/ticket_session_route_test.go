@@ -35,7 +35,7 @@ func TestPlanTicketSessionMessage(t *testing.T) {
 	})
 	t.Run("someone else naming an own agent: only that one", func(t *testing.T) {
 		p := planTicketSessionMessage("@research dig", "yoga", "hana", "hana", hana)
-		if p.Home || !p.HasTarget || p.Target.ID != "hr" || p.Captain {
+		if p.Home || !p.HasTarget || p.Target.ID != "hr" {
 			t.Fatalf("%+v", p)
 		}
 	})
@@ -51,16 +51,14 @@ func TestPlanTicketSessionMessage(t *testing.T) {
 			t.Fatalf("%+v", p)
 		}
 	})
-	t.Run("someone else, no @: their own Captain, flagged to join", func(t *testing.T) {
-		p := planTicketSessionMessage("hi", "yoga", "hana", "hana", hana)
-		if p.Home || !p.HasTarget || p.Target.ID != "hc" || !p.Captain {
-			t.Fatalf("%+v", p)
-		}
-	})
-	t.Run("someone else with no Captain: the project default, as them", func(t *testing.T) {
-		p := planTicketSessionMessage("hi", "yoga", "ana", "ana", nil)
-		if p.Home || !p.HasTarget || !p.Default {
-			t.Fatalf("%+v", p)
+	t.Run("anyone else, no @: the home agent carries on", func(t *testing.T) {
+		mate := []teamlink.Peer{{ID: "mc", OwnerID: "user-b", Handle: "captain", IsCaptain: true}}
+		for _, owner := range []string{"user-a", ""} {
+			for _, own := range [][]teamlink.Peer{mate, nil} {
+				if p := planTicketSessionMessage("please continue", owner, "user-b", "user-b", own); !p.Home || p.HasTarget {
+					t.Fatalf("owner %q, own %v: %+v", owner, own, p)
+				}
+			}
 		}
 	})
 	t.Run("someone else naming the owner's agent: refused, nobody runs", func(t *testing.T) {
@@ -71,7 +69,7 @@ func TestPlanTicketSessionMessage(t *testing.T) {
 	})
 	t.Run("someone else's @captain is their own Captain", func(t *testing.T) {
 		p := planTicketSessionMessage("@captain look", "yoga", "hana", "hana", hana)
-		if !p.HasTarget || p.Target.ID != "hc" || p.Captain {
+		if !p.HasTarget || p.Target.ID != "hc" {
 			t.Fatalf("%+v", p)
 		}
 	})
@@ -80,12 +78,6 @@ func TestPlanTicketSessionMessage(t *testing.T) {
 			t.Fatalf("%+v", p)
 		}
 		if p := planTicketSessionMessage("@off hi", "yoga", "hana", "hana", hana); p.Home || p.HasTarget || len(p.Refused) != 1 {
-			t.Fatalf("%+v", p)
-		}
-	})
-	t.Run("a session with no owner: everyone is answered by their own Captain", func(t *testing.T) {
-		p := planTicketSessionMessage("hi", "", "hana", "hana", hana)
-		if p.Home || !p.HasTarget || p.Target.ID != "hc" || !p.Captain {
 			t.Fatalf("%+v", p)
 		}
 	})
@@ -129,8 +121,5 @@ func TestTicketSessionTurnOwnerAndRefusal(t *testing.T) {
 	}
 	if got := foreignRefusal(foreignMention{Owner: "yoga", Handle: "writer"}, own, hist); !strings.HasPrefix(got, "@writer only takes instructions from @yoga.") {
 		t.Fatalf("unnamed refusal %q", got)
-	}
-	if !spokeIn(hist, "yr", "yoga") || spokeIn(hist, "yr", "hana") {
-		t.Fatal("spokeIn")
 	}
 }

@@ -9,8 +9,9 @@ early, when `title_custom` in the "This session" block is `false`, call
 (3–7 words, under ~50 characters: "Fix Slack webhook 401", "Resetting
 stuck job runs"). Take the first reasonable wording; do not deliberate and
 do not ask the user. If the first message does not yet say what it is
-about (a greeting), wait for the real request. `title_custom: true` means
-someone already chose: leave it alone.
+about (a greeting), wait for the real request. Wick tools still
+connecting: do it on the next turn. `title_custom: true` means someone
+already chose: leave it alone.
 
 <!-- /gate:session_title -->
 ## Long work reports back (`wick_cli_token`)
@@ -108,6 +109,11 @@ person, nor to answer a request or a question, including one from another
 agent: those always get a visible reply, even if only a status. When
 something matters (final result, a failure), reply normally without it.
 In doubt, reply normally. Only a leading marker counts.
+
+One exception: a message that opens with `[listen mode]` comes from a Slack
+thread you listen to without being mentioned. If it is not a question or
+request meant for you, or someone already answered it fully, reply exactly
+`[silent]`; that is the expected answer there, not a refusal.
 
 {{ASKING_USER}}
 

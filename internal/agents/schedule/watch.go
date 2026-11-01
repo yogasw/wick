@@ -248,7 +248,11 @@ func HasBash(steps []Step) bool {
 // made the call: the JSON path of the bad field, the value it sent, what is
 // accepted, and an example. `steps[1].rules[0].op: "eq" is not an op; use one
 // of: equals, not_equals, …`.
-func ValidateSteps(steps []Step) error {
+func ValidateSteps(steps []Step) error { return ValidateStepsFor(steps, "") }
+
+// ValidateStepsFor is ValidateSteps for a watch with wakeOn: there the first
+// step may be a check, since an event run hands it the event payload.
+func ValidateStepsFor(steps []Step, wakeOn string) error {
 	if len(steps) == 0 {
 		return errors.New(`steps: a watch needs at least one step, e.g. [{"kind":"connector","tool_id":"conn:<id>/<op>","params":{…}},{"kind":"check","rules":[{"path":"state.name","op":"equals","value":"COMPLETED"}]}]`)
 	}
@@ -281,8 +285,8 @@ func ValidateSteps(steps []Step) error {
 				return fmt.Errorf("%s: a bash step takes script (+ timeout_sec) only", at)
 			}
 		case StepKindCheck:
-			if i == 0 {
-				return fmt.Errorf("%s: a check step reads the previous step's JSON, so it cannot be first — put a connector step before it", at)
+			if i == 0 && wakeOn == "" {
+				return fmt.Errorf("%s: a check step reads the previous step's JSON, so it cannot be first — put a connector step before it (or set wake_on: an event's payload is then the first step's input)", at)
 			}
 			if err := validateCheck(s, at); err != nil {
 				return err
@@ -346,6 +350,8 @@ type RunRecord struct {
 	DurationMs int64     `json:"duration_ms"`
 	Result     string    `json:"result"`
 	Manual     bool      `json:"manual"`
+	// Event is the topic that woke this run (wake_on); empty on a timed run.
+	Event string `json:"event,omitempty"`
 	// Type is the schedule's type (watch | message): both keep history here.
 	Type string `json:"type,omitempty"`
 	// SessionID is where a message fire landed (message schedules).
@@ -501,7 +507,9 @@ func runBash(ctx context.Context, s Step, cwd string, stdin []byte, env []string
 // cwd is the confined bash directory (watchExecDir); "" with cwdErr set means
 // none could be resolved, which fails any bash step rather than running it
 // somewhere else.
-func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, cwd, tmpDir string, conn ConnectorExecutor) (rec RunRecord, result string) {
+// input is what the first step reads as its previous output: the event
+// payload of a wake_on run, nil on a timed run.
+func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, cwd, tmpDir string, conn ConnectorExecutor, input []byte) (rec RunRecord, result string) {
 	rec = RunRecord{ScheduleID: m.ID, StartedAt: time.Now().UTC(), Manual: m.ManualFire, Result: entity.WatchResultError, StepsRev: m.StepsRev}
 	defer func() {
 		rec.FinishedAt = time.Now().UTC()
@@ -521,7 +529,7 @@ func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, 
 		return rec, ""
 	}
 
-	var prev []byte
+	prev := input
 	var stepFiles []string
 	last := len(steps) - 1
 	for i, s := range steps {

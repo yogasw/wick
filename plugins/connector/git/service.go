@@ -50,7 +50,46 @@ func loadGlobal(c *connector.Ctx) GlobalPolicy {
 		AllowForcePush: c.CfgBool("allow_force_push"),
 		RawEnabled:     c.CfgBool("raw_enabled"),
 		RawRules:       parseRawRules(c.Cfg("raw_rules")),
+		DenyPatterns:   denyPatterns(c),
 	}
+}
+
+// denyPatterns is the sensitive-data list: the deny_patterns field plus the
+// file deny_patterns_file names, read fresh so an edit applies at once. An
+// unreadable file is skipped: the field's own patterns still apply.
+func denyPatterns(c *connector.Ctx) []string {
+	out := ParseDenyPatterns(c.Cfg("deny_patterns"))
+	if path := strings.TrimSpace(c.Cfg("deny_patterns_file")); path != "" {
+		if b, err := os.ReadFile(path); err == nil {
+			out = append(out, ParseDenyPatterns(string(b))...)
+		}
+	}
+	return out
+}
+
+// stagedAdditions is every line the commit would add ("+" lines of the
+// staged diff; with all, of the tracked changes too), for the
+// sensitive-data guard. Lock files and build output are skipped.
+func stagedAdditions(c *connector.Ctx, repoPath string, all bool) string {
+	args := []string{"diff", "--no-color", "-U0"}
+	if all {
+		args = append(args, "HEAD")
+	} else {
+		args = append(args, "--cached")
+	}
+	args = append(args, "--", ".", ":!*.lock", ":!**/dist/**")
+	res, err := Run(c.Context(), Cmd{RepoPath: repoPath, UserArgs: args}, runOpts(c, false))
+	if err != nil || !res.OK {
+		return ""
+	}
+	var b strings.Builder
+	for _, l := range strings.Split(res.Stdout, "\n") {
+		if strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++ ") {
+			b.WriteString(l[1:])
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }
 
 // policyFor compiles the effective policy for one repo. Invalid repo_policies

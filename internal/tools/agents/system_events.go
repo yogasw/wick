@@ -90,6 +90,13 @@ func touchSessionActive(layout agentconfig.Layout, sessionID string) {
 	}
 }
 
+// EmitSystemEvent records a server-authored system turn of kind in
+// sessionID's timeline, for wiring outside this package (a channel's held
+// replies).
+func EmitSystemEvent(sessionID, kind, text string, extras map[string]string) {
+	emitSystemEvent(sessionID, kind, text, extras)
+}
+
 // emitSystemEvent is recordSystemTurn on the process-wide layout and
 // broadcaster — the one call every emit site uses.
 func emitSystemEvent(sessionID, kind, text string, extras map[string]string) {

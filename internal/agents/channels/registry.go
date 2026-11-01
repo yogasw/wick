@@ -74,9 +74,8 @@ type Registry struct {
 
 	// turnFallback, when set, is told about the end of every turn: when
 	// it started (its first event here) and whether it gave the channels
-	// nothing (empty or silent). A line it returns for a quiet turn goes
-	// out as a Notice before the turn's terminal event, while the thread
-	// is still open. See WithTurnFallback.
+	// nothing (empty or silent). What it returns is never posted. See
+	// turnEndNotice.
 	turnFallback TurnFallback
 }
 
@@ -165,27 +164,25 @@ func looksSilent(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimLeft(s, " \t\r\n")), SilentMarker)
 }
 
-// WithTurnFallback attaches the check run at every turn end; for a turn
-// with nothing for the channels (no text, or a [silent] reply) the line
-// fn returns is posted instead. A Team agent woken with its teammates'
-// results that writes no answer is the case it exists for: the results
-// still reach the thread.
+// WithTurnFallback attaches the hook told about every turn end. Its line
+// is no longer posted (turnEndNotice): a quiet turn gives the channels
+// nothing.
 func (r *Registry) WithTurnFallback(fn TurnFallback) *Registry {
 	r.turnFallback = fn
 	return r
 }
 
-// turnEndNotice tells turnFallback a turn ended and, for a quiet one,
-// returns its line wrapped as the Notice to forward; ok false when none.
+// turnEndNotice tells turnFallback a turn ended, so it can settle its own
+// bookkeeping (the Team wake marks the turn answered). A quiet turn stays
+// quiet: whatever line the hook builds never reaches a channel — a Team
+// agent that answers its teammates' results with [silent] or nothing meant
+// to say nothing, and the results are already in the web UI. ok is always
+// false; the event is kept for the call sites' shape.
 func (r *Registry) turnEndNotice(sessionID string, start time.Time, quiet bool) (event.AgentEvent, bool) {
-	if r.turnFallback == nil {
-		return event.AgentEvent{}, false
+	if r.turnFallback != nil {
+		_, _ = r.turnFallback(sessionID, start, quiet)
 	}
-	text, ok := r.turnFallback(sessionID, start, quiet)
-	if !quiet || !ok || strings.TrimSpace(text) == "" {
-		return event.AgentEvent{}, false
-	}
-	return event.AgentEvent{Type: event.Notice, Text: text}, true
+	return event.AgentEvent{}, false
 }
 
 // withoutText is evs minus their reply text: what a quiet turn still
@@ -478,6 +475,28 @@ func (r *Registry) ChannelByName(name string) Channel {
 }
 
 // Channels returns a snapshot of the registered channels.
+// ThreadListen serves wick_slack_listen: the channel instance that owns
+// sessionID (a ThreadListener) answers for its thread.
+func (r *Registry) ThreadListen(sessionID string, req ListenRequest) (ListenResult, error) {
+	for _, c := range r.Channels() {
+		if tl, ok := c.(ThreadListener); ok && tl.OwnsSession(sessionID) {
+			return tl.ThreadListen(sessionID, req)
+		}
+	}
+	return ListenResult{}, fmt.Errorf("this session is not a Slack channel thread, so there is nothing to listen to")
+}
+
+// ListenPrompt is the listen-mode section of sessionID's system prompt,
+// from the channel that owns it; "" for every other session.
+func (r *Registry) ListenPrompt(sessionID string) string {
+	for _, c := range r.Channels() {
+		if tl, ok := c.(ThreadListener); ok && tl.OwnsSession(sessionID) {
+			return tl.ListenPrompt(sessionID)
+		}
+	}
+	return ""
+}
+
 func (r *Registry) Channels() []Channel {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -692,6 +711,12 @@ func (r *Registry) DispatchAgentEvent(sessionID string, ev event.AgentEvent) {
 // came from, used to label a sub-agent's progress when it is relayed onto its
 // leader's thread. Callers without a name can use DispatchAgentEvent.
 func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.AgentEvent) {
+	// The CLI's own notice ("You've hit your weekly limit · resets …") is
+	// not the agent's reply: no channel ever shows it. The turn's Error
+	// (or the failover that takes it over) says what happened.
+	if ev.Type == event.TextDelta && ev.Synthetic {
+		return
+	}
 	// A sub-agent's session has no thread on any channel, so its events would
 	// be dropped by every receiver. Re-address the ones that carry progress to
 	// the leader's thread instead, and return: the child must not accumulate
@@ -712,6 +737,22 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		ts.start = time.Now()
 	}
 	start := ts.start
+
+	// A failover took the turn elsewhere: the failed provider's text (its
+	// limit line, a cut answer) never reaches a channel. What is held here
+	// goes and the next provider's reply is decided afresh; channels shown
+	// some of it get the Warning, to drop theirs.
+	if ev.Type == event.Warning && ev.FailedOver {
+		shown := ts.decided && !ts.silent
+		ts.buf.Reset()
+		ts.pending = withoutText(ts.pending)
+		ts.decided, ts.silent = false, false
+		r.mu.Unlock()
+		if shown {
+			r.forward(sessionID, []event.AgentEvent{ev})
+		}
+		return
+	}
 
 	terminal := ev.Type == event.Done || ev.Type == event.Error
 
@@ -782,7 +823,7 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 // notice (event.Notice), outside any turn: it is not buffered with a
 // reply, does not open the turn state the next reply is decided on, and
 // is not dropped with a silent one. For wick's own notes that can come
-// between turns (a provider failover or its return). Sub-agent sessions
+// between turns. Sub-agent sessions
 // have no thread; nothing is sent for them.
 func (r *Registry) DispatchNotice(sessionID, text string) {
 	if text == "" || agentconfig.ParentOfSubSession(sessionID) != "" {

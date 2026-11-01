@@ -69,10 +69,9 @@ type AgentPersona struct {
 	// "caller" (the human who triggered the turn, the owner when none did)
 	// or "owner" (always the owner). See team.SpawnIdentity.
 	RunAs string `gorm:"type:varchar(16);not null;default:'caller'" json:"run_as"`
-	// UseGlobalPrompt makes the agent's spawns carry the operator's
-	// global system_prompt instead of system_prompt_team. On for a
-	// project converted into an agent, whose channel rules (Slack format,
-	// identity) live in that prompt; off for a new agent.
+	// UseGlobalPrompt is no longer read: every Team spawn now carries the
+	// shared system_prompt, with system_prompt_team added after it. Kept
+	// so stored rows and API clients that still send it keep working.
 	UseGlobalPrompt bool `gorm:"not null;default:false" json:"use_global_prompt"`
 
 	// MentionFrom is who may hand this agent a turn over the Team link:
@@ -122,6 +121,11 @@ type AgentPersona struct {
 	// work (after team_message) stays out of its channels; the final
 	// answer always posts. nil = never set: on (team.HidesInterimInChannels).
 	ChannelHideInterim *bool `json:"channel_hide_interim"`
+	// StopAfterTeamTask: once this agent answered a task another agent
+	// handed it, its process stops right away instead of idling until the
+	// idle timeout, so team exchanges do not pile up processes. nil = never
+	// set: on (team.StopsAfterTeamTask).
+	StopAfterTeamTask *bool `json:"stop_after_team_task"`
 	// LastReadAt is when the owner last opened the agent's chat in the
 	// Team app; activity on the main session after it reads as unread.
 	// nil = never opened. Only the owner chats an agent from the app, so

@@ -40,7 +40,7 @@ describe("htmlfile fence by extension", () => {
   });
 
   test("an image renders inline from files/raw, never the download endpoint", () => {
-    const path = "artifacts/agent-avatars/client-dermies.PNG";
+    const path = "artifacts/agent-avatars/client-alpha.PNG";
     const node = enriched(fence(path));
     const host = node.querySelector('[data-htmlfile-nonhtml="image"]') as HTMLElement;
     expect(host).not.toBeNull();
@@ -49,7 +49,7 @@ describe("htmlfile fence by extension", () => {
     expect(a.hasAttribute("download")).toBe(false);
     const img = a.querySelector("img") as HTMLImageElement;
     expect(img.getAttribute("src")).toBe(raw(path));
-    expect(img.alt).toBe("client-dermies.PNG");
+    expect(img.alt).toBe("client-alpha.PNG");
     expect(img.className).toContain("max-w-full");
     expect(img.className).toContain("rounded-lg");
     expect(node.querySelector("iframe")).toBeNull();

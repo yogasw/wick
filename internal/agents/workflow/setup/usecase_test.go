@@ -14,6 +14,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	"github.com/yogasw/wick/internal/entity"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
 
@@ -241,13 +243,34 @@ func TestUseCase_Connector_StubModule(t *testing.T) {
 		},
 	})
 
+	// No connectors service here: run the registered op in place, as the
+	// owner the node resolves.
+	m.Connectors.SetUserResolver(func(ctx context.Context, id string) (*entity.User, []string, error) {
+		return &entity.User{ID: id}, nil, nil
+	})
+	m.Connectors.SetExecutor(func(ctx context.Context, c connector.Call) (string, error) {
+		mod, _ := m.Connectors.Module(c.Module)
+		for _, op := range mod.AllOps() {
+			if op.Key == c.Op {
+				out, err := op.Execute(pkgconnector.NewCtx(ctx, c.Instance, nil, c.Input, nil, nil, nil))
+				if err != nil {
+					return "", err
+				}
+				b, err := json.Marshal(out)
+				return string(b), err
+			}
+		}
+		return "", fmt.Errorf("no op %s", c.Op)
+	})
+
 	require.NoError(t, m.Start(context.Background()))
 
 	w := workflow.Workflow{
-		ID:      "uc-connector",
-		Version: 1,
-		Name:    "Connector test",
-		Enabled: true,
+		ID:        "uc-connector",
+		Version:   1,
+		Name:      "Connector test",
+		Enabled:   true,
+		CreatedBy: "u-owner",
 		Triggers: []workflow.Trigger{{Type: workflow.TriggerManual}},
 		Graph: workflow.Graph{
 			Entry: "call",

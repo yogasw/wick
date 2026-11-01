@@ -60,6 +60,31 @@ export function backingLink(t: Pick<GroupTurn, "speaker">): { handle: string; se
   return { handle: s.handle, session: s.session_id };
 }
 
+/** relayTo is the handle a member's turn only hands the thread to, "" when
+    it is an answer of its own. A hand-off opens with "@handle …" naming
+    another member (the mention the server routes, teamlink.LeadMentions)
+    and that member answers before the next person speaks; the group shows
+    it as one "A → @b" line instead of a full message. */
+export function relayTo(turns: GroupTurn[], i: number, members: Pick<GroupMember, "handle">[]): string {
+  const t = turns[i];
+  if (t?.role !== "assistant" || !t.speaker?.handle) return "";
+  const m = /^\s*@([a-z0-9][a-z0-9_-]*)/i.exec(t.text ?? "");
+  if (!m) return "";
+  const to = m[1].toLowerCase();
+  if (to === t.speaker.handle.toLowerCase() || !members.some((x) => x.handle.toLowerCase() === to)) return "";
+  for (let j = i + 1; j < turns.length; j++) {
+    const n = turns[j];
+    if (n.role === "user") return "";
+    if (n.role === "assistant" && n.speaker?.handle?.toLowerCase() === to) return n.speaker.handle;
+  }
+  return "";
+}
+
+/** relayBody is a hand-off's text without its leading mention, on one line. */
+export function relayBody(text: string): string {
+  return text.replace(/^\s*@[a-z0-9][a-z0-9_-]*[\s,:]*/i, "").replace(/\s+/g, " ").trim();
+}
+
 /** mergeTurn adds a live turn to the thread once (by turn_id). */
 export function mergeTurn(turns: GroupTurn[], t: GroupTurn): GroupTurn[] {
   if (t.turn_id && turns.some((x) => x.turn_id === t.turn_id)) return turns;

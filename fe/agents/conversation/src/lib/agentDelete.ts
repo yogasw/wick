@@ -7,7 +7,7 @@ export type AgentProjectPreview = { chats: number; channels?: string[] | null; s
     is ticked: what goes, and what stops with it. */
 export function deleteAlert(p: AgentProjectPreview | null): string {
   const n = p?.chats ?? 0;
-  let s = `This also deletes ${p ? `${n} chat${n === 1 ? "" : "s"}` : "its chats"}, their history, files and the agent's memory for this project. This cannot be undone.`;
+  let s = `This also deletes ${p ? `${n} chat${n === 1 ? "" : "s"}` : "its chats"}, their history, files and the agent's memory for this project. The project moves to the deleted list: its owner or an admin can restore it for 30 days, after that it is removed permanently.`;
   const ch = p?.channels ?? [];
   if (ch.length) s += ` Connected channels stop: ${ch.join(", ")}.`;
   const sc = p?.schedules ?? 0;

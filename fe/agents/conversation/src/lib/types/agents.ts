@@ -507,6 +507,10 @@ export type WsField = {
   options?: string[];
   value?: string;
   help?: string;
+  /** The agent may not set it; a human can, here. */
+  locked?: boolean;
+  /** Section title; the card draws a heading where it changes. */
+  group?: string;
 };
 
 export type WsInstance = {
@@ -640,6 +644,9 @@ export type ProjectOption = {
   /** Returned only because it was asked for by id (`include`) and the
       caller cannot open it: shown to name a saved choice, never offered. */
   no_access?: boolean;
+  /** The caller owns it (or it is ownerless and they are an admin), so
+      Project settings — and the delete inside — are theirs to open. */
+  can_manage?: boolean;
 };
 
 /** One column on a project's board. Statuses are per project: a team names

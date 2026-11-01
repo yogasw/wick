@@ -87,6 +87,14 @@
 
   <TextInput value={op.description} onChange={(v) => set("description", v)} placeholder="Description shown to the LLM — action verbs, be specific." ariaLabel="Operation description" />
 
+  {#if op.request}
+    <div>
+      <span class="mb-1 block text-[11px] font-medium text-black-800 dark:text-black-600">Enabled when (optional)</span>
+      <TextInput value={op.visible_when ?? ""} onChange={(v) => set("visible_when", v.trim())} placeholder="config_field:value1|value2 — e.g. mode:write" ariaLabel="Enabled when" class="font-mono" />
+      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Switches this op off while the instance config holds another value. The agent still sees it, marked unavailable.</p>
+    </div>
+  {/if}
+
   <div class="flex items-center justify-between">
     <span class="text-[11px] font-semibold uppercase tracking-wider text-black-800 dark:text-black-600">Inputs (per-call, LLM provides)</span>
     <button type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600" onclick={addInput}>+ Add input</button>

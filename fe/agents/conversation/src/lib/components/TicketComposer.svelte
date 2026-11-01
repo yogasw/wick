@@ -28,6 +28,9 @@
         (resolved by the server), named here. */
     teamCaptain?: boolean;
     captainName?: string;
+    /** The caller's own agent of this project: it answers instead of the
+        Captain (server-resolved too). "" = the Captain. */
+    projectAgentName?: string;
     /** Several projects to start in (Team › Tickets' board): a picker in
         the footer, `project` being the one picked. */
     projectChoices?: ProjectOption[];
@@ -37,9 +40,12 @@
     /** The session exists (and is on the ticket). Absent = open its page. */
     onCreated?: (sessionId: string, url: string) => void;
   };
-  let { base, project, providers, ticketId, ticketLabel = "", teamCaptain = false, captainName = "", projectChoices, onProjectChange, onClearTicket, onCreated }: Props = $props();
+  let { base, project, providers, ticketId, ticketLabel = "", teamCaptain = false, captainName = "", projectAgentName = "", projectChoices, onProjectChange, onClearTicket, onCreated }: Props = $props();
 
   let selectedProvider = $state<string>("");
+
+  // Who answers a Team session: the project's own agent, else the Captain.
+  const responderLabel = $derived(projectAgentName || `${captainName || "Captain"} (your Captain)`);
 
   // A named instance is "type/name"; a default collapses to the bare type.
   function providerKey(p: ProviderOption): string {
@@ -224,7 +230,7 @@
           >{labelBanner}</span
         > — this chat joins the ticket and reads its notes.
         {#if teamCaptain}
-          <span class="font-medium text-black-800 dark:text-black-600" data-testid="ticket-composer-responder">→ {captainName || "Captain"} (your Captain)</span>
+          <span class="font-medium text-black-800 dark:text-black-600" data-testid="ticket-composer-responder">→ {responderLabel}</span>
         {/if}
         {#if onClearTicket}
           <button
@@ -248,7 +254,7 @@
           {/each}
         </select>
         {#if teamCaptain}
-          <span class="font-medium text-black-800 dark:text-black-600">→ {captainName || "Captain"} (your Captain)</span>
+          <span class="font-medium text-black-800 dark:text-black-600">→ {responderLabel}</span>
         {/if}
       {:else}
         New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override.

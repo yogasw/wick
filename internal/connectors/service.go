@@ -1585,6 +1585,41 @@ func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, ful
 	return out
 }
 
+// ConfigOffOps maps every op the row's own config switches off (its
+// VisibleWhen is not met) to the reason, limited to ops that would
+// otherwise be live for the caller. wick_get lists them as unavailable so
+// the agent knows they exist and why it cannot call them.
+func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map[string]string {
+	full, err := s.OperationStatesFull(ctx, connectorID, key)
+	if err != nil {
+		return nil
+	}
+	mod, _ := s.Module(key)
+	scope := AgentScopeFrom(ctx)
+	var out map[string]string
+	for _, op := range mod.AllOps() {
+		st, ok := full[op.Key]
+		if !ok || !st.HiddenByConfig || !st.Enabled || st.ConfigOnly {
+			continue
+		}
+		if scope != nil && !scope.AllowOp(connectorID, op.Key, op.Destructive) {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[op.Key] = ConfigOffReason(op)
+	}
+	return out
+}
+
+// ConfigOffReason is the note shown for an op its instance's config has
+// switched off.
+func ConfigOffReason(op connector.Operation) string {
+	field, values, _ := strings.Cut(op.VisibleWhen, ":")
+	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); ask an admin to change the config to use it", strings.TrimSpace(field), strings.TrimSpace(values))
+}
+
 // OpState bundles the effective state of one operation on one connector
 // row: the admin-controlled Enabled flag, the health-check-controlled
 // SystemDisabled flag, and the reason surfaced alongside the lock when
@@ -1798,7 +1833,7 @@ func (s *Service) decryptInstanceConfig(config map[string]string, callerUserID s
 // base module registers no hook, so the caller can fall back to running
 // a real operation as the probe. callerUserID decrypts wick_enc_ tokens
 // the same way as RunHealthCheck.
-func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string, callerUserID string) ([]connector.OpHealth, error) {
+func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config, lockSeals map[string]string, callerUserID string) ([]connector.OpHealth, error) {
 	mod, ok := s.Module(baseKey)
 	if !ok {
 		return nil, fmt.Errorf("no implementation registered for base connector key %q", baseKey)
@@ -1806,7 +1841,7 @@ func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, insta
 	if mod.HealthCheck == nil {
 		return nil, ErrNoHealthCheck
 	}
-	cfg, err := s.decryptInstanceConfig(config, callerUserID)
+	cfg, err := s.decryptInstanceConfig(s.ResolveSessionConfig(mod, instanceID, config, lockSeals), callerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -1892,6 +1927,51 @@ type SessionInstanceTarget struct {
 	BaseKey string
 	Label   string
 	Config  map[string]string
+	// LockSeals are the instance's seals for session-locked keys a human
+	// set (sessionworkspace.Instance.LockSeals).
+	LockSeals map[string]string
+}
+
+// sessionLockPlain is what a lock seal encrypts: the instance, key and
+// value it vouches for, so a seal cannot be moved to another instance,
+// key or value.
+func sessionLockPlain(instanceID, key, value string) string {
+	return "wick-session-lock\x00" + instanceID + "\x00" + key + "\x00" + value
+}
+
+// SealSessionLock vouches that a human set key=value on a session
+// instance. Only the session Config tab calls it; the agent's paths
+// refuse locked keys outright.
+func (s *Service) SealSessionLock(instanceID, key, value string) (string, error) {
+	if s.enc == nil || s.enc.Disabled() {
+		return "", fmt.Errorf("encryption is disabled on this server — a locked value cannot be sealed")
+	}
+	return s.enc.EncryptMaster(sessionLockPlain(instanceID, key, value))
+}
+
+// ResolveSessionConfig is the config a session instance runs with: its
+// stored values, except that a session-locked key keeps its stored value
+// only when a human set it (a valid seal) — otherwise the module default
+// applies.
+func (s *Service) ResolveSessionConfig(mod connector.Module, instanceID string, stored, seals map[string]string) map[string]string {
+	out := connector.SessionConfig(mod, stored)
+	if s.enc == nil || s.enc.Disabled() {
+		return out
+	}
+	for _, c := range mod.Configs {
+		if !c.SessionLocked {
+			continue
+		}
+		v, ok := stored[c.Key]
+		seal := seals[c.Key]
+		if !ok || seal == "" {
+			continue
+		}
+		if plain, err := s.enc.DecryptMaster(seal); err == nil && plain == sessionLockPlain(instanceID, c.Key, v) {
+			out[c.Key] = v
+		}
+	}
+	return out
 }
 
 // ExecuteResult carries the outcome of one Execute call. Returned
@@ -2105,10 +2185,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// row per field, owner = "connector:{id}").
 	var configs map[string]string
 	if virtual {
-		configs = make(map[string]string, len(p.SessionInstance.Config))
-		for k, v := range p.SessionInstance.Config {
-			configs[k] = v
-		}
+		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
 	} else {
 		configs = s.LoadConfigs(*c)
 	}
@@ -2116,10 +2193,13 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// VisibleWhen gates the op on the instance's own config (e.g. an op only
 	// one browser engine supports). It can only be checked here, once the
 	// config is loaded, and before the account token lands in the map. The
-	// manager's test paths stay open so an admin can still try the op.
-	if op.VisibleWhen != "" && p.Source != entity.ConnectorRunSourceTest && p.Source != entity.ConnectorRunSourcePluginTest &&
+	// manager's test paths stay open so an admin can still try the op — but
+	// not for a session instance, whose test action the agent itself can
+	// call: an op switched off by config stays off there.
+	testPath := p.Source == entity.ConnectorRunSourceTest || p.Source == entity.ConnectorRunSourcePluginTest
+	if op.VisibleWhen != "" && (virtual || !testPath) &&
 		!connector.OpVisible(*op, connector.EffectiveConfigValues(mod, configs)) {
-		return nil, fmt.Errorf("operation %q is not available on this instance (requires %s)", p.OperationKey, op.VisibleWhen)
+		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReason(*op))
 	}
 
 	// Inject the selected account's token. Ownership and per-account op

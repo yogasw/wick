@@ -22,7 +22,8 @@
     groupConversation, sendToGroup, markGroupRead, runApi,
     type AgentItem, type GroupItem, type GroupTurn,
   } from "../api/team.js";
-  import { backingLink, composerHint, groupFace, handlesLine, mergeTurn } from "../teamGroups.js";
+  import { backingLink, composerHint, groupFace, handlesLine, mergeTurn, relayBody, relayTo } from "../teamGroups.js";
+  import { turnTime } from "../timeFormat.js";
   import { formatAgentsRoute, navigate } from "../agentsRouter.js";
   import { connectSession } from "../stores/sse.js";
   import type { AgentEvent } from "../types/agents.js";
@@ -50,6 +51,8 @@
   let typingSession = $state<Record<string, string>>({});
   let pendingUntil = $state(0);
   let threadEl = $state<HTMLDivElement | null>(null);
+  /* Hand-off lines opened to the full message, by turn key. */
+  let openRelays = $state<Record<string, boolean>>({});
 
   const hint = $derived(composerHint(group));
   /* The header's faces animate while that member answers in this group
@@ -189,30 +192,57 @@
     <button type="button" class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" title="Group settings" aria-label="Group menu" onclick={onSettings}>⋯</button>
   </header>
 
-  <div class="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" bind:this={threadEl} data-testid="group-thread">
+  <!-- Same column as an agent's chat (.page-col), so a wide window does
+       not stretch the thread edge to edge. -->
+  <div class="min-h-0 flex-1 overflow-y-auto" bind:this={threadEl} data-testid="group-thread">
+    <div class="page-col space-y-3 px-4 py-4 md:px-10">
     {#if turns.length === 0}
       <p class="py-10 text-center text-sm text-black-800 dark:text-black-600">Say hi to {group.name}. A message with no @ goes to @{group.responder}.</p>
     {/if}
     {#each turns as t, i (t.turn_id ?? i)}
-      <ThreadMessage turn={t as unknown as ConversationTurn} {teamAgents} />
-      {#if t.role === "assistant"}
-        {@const link = backingLink(t)}
+      {@const link = t.role === "assistant" ? backingLink(t) : null}
+      {@const relay = relayTo(turns, i, group.members)}
+      {@const key = t.turn_id ?? String(i)}
+      {#snippet chatLink()}
         {#if link}
           <a
-            style="margin-left:28px" class="-mt-2 inline-block text-[11px] text-black-700 hover:text-green-600 hover:underline dark:hover:text-green-400"
+            class="shrink-0 text-black-700 hover:text-green-600 hover:underline dark:hover:text-green-400"
             href={formatAgentsRoute({ handle: link.handle, session: link.session, panel: null }, base)}
             data-testid="backing-link"
             onclick={(e) => { e.preventDefault(); navigate({ handle: link.handle, session: link.session, panel: null }); }}
           >open in @{link.handle}'s chat ↗</a>
         {/if}
+      {/snippet}
+      {#if relay}
+        {@const from = t.speaker ? byId[t.speaker.agent_id] : undefined}
+        <button
+          type="button"
+          class="flex w-full min-w-0 items-center gap-2 text-left text-xs text-black-700 hover:text-black-900 dark:text-black-600 dark:hover:text-white-100"
+          aria-expanded={!!openRelays[key]}
+          title={openRelays[key] ? "Hide the full message" : "Show the full message"}
+          data-testid="group-relay"
+          onclick={() => (openRelays = { ...openRelays, [key]: !openRelays[key] })}
+        >
+          <AgentAvatar kind={from?.avatar?.kind} image={from?.avatar?.image} shape={from?.avatar?.shape} expression={from?.avatar?.expression} color={from?.avatar?.color} size={18} />
+          <span class="shrink-0 font-medium text-black-900 dark:text-white-100">{from?.name ?? "@" + t.speaker?.handle} → @{relay}</span>
+          <span class="min-w-0 truncate italic">{relayBody(t.text)}</span>
+          <span class="shrink-0">{turnTime(t as unknown as ConversationTurn)}</span>
+          <span class="shrink-0" aria-hidden="true">{openRelays[key] ? "▾" : "▸"}</span>
+        </button>
+        {#if openRelays[key]}
+          <ThreadMessage turn={t as unknown as ConversationTurn} {teamAgents} speakerAside={link ? chatLink : undefined} />
+        {/if}
+      {:else}
+        <ThreadMessage turn={t as unknown as ConversationTurn} {teamAgents} speakerAside={link ? chatLink : undefined} />
       {/if}
     {/each}
     {#if typingHandles.length}
       <p class="text-xs font-medium text-green-600 dark:text-green-400" data-testid="group-typing">@{typingHandles.join(", @")} typing<Dots /></p>
     {/if}
+    </div>
   </div>
 
-  <div class="shrink-0 px-2 pb-2" data-testid="group-composer">
+  <div class="page-col shrink-0 px-2 pb-2 md:px-6" data-testid="group-composer">
     <Composer
       onSend={send}
       disabled={sending}

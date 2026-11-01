@@ -176,6 +176,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if !gateActive && s.BypassPermissions {
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
+	// The path guard rides its own settings file from the session dir: it
+	// works in every permission mode (an exit 2 blocks even under
+	// bypassPermissions) and the agent cannot edit it.
+	if opt.PathGuardSettings != "" {
+		args = append(args, "--settings", opt.PathGuardSettings)
+	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
 	// Pinned model (per-instance model picker) → --model. No-op when

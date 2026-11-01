@@ -501,3 +501,18 @@ func TestALiveRoleIsNotSpawnable(t *testing.T) {
 type recordingWaker struct{}
 
 func (recordingWaker) WakeChild(context.Context, string, string) error { return nil }
+
+// Every sub-agent is told its own scratch folder, named after its role and
+// delegation, so siblings never share or delete each other's files.
+func TestSpawnPreambleNamesScratchFolder(t *testing.T) {
+	s, r, _ := newService(t)
+	seedProfile(t, r, "researcher")
+	row := seedRunning(t, r, "a1")
+	row.ProfileKey = "Wick Dev"
+	row.ID = "0123456789abcdef"
+	row.StartedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	got := s.spawnPreamble(context.Background(), row)
+	if !strings.Contains(got, "`scratch-wick-dev-01234567-20260102/`") {
+		t.Fatalf("scratch folder not named: %q", got)
+	}
+}

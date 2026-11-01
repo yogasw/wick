@@ -471,6 +471,55 @@ func (r *Registry) adoptNewSessions() {
 	}
 }
 
+// ResyncFromDisk re-reads every session this process already knows and
+// takes the disk copy wherever its last_active is newer than the cached
+// one. It returns how many sessions moved.
+//
+// Meant for the moment a draining predecessor has exited. Reload read the
+// directory at boot, but the predecessor keeps the intake baton until it
+// has drained, so it can still START a turn after that read: a teammate's
+// task landing in one of an agent's chats is the common case. That turn
+// was not live when Reload looked, so it is not deferred, and the session
+// was known, so adoptNewSessions skips it. Every meta write the
+// predecessor makes for it lands on disk only, and this cache would keep
+// showing the boot copy (a chat that answered a minute ago reads "2d ago"
+// and sinks to the bottom) until the next write from this process.
+//
+// Like adoption, read-only: no status reset, no inflight recovery. Only a
+// strictly newer last_active is taken, so a write this process made after
+// the read started is never rolled back by an older disk copy.
+func (r *Registry) ResyncFromDisk() int {
+	ids, err := session.ListAll(r.layout)
+	if err != nil {
+		log.Warn().Err(err).Msg("registry: resync after handover could not list sessions")
+		return 0
+	}
+	moved := 0
+	for _, id := range ids {
+		r.mu.RLock()
+		cached, known := r.sessions[id]
+		r.mu.RUnlock()
+		if !known {
+			continue // adoptNewSessions / adoptSession pick these up
+		}
+		s, err := session.Load(r.layout, id)
+		if err != nil || !s.Meta.LastActive.After(cached.Meta.LastActive) {
+			continue
+		}
+		r.mu.Lock()
+		if cur, ok := r.sessions[id]; ok && s.Meta.LastActive.After(cur.Meta.LastActive) {
+			r.sessions[id] = s
+			r.invalidateSessionViews()
+			moved++
+		}
+		r.mu.Unlock()
+	}
+	if moved > 0 {
+		log.Info().Int("sessions", moved).Msg("registry: took newer session meta written by the previous process")
+	}
+	return moved
+}
+
 // claimDiskScan reports whether this caller should run the scan, taking
 // the slot if so. Rate limiting has to be a claim rather than a check:
 // two concurrent dashboard reads would otherwise both see a stale

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,9 @@ type StreamEvent struct {
 	// read from here because the normalized event carries no usage field
 	// and providers report it in their own shapes.
 	Raw string
+	// FailedOver: a Warning standing for a turn a provider failover took
+	// over. The text so far is the failed provider's (its limit line).
+	FailedOver bool
 }
 
 // Runner drives one session as a sub-agent. Implemented by the pool
@@ -1004,6 +1008,12 @@ func (s *Service) await(
 			switch ev.Type {
 			case event.TextDelta:
 				text.WriteString(ev.Text)
+			case event.Warning:
+				// The failed provider's text never reaches the result;
+				// the next provider's answer follows on this stream.
+				if ev.FailedOver {
+					text.Reset()
+				}
 			case event.Error:
 				// The provider killed the run itself (claude's
 				// error_max_turns rides this path as is_error=true on its
@@ -1496,8 +1506,32 @@ func (s *Service) spawnPreamble(ctx context.Context, row *entity.AgentDelegation
 	if row.Supervised {
 		parts = append(parts, SupervisionBrief)
 	}
+	parts = append(parts, filesBrief(row))
 	return strings.Join(parts, "\n")
 }
+
+// filesBrief names the scratch folder a sub-agent puts its files in. The
+// file rules themselves are in its system prompt ("Files you create");
+// what it cannot work out alone is a folder name of its own, so two
+// children of one leader never share, or delete, each other's scratch.
+func filesBrief(row *entity.AgentDelegation) string {
+	role := strings.Trim(scratchNameRe.ReplaceAllString(strings.ToLower(row.ProfileKey), "-"), "-")
+	if role == "" {
+		role = "task"
+	}
+	id := row.ID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	day := row.StartedAt
+	if day.IsZero() {
+		day = time.Now()
+	}
+	return fmt.Sprintf("\nFiles: put everything this task creates in `scratch-%s-%s-%s/` under your working directory (deliverables meant to be kept go in `artifacts/`, repos you edit in `<repo>/`), never in /tmp or your home, and delete that scratch folder once your result is reported.",
+		role, id, day.Format("20060102"))
+}
+
+var scratchNameRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // memoryPayload renders the history this delegation's memory mode calls
 // for. Siblings are only fetched by the modes that use them — a

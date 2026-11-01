@@ -154,6 +154,13 @@ type ScheduledMessage struct {
 	// Steps is the JSON array of watch steps (schedule.Step). Empty for a
 	// "message" schedule.
 	Steps string `gorm:"type:text"`
+	// WakeOn subscribes a watch to an event topic, "<plugin key>:<topic>"
+	// (a trailing * matches a prefix): when a plugin publishes a matching
+	// event (Host API events.publish) the watch runs at once with the event
+	// payload as its first step's input. A watch with WakeOn and no
+	// every/cron waits for events only; its timeout still ends it. Empty =
+	// a plain timed watch.
+	WakeOn string `gorm:"type:varchar(255);index"`
 	// LastResult is the outcome of the most recent watch run: matched |
 	// pending | error. Empty until the first run, and on message rows.
 	LastResult string `gorm:"type:varchar(16)"`

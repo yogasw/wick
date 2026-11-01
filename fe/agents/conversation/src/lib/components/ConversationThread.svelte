@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { reactionsByTurn } from "../reactMarker.js";
   import TraceNote from "./TraceNote.svelte";
   import { onMount } from "svelte";
   import type { ConversationTurn, LiveTurn, TeamTaskItem, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
@@ -13,7 +14,8 @@
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
-  import { foldSystemEvents } from "../systemEvents.js";
+  import { foldSystemEvents, isHiddenSystemEvent } from "../systemEvents.js";
+  import { linkListenHolds } from "../listenHolds.js";
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
@@ -174,15 +176,19 @@
     return ids;
   });
   const teamNames = $derived(teamCtx ? Object.fromEntries(Object.entries(teamCtx.agents()).map(([h, a]) => [h, a.name])) : {});
-  const shownTurns = $derived(foldTeamResults(withRemoteLinks(
+  /* Slack listen holds leave the thread unless they ended badly; their
+     detail rides on the user turn each became (listenHolds.ts). */
+  const linkedHolds = $derived(linkListenHolds(
     foldSystemEvents(
       foldReplaced(turns).filter((t, i, all) => {
+        if (t.role === "system" && isHiddenSystemEvent(t.kind)) return false;
         if (!t.interrupted || t.role !== "assistant") return true;
         const next = all[i + 1];
         return !next || next.role !== "assistant";
       }),
     ),
-  ), blockTaskIds, teamNames));
+  ));
+  const shownTurns = $derived(foldTeamResults(withRemoteLinks(linkedHolds.turns), blockTaskIds, teamNames));
 
   /* P60 S2 guard 2: whether a later answer of the chat's agent follows
      each turn. A turn that only delegated keeps its in-between text in its
@@ -206,6 +212,9 @@
     }
     return out;
   });
+
+  /* A reply's [react :x:] marker shows as a chip on the message it reacted to. */
+  const reactionsAt = $derived(reactionsByTurn(shownTurns));
 
   const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
   /* grouped §3 live asst-meta over the block: "Captain · 10:02 · split
@@ -356,7 +365,7 @@
           <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
         </div>
       {:else}
-      <ThreadMessage {turn} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} />
+      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} reactions={reactionsAt[i]} />
       {/if}
     </div>
   {/each}

@@ -97,8 +97,8 @@ type PickInput struct {
 	Healthy func(key string, now time.Time) (bool, Health)
 	// Key names the account behind an instance; nil = HealthKey.
 	Key func(Instance) string
-	// Guard refuses a target the session may not use (CheckSwitch with the
-	// session's ctx and id); nil = no guard.
+	// Guard refuses a target the session may not use (CheckFailover with
+	// the session's ctx and id); nil = no guard.
 	Guard func(tag string) error
 	// Now is the health clock; zero = time.Now().
 	Now time.Time
@@ -253,9 +253,9 @@ func PickTarget(in PickInput) (Target, bool) {
 	return Target{}, false
 }
 
-// GuardFor adapts CheckSwitch to PickInput.Guard for one session.
+// GuardFor adapts CheckFailover to PickInput.Guard for one session.
 func GuardFor(ctx context.Context, sessionID string) func(tag string) error {
-	return func(tag string) error { return CheckSwitch(ctx, sessionID, tag) }
+	return func(tag string) error { return CheckFailover(ctx, sessionID, tag) }
 }
 
 // FailoverTrigger is the chain trigger an error kind fires ("" = none).

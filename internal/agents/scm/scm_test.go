@@ -492,7 +492,7 @@ func TestStatusNestedRepoIsDirEntry(t *testing.T) {
 func TestDiscoverReposFindsNestedClone(t *testing.T) {
 	skipNoGit(t)
 	root := t.TempDir()
-	outer := filepath.Join(root, "erha-store")
+	outer := filepath.Join(root, "client-store")
 	inner := filepath.Join(outer, "integration-helm")
 	deep := filepath.Join(outer, "a", "b", "c", "too-deep")
 	if err := os.MkdirAll(inner, 0o755); err != nil {
@@ -513,20 +513,20 @@ func TestDiscoverReposFindsNestedClone(t *testing.T) {
 	for _, r := range repos {
 		names[r.Rel] = r.Name
 	}
-	if _, ok := names["erha-store"]; !ok {
+	if _, ok := names["client-store"]; !ok {
 		t.Fatalf("expected the outer repo, got %+v", repos)
 	}
-	if _, ok := names["erha-store/integration-helm"]; !ok {
+	if _, ok := names["client-store/integration-helm"]; !ok {
 		t.Fatalf("expected the nested clone, got %+v", repos)
 	}
 	// Nested repos are labelled by path — "integration-helm" alone could
 	// be any of several clones in a session directory.
-	if got := names["erha-store/integration-helm"]; got != "erha-store/integration-helm" {
+	if got := names["client-store/integration-helm"]; got != "client-store/integration-helm" {
 		t.Fatalf("nested repo should be named by path, got %q", got)
 	}
 	// Bounded: a repo four levels down inside another repo is somebody's
 	// fixture, not a clone the user is working in.
-	if _, ok := names["erha-store/a/b/c/too-deep"]; ok {
+	if _, ok := names["client-store/a/b/c/too-deep"]; ok {
 		t.Fatalf("descent below maxNestedDepth should stop, got %+v", repos)
 	}
 }

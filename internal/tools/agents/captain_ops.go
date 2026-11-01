@@ -271,6 +271,28 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 	if (in.Provider != nil || in.Model != nil) && IsRemoteAgent(p) {
 		return nil, fmt.Errorf("@%s is a remote agent; it has no provider here", p.Handle)
 	}
+	forceOn := false
+	if in.ForceDefaultProvider != nil {
+		var on bool
+		switch strings.ToLower(strings.TrimSpace(*in.ForceDefaultProvider)) {
+		case "on", "true", "yes":
+			on = true
+		case "off", "false", "no":
+		default:
+			return nil, errors.New("force_default_provider is on or off")
+		}
+		if IsRemoteAgent(p) {
+			return nil, fmt.Errorf("@%s is a remote agent; it has no provider here", p.Handle)
+		}
+		if team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy) != on || team.ForcesDefaultProvider(p.SessionPolicy) != on {
+			setProviderLock(&p, on)
+			changed = append(changed, "force default provider")
+			if err := globalTeam.Update(ctx, &p); err != nil {
+				return nil, err
+			}
+		}
+		forceOn = on
+	}
 	var prov *string
 	if in.Provider != nil {
 		k := ""
@@ -325,6 +347,12 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		}
 		if prov != nil || in.Model != nil {
 			switched = followAgentDefault(ctx, p, oldProv)
+		}
+	}
+	// Forcing the default (newly or again) sweeps the agent's chats.
+	if forceOn && switched < 0 && p.ProjectID != "" {
+		if proj, ok := globalMgr.Registry().Project(p.ProjectID); ok {
+			switched = followAgentDefault(ctx, p, proj.Meta.Defaults.Provider)
 		}
 	}
 	if len(changed) == 0 {

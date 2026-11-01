@@ -56,6 +56,21 @@ type Service struct {
 	// whatever the declaration allows", which is what every owner did
 	// before this existed.
 	validators map[string]ConfigValidator
+	// onChange is told about every write that changed a value (see
+	// SetChangeHook). Nil = nobody listens.
+	onChange ChangeHook
+}
+
+// ChangeHook is told, after the write, that (owner, key) went from before
+// to after (plaintext). ctx is the writer's, so it carries who wrote it.
+type ChangeHook func(ctx context.Context, owner, key, before, after string)
+
+// SetChangeHook wires h; nil turns it off. Call at boot, before the HTTP
+// surface is serving.
+func (s *Service) SetChangeHook(h ChangeHook) {
+	s.mu.Lock()
+	s.onChange = h
+	s.mu.Unlock()
 }
 
 // ConfigValidator rejects an invalid value for one (key, value) pair of an
@@ -511,8 +526,13 @@ func (s *Service) setOwned(ctx context.Context, owner, key, value string) error 
 	// DecryptMaster, but skipping the call avoids a needless decrypt.
 	fresh.Value = plaintext
 	s.mu.Lock()
+	before := s.cache[ownerKey{Owner: owner, Key: key}].Value
 	s.cache[ownerKey{Owner: owner, Key: key}] = *fresh
+	hook := s.onChange
 	s.mu.Unlock()
+	if hook != nil && before != plaintext {
+		hook(ctx, owner, key, before, plaintext)
+	}
 	return nil
 }
 

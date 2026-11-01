@@ -4,6 +4,7 @@ import type {
   MemoryReport,
   SeriesResponse,
   ProcessListResponse,
+  ProcessProps,
   WrapperStatus,
   WrapperAction,
 } from "./types.js";
@@ -32,6 +33,10 @@ export const killProcessE = (base: string, body: { pid?: number; name?: string }
     `${base}/api/processes/kill`,
     body,
   );
+
+// One process, read on demand when its Properties dialog opens.
+export const fetchProcessPropsE = (base: string, pid: number) =>
+  apiGetE<ProcessProps>(`${base}/api/processes/props?pid=${pid}`);
 
 export const applySuggestedE = (base: string) =>
   apiPostE<{ ok: boolean }>(`${base}/api/memory/apply-suggested`, {});

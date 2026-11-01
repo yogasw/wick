@@ -223,6 +223,8 @@ func main() {
 		case "--config", "-config", "config":
 			printConfig()
 			return
+		case gate.PathGuardFlag:
+			os.Exit(runPathGuard(os.Args[2:], os.Stdin, os.Stderr))
 		case "--probe-deny":
 			// Always-deny mode for ProbeGateSupport. Drains stdin so
 			// the provider's hook write doesn't block, then emits the
@@ -825,4 +827,33 @@ func pathFromInput(in hookInput) string {
 		return in.ToolInput.Path
 	}
 	return ""
+}
+
+// runPathGuard is the path guard hook: exit 2 (claude blocks the call and
+// shows stderr to the agent) when the tool call reaches into another
+// agent's project or session, 0 otherwise. A spec it cannot read blocks
+// too: a guard that fails open is no guard.
+func runPathGuard(args []string, stdin io.Reader, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "path guard: no spec given")
+		return 2
+	}
+	spec, err := gate.LoadPathGuardSpec(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "path guard: cannot read its spec (%v); blocking\n", err)
+		return 2
+	}
+	var in struct {
+		CWD       string         `json:"cwd"`
+		ToolInput map[string]any `json:"tool_input"`
+	}
+	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
+		fmt.Fprintf(stderr, "path guard: unreadable hook input (%v); blocking\n", err)
+		return 2
+	}
+	if p := gate.CheckPathGuard(spec, gate.PathGuardInput{CWD: in.CWD, ToolInput: in.ToolInput}); p != "" {
+		fmt.Fprintln(stderr, gate.PathGuardMessage(p))
+		return 2
+	}
+	return 0
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SSEStatus } from "../types/agents.js";
   import TeammatesChip from "./team/TeammatesChip.svelte";
+  import ListenChip from "./ListenChip.svelte";
   import type { LifecycleState } from "../stores/thread.js";
   import { idleCountdownText } from "../idleCountdown.js";
 
@@ -36,6 +37,9 @@
        means ticket mode is off — the entry is then absent entirely rather
        than present and inert. */
     ticketJump?: { label: string; onJump: () => void };
+    /** Where the 👂 listen chip reads; it shows only on a Slack thread. */
+    base?: string;
+    sessionId?: string;
     onKill: () => void;
     onDelete: () => void;
     onTabChange?: (view: ActiveView) => void;
@@ -51,6 +55,8 @@
     teammatesBusy = 0,
     activeView = "conversation",
     ticketJump,
+    base = "",
+    sessionId = "",
     onKill,
     onDelete,
     onTabChange,
@@ -255,6 +261,7 @@
       </span>
     {/if}
     <TeammatesChip count={teammatesBusy} />
+    {#if sessionId}<ListenChip {base} {sessionId} />{/if}
 
     <span
       class={[

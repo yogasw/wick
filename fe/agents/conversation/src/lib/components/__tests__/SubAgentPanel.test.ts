@@ -365,6 +365,21 @@ describe("SubAgentPanel — Stop kept out of the way", () => {
     const item = screen.getByRole("menuitem", { name: "Stop all (0 running)" }) as HTMLButtonElement;
     expect(item.disabled).toBe(true);
   });
+
+  // The provider a sub-agent runs on comes from its role, so the role
+  // editor has to be reachable from where the sub-agents are listed.
+  test("⋯ links to the roles page, even before any sub-agent ran", async () => {
+    render(SubAgentPanel, { props: props({ subAgents: [], rolesHref: "/agents/projects/p1?tab=subagents" }) });
+    await fireEvent.click(screen.getByRole("button", { name: "Sub-agent actions" }));
+    const link = screen.getByRole("menuitem", { name: "Manage sub-agent roles" });
+    expect(link.getAttribute("href")).toBe("/agents/projects/p1?tab=subagents");
+    expect(screen.queryByRole("menuitem", { name: /stop all/i })).toBeNull();
+  });
+
+  test("no ⋯ menu without sub-agents or a roles link", () => {
+    render(SubAgentPanel, { props: props({ subAgents: [] }) });
+    expect(screen.queryByRole("button", { name: "Sub-agent actions" })).toBeNull();
+  });
 });
 
 describe("SubAgentPanel — continuing a finished sub-agent", () => {

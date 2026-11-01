@@ -3,8 +3,10 @@
   import type { AnalyticsPoint, AnalyticsProject, AnalyticsResponse, AnalyticsUser } from "$lib/types";
   import { ago, isDormant, channelClass, channelColor } from "$lib/format";
   import { loadAnalytics } from "$lib/stream";
+  import { conditionValues, emptyConditions, filterQuery, readFilter, type Conditions, type Range } from "$lib/urlFilter";
   import Chart from "$lib/Chart.svelte";
   import RecentSessions from "$lib/RecentSessions.svelte";
+  import AdvancedFilters, { condFieldLabels, condOpLabels, filterRule, type Advanced } from "$lib/AdvancedFilters.svelte";
   import { UsageReport, fetchUsageReport, compactTokens, formatCost } from "@wick-fe/common-ui";
   import type { UsageReportData } from "@wick-fe/common-ui";
 
@@ -32,6 +34,11 @@
       ledger = await fetchUsageReport(ledgerEndpoint, false, ledgerWindow, ledgerSince, ledgerUntil, {
         channels: picked,
         instances: pickedInstances,
+        providers: pickedProviders,
+        people: pickedPeople,
+        models: pickedModels,
+        match: conditionValues(pickedText),
+        matchOp: pickedText.join,
       });
     } catch {
       ledger = null; // a missing ledger must not take the page down
@@ -47,8 +54,9 @@
   });
 
   type Tab = "people" | "projects" | "channels" | "providers";
-  /** "all" runs back to the oldest conversation; "custom" uses the dates. */
-  type Range = 1 | 7 | 30 | 90 | 365 | "all" | "custom";
+  /** The filter a shared link carries. Read once: after that the page
+     writes it, so the address bar always reproduces what is on screen. */
+  const initial = readFilter(location.search);
 
   let data = $state<AnalyticsResponse | null>(null);
   let error = $state<string | null>(null);
@@ -58,13 +66,24 @@
      it is given, so a month is the slowest possible first paint — and
      "what is happening now" is the question people open it with. A wider
      window is one click away; the wait for it is not. */
-  let range = $state<Range>(1);
-  let customFrom = $state("");
-  let customTo = $state("");
+  let range = $state<Range>(initial.range);
+  let customFrom = $state(initial.from);
+  let customTo = $state(initial.to);
   /** Channels the whole page is restricted to. Empty = all of them. */
-  let picked = $state<string[]>([]);
+  let picked = $state<string[]>(initial.channels);
   /** Specific bots ("slack:<owner id>"). Empty = every bot of those channels. */
-  let pickedInstances = $state<string[]>([]);
+  let pickedInstances = $state<string[]>(initial.instances);
+  /** Provider keys ("claude/work", "(none)"). Empty = every provider. */
+  let pickedProviders = $state<string[]>(initial.providers);
+  /** Wick user ids, or "(unattributed)". Empty = everyone. */
+  let pickedPeople = $state<string[]>(initial.people);
+  /** Models ("opus", "(none)"). Empty = every model. */
+  let pickedModels = $state<string[]>(initial.models);
+  /** The condition builder's rows (title, model, channel…). None = off. */
+  let pickedText = $state<Conditions>(initial.match);
+  let advancedOpen = $state(false);
+  /** People list order: the server's recency, or busiest first. */
+  let peopleSort = $state<"recent" | "count">("recent");
   let query = $state("");
   let metric = $state<"sessions" | "logins">("sessions");
   /** Series drawn over the total. Empty = just the total. */
@@ -83,6 +102,21 @@
     // channel click cannot leave the cost figures describing the
     // previous selection.
     void loadLedger();
+    history.replaceState(
+      history.state,
+      "",
+      `${location.pathname}${filterQuery({
+        range,
+        from: customFrom,
+        to: customTo,
+        channels: picked,
+        instances: pickedInstances,
+        providers: pickedProviders,
+        people: pickedPeople,
+        models: pickedModels,
+        match: pickedText,
+      })}${location.hash}`,
+    );
     progress = { done: 0, total: 0 };
     try {
       data = await loadAnalytics(endpoint, {
@@ -91,6 +125,10 @@
         to: range === "custom" ? customTo : undefined,
         channels: picked,
         instances: pickedInstances,
+        providers: pickedProviders,
+        people: pickedPeople,
+        models: pickedModels,
+        match: pickedText,
         onProgress: (done, total) => (progress = { done, total }),
       });
     } catch (e) {
@@ -140,10 +178,62 @@
     void load();
   }
 
+  function applyAdvanced(next: Advanced) {
+    advancedOpen = false;
+    pickedPeople = next.people;
+    pickedProviders = next.providers;
+    pickedModels = next.models;
+    // A row left blank says nothing; keep only the ones that do.
+    pickedText = { join: next.match.join, rules: next.match.rules.filter((r) => r.value.trim()) };
+    void load();
+  }
+
+  const currentAdvanced = (): Advanced => ({
+    people: pickedPeople,
+    providers: pickedProviders,
+    models: pickedModels,
+    match: pickedText,
+  });
+
+  function removeAdvanced(kind: "people" | "providers" | "models" | "match", v: string) {
+    const now = currentAdvanced();
+    if (kind === "match") applyAdvanced({ ...now, match: { ...now.match, rules: now.match.rules.filter((_, i) => String(i) !== v) } });
+    else applyAdvanced({ ...now, [kind]: now[kind].filter((x) => x !== v) });
+  }
+
+  const advancedCount = $derived(
+    pickedPeople.length + pickedProviders.length + pickedModels.length + pickedText.rules.length,
+  );
+  const personName = (id: string) =>
+    id === "(unattributed)" ? "Unattributed / machine" : data?.users.find((u) => u.id === id)?.name || id;
+  /* Every account, by name, plus the unattributed bucket when the range
+     holds one. Accounts come from the people list, which always lists
+     every account whatever the filter. */
+  const peopleOptions = $derived.by(() => {
+    const opts = [...(data?.users ?? [])]
+      .map((u) => ({ id: u.id, name: u.name || u.email || u.id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (data?.known_people?.includes("(unattributed)")) opts.push({ id: "(unattributed)", name: personName("(unattributed)") });
+    return opts;
+  });
+  const pills = $derived([
+    ...pickedPeople.map((v) => ({ kind: "people" as const, v, label: personName(v) })),
+    ...pickedProviders.map((v) => ({ kind: "providers" as const, v, label: v })),
+    ...pickedModels.map((v) => ({ kind: "models" as const, v, label: `model: ${v}` })),
+    ...pickedText.rules.map((r, i) => ({
+      kind: "match" as const,
+      v: String(i),
+      label: `${i > 0 ? `${pickedText.join.toUpperCase()} ` : ""}${condFieldLabels[r.field].toLowerCase()} ${condOpLabels[r.op]} "${r.value}"`,
+    })),
+  ]);
+  /** Turns per provider come from the ledger, scoped by the same filter. */
+  const turnsFor = (key: string) => ledger?.by_provider.find((r) => r.key === key)?.turns;
+
   const users = $derived.by<AnalyticsUser[]>(() => {
     const all = data?.users ?? [];
     const q = query.trim().toLowerCase();
-    return all.filter((u) => {
+    const sorted = peopleSort === "count" ? [...all].sort((a, b) => b.sessions + b.joined - (a.sessions + a.joined)) : all;
+    return sorted.filter((u) => {
       if (!q) return true;
       return (
         u.name.toLowerCase().includes(q) ||
@@ -182,6 +272,7 @@
 
   const providers = $derived(data?.providers ?? []);
   const knownChannels = $derived(data?.known_channels ?? data?.channels.map((c) => c.channel) ?? []);
+  const knownProviders = $derived(data?.known_providers ?? providers.map((p) => p.key));
 
   // What the window itself says — distinct from the all-time cards above,
   // which do not move when the range changes.
@@ -343,10 +434,67 @@
           </button>
         {/each}
       {/if}
+      <button
+        type="button"
+        onclick={() => (advancedOpen = true)}
+        disabled={loading}
+        title="People, providers, models and conditions"
+        data-testid="advanced-filters"
+        class="ml-2 flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs disabled:opacity-50 {advancedCount > 0
+          ? 'border-green-400 text-green-700 dark:text-green-300'
+          : 'border-white-300 text-black-700 dark:border-navy-600 dark:text-black-600'}"
+      >
+        ⚙ Advanced filters
+        {#if advancedCount > 0}
+          <span class="rounded-full bg-green-500 px-1.5 text-[10px] font-semibold text-white-100">{advancedCount}</span>
+        {/if}
+      </button>
       <span class="ml-auto text-xs text-black-600 dark:text-black-700">
         {data.window.from} → {data.window.to}{picked.length > 0 ? ` · ${picked.join(" + ")}` : ""}
       </span>
     </div>
+
+    {#if pills.length}
+      <div class="-mt-3 flex flex-wrap items-center gap-1.5 px-1" data-testid="advanced-pills">
+        {#each pills as p (p.kind + p.v)}
+          <span class="flex items-center gap-1 rounded-full border border-green-400 bg-green-500/10 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
+            {p.label}
+            <button type="button" aria-label={`Remove ${p.label}`} onclick={() => removeAdvanced(p.kind, p.v)} disabled={loading}>×</button>
+          </span>
+        {/each}
+        <button
+          type="button"
+          onclick={() => applyAdvanced({ people: [], providers: [], models: [], match: { ...emptyConditions, rules: [] } })}
+          disabled={loading}
+          class="text-xs text-black-700 underline dark:text-black-600"
+        >
+          Clear
+        </button>
+        <span class="cursor-help text-xs text-black-600 dark:text-black-700" title={filterRule}>ⓘ</span>
+      </div>
+    {/if}
+    {#if data.window.match_error}
+      <p class="-mt-3 px-1 text-xs text-red-600 dark:text-red-400" data-testid="match-error">
+        Regex does not compile, so nothing matches: {data.window.match_error}
+      </p>
+    {/if}
+
+    <AdvancedFilters
+      open={advancedOpen}
+      people={peopleOptions}
+      providers={knownProviders}
+      models={data.known_models ?? []}
+      suggest={{
+        model: data.known_models ?? [],
+        provider: knownProviders,
+        channel: knownChannels,
+        person: peopleOptions.map((p) => p.name),
+        project: data.projects?.map((p) => p.name) ?? [],
+      }}
+      selected={currentAdvanced()}
+      onApply={applyAdvanced}
+      onClose={() => (advancedOpen = false)}
+    />
 
     <!-- Totals. Accounts is all-time (an account exists regardless of a
          date range); everything else is the range. -->
@@ -383,6 +531,11 @@
       until={ledgerUntil}
       channels={picked}
       instances={pickedInstances}
+      providers={pickedProviders}
+      people={pickedPeople}
+      models={pickedModels}
+      match={conditionValues(pickedText)}
+      matchOp={pickedText.join}
       report={ledger}
     />
 
@@ -538,6 +691,53 @@
       Generated {ago(data.generated_at)}.
     </p>
 
+    <!-- "Provider X, used by these people: how often, who last, who most",
+         one row per picked provider, under every other filter. -->
+    {#if data.provider_usage?.length}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden" data-testid="provider-usage">
+        <div class="flex flex-wrap items-center gap-2 border-b border-white-300 dark:border-navy-600 px-5 py-3">
+          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Provider usage</h2>
+          <span class="text-xs text-black-600 dark:text-black-700">{filterRule}</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b border-white-300 text-left text-[11px] uppercase tracking-wide text-black-700 dark:border-navy-600 dark:text-black-600">
+                <th class="px-5 py-2.5">Provider</th>
+                <th class="px-5 py-2.5">Conversations</th>
+                <th class="px-5 py-2.5">Turns</th>
+                <th class="px-5 py-2.5">People</th>
+                <th class="px-5 py-2.5">Last used</th>
+                <th class="px-5 py-2.5">Top user</th>
+                <th class="px-5 py-2.5">Models</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each data.provider_usage as pu (pu.key)}
+                <tr class="border-b border-white-300 text-black-900 dark:border-navy-600 dark:text-white-100">
+                  <td class="px-5 py-2.5">
+                    <span class="mr-1.5 inline-block h-2 w-2 rounded-full" style={`background:${channelColor(pu.key)}`}></span>{pu.key}
+                  </td>
+                  <td class="px-5 py-2.5 font-mono">{pu.sessions}</td>
+                  <td class="px-5 py-2.5 font-mono">{turnsFor(pu.key) ?? "—"}</td>
+                  <td class="px-5 py-2.5 font-mono">{pu.people}</td>
+                  <td class="px-5 py-2.5">
+                    {#if pu.last_used_at}{ago(pu.last_used_at)}{pu.last_used_by ? ` · ${pu.last_used_by}` : ""}{:else}—{/if}
+                  </td>
+                  <td class="px-5 py-2.5">{pu.top_user ? `${pu.top_user} · ${pu.top_user_sessions}` : "—"}</td>
+                  <td class="px-5 py-2.5">
+                    {#each pu.models ?? [] as m}
+                      <span class="mr-1 rounded bg-white-300 px-1.5 py-0.5 text-[10px] dark:bg-navy-600">{m.key} {m.sessions}</span>
+                    {:else}—{/each}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
+
     <!-- Lists, one tab each. -->
     <div class="flex flex-wrap items-center gap-1 border-b border-white-300 dark:border-navy-600">
       {#each tabs as t}
@@ -562,6 +762,19 @@
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">People</h2>
           <span class="rounded bg-white-300 px-2 py-0.5 text-xs font-medium text-black-700 dark:bg-navy-600 dark:text-black-600">{users.length}</span>
           <span class="text-xs text-black-600 dark:text-black-700">click a name for their detail</span>
+          <div class="flex gap-0.5 rounded-lg border border-white-300 p-0.5 dark:border-navy-600">
+            {#each [["recent", "Last active"], ["count", "Most conversations"]] as [key, label]}
+              <button
+                type="button"
+                onclick={() => (peopleSort = key as "recent" | "count")}
+                class="rounded px-2 py-0.5 text-xs {peopleSort === key
+                  ? 'bg-green-500/15 font-medium text-green-700 dark:text-green-300'
+                  : 'text-black-700 dark:text-black-600'}"
+              >
+                {label}
+              </button>
+            {/each}
+          </div>
           <input
             type="text"
             bind:value={query}

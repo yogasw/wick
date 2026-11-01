@@ -1,13 +1,13 @@
 // Package connector is the workflow-facing index of connector modules.
-// Engine `type: connector` nodes resolve a (module, op, row) tuple
-// through Registry and invoke the underlying Operation.Execute via
-// pkg/connector. Audit + credential lookup go through the injected
-// hooks so this package stays free of DB imports.
+// Engine `type: connector` nodes name a (module, op, instance) tuple and
+// run it through the injected ExecuteFn — the same connectors.Service
+// path a direct MCP call takes — so this package stays free of DB
+// imports and never handles an instance's config itself.
 package connector
 
 import (
 	"context"
-	"net/http"
+	"errors"
 	"sort"
 	"sync"
 
@@ -15,10 +15,23 @@ import (
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
 
-// RowCredsFn returns the credential map for a connector row (instance).
-// accountID, when non-empty, selects a connected SSO account whose access
-// token the resolver injects (user_token) over the row's config.
-type RowCredsFn func(module, row, accountID string) (map[string]string, error)
+// Call is one connector op a workflow node runs as its owner.
+type Call struct {
+	Module string
+	Op     string
+	// Instance names the connector instance by ID or label. Empty picks
+	// the newest instance of Module.
+	Instance string
+	// AccountID, when set, runs as that connected account of the instance.
+	AccountID string
+	Owner     *entity.User
+	OwnerTags []string
+	Input     map[string]string
+	RawInput  map[string]any
+}
+
+// ExecuteFn runs c and returns the op's JSON response.
+type ExecuteFn func(ctx context.Context, c Call) (string, error)
 
 // UserResolverFn resolves a workflow's owner (Workflow.CreatedBy) into the
 // authenticated user + their filter tag IDs, so the connector executor can
@@ -53,34 +66,31 @@ type RunRecord struct {
 type Registry struct {
 	mu           sync.RWMutex
 	modules      map[string]pkgconnector.Module
-	rowCreds     RowCredsFn
+	executor     ExecuteFn
 	userResolver UserResolverFn
 	auditor      RunAuditor
-	httpCli      *http.Client
 }
 
 // NewRegistry builds an empty registry.
-func NewRegistry(rowCreds RowCredsFn, audit RunAuditor) *Registry {
+func NewRegistry(exec ExecuteFn, audit RunAuditor) *Registry {
 	return &Registry{
 		modules:  map[string]pkgconnector.Module{},
-		rowCreds: rowCreds,
+		executor: exec,
 		auditor:  audit,
-		httpCli:  &http.Client{},
 	}
 }
 
-// SetRowCreds wires in a credential lookup hook after construction.
-// Server.go uses this to inject ConnectorsCredsAdapter once the
-// connectors service is built — Manager.New() runs before service
-// construction so the registry starts with a nil hook.
-func (r *Registry) SetRowCreds(fn RowCredsFn) {
+// SetExecutor wires the op runner after construction. Server.go injects
+// ConnectorsExecutor once the connectors service is built — Manager.New()
+// runs before service construction so the registry starts with a nil hook.
+func (r *Registry) SetExecutor(fn ExecuteFn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.rowCreds = fn
+	r.executor = fn
 }
 
 // SetUserResolver wires the workflow-owner → user lookup hook. Like
-// SetRowCreds it is injected post-construction from server.go once the
+// SetExecutor it is injected post-construction from server.go once the
 // login service exists. Nil hook = runs stay unauthenticated (legacy
 // behaviour) and identity-gated connector ops keep returning their own
 // "not authenticated" error.
@@ -128,16 +138,15 @@ func (r *Registry) Module(key string) (pkgconnector.Module, bool) {
 	return m, ok
 }
 
-// HTTPClient exposes the shared http.Client used when building Ctx.
-func (r *Registry) HTTPClient() *http.Client { return r.httpCli }
-
-// RowCreds returns the resolved credentials for (module, row, accountID).
-// Empty map when no lookup hook was provided.
-func (r *Registry) RowCreds(module, row, accountID string) (map[string]string, error) {
-	if r.rowCreds == nil {
-		return map[string]string{}, nil
+// Execute runs c through the wired ExecuteFn.
+func (r *Registry) Execute(ctx context.Context, c Call) (string, error) {
+	r.mu.RLock()
+	fn := r.executor
+	r.mu.RUnlock()
+	if fn == nil {
+		return "", errors.New("connector execution is not wired")
 	}
-	return r.rowCreds(module, row, accountID)
+	return fn(ctx, c)
 }
 
 // WriteAudit forwards to the configured RunAuditor (no-op if nil).

@@ -284,3 +284,41 @@ func mustFirstID(t *testing.T, layout agentconfig.Layout, sid string) string {
 	}
 	return got[0].ID
 }
+
+func TestOnChangeFiresForEveryMutation(t *testing.T) {
+	layout, sid := newLayout(t)
+	var got []string
+	SetOnChange(func(s string) { got = append(got, s) })
+	t.Cleanup(func() { SetOnChange(nil) })
+
+	in, err := Add(layout, sid, Instance{BaseKey: "httprest", Label: "Staging"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := SetConfig(layout, sid, in.ID, map[string]string{"base_url": "https://example.com"}); err != nil {
+		t.Fatalf("set config: %v", err)
+	}
+	if err := SetLabel(layout, sid, in.ID, "Prod"); err != nil {
+		t.Fatalf("set label: %v", err)
+	}
+	if _, err := Remove(layout, sid, in.ID); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("want 4 notifications, got %d: %v", len(got), got)
+	}
+	for _, s := range got {
+		if s != sid {
+			t.Fatalf("notified %q, want %q", s, sid)
+		}
+	}
+
+	// A failed mutation persists nothing and says nothing.
+	got = nil
+	if err := SetLabel(layout, sid, "sw_missing", "x"); err == nil {
+		t.Fatal("expected error for missing instance")
+	}
+	if len(got) != 0 {
+		t.Fatalf("failed mutation notified: %v", got)
+	}
+}

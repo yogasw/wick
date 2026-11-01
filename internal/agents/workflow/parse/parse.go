@@ -446,6 +446,10 @@ func validateTrigger(r *Result, path string, tr workflow.Trigger, wfID string) {
 	case workflow.TriggerCron:
 		if tr.Schedule == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".schedule", Message: "is required for cron trigger"})
+		} else if n := len(strings.Fields(tr.Schedule)); n != 5 && n != 6 {
+			// A warning, not an error: the scheduler skips such a schedule,
+			// and older saved workflows must keep loading.
+			r.Warnings = append(r.Warnings, Error{Path: path + ".schedule", Message: fmt.Sprintf("%q has %d fields; it never fires. Use 5 (min hour dom mon dow) or 6 (sec min hour dom mon dow), e.g. \"*/30 * * * * *\" = every 30 seconds", tr.Schedule, n)})
 		}
 	case workflow.TriggerChannel:
 		if tr.ChannelName == "" {

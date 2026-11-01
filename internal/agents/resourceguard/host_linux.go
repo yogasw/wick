@@ -97,6 +97,15 @@ func (h *linuxHost) PSI(resource string) (float64, float64, bool) {
 	return parsePSI(string(b))
 }
 
+func (h *linuxHost) OwnMemPSI() (float64, bool) {
+	b, err := os.ReadFile(filepath.Join(h.user, "memory.pressure"))
+	if err != nil {
+		return 0, false
+	}
+	_, full, ok := parsePSI(string(b))
+	return full, ok
+}
+
 // parsePSI reads avg10 of the "some" and "full" lines.
 func parsePSI(s string) (some, full float64, ok bool) {
 	for _, line := range strings.Split(s, "\n") {

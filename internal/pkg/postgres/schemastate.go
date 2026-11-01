@@ -117,6 +117,9 @@ var migratedModels = []any{
 	&entity.TeamFolders{},
 	// Team agents shared with another user (chat only).
 	&entity.AgentShare{},
+	// Version history of the operator prompts and Team instructions, and
+	// the MCP proposals waiting for an admin's approval.
+	&entity.PromptChange{},
 }
 
 // modelFingerprint derives a stable hash of the models' shape. Purely

@@ -614,6 +614,11 @@ func (h *handlers) settingsSet(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Reading the settings is a member's right; changing them is the
+	// owner's, as on the settings page.
+	if err := team.CheckProjectOwner(c.Context(), h.layout, c.CallerUserID(), projectID); err != nil {
+		return nil, err
+	}
 	p, err := project.Load(h.layout, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("load project %q: %w", projectID, err)

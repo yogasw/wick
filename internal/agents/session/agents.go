@@ -267,6 +267,31 @@ func SetAgentProvider(layout config.Layout, id, name, providerKey string) error 
 	})
 }
 
+// SetNodeProvider is SetAgentProvider (plus the model pin, when modelID
+// is not empty) for a workflow node that re-applies the same provider
+// on every run. An agent a failover moved off that very provider stays
+// on its stand-in: rewriting the entry would send each run back to an
+// account that is still limited, only to fail over again. The node's
+// model then becomes the home's, and the return home brings both back
+// once the account is usable. No-op when the entry doesn't exist.
+func SetNodeProvider(layout config.Layout, id, name, providerKey, modelID string) error {
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		if a.Failover != nil && a.Failover.HomeProvider == providerKey && a.Provider != "" && a.Provider != providerKey {
+			if modelID == "" || a.Failover.HomeModelID == modelID {
+				return false
+			}
+			a.Failover.HomeModelID = modelID
+			return true
+		}
+		a.Provider = providerKey
+		if modelID != "" {
+			a.ModelID = modelID
+		}
+		a.Failover = &FailoverState{HomeProvider: providerKey, HomeModelID: a.ModelID}
+		return true
+	})
+}
+
 // SetModelIDIfEmpty pins a model only when the entry carries no pin.
 //
 // Inherited defaults use this rather than SetModelID: a session already

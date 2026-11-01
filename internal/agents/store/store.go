@@ -290,6 +290,13 @@ const KindCompaction = "compaction"
 // turns of one queue_id fold into one row in the UI.
 const KindRemoteQueue = "remote_queue"
 
+// KindListenHeld: where a Slack reply held by listen mode or an auto-reply
+// merge stands (extras: hold_id, state = held | sent | skipped |
+// cancelled, mode, delay_sec, started_ms, user, msg_ts). The turns of one
+// hold_id fold into one row in the UI, so a held reply shows the moment it
+// arrives instead of only once it reaches the agent.
+const KindListenHeld = "listen_held"
+
 // KindRemoteLink: the remote's own page for the running turn (extras: url),
 // e.g. a Jules session, where a turn wick cannot stop can be stopped.
 const KindRemoteLink = "remote_link"

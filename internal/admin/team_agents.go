@@ -95,7 +95,7 @@ func (h *Handler) teamAgentsAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// No owner picker: see the doc comment above.
-	adminview.ResourcesAdminPage("Team agents", "/admin/team-agents", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Team agents", "/admin/team-agents", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, adminview.ResourceFilter{}, user).Render(ctx, w)
 }
 
 // setTeamAgentTags saves the share tags of one agent. An unknown agent is

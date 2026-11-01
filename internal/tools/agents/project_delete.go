@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -13,22 +16,25 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider/claude"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/trash"
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// workspaceForgetters drops what a provider CLI keeps on its own disk for one
-// cwd, keyed by provider type and called with the instance's config dir. Only
+// workspaceHistory locates what a provider CLI keeps on its own disk for
+// one cwd, keyed by provider type and called with the instance's config
+// dir. A project delete moves those folders into the project trash. Only
 // providers whose storage is keyed by cwd belong here:
 //
 //   - claude   — `<config dir>/projects/<encoded cwd>/`: transcripts + memory.
 //   - codex    — rollouts are filed by date (`sessions/YYYY/MM/DD/`), not cwd.
 //   - opencode — sessions live in its own database, not a per-cwd folder.
 //   - gemini, omp — not wired: their per-project folder naming is not
-//     something wick spawns or verifies, and removing a guessed path could
-//     hit another project's history.
-var workspaceForgetters = map[provider.Type]func(configDir, cwd string) error{
-	provider.TypeClaude: claude.ForgetWorkspace,
+//     something wick spawns or verifies, and moving a guessed path could
+//     take another project's history.
+var workspaceHistory = map[provider.Type]func(configDir, cwd string) ([]string, error){
+	provider.TypeClaude: claude.WorkspaceDirs,
 }
 
 // errProtectedProject refuses the default/personal project.
@@ -157,11 +163,14 @@ func projectDeletePreviewJSON(c *tool.Ctx) {
 	c.JSON(http.StatusOK, previewProjectDelete(c.Context(), p))
 }
 
-// purgeProject deletes a project for good: it stops the agents running in
-// its sessions, cancels the schedules that would fire into it, removes the
-// sessions (sub-agents included) and the project folder, then forgets the
-// provider history kept for its managed cwd. A custom path is the user's
-// folder: it stays, and so does the provider history of it.
+// purgeProject deletes a project into the trash: it stops the agents
+// running in its sessions, cancels the schedules that would fire into it,
+// moves the sessions (sub-agents included), the project folder and the
+// provider history of its managed cwd into one trash entry, and drops them
+// from the registry so every list forgets them at once. A custom path is
+// the user's folder: it stays, and so does the provider history of it.
+// The entry is restorable until the retention sweep removes it (see
+// project_trash.go).
 func purgeProject(ctx context.Context, p project.Project, by string) error {
 	id := p.Meta.ID
 	if project.IsProtected(p.Meta) {
@@ -175,46 +184,85 @@ func purgeProject(ctx context.Context, p project.Project, by string) error {
 			}
 		}
 	}
+	var cancelled []trash.Schedule
 	if globalSchedule != nil {
+		// since=now: the live rows only, i.e. what CancelTargeting cancels.
+		rows, err := globalSchedule.ListTargeting(ctx, id, sids, time.Now())
+		if err != nil {
+			log.Ctx(ctx).Warn().Err(err).Str("project", id).Msg("delete project: list schedules")
+		}
+		for _, r := range rows {
+			cancelled = append(cancelled, trash.Schedule{
+				ID: r.ID, Kind: r.Kind, SessionID: r.SessionID, Cron: r.Cron,
+				EveryMs: r.IntervalMs, RunAt: r.RunAt, Message: r.Message,
+			})
+		}
 		if n, err := globalSchedule.CancelTargeting(ctx, id, sids); err != nil {
 			log.Ctx(ctx).Warn().Err(err).Str("project", id).Msg("delete project: cancel schedules")
 		} else if n > 0 {
 			log.Ctx(ctx).Info().Int64("schedules", n).Str("project", id).Msg("delete project: schedules cancelled")
 		}
 	}
-	managedCwd := ""
-	if p.Meta.CustomPath == "" {
-		managedCwd = globalLayout.ProjectManagedPath(id)
+	st := trash.Stash{
+		ID: id, Name: p.Meta.Name, OwnerUserID: p.Meta.OwnerUserID, DeletedBy: actorOf(ctx),
+		CustomPath: p.Meta.CustomPath, ProjectDir: globalLayout.ProjectDir(id),
+		SessionDirs: map[string]string{}, Schedules: cancelled,
 	}
-	if err := globalMgr.DeleteProject(ctx, id); err != nil {
+	for _, sid := range sids {
+		st.SessionDirs[sid] = globalLayout.SessionDir(sid)
+	}
+	if p.Meta.CustomPath == "" {
+		st.Providers = workspaceHistoryFn(ctx, globalLayout.ProjectManagedPath(id))
+	}
+	m, err := trash.Put(globalLayout.BaseDir, time.Now(), st)
+	if m.Project.Original == "" || !trashHasProject(m) {
 		return err
 	}
+	globalMgr.ForgetProject(id, sids)
 	if globalTagsSvc != nil {
 		_ = globalTagsSvc.DeleteResourceOwnerTag(ctx, id)
 	}
-	if managedCwd != "" {
-		forgetWorkspaceFn(ctx, managedCwd)
+	if err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("project", id).Msg("delete project: some folders stayed in place")
 	}
-	log.Ctx(ctx).Info().Str("project", id).Int("sessions", len(sids)).Msg("project deleted")
+	log.Ctx(ctx).Info().Str("project", id).Str("trash", m.Key).Int("sessions", len(sids)).
+		Int("provider_dirs", len(m.Providers)).Msg("project moved to trash")
 	return nil
 }
 
-// forgetWorkspaceFn is forgetWorkspace, swappable so tests never reach the
-// provider config dirs of the machine running them.
-var forgetWorkspaceFn = forgetWorkspace
+// trashHasProject reports whether Put got as far as moving the project
+// folder: before that nothing moved and the project is still live.
+func trashHasProject(m trash.Manifest) bool {
+	_, err := os.Stat(filepath.Join(trash.Root(globalLayout.BaseDir), m.Key, m.Project.Stored))
+	return err == nil
+}
 
-// forgetWorkspace runs every workspaceForgetter once per distinct config
-// dir across the configured instances. Best effort: the project is already
-// gone, so a leftover history folder is logged, not returned.
-func forgetWorkspace(ctx context.Context, cwd string) {
+// actorOf is the id of the signed-in user behind ctx, "" for system work.
+func actorOf(ctx context.Context) string {
+	if u := login.GetUser(ctx); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
+// workspaceHistoryFn is workspaceHistoryDirs, swappable so tests never
+// reach the provider config dirs of the machine running them.
+var workspaceHistoryFn = workspaceHistoryDirs
+
+// workspaceHistoryDirs runs every workspaceHistory locator once per
+// distinct config dir across the configured instances and returns the
+// folders found, by provider instance name. Best effort: a locator that
+// fails is logged and its folders stay where they are.
+func workspaceHistoryDirs(ctx context.Context, cwd string) map[string][]string {
+	out := map[string][]string{}
 	instances, err := provider.Load()
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("delete project: load provider instances")
-		return
+		return out
 	}
 	var seen []string
 	for _, ins := range instances {
-		forget, ok := workspaceForgetters[ins.Type]
+		locate, ok := workspaceHistory[ins.Type]
 		if !ok {
 			continue
 		}
@@ -224,8 +272,14 @@ func forgetWorkspace(ctx context.Context, cwd string) {
 			continue
 		}
 		seen = append(seen, key)
-		if err := forget(dir, cwd); err != nil {
-			log.Ctx(ctx).Warn().Err(err).Str("provider", ins.Name).Str("cwd", cwd).Msg("delete project: forget workspace")
+		dirs, err := locate(dir, cwd)
+		if err != nil {
+			log.Ctx(ctx).Warn().Err(err).Str("provider", ins.Name).Str("cwd", cwd).Msg("delete project: locate workspace history")
+			continue
+		}
+		if len(dirs) > 0 {
+			out[ins.Name] = append(out[ins.Name], dirs...)
 		}
 	}
+	return out
 }

@@ -114,6 +114,29 @@ Streamable HTTP only — a stdio server needs an HTTP sidecar
 (`mcp-proxy`, `supergateway`) in front. Auth schemes here are `none`, `bearer`,
 `custom_header`, and `sso`.
 
+## Groups, op switches and session locks
+
+Three optional draft fields, all off by default — reach for them only when
+the user asks for that control:
+
+- **`configs[].group`** — section title. With many configs, group them
+  ("Connection", "Access") so the Settings page and the session Config tab
+  stay readable.
+- **`ops[].visible_when`** (API ops only) — `"<config>:<a|b>"`. The usual
+  shape is a dropdown config `mode` (`read|write`, default `read`) with
+  `visible_when: "mode:write"` on every write op: a `read` instance keeps
+  those ops listed in `wick_get` as `unavailable` (with the reason, no
+  `tool_id`) and refuses to execute them.
+- **`configs[].session_locked`** (with `allow_session_config`) — the agent
+  cannot set the field on a session clone (`locked_keys`, `set_config`
+  refuses it); a human can, in the Session Workspace tab. Until a human does,
+  it runs with its `default`. Lock `mode` so the agent cannot switch itself
+  to write, and `base_url` so it cannot redirect the calls; leave
+  credentials unlocked so the agent can fill them. A locked required field
+  needs a default. The builder can lock a whole group.
+
+Say in the plan which ops carry a switch and which configs are locked.
+
 ## What still needs the dashboard
 
 - **OAuth-scheme MCP servers.** They need an interactive browser login, so

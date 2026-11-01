@@ -53,6 +53,10 @@ type watchEntry struct {
 	next        time.Time
 	// pendingNext is the real next fire while a manual run borrows next.
 	pendingNext time.Time
+	// wakeQ are events (wake_on) waiting to run, oldest first; wakeReturn
+	// is the timed slot to go back to once they are drained.
+	wakeQ       []wakeEvent
+	wakeReturn  time.Time
 	running     bool
 	gone        bool
 	dirty       bool
@@ -158,6 +162,9 @@ func (r *Runner) refreshWatches(ctx context.Context, l zerologLogger) {
 			e.pendingNext = e.next
 		}
 		e.next = row.RunAt
+		if len(e.wakeQ) > 0 && !e.running {
+			e.wakeReturn, e.next = row.RunAt, time.Now() // events still waiting
+		}
 		e.dbUpdatedAt = row.UpdatedAt
 		e.accessUntil = time.Time{} // re-check access after any edit
 	}
@@ -309,7 +316,7 @@ func (r *Runner) testWatch(ctx context.Context, m entity.ScheduledMessage, overr
 			return nil, err
 		}
 	}
-	if err := ValidateSteps(steps); err != nil {
+	if err := ValidateStepsFor(steps, m.WakeOn); err != nil {
 		return nil, err
 	}
 	select {
@@ -330,7 +337,7 @@ func (r *Runner) testWatch(ctx context.Context, m entity.ScheduledMessage, overr
 				cwd = dir
 			}
 		}
-		rec, _ = executeWatch(ctx, m, steps, cwd, watchTmpDir(m), r.connExec)
+		rec, _ = executeWatch(ctx, m, steps, cwd, watchTmpDir(m), r.connExec, nil)
 	}
 	rec.Type, rec.Manual, rec.DryRun, rec.StepsRev = entity.ScheduledTypeWatch, true, true, m.StepsRev
 	if override != nil {
@@ -362,18 +369,39 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 	m := e.m
 	manual := m.ManualFire
 	pendingNext := e.pendingNext
+	var ev *wakeEvent
+	if len(e.wakeQ) > 0 && !manual {
+		first := e.wakeQ[0]
+		e.wakeQ = e.wakeQ[1:]
+		ev = &first
+	}
+	wakeReturn := e.wakeReturn
 	ws.mu.Unlock()
 
 	firedAt := time.Now()
+	if ev == nil && !manual && IsWakeOnly(m) && firedAt.Before(wakeDeadline(m)) {
+		// A wake-only watch made due without an event (a checkpoint or a
+		// restart caught it mid-wake): nothing to run, back to waiting.
+		ws.mu.Lock()
+		e.next, e.wakeReturn, e.running = wakeDeadline(m), time.Time{}, false
+		ws.mu.Unlock()
+		return
+	}
+	timedOut := ev == nil && !manual && IsWakeOnly(m)
 	steps, onMatch, err := ParseWatch(m.Steps)
 	if err == nil {
-		err = ValidateSteps(steps)
+		err = ValidateStepsFor(steps, m.WakeOn)
 	}
 	var rec RunRecord
 	var result string
 	if err != nil {
 		rec = RunRecord{ScheduleID: m.ID, StartedAt: firedAt.UTC(), FinishedAt: firedAt.UTC(), Result: entity.WatchResultError,
 			Error: "invalid watch steps: " + err.Error()}
+	} else if timedOut {
+		// The time limit of a wake-only watch: no event matched. Nothing to
+		// run; the cadence below finds no next slot and ends it as timed out.
+		rec = RunRecord{ScheduleID: m.ID, StartedAt: firedAt.UTC(), FinishedAt: firedAt.UTC(), Result: entity.WatchResultPending,
+			Reason: "no event for wake_on " + m.WakeOn + " before the time limit"}
 	} else if denied := r.watchAccessOK(ctx, e, steps); denied != "" {
 		rec = RunRecord{ScheduleID: m.ID, StartedAt: firedAt.UTC(), FinishedAt: firedAt.UTC(), Result: entity.WatchResultError, Error: denied, Denied: true}
 	} else {
@@ -385,7 +413,14 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 				l.Warn().Str("id", m.ID).Err(derr).Msg("watch: bash cwd refused")
 			}
 		}
-		rec, result = executeWatch(ctx, m, steps, cwd, watchTmpDir(m), r.connExec)
+		var input []byte
+		if ev != nil {
+			input = ev.payload
+		}
+		rec, result = executeWatch(ctx, m, steps, cwd, watchTmpDir(m), r.connExec, input)
+	}
+	if ev != nil {
+		rec.Event = ev.topic
 	}
 
 	prevResult := m.LastResult
@@ -461,6 +496,12 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 	if terminal == "" {
 		if manual {
 			out.Next = pendingNext
+		} else if ev != nil && !IsWakeOnly(m) && !wakeReturn.IsZero() {
+			// An event run sits between timed slots: keep the slot it borrowed.
+			out.Next = wakeReturn
+			if m.MaxRuns > 0 && m.RunCount >= m.MaxRuns {
+				out.Next = time.Time{}
+			}
 		} else if next, aerr := advance(m, firedAt, m.RunCount); aerr == nil {
 			out.Next = next
 		}
@@ -538,6 +579,13 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 		e.m.ManualFire = false
 		e.next = out.Next
 		e.pendingNext = time.Time{}
+	}
+	if len(e.wakeQ) > 0 {
+		// Events arrived while this ran (or are still queued): run again now,
+		// then return to the slot just computed.
+		e.wakeReturn, e.next = e.next, time.Now()
+	} else {
+		e.wakeReturn = time.Time{}
 	}
 	if write {
 		e.dbUpdatedAt, e.lastFlush, e.dirty = out.At, time.Now(), false

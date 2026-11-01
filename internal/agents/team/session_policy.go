@@ -34,6 +34,25 @@ type SessionPolicy struct {
 	// agent's memory when they go idle. Stored only for now; nothing acts
 	// on it yet.
 	SummariseThreads bool `json:"summarise_threads"`
+	// ForceDefaultProvider keeps every chat of the agent on its default
+	// provider and model, hand picks included; a chat on a failover
+	// stand-in is left to the failover. Kept here, in the existing JSON
+	// column, so the setting needs no new column.
+	ForceDefaultProvider bool `json:"force_default_provider"`
+}
+
+// ForcesDefaultProvider reads ForceDefaultProvider from the stored
+// entity.AgentPersona.SessionPolicy.
+func ForcesDefaultProvider(raw string) bool {
+	return DecodeSessionPolicy(raw).ForceDefaultProvider
+}
+
+// LocksProvider is the agent's one provider setting, "Provider in chats":
+// true = every chat stays on the agent's default provider (switching in
+// chat is off, or ForceDefaultProvider is on), false = a chat may pick
+// its own. Arguments as stored on entity.AgentPersona.
+func LocksProvider(allowSwitch *bool, isCaptain bool, sessionPolicy string) bool {
+	return !AllowsProviderSwitch(allowSwitch, isCaptain) || ForcesDefaultProvider(sessionPolicy)
 }
 
 // NormalizeSessionPolicy clamps p to valid values: an unknown policy is

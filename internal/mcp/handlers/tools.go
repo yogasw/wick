@@ -668,6 +668,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				ReadOnlyHint: PtrBool(true),
 			},
 		},
+		SlackListenDescriptor(),
+		SessionLinkDescriptor(),
 		{
 			Name: "wick_set_title",
 			Description: "Set the session's title (the label shown in the sidebar). " +
@@ -896,6 +898,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"type":        "string",
 						"enum":        []string{"stop", "continue"},
 						"description": "type=watch (create, or update/reschedule): what a match does. 'stop' (default) notifies once and finishes. 'continue' notifies and keeps running, notifying again only when the match is new — the dedup key is the extract of the last check step that has one (else the output), so extract ONLY what marks new data (e.g. {build: build_number, branch: target.ref_name}), never durations or timestamps. Ends on timeout, cancel or fail_rules.",
+					},
+					"wake_on": map[string]any{
+						"type":        "string",
+						"description": "type=watch, action=create: subscribe the watch to plugin events, \"<plugin key>:<topic>\" (trailing * = prefix), e.g. \"gitlab_webhook:group/repo\". When that plugin publishes a matching event (a webhook it received) the watch runs AT ONCE with the event JSON as the first step's input, so the first step may be a check. With no every/cron the watch waits for events only — no polling; timeout still applies (default 24h). With every/cron it also keeps polling.",
 					},
 					"steps": map[string]any{
 						"type": "array",

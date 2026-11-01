@@ -10,6 +10,64 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.18.0](https://github.com/yogasw/wick/compare/v1.17.1...v1.18.0) — GitLab & Platform
+
+_Released on 2026-11-01_
+
+### Added
+-   **GitLab connector plugin**: Integrated a new connector for GitLab (gitlab.com or self-managed) supporting projects, repositories, merge requests, pipelines, job logs, and issues. Includes a **Permission status** panel that probes live to name missing fine-grained permissions (as shown in GitLab's token form), with **↻ Recheck** and a **Test project** box. **Merge rules** functionality, similar to Bitbucket's, is checked by `merge_merge_request` with configurable defaults (e.g., one approval by default, `*helm*` denied), and a fixed **Else** row to ensure all projects are covered. A **Test merge rules** panel allows judging pasted merge requests without actual merging.
+-   **`data-op-input` for `html=` widgets**: Introduced an operation that runs while the operator types, debounced, to enable real-time search functionality (e.g., Bitbucket and GitLab approver search) without needing a separate Search button.
+-   **Default reviewers for Bitbucket and GitLab**: Ability to define default reviewers for pull and merge requests.
+-   **Team/Group Chat Enhancements**: Added an agent-chat column, streamlined one-line hand-offs, and a clock on the speaker row for improved chat visibility.
+-   **Usage Analytics**: New features for tracking token usage over time, including a condition builder for usage filters, and the ability to filter usage by title or session ID in admin analytics. Also includes new people and model filters, and a provider usage table.
+-   **Workflow Cron Triggers**: Cron triggers now support a `seconds` field for more granular scheduling.
+-   **Agent Provider Settings**: Consolidated "Provider in chats" into a single setting allowing it to be locked to a default or chosen per chat. Captains can now force the default provider, and failover chains are extended up to 6 providers. Team agents can maintain the default provider across all chats.
+-   **Agent Path Guard Enhancements**: `path_guard_allow` now accepts `*` per path segment. Claude agents can be explicitly restricted from other projects and sessions.
+-   **Agent System Prompt**: The `system_prompt` is now the shared base for Team agents, incorporating general behavior.
+-   **Admin-Managed Security Prompt**: Implemented an admin-managed security prompt feature with approval and version history.
+-   **Project Deletion and Restoration**: Projects can now be soft-deleted to a 30-day trash with restore functionality, and are visible in the projects table with filters. Project settings and deletion are restricted to owners and require name confirmation, consent, and two sums for permanent deletion.
+-   **Agent Listen Mode**: The listen mode is now accessible from the composer toolbar, with detailed information shown on the timestamp.
+-   **Per-Channel Slack Listen/Auto-Reply Mode**: Introduced an advanced `auto-reply` mode for Slack channels with a 15-second default delay. Thank-you messages are answered with a reaction. Listen rules and `LISTEN.md` are integrated into the system prompt, and replies show a one-line note. The Settings panel displays the active listen mode and an 👂 chip in the chat header. Held replies are shown at once.
+-   **Workflow Event Watches**: Workflows can now wait for plugin events using `wake_on + events.publish`.
+-   **Linked Sessions**: Agents can now manage and interact with linked sessions.
+-   **Deployment Scripts (`deploy-from-source`)**: New scripts to build and install the Wick app and its plugins from source on Linux, macOS, and Windows. This includes automated daemon startup, skipping redundant builds, systemd unit installation, and updating existing Go installations.
+
+### Changed
+-   **Upgrade Handover for Channels**: The draining process now hands its Slack/Telegram listeners to the new build as soon as the drain starts, allowing new messages to be answered immediately by the new build.
+-   **Workflow Connector Node Execution**: Connector nodes within workflows are now executed through the dedicated connectors service.
+
+### Fixed
+-   **Slack Remote Agents**: Corrected an issue where a saved remote target opening its own thread (e.g., mentioning another agent) was incorrectly treated as a remote's reply and dropped before agent allowlist checks.
+-   **`html=` Widgets Hidden Inputs**: Hidden inputs now correctly synchronize with each re-render, preventing stale state from being posted on subsequent user interactions (e.g., an "Add rule" button posting outdated row counts).
+-   **`html=` Widgets Re-fetching**: Resolved a bug causing `html=` widgets to re-fetch in a loop when their markup changed between renders. Widgets within collapsed configuration groups now render only when the group is opened, improving performance.
+-   **Team Chat Display**: Ensured group replies consistently carry only the final answer, and improved rendering for Markdown bracket labels and nested bullet points.
+-   **Agent Working Cue**: The working cue now correctly remains active throughout a teammate's turn.
+-   **Skill Sync**: Corrected `SKILL.md` frontmatter positioning and ensured host-admin skills without Bash are hidden.
+-   **Custom Connector File Uploads**: Fixed the `Content-Type` header for `multipart/form-data` uploads of local files in custom connectors.
+-   **Conversation UI**: Improved readability of system/teammate cards and trace text in light mode.
+-   **Workflow Connector Secrets**: Ensured connector configuration secrets are decrypted before connector nodes run within a workflow.
+-   **Agent Settings UI**: Added titles above the descriptive notes for Advanced toggles in agent Settings.
+-   **Agent Chat Attribution**: Prevented lines citing a teammate as a source from being misidentified as a mention of that teammate.
+-   **Agent Path Guard Installation**: Ensured the path guard installs correctly even when the approval gate is disabled.
+-   **Agent Security Prompt Config**: Fixed an issue where the security prompt config description could contain a tag separator.
+-   **Project Menu Display**: The project menu is no longer shown on a ticket's dedicated page.
+-   **Channel Messaging**: Prevented CLI limit notices and agent errors from appearing in channel threads.
+-   **Resource Guard**: Addressed issues where agents were held due to memory pressure from processes outside Wick. Improved messaging now clarifies why queued agents are held, and the busiest outside process is measured over its own window.
+-   **Agent Failover**: Corrected failover logic to check the agent owner's provider access instead of the sender's. Enabled agents that maintain their provider to still fail over. Automatic provider failover is now suppressed in channel threads.
+-   **Slack Messaging**: Ensured only the turn's final text is posted to Slack, not intermediate narration between tool calls. Dropped failed-over turn text from team, sub-agent, and A2A replies.
+-   **Team Tickets**: Any user authorized to open a ticket session can now continue it with the home agent, including file attachments.
+-   **Slack Rich Text**: Optimized rich text rebuilding to occur only when fallback text was clipped. Ensured bot `rich_text` blocks are rendered when reading messages, and message text is read from blocks rather than collapsed fallback.
+-   **Slack Settings UI**: Resolved an issue where channel rules could overflow the drawer.
+-   **Registry**: Correctly captures session metadata written by a draining predecessor after boot.
+-   **Git Connector**: Implemented a guard to refuse commits containing sensitive words.
+-   **Channels**: A quiet turn no longer posts the generic "Results came in…" fallback message.
+-   **Memory Scope**: Aligned agent slice runtime memory controls with the unit.
+-   **Agent Queue/UI**: Ensured finished team/machine turns are stopped, queue position is displayed, and resources are properly labeled.
+-   **Slack API Calls**: Blocked user group writes in `custom_api_call` until the `allow_usergroup_write` setting is explicitly checked.
+
+---
+
+
 ## [v1.17.1](https://github.com/yogasw/wick/compare/v1.17.0...v1.17.1) — Maintenance
 
 _Released on 2026-10-19_

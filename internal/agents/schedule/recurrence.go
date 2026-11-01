@@ -87,7 +87,7 @@ func ParseWhen(runAt, every, cron string, now time.Time) (Spec, error) {
 // "every hour on the hour" schedule at 10:50 gives 11:00, not 11:50 — the
 // latter silently re-anchored the schedule for good.
 func NextFrom(m entity.ScheduledMessage, from time.Time) (time.Time, error) {
-	if m.IntervalMs <= 0 && strings.TrimSpace(m.Cron) == "" {
+	if m.IntervalMs <= 0 && strings.TrimSpace(m.Cron) == "" && !IsWakeOnly(m) {
 		return time.Time{}, fmt.Errorf("schedule is not recurring")
 	}
 	return nextInSeries(m, from)
@@ -174,6 +174,13 @@ func advance(m entity.ScheduledMessage, from time.Time, runCountAfter int) (time
 	if m.MaxRuns > 0 && runCountAfter >= m.MaxRuns {
 		return time.Time{}, nil
 	}
+	if IsWakeOnly(m) {
+		// No cadence: the only timed slot is the time limit, once.
+		if d := wakeDeadline(m); from.Before(d) {
+			return d, nil
+		}
+		return time.Time{}, nil
+	}
 	next, err := nextInSeries(m, from)
 	if err != nil {
 		return time.Time{}, err
@@ -201,6 +208,8 @@ func advance(m entity.ScheduledMessage, from time.Time, runCountAfter int) (time
 // just the next matching minute after `from`.
 func nextInSeries(m entity.ScheduledMessage, from time.Time) (time.Time, error) {
 	switch {
+	case IsWakeOnly(m):
+		return wakeDeadline(m), nil
 	case m.IntervalMs > 0:
 		interval := time.Duration(m.IntervalMs) * time.Millisecond
 		if m.Anchor == nil {

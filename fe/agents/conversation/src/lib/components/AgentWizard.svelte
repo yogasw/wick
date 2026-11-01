@@ -134,7 +134,6 @@
   let mentionAllow = $state<string[]>([]);
   // ✨ Generate filled Access/Mentions: say so on that step.
   let fromDraft = $state(false);
-  let useGlobalPrompt = $state(true);
   // On by default: the agent's project stays in Agents → Projects as well.
   let showInProjects = $state(true);
   // Step 3: "type/name::modelID", empty until picked by hand.
@@ -331,7 +330,6 @@
           run_as: isCaptain ? "owner" : "caller",
           mention_from: mentionFrom,
           ...(mentionFrom === "list" ? { mention_allow: [...mentionAllow] } : {}),
-          ...(convertProject && projectId === convertProject ? { use_global_prompt: useGlobalPrompt } : {}),
           // Only the agent's own project (new or converted) can be hidden.
           ...(!projectId || projectId === convertProject ? { show_in_projects: showInProjects } : {}),
           provider: splitPick(pick).provider,
@@ -572,10 +570,6 @@
       <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-access">
         <span class="font-medium text-black-900 dark:text-white-100">Default for a converted project:</span> every connector you have at Write, and connectors added later open read-only — so its chats keep doing what they do today. Narrow it below or later in Settings.
       </p>
-      <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100" data-testid="aw-global-prompt">
-        <input type="checkbox" class="mt-1" bind:checked={useGlobalPrompt} />
-        <span>Use the global system prompt<br /><span class="text-xs text-black-800 dark:text-black-600">On by default: the project's chats already run with it. Turn off to run on the persona alone.</span></span>
-      </label>
     {/if}
     {#if fromDraft}
       <p class="rounded-xl border border-green-500/40 bg-green-500/10 px-3 py-2 text-xs text-black-900 dark:text-white-100" data-testid="aw-from-draft">

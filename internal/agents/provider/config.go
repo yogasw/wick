@@ -12,6 +12,7 @@ import (
 // InstanceConfig is the wick-tag-annotated view of provider instance settings.
 // Used to drive ConfigsTable rendering and per-key saves.
 type InstanceConfig struct {
+	SandboxMode   string `wick:"key=sandbox_mode;dropdown=read-only|workspace-write|danger-full-access;desc=Codex filesystem sandbox. Applies from the next turn, does not change tool approval policy."`
 	Binary        string `wick:"key=binary;desc=Binary path override. Empty = auto-resolve from PATH."`
 	ExtraArgs     string `wick:"key=extra_args;kvlist;desc=Extra CLI args passed to the binary on every spawn."`
 	Env           string `wick:"key=env;kvlist=key|value;desc=Environment variables injected on every spawn."`
@@ -89,13 +90,26 @@ func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 	if sendMode == "" {
 		sendMode = "default" // empty = follow the provider type's default
 	}
+	sandboxMode := CodexSandboxFullAccess // matches the existing spawner default
+	if ins.CodexConfig != nil && ins.CodexConfig.SandboxMode != "" {
+		sandboxMode = ins.CodexConfig.SandboxMode
+	}
 	rows := pkgentity.StructToConfigs(InstanceConfig{
+		SandboxMode:   string(sandboxMode),
 		Binary:        ins.Binary,
 		ExtraArgs:     argsToKVList(ins.ExtraArgs),
 		Env:           envToKVList(ins.Env),
 		MaxConcurrent: ins.MaxConcurrent,
 		SendMode:      sendMode,
 	})
+	if ins.Type != TypeCodex {
+		for i, row := range rows {
+			if row.Key == "sandbox_mode" {
+				rows = append(rows[:i], rows[i+1:]...)
+				break
+			}
+		}
+	}
 	if ins.Type == TypeOMP || ins.Type == TypeOpencode {
 		rows = append(rows, pkgentity.StructToConfigs(AccountCLIConfig{ExtraMCPServers: ins.ExtraMCPServers})...)
 		rows = append(rows, pkgentity.StructToConfigs(LiveCLIModelConfig{
@@ -163,6 +177,14 @@ func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 // ApplyInstanceConfigKey merges one saved key=value into an Instance.
 func ApplyInstanceConfigKey(ins *Instance, key, value string) {
 	switch key {
+	case "sandbox_mode":
+		if ins.Type != TypeCodex {
+			return
+		}
+		if ins.CodexConfig == nil {
+			ins.CodexConfig = &CodexConfig{}
+		}
+		ins.CodexConfig.SandboxMode = CodexSandboxMode(strings.TrimSpace(value))
 	case "binary":
 		ins.Binary = strings.TrimSpace(value)
 	case "extra_args":
@@ -240,6 +262,13 @@ func ValidateInstanceConfigKey(key, value string) error {
 		return validateIdleCompactKey(key, value)
 	}
 	switch key {
+	case "sandbox_mode":
+		switch CodexSandboxMode(strings.TrimSpace(value)) {
+		case "", CodexSandboxReadOnly, CodexSandboxWorkspaceWrite, CodexSandboxFullAccess:
+			return nil
+		default:
+			return fmt.Errorf("invalid Codex sandbox mode %q", value)
+		}
 	case "extra_mcp_servers":
 		_, err := ParseExtraMCP(value)
 		return err

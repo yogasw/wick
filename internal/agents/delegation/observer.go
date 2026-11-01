@@ -52,6 +52,15 @@ func (o *TurnObserver) OnEvent(sessionID, agentName string, ev event.AgentEvent)
 		b.WriteString(ev.Text)
 		o.mu.Unlock()
 
+	case event.Warning:
+		// A failover took the turn: the failed provider's text routes
+		// nothing.
+		if ev.FailedOver {
+			o.mu.Lock()
+			delete(o.buf, key)
+			o.mu.Unlock()
+		}
+
 	case event.Done:
 		o.mu.Lock()
 		b := o.buf[key]

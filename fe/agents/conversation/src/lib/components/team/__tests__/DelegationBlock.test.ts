@@ -297,7 +297,7 @@ describe("DelegationBlock", () => {
     render(DelegationBlock, {
       props: {
         tasks: [
-          task({ task_id: "a", progress: "Checking Loki for Audy pods" }),
+          task({ task_id: "a", progress: "Checking Loki for client-a pods" }),
           task({ task_id: "b", to_handle: "vera", to_name: "Vera", progress: "Reading the client WA group" }),
         ],
       },
@@ -306,7 +306,7 @@ describe("DelegationBlock", () => {
     expect(rows.map((r) => r.getAttribute("data-task-id"))).toEqual(["a", "b"]);
     expect(rows[0].querySelector("b")!.textContent).toBe("Anton");
     expect(rows[0].textContent).toContain("●");
-    expect(rows[0].textContent).toContain("Checking Loki for Audy pods");
+    expect(rows[0].textContent).toContain("Checking Loki for client-a pods");
     expect(rows[1].querySelector("b")!.textContent).toBe("Vera");
     expect(rows[1].querySelector(".font-mono")!.textContent).toBe(screen.getAllByTestId("chip-elapsed")[1].textContent);
   });

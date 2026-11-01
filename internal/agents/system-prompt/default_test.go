@@ -52,7 +52,8 @@ func TestDefaultSystemPromptResolvesApp(t *testing.T) {
 func TestImmutableHasNoLeftoverTokens(t *testing.T) {
 	for _, c := range providerVariants() {
 		t.Run(c.name, func(t *testing.T) {
-			if tok := tokenRe.FindString(c.fn()); tok != "" {
+			// AdminContactToken is resolved per spawn by the factory.
+			if tok := tokenRe.FindString(ResolveAdminContact(c.fn(), "")); tok != "" {
 				t.Errorf("leftover unresolved token %q", tok)
 			}
 		})

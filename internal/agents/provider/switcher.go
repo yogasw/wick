@@ -128,6 +128,21 @@ func CheckSwitch(ctx context.Context, sessionID, tag string) error {
 	return SwitchGuard(ctx, sessionID, tag)
 }
 
+// FailoverGuard, when set, decides whether a failover (or its return)
+// may move sessionID to tag. Unlike SwitchGuard it does not hold the
+// agent's "keeps its provider" setting: the chain is the owner's own
+// plan for a dead account, not someone picking a provider. nil = the
+// failover falls back to SwitchGuard.
+var FailoverGuard func(ctx context.Context, sessionID, tag string) error
+
+// CheckFailover runs FailoverGuard, or CheckSwitch when none is wired.
+func CheckFailover(ctx context.Context, sessionID, tag string) error {
+	if FailoverGuard == nil {
+		return CheckSwitch(ctx, sessionID, tag)
+	}
+	return FailoverGuard(ctx, sessionID, tag)
+}
+
 // normalizeProviderKey returns "type/name" form. Bare "type" becomes "type/type".
 func normalizeProviderKey(key string) string {
 	if strings.Contains(key, "/") {

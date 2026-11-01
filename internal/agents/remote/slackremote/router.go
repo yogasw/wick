@@ -1,6 +1,7 @@
 package slackremote
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,14 @@ type Router struct {
 	// past keeps each ended turn's tracker until pastTTL, so the remote's
 	// late messages in its thread are still known as its own (Owns).
 	past map[*tracker]time.Time
+	// targets reads the saved remote agents (SetTargets); cached holds
+	// the last read, taken at targetsAt.
+	targets   func() ([]Config, error)
+	cached    []Config
+	targetsAt time.Time
+	// started holds the threads a saved channel target opened itself, until
+	// pastTTL: its messages there are its own conversation, not a reply.
+	started map[string]time.Time
 }
 
 // pastTTL is how long a thread a remote turn ran in stays known after it.
@@ -54,7 +63,7 @@ func FromEvent(channel, subtype, ts, threadTS, user, botID, text string, edited 
 var Shared = NewRouter()
 
 func NewRouter() *Router {
-	return &Router{turns: map[string]map[*tracker]struct{}{}, past: map[*tracker]time.Time{}}
+	return &Router{turns: map[string]map[*tracker]struct{}{}, past: map[*tracker]time.Time{}, started: map[string]time.Time{}}
 }
 
 func threadKey(channel, ts string) string { return channel + "|" + ts }
@@ -127,7 +136,76 @@ func (r *Router) Owns(m Message) bool {
 			}
 		}
 	}
+	return r.fromTarget(m)
+}
+
+// targetsTTL is how long the saved remote targets are cached.
+var targetsTTL = 30 * time.Second
+
+// SetTargets wires where the saved Slack remote agents are read from. A
+// turn's tracker lives in the process that sent it: across a restart or
+// an upgrade, while two generations share the Slack socket, the other
+// process gets the remote's reply without knowing the turn. The saved
+// targets let it still tell the reply is a remote's, never a new message
+// to an agent here (two bots answering each other's mentions).
+func (r *Router) SetTargets(list func() ([]Config, error)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.targets, r.targetsAt, r.cached = list, time.Time{}, nil
+}
+
+// fromTarget reports whether m is a bot message from a saved Slack remote
+// agent's target, in the place its turns go (its channel, or a DM), outside
+// a thread the target opened itself (ownThread).
+// Callers hold r.mu.
+func (r *Router) fromTarget(m Message) bool {
+	if r.targets == nil || m.BotID == "" {
+		return false
+	}
+	if time.Since(r.targetsAt) > targetsTTL {
+		list, err := r.targets()
+		if err != nil {
+			log.Debug().Err(err).Msg("slackremote: saved targets read failed")
+		} else {
+			r.cached, r.targetsAt = list, time.Now()
+		}
+	}
+	for _, c := range r.cached {
+		id := c.TargetID()
+		if id == "" || (m.User != id && m.BotID != id) {
+			continue
+		}
+		if c.Target == TargetDM {
+			if strings.HasPrefix(m.Channel, "D") {
+				return true
+			}
+			continue
+		}
+		if m.Channel == c.Channel {
+			return !r.ownThread(m)
+		}
+	}
 	return false
+}
+
+// ownThread reports whether m, a channel target's message, sits in a
+// thread that target opened itself. A channel turn's reply always lands in
+// the thread wick started, so a top-level message is the target starting a
+// conversation of its own (e.g. mentioning an agent here) and its later
+// messages in that thread are too. Callers hold r.mu.
+func (r *Router) ownThread(m Message) bool {
+	nowT := time.Now()
+	for k, until := range r.started {
+		if nowT.After(until) {
+			delete(r.started, k)
+		}
+	}
+	if m.ThreadTS == "" || m.ThreadTS == m.TS {
+		r.started[threadKey(m.Channel, m.TS)] = nowT.Add(pastTTL)
+		return true
+	}
+	_, ok := r.started[threadKey(m.Channel, m.ThreadTS)]
+	return ok
 }
 
 // DispatchReaction routes a reaction added to or removed from message ts

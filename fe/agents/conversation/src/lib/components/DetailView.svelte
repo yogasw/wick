@@ -64,7 +64,7 @@
   import { setTeamTasksCtx } from "../teamTasksContext.js";
   import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
-  import { workingTeammates, waitingTrayLine, stopDialog } from "../teammatesBusy.js";
+  import { workingTeammates, waitingTrayLine, stopDialog, threadTyping } from "../teammatesBusy.js";
   import TeamQueueStrip from "./TeamQueueStrip.svelte";
   import { answerTeamTask, cancelTeamTask, cancelWorkingTeamTasks, summarizeTeamTasks, getTeamTasksView, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
@@ -118,6 +118,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import { cancelRemoteQueued, getSessionOptions, listAgentRoster, recheckRemote, runApi, type SessionOptions } from "../api/team.js";
   import SessionFieldChips from "./SessionFieldChips.svelte";
+  import ListenModeButton from "./ListenModeButton.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
   import { readRosterCache, teamAgentsByHandle as teamAgentsOf } from "../rosterCache.js";
@@ -906,6 +907,11 @@
   // provider instance's own default model applies.
   let activeModelID = $state("");
   let activeProjectId = $state<string | null>(null);
+  // Sub-agent roles are edited where they are scoped: the project's
+  // Sub-agents tab, or the global roles page for a chat with no project.
+  const rolesHref = $derived(
+    activeProjectId ? `${base}/projects/${encodeURIComponent(activeProjectId)}?tab=subagents` : `${base}/agent-profiles`,
+  );
 
   /* ── approval error state ─────────────────────────────────────── */
   let approvalError = $state("");
@@ -1723,6 +1729,14 @@
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Coalesce: one save can touch the workspace file more than once (config,
+     then lock seals), and each write publishes its own event. */
+  let workspaceReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleWorkspaceReload() {
+    if (workspaceReloadTimer) clearTimeout(workspaceReloadTimer);
+    workspaceReloadTimer = setTimeout(() => { workspaceReloadTimer = null; loadWorkspace(); }, 300);
+  }
+
   function loadSchedules() {
     if (agentMode?.chatOnly) return;
     run(listSchedules(base, sessionId).pipe(Effect.provide(WickClientLayer)))
@@ -2264,6 +2278,7 @@
       if (isReconnect(sseStatus, s)) {
         scheduleSubAgentReload();
         loadTeamTasks();
+        scheduleWorkspaceReload();
       }
       sseStatus = s;
     });
@@ -2340,6 +2355,10 @@
         // there, so without its own event the panel would sit on a stale
         // list until something unrelated triggered a fetch.
         scheduleTodoReload();
+      } else if (ev.type === "workspace") {
+        // A session connector was added, filled in, renamed or removed —
+        // by the agent, another tab, or the idle sweeper.
+        scheduleWorkspaceReload();
       } else if (ev.type === "team_task") {
         // A task this chat sent changed state (Needs you, a reply, …).
         const t = parseTeamTaskEvent(ev.data);
@@ -2423,6 +2442,18 @@
     agentLifecycle.state === "queued" ||
       liveProcesses.some((p) => p.session_id === sessionId && p.lifecycle === "queued"),
   );
+  /* Where a queued turn stands, for the composer's spinner: its place in
+     the queue and how full the pool is. */
+  const composerQueueLabel = $derived.by(() => {
+    const w = waitState;
+    if (!composerQueued || !w) return "";
+    const parts: string[] = [];
+    if (w.queue_pos > 0) parts.push(w.queue_len > 0 ? `#${w.queue_pos} of ${w.queue_len}` : `#${w.queue_pos}`);
+    if (w.global_max > 0) parts.push(`${w.global_used}/${w.global_max} running`);
+    else if (w.provider && w.max > 0) parts.push(`${w.used}/${w.max} running`);
+    if (w.hold) parts.push("host busy");
+    return parts.join(" · ");
+  });
   const composerRunning = $derived(
     !composerQueued &&
       (typing.active || live !== null || agentLifecycle.state === "working" || agentLifecycle.state === "spawning"),
@@ -2660,6 +2691,9 @@
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
     railTab = railTab === tab ? null : tab;
+    // Opening Config always re-reads it: a base connector edited in the
+    // admin pages publishes nothing to this session.
+    if (railTab === "workspace") loadWorkspace();
     // Any deliberate click hands the rail back to the user, so a finishing
     // checklist no longer closes it under them.
     todosAutoOpened = false;
@@ -3198,6 +3232,13 @@
   {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
 {/snippet}
 
+<!-- The Slack reply-mode button (hidden for any session that is no Slack
+     channel thread), then the session's locked fields. -->
+{#snippet composerToolbarExtra()}
+  <ListenModeButton {base} {sessionId} />
+  {#if sessionFields && sessionFields.fields.length > 0}{@render lockedSessionFields()}{/if}
+{/snippet}
+
 {#snippet sessionPanel()}
   <SessionPanel
     info={notesInfo}
@@ -3253,6 +3294,8 @@
       teammatesBusy={busyTeammateCount}
       {activeView}
       {ticketJump}
+      {base}
+      {sessionId}
       onKill={handleKill}
       onDelete={handleDelete}
       onTabChange={handleTabChange}
@@ -3286,7 +3329,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} waitNote={detached ? null : turnWait} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : threadTyping(typing, busyTeammateCount)} {progressLabel} waitNote={detached ? null : turnWait} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} teammatesHidden={!teammatesShown || agentMode?.agent?.showTeammates === false} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
           {#if loadingNewer}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -3477,8 +3520,9 @@
             caption={agentMode?.agent?.caption}
             running={composerRunning}
             queued={composerQueued}
+            queueLabel={composerQueueLabel}
             onStop={handleStopFromComposer}
-            toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
+            toolbarExtra={composerToolbarExtra}
           />
           </div>
         </div>
@@ -3730,6 +3774,7 @@
           {teamTasks}
           teamAgents={teamAgentsByHandle}
           onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
+          {rolesHref}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -3956,6 +4001,7 @@
               {teamTasks}
               teamAgents={teamAgentsByHandle}
               onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
+              {rolesHref}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -4229,6 +4275,7 @@
     row={selectedSubAgentRow}
     onClose={() => { selectedSubAgent = null; }}
     onChanged={loadSubAgents}
+    {rolesHref}
   />
 {/if}
 

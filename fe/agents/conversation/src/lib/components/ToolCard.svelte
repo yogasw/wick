@@ -393,7 +393,7 @@
       <button
         type="button"
         onclick={toggleResult}
-        class={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors ${block.isError ? "text-red-600 dark:text-red-400" : "text-black-600 dark:text-black-700"}`}
+        class={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors ${block.isError ? "text-red-600 dark:text-red-400" : "text-black-800 dark:text-black-700"}`}
       >
         <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
           {#if block.isError}

@@ -15,6 +15,7 @@
    *   - Nothing auto-refreshes. The ledger is history, not a live feed;
    *     a table that reshuffles while you read it is hostile. */
   import { onMount } from "svelte";
+  import TokenTrend from "./TokenTrend.svelte";
   import {
     fetchUsageReport,
     fetchProviderUsage,
@@ -63,6 +64,12 @@
         to everything else below it. */
     channels?: string[];
     instances?: string[];
+    providers?: string[];
+    people?: string[];
+    models?: string[];
+    /** Condition rows, same as the page's condition builder. */
+    match?: string[];
+    matchOp?: string;
     /** Already-fetched report. A page that needs these numbers for its
         own drill-downs fetches once and hands the result here, instead
         of the card asking for the same thing a second time. */
@@ -83,6 +90,11 @@
     until = "",
     channels,
     instances,
+    providers,
+    people,
+    models,
+    match,
+    matchOp = "",
     report: reportProp,
     flush = false,
   }: Props = $props();
@@ -127,10 +139,10 @@
     error = "";
     try {
       if (provider) {
-        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances });
+        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances, providers, people, models, match, matchOp });
         page = 0;
       } else {
-        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances });
+        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances, providers, people, models, match, matchOp });
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -145,7 +157,7 @@
      a second request on mount beside onMount's. */
   let lastRange = $state("");
   $effect(() => {
-    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${fed ? "fed" : ""}`;
+    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${(providers ?? []).join()}|${(people ?? []).join()}|${(models ?? []).join()}|${matchOp}:${(match ?? []).join("\n")}|${fed ? "fed" : ""}`;
     if (lastRange === "") {
       lastRange = key;
       return;
@@ -505,6 +517,10 @@
         <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">tokens per turn</p>
       </div>
     </div>
+
+    {#if report.trend?.length}
+      <TokenTrend points={report.trend} unit={report.trend_unit} />
+    {/if}
 
     <div
       class="px-5 pt-3 flex items-center gap-1 border-t border-white-300 dark:border-navy-600"

@@ -437,13 +437,10 @@
         <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
         <ProjectMenu {base} {project} {chatCount} {onPin} />
       </div>
-    {:else if ticketEnabled && openTicketId}
-      <!-- A ticket's page has its own Back; only the project's actions need
-           somewhere to live. -->
-      <div class="flex items-center justify-end">
-        <ProjectMenu {base} {project} {chatCount} {onPin} />
-      </div>
     {/if}
+    <!-- A ticket's page has no project menu: it has its own Back, and the
+         project's actions read as the ticket's there. The board and the
+         chat list keep it. -->
 
     {#if ticketEnabled && openTicketId}
       <!-- The page height is locked (each panel scrolls itself), so the

@@ -169,7 +169,9 @@ Two costs of letting work finish in the old process, both real:
 - The old process keeps the MCP credential it minted per spawn, and that credential is known only to the process that minted it. Its agents' own wick tool calls now land on the successor (same socket) and come back `401` — see Troubleshooting. Non-MCP tools are unaffected.
 - While the parent is alive the *next* reload is refused with `parent hasn't exited`. Two generations at a time, no more.
 
-One case where the wait genuinely may not converge: the draining process keeps the **intake baton** to the end, so inbound Slack events and cron ticks still land *here* and start new work, which restarts the settle window. On a busy host the handover waits for a real lull. That is the trade the rule asks for — nothing is killed — and the escape is a human forcing the swap, not a timer choosing for them.
+**Channels move first.** As soon as it starts draining, the old process offers its channel listeners (Slack sockets, Telegram polling) to the successor (`channels_released` in `draining.json`); the successor starts them and writes `channels.taken`; a few seconds later the old process stops listening. New messages are answered by the new build at once, and the old one only finishes the turns it already had — so a busy host no longer keeps the drain alive forever, and a fix just deployed is live for every new message. A message for a session whose turn is still running in the old process is held (buffered, status queued) and delivered once that turn ends, so one session never runs two agents. Sending is not moved: a reply still being written in the old process goes out from there.
+
+Cron, workflows and scheduled messages still move with the **intake baton**, when the old process exits — two processes running them would double-fire. A successor that does not take the channels within two minutes (an older binary after a rollback) leaves them where they were, and they move with the baton as before.
 
 Every 15 seconds a drain logs what is still outstanding, by name, so a long wait is legible rather than a silent hang.
 

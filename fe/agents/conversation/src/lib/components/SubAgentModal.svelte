@@ -63,9 +63,11 @@
     onClose: () => void;
     /** Fired after a Stop so the rail behind the modal can catch up. */
     onChanged?: () => void;
+    /** Where the role behind this sub-agent is edited. Absent → no link. */
+    rolesHref?: string;
   };
 
-  let { base, sessionId, row, onClose, onChanged }: Props = $props();
+  let { base, sessionId, row, onClose, onChanged, rolesHref }: Props = $props();
 
   function run<T>(eff: Effect.Effect<T, unknown, never>): Promise<T> {
     return Effect.runPromise(eff);
@@ -413,7 +415,7 @@
 
       <!-- what it runs on, and what that has cost: a caption, never a
            control. Provider and model are decided at spawn from the role,
-           so there is nothing here to change. -->
+           so the only way to change them is the role itself — linked. -->
       <div
         data-testid="subagent-meter"
         class="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-white-300 px-4 py-2 text-[10px] text-black-700 dark:border-navy-600 dark:text-black-600"
@@ -428,6 +430,14 @@
             >
             {#if modelLabel}
               <span class="truncate" title={modelLabel}>· {modelLabel}</span>
+            {/if}
+            {#if rolesHref}
+              <a
+                href={rolesHref}
+                title="Provider comes from the role; editing it applies to the next spawn."
+                class="shrink-0 text-black-700 underline hover:text-black-900 dark:text-black-600 dark:hover:text-white-100"
+                >change</a
+              >
             {/if}
           {:else}
             <span data-testid="subagent-provider-unknown" title="No turn has run on this sub-agent yet, so no provider has answered for it."

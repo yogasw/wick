@@ -12,6 +12,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -28,6 +29,10 @@ type GlobalPolicy struct {
 	AllowForcePush bool
 	RawEnabled     bool
 	RawRules       map[string]string // subcommand → "allow" | "deny"
+
+	// DenyPatterns are regexes (case-insensitive) a commit's message and
+	// added lines must never match: the sensitive-data guard.
+	DenyPatterns []string
 }
 
 // RepoRule is one layer-2 row from the repo_policies kvlist. An empty column
@@ -55,6 +60,7 @@ type EffectivePolicy struct {
 	AllowForcePush bool
 	RawEnabled     bool
 	RawRules       map[string]string
+	DenyRes        []*regexp.Regexp
 	MatchedRule    string // "global" or "per-repo → <glob>"; never empty
 	PolicyErr      string // non-empty when config is malformed → deny mutations
 }
@@ -278,6 +284,14 @@ func Resolve(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) Effect
 			p.BranchRe = re
 		}
 	}
+	for _, pat := range g.DenyPatterns {
+		re, err := regexp.Compile("(?i)" + pat)
+		if err != nil {
+			p.PolicyErr = "sensitive-data pattern " + strconv.Quote(pat) + " does not compile: " + err.Error()
+			continue
+		}
+		p.DenyRes = append(p.DenyRes, re)
+	}
 	if p.MessagePattern != "" {
 		re, err := regexp.Compile(p.MessagePattern)
 		if err != nil {
@@ -427,6 +441,9 @@ type Request struct {
 	Force         bool
 	NewBranch     bool
 	RawSubcommand string
+	// Added is every line a commit adds (staged diff, "+" lines), for the
+	// sensitive-data guard.
+	Added string
 }
 
 // Verdict is the policy outcome. A denied verdict always carries a Reason, and
@@ -514,6 +531,11 @@ func (p EffectivePolicy) Evaluate(r Request) Verdict {
 		}
 		// Only a commit carries a message, so only a commit is judged on one. An
 		// empty message is left to git, which refuses it with its own error.
+		if r.Op == "commit" {
+			if where, hit := p.sensitiveHit(r); hit != "" {
+				return deny(fmt.Sprintf("commit refused: %q in %s is on the sensitive-data list; replace it with neutral data (client A, acme, dev@example.com) and commit again", hit, where))
+			}
+		}
 		if r.Op == "commit" && r.Message != "" && p.MessageRe != nil &&
 			!p.MessageRe.MatchString(r.Message) {
 			return deny(fmt.Sprintf("commit message does not match the required pattern %s",
@@ -619,4 +641,34 @@ func scopeWarning(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) s
 	return "this repository has no readable remote, so host/owner/repo is unknown and " +
 		"these stricter rules could not be evaluated: " + strings.Join(globs, ", ") +
 		". The global fallback was used instead, which may be more permissive"
+}
+
+// sensitiveHit reports where (the commit message, or the added lines) and
+// what a deny pattern matched first; "" when nothing did.
+func (p EffectivePolicy) sensitiveHit(r Request) (where, hit string) {
+	for _, re := range p.DenyRes {
+		if m := re.FindString(r.Message); m != "" {
+			return "the commit message", m
+		}
+	}
+	for _, re := range p.DenyRes {
+		if m := re.FindString(r.Added); m != "" {
+			return "the staged changes", m
+		}
+	}
+	return "", ""
+}
+
+// ParseDenyPatterns reads one pattern per line; blank lines and lines
+// starting with # are skipped.
+func ParseDenyPatterns(text string) []string {
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }

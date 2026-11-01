@@ -43,11 +43,15 @@ type Configs struct {
 	// RulesEditor is the only place merge_rules is edited: mode as a dropdown and
 	// approvers found by name among the workspace's Bitbucket users.
 	RulesEditor string `wick:"html=rules_editor;group=Merge rules|Checked by merge_pull_request before every merge. A repository no row matches merges without checks, so keep a * row as the default.|collapsed;desc=Edit the merge rules. Every button saves."`
-	MergeRules  string `wick:"kvlist=repo|mode|min_approvals|required_approvers;hidden;default=[{\"repo\":\"*\",\"mode\":\"allow\",\"min_approvals\":\"1\",\"required_approvers\":\"5efc131e3404690bae882041\",\"approver_names\":\"Taufik Budi S\"},{\"repo\":\"integration-helm\",\"mode\":\"deny\",\"min_approvals\":\"\",\"required_approvers\":\"\"}];desc=Managed by the Merge rules editor. One row per repository. repo: slug or workspace/slug, globs allowed (* matches every repo). The row with the fewest * wins. mode: allow or deny (deny refuses every merge, e.g. integration-helm). min_approvals: approvals the PR needs. required_approvers: comma-separated account_id, {uuid} or nickname. Each one who is on the PR must have approved, someone not on the PR is not required."`
+	MergeRules  string `wick:"kvlist=repo|mode|min_approvals|required_approvers;hidden;default=[{\"repo\":\"*\",\"mode\":\"allow\",\"min_approvals\":\"1\",\"required_approvers\":\"5efc131e3404690bae882041\",\"approver_names\":\"Taufik Budi S\"},{\"repo\":\"infra-helm\",\"mode\":\"deny\",\"min_approvals\":\"\",\"required_approvers\":\"\"}];desc=Managed by the Merge rules editor. One row per repository. repo: slug or workspace/slug, globs allowed (* matches every repo). The row with the fewest * wins. mode: allow or deny (deny refuses every merge, e.g. infra-helm). min_approvals: approvals the PR needs. required_approvers: comma-separated account_id, {uuid} or nickname. Each one who is on the PR must have approved, someone not on the PR is not required."`
 	// RulesTest checks a real pull request against the saved rules, without merging.
 	RulesTest string `wick:"html=rules_test_panel;group=Test merge rules|Paste a pull request and see the checklist merge_pull_request would apply.|collapsed;desc=Test a pull request against the saved rules. Nothing is merged."`
 	// The test panel's last input, persisted so a re-mount of the widget does not wipe it.
 	RulesTestPR string `wick:"hidden;desc=Last pull request tested in the merge rules panel."`
+
+	// DefaultReviewers is added to every PR create_pull_request opens, so a
+	// team's usual reviewer is never left to the caller's memory.
+	DefaultReviewers string `wick:"group=Pull requests|Applied by create_pull_request.|collapsed;desc=Comma-separated Bitbucket account_id or {uuid} added as reviewers to every PR create_pull_request opens, on top of its reviewers input. The skip_default_reviewers input leaves them out for one PR."`
 
 	DefaultPagelen int `wick:"default=20;group=Paging||collapsed;desc=Default Bitbucket page length for list/search operations."`
 	MaxPagelen     int `wick:"default=100;group=Paging;desc=Maximum page length allowed by this connector."`
@@ -128,7 +132,8 @@ type CreatePullRequestInput struct {
 	SourceBranch      string `wick:"required;desc=Source branch name."`
 	DestinationBranch string `wick:"required;desc=Destination branch name. Example: main"`
 	CloseSourceBranch bool   `wick:"default=false;desc=Close source branch after merge."`
-	Reviewers         string `wick:"desc=Optional reviewers, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. The PR author cannot be a reviewer."`
+	Reviewers         string `wick:"desc=Optional reviewers, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. Added on top of the default_reviewers config. The PR author cannot be a reviewer."`
+	SkipDefault       bool   `wick:"key=skip_default_reviewers;desc=true = do not add the default_reviewers config to this PR (e.g. someone asked to drop that reviewer)."`
 }
 
 type AddPullRequestReviewersInput struct {

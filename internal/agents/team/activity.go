@@ -85,6 +85,12 @@ func HidesInterimInChannels(set *bool) bool {
 	return set == nil || *set
 }
 
+// StopsAfterTeamTask reads StopAfterTeamTask with its default: on, the
+// agent's process stops as soon as it answered a teammate's task.
+func StopsAfterTeamTask(set *bool) bool {
+	return set == nil || *set
+}
+
 // TurnStatus is the roster status of a session: "running" only while a
 // turn is in flight. metaStatus is the persisted session status, which
 // the pool sets to running at spawn and back to idle only when the

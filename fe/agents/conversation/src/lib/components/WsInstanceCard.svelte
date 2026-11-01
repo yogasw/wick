@@ -177,8 +177,11 @@
   <!-- Body -->
   {#if isOpen}
     <div class="p-3 space-y-3" data-testid="card-body">
-      {#each (instance.fields ?? []) as field (field.key)}
+      {#each (instance.fields ?? []) as field, fi (field.key)}
         {@const fieldId = `ws-${instance.id}-${field.key}`}
+        {#if field.group && field.group !== (instance.fields ?? [])[fi - 1]?.group}
+          <p class="pt-1 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600" data-testid="ws-field-group">{field.group}</p>
+        {/if}
         <div>
           <label
             for={fieldId}
@@ -190,6 +193,9 @@
             {/if}
             {#if field.set}
               <span class="ml-1 text-[10px] text-green-600 dark:text-green-400">• set</span>
+            {/if}
+            {#if field.locked}
+              <span class="ml-1 text-[10px] text-black-700 dark:text-black-600" title="Locked for the agent: only you can change it here; otherwise the default applies">🔒 AI can't change</span>
             {/if}
           </label>
 

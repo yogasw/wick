@@ -116,6 +116,13 @@ func (t *translator) next(ev event.AgentEvent) (out a2a.Event, last bool) {
 		t.full.Reset()
 		t.full.WriteString(ev.Text)
 		return nil, false
+	case event.Warning:
+		// A failover took the turn: the final message carries only the
+		// next provider's reply.
+		if ev.FailedOver {
+			t.full.Reset()
+		}
+		return nil, false
 	case event.TextDelta:
 		if ev.Text == "" {
 			return nil, false

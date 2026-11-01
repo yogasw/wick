@@ -290,6 +290,18 @@ func CanAccess(meta Meta, acc Access) bool {
 	return false
 }
 
+// CanManage reports whether userID may change meta's settings or delete
+// the project. Narrower than CanAccess on purpose: a tag grant lets a
+// member work in the project (board, tickets, sessions) but not
+// reconfigure or remove it — only its owner may. An ownerless project
+// stays admin-only, the rule CanAccess's caller already applies to it.
+func CanManage(meta Meta, userID string, isAdmin bool) bool {
+	if meta.OwnerUserID == "" {
+		return isAdmin
+	}
+	return userID != "" && meta.OwnerUserID == userID
+}
+
 // ListVisibleTo returns the IDs of projects acc may see, sorted like List.
 // Use this for every user-facing project enumeration (channel default
 // dropdown, pickers) instead of List, which returns all projects on disk.

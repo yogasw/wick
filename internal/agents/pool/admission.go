@@ -32,8 +32,12 @@ func memoryAdmits(minFreeMB int, availBytes uint64, availKnown bool) bool {
 // queued spawn is never a silent mystery.
 func (p *Pool) memoryAdmitsNow() bool {
 	if p.cfg.SpawnHold != nil && p.cfg.SpawnHold() {
-		log.Info().Str("component", "pool").
-			Msg("spawn queued: free memory is falling fast toward the floor")
+		reason := ""
+		if p.cfg.SpawnHoldReason != nil {
+			reason = p.cfg.SpawnHoldReason()
+		}
+		log.Info().Str("component", "pool").Str("reason", reason).
+			Msg("spawn queued: the resource guard is holding new agents")
 		return false
 	}
 	if p.cfg.MinFreeMemoryLoader == nil {

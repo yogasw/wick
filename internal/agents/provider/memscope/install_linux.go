@@ -5,7 +5,9 @@ package memscope
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/pkg/safeexec"
@@ -31,6 +33,11 @@ func EnsureSlice(limits SliceLimits) error {
 		return err
 	}
 	if !changed {
+		// Once per process even when the unit is unchanged: a runtime
+		// drop-in can predate this wick (RuntimeMemoryArgs).
+		if runtimeSynced.CompareAndSwap(false, true) {
+			syncRuntimeMemory(l, limits)
+		}
 		return nil
 	}
 	l.Info().
@@ -43,5 +50,22 @@ func EnsureSlice(limits SliceLimits) error {
 	if err := safeexec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
 		l.Warn().Err(err).Msg("daemon-reload failed; slice limits apply on next reload")
 	}
+	runtimeSynced.Store(true)
+	syncRuntimeMemory(l, limits)
 	return nil
+}
+
+// runtimeSynced: this process already put the runtime memory controls
+// back in line with the unit.
+var runtimeSynced atomic.Bool
+
+// syncRuntimeMemory overrides any runtime drop-in on the slice's memory
+// keys with the unit's own values (RuntimeMemoryArgs). Best effort.
+func syncRuntimeMemory(l zerolog.Logger, limits SliceLimits) {
+	args := RuntimeMemoryArgs(limits)
+	if err := safeexec.Command("systemctl", args...).Run(); err != nil {
+		l.Warn().Err(err).Strs("args", args).Msg("could not align the slice's runtime memory controls")
+		return
+	}
+	l.Info().Strs("args", args).Msg("agents.slice runtime memory controls aligned with the unit")
 }

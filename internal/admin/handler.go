@@ -132,6 +132,9 @@ type Handler struct {
 	// post-construction (SetProjectWriter): the page lists projects through
 	// ProjectLister, and only this one endpoint needs to write one back.
 	projectWriter ProjectWriter
+	// projectTrash backs the Deleted filter and Restore on /admin/projects
+	// (SetProjectTrash); nil hides deleted projects.
+	projectTrash ProjectTrash
 	// teamAgents backs /admin/team-agents (SetTeamAgents); nil = 503.
 	teamAgents TeamAgentLister
 
@@ -339,6 +342,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/schedule/{id}/owner", admin(h.setScheduleOwner))
 	mux.Handle("POST /admin/projects/{id}/tags", admin(h.setProjectTags))
 	mux.Handle("POST /admin/projects/{id}/owner", admin(h.setProjectOwner))
+	mux.Handle("POST /admin/projects-trash/{key}/restore", admin(h.restoreDeletedProject))
 
 	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))
 	mux.Handle("POST /admin/workflows/{id}/tags", admin(h.setWorkflowTags))

@@ -58,6 +58,10 @@ type Configs struct {
 
 	CustomAPIMode      string `wick:"group=Custom API|Governs the custom_api_call escape hatch — reaching Slack Web API methods this connector has no dedicated operation for. The operation itself is disabled by default; enable it on this page before these settings do anything.;dropdown=allowlist|all;default=allowlist;desc=Which Slack methods custom_api_call may reach. 'allowlist' permits only the methods listed below (recommended). 'all' permits every Slack Web API method."`
 	CustomAPIAllowlist string `wick:"group=Custom API;kvlist=method;visible_when=custom_api_mode:allowlist;desc=Slack Web API method names custom_api_call may reach, one per row (e.g. emoji.list, pins.add, conversations.members). Supports a trailing * wildcard for prefixes: 'admin.*' allows every admin method. Ignored when mode is 'all'."`
+	// AllowUsergroupWrite unlocks the user group write methods. A user
+	// group is shared by the whole workspace and Slack has no per-group
+	// scope, so they stay blocked whatever the mode or allowlist says.
+	AllowUsergroupWrite bool `wick:"key=allow_usergroup_write;group=Custom API;desc=Let custom_api_call change user groups (usergroups.create, update, enable, disable, users.update). Off by default: a user group belongs to the whole workspace, so these methods stay blocked even in 'all' mode or behind an allowlist wildcard until this is checked."`
 }
 
 // ── Input structs ────────────────────────────────────────────────────
@@ -877,6 +881,7 @@ func Operations() []connector.Category {
 						"Disabled by default. An admin must enable the operation on the connector page before it can run at all.",
 						"Reachable methods are governed by custom_api_mode: 'allowlist' (default) permits only the methods in custom_api_allowlist; 'all' permits every method. A blocked call fails with the reason and the allowlist contents.",
 						"Allowlist entries support a trailing * wildcard, so 'admin.*' covers every admin method.",
+						"User group writes (usergroups.create, update, enable, disable, users.update) are blocked in every mode until allow_usergroup_write is checked on the connector page; usergroups.list stays reachable through the allowlist.",
 						"Never pass token in params — the connector attaches its own credential, and a token key in params is rejected.",
 						"The token still bounds what is possible: a method needing a scope the token lacks fails with Slack's missing_scope error no matter what the allowlist says.",
 						"Responses are returned verbatim, so a method returning a large payload lands in the agent's context unshaped. Pass a limit in params for .list methods.",

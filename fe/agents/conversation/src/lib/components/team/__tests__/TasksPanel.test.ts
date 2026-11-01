@@ -375,7 +375,7 @@ describe("TasksPanel Retry / Reassign", () => {
   afterEach(() => vi.useRealTimers());
 
   const failed = task({ task_id: "f", to_handle: "kai", to_name: "Kai", state: "failed", summary: "No reply in 10 min", updated_at: at(11, 50) });
-  const declined = task({ task_id: "x", to_handle: "jules", to_name: "Google Jules", state: "rejected", summary: "No access to qiscus/raya-webhook", updated_at: at(11, 52) });
+  const declined = task({ task_id: "x", to_handle: "jules", to_name: "Google Jules", state: "rejected", summary: "No access to acme/sample-webhook", updated_at: at(11, 52) });
   const teammates = [
     { handle: "jules", name: "Google Jules" },
     { handle: "anton", name: "Anton" },
