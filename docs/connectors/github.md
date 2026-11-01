@@ -129,6 +129,8 @@ Not repo-scoped — `q` uses [GitHub search syntax](https://docs.github.com/en/s
 |---|---|---|---|
 | `list_workflows` | no | `owner`, `repo`, `per_page` | Workflows defined in the repo. |
 | `list_workflow_runs` | no | `owner`, `repo`, `per_page` | Recent workflow runs (status / conclusion). |
+| `list_run_jobs` | no | `owner`, `repo`, `run_id` | Jobs of one run, trimmed to id / name / status / conclusion / `failed_steps`. |
+| `get_job_log` | no | `owner`, `repo`, `job_id`, `grep`, `context`, `tail_bytes` | Plain-text job log: the last `tail_bytes` (default 60000), or only lines matching the `grep` regex with `context` lines around them (default 5). |
 | `dispatch_workflow` | yes | `owner`, `repo`, `workflow_id`, `ref`, `inputs` | Trigger a `workflow_dispatch`. `workflow_id` = numeric ID or filename (`ci.yml`); `inputs` is an optional JSON object. |
 
 ### Webhooks
