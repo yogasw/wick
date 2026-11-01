@@ -907,6 +907,11 @@
   // provider instance's own default model applies.
   let activeModelID = $state("");
   let activeProjectId = $state<string | null>(null);
+  // Sub-agent roles are edited where they are scoped: the project's
+  // Sub-agents tab, or the global roles page for a chat with no project.
+  const rolesHref = $derived(
+    activeProjectId ? `${base}/projects/${encodeURIComponent(activeProjectId)}?tab=subagents` : `${base}/agent-profiles`,
+  );
 
   /* ── approval error state ─────────────────────────────────────── */
   let approvalError = $state("");
@@ -3769,6 +3774,7 @@
           {teamTasks}
           teamAgents={teamAgentsByHandle}
           onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
+          {rolesHref}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -3995,6 +4001,7 @@
               {teamTasks}
               teamAgents={teamAgentsByHandle}
               onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
+              {rolesHref}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -4268,6 +4275,7 @@
     row={selectedSubAgentRow}
     onClose={() => { selectedSubAgent = null; }}
     onChanged={loadSubAgents}
+    {rolesHref}
   />
 {/if}
 
