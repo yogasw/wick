@@ -86,9 +86,10 @@ func TestMessageFromUserAnswersAQuestion(t *testing.T) {
 	if _, err := h.MessageFromUser(ctx, "sess-cap", q.TaskID, "staging"); err != nil {
 		t.Fatal(err)
 	}
-	if got := roles(threadOf(t, h, q.TaskID)); got != "captain:deploy it | teammate:which environment? | user:staging | teammate:done" {
-		t.Fatalf("thread = %s", got)
-	}
+	// The answer is sent without waiting: the teammate's reply lands on
+	// the thread a moment later.
+	want := "captain:deploy it | teammate:which environment? | user:staging | teammate:done"
+	waitFor(t, "the teammate's reply", func() bool { return roles(threadOf(t, h, q.TaskID)) == want })
 }
 
 // Another chat's task is unknown, an empty message is refused, and with
