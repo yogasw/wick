@@ -189,7 +189,7 @@ setup() {
     # the CLI version the app already depends on, so `wick build` matches the module
     local wv=""; [ -f "$DIR/go.mod" ] && wv="$(awk '$1=="github.com/yogasw/wick"{print $2; exit}' "$DIR/go.mod")"
     say "install wick CLI ${wv:-latest}"
-    run go install "github.com/yogasw/wick@${wv:-latest}"
+    run go install "github.com/yogasw/wick@v1.18.0"
   else
     echo "   wick CLI ok ($(command -v wick))"
   fi
