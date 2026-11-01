@@ -182,7 +182,7 @@ What the script runs, if you prefer the steps yourself:
 curl -fsSL -o go.tgz https://go.dev/dl/go1.26.0.linux-amd64.tar.gz   # the version in go.mod
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go.tgz
 export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
-go install github.com/yogasw/wick@latest                          # the wick CLI
+go install github.com/yogasw/wick@v1.18.0                          # the wick CLI
 
 # 2. app
 git clone https://github.com/org/myapp.git && cd myapp
