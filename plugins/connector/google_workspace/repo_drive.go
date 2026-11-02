@@ -152,10 +152,24 @@ func refreshAccessToken(c *connector.Ctx) (string, error) {
 }
 
 // probeTokenScopes calls Google tokeninfo to get the granted OAuth scopes
-// for the current user_token. Used by HealthCheck.
+// for the current user_token. Used by HealthCheck. The stored access token
+// expires after ~1 hour, so a rejected token is refreshed once and probed
+// again — otherwise a healthy connection would look disconnected.
 func probeTokenScopes(c *connector.Ctx) (string, error) {
+	scope, err := tokenInfoScopes(c, c.Cfg("user_token"))
+	if err == nil || c.Cfg("refresh_token") == "" {
+		return scope, err
+	}
+	token, rerr := refreshAccessToken(c)
+	if rerr != nil {
+		return "", rerr
+	}
+	return tokenInfoScopes(c, token)
+}
+
+func tokenInfoScopes(c *connector.Ctx, token string) (string, error) {
 	params := url.Values{}
-	params.Set("access_token", c.Cfg("user_token"))
+	params.Set("access_token", token)
 	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet,
 		"https://www.googleapis.com/oauth2/v1/tokeninfo?"+params.Encode(), nil)
 	if err != nil {
