@@ -125,6 +125,10 @@ type Service struct {
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
+	// oauth serializes and remembers access-token refreshes for
+	// generic-OAuth connectors — see ensureOAuthToken.
+	oauth oauthRefreshState
+
 	// cfgs delegates per-instance configuration storage to the central
 	// configs table (owner = "connector:{id}"). nil means storage falls
 	// back to the legacy entity.Connector.Configs JSON column — set
@@ -2403,6 +2407,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		masker.add(decCfg)
 		masker.add(decIn)
 		masker.add(collectSensitiveValues(mod, op, configs, input))
+	}
+
+	// Renew an expired OAuth access token before the op sees it and keep
+	// the result, so a provider like Google is not asked for a new token on
+	// every call (the connector cannot write its config back itself).
+	if !virtual {
+		if minted := s.ensureOAuthToken(ctx, mod, *c, acct, configs); minted != "" {
+			masker.add([]string{minted})
+		}
 	}
 
 	// Resolve the session id up front (an explicit `session_id` op input wins
