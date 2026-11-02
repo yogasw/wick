@@ -156,6 +156,14 @@ export interface ConnectorAccount {
 export interface ConnectorOAuthMeta {
   display_name: string;
   start_url: string;
+  /* Effective "allow shared instance credential": a call with no connected
+     account of its own may run on the instance user_token / refresh_token. */
+  shared_credential?: boolean;
+  /* The instance still holds a value in those slots (policy managers only). */
+  shared_credential_stored?: boolean;
+  /* SSO on, shared credential off, and the viewer has no account: every
+     call they make fails until they connect. */
+  needs_connect?: boolean;
 }
 
 export interface ConnectorDetail {

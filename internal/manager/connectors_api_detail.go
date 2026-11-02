@@ -192,6 +192,18 @@ type connectorAccountJSON struct {
 type connectorOAuthJSON struct {
 	DisplayName string `json:"display_name"`
 	StartURL    string `json:"start_url"`
+	// SharedCredential is the row's effective "allow shared instance
+	// credential" answer: may a call with no connected account of its own
+	// run on the instance user_token / refresh_token.
+	SharedCredential bool `json:"shared_credential"`
+	// SharedCredentialStored is true when the instance still holds a value
+	// in those slots — the policy section offers to clear it while off.
+	// Only set for a caller who may manage the policy.
+	SharedCredentialStored bool `json:"shared_credential_stored,omitempty"`
+	// NeedsConnect is true when SSO is on, the shared credential is off and
+	// the viewer has no connected account: every call they make fails until
+	// they connect, so the page says so up front.
+	NeedsConnect bool `json:"needs_connect"`
 }
 
 // connectorDetailJSON is the shape served at
@@ -315,6 +327,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		if mod.OAuth != nil {
 			rowJSON.OAuth = h.rowOAuthJSON(mod, row, user)
 			rowJSON.Accounts = h.rowAccountsJSON(ctx, row, user, callerTags)
+			h.fillSharedCredentialJSON(ctx, rowJSON.OAuth, row, user, rowJSON.Accounts)
 		}
 		rowJSON.MCPAuth = h.rowMCPAuthJSON(ctx, key, row, user)
 		out.Rows = append(out.Rows, rowJSON)
@@ -412,6 +425,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	var oauthJSON *connectorOAuthJSON
 	if mod.OAuth != nil {
 		oauthJSON = h.rowOAuthJSON(mod, *row, user)
+		h.fillSharedCredentialJSON(ctx, oauthJSON, *row, user, accounts)
 	}
 
 	writeJSON(w, http.StatusOK, connectorDetailJSON{
@@ -513,6 +527,34 @@ func (h *Handler) rowOAuthJSON(mod connector.Module, row entity.Connector, user 
 		}
 	}
 	return out
+}
+
+// fillSharedCredentialJSON sets the shared-credential policy and the
+// viewer's "connect needed" state on a row's OAuth read model. accounts is
+// the visible list already built for the row; the viewer's own accounts are
+// always in it.
+func (h *Handler) fillSharedCredentialJSON(ctx context.Context, out *connectorOAuthJSON, row entity.Connector, user *entity.User, accounts []connectorAccountJSON) {
+	out.SharedCredential = h.sharedCredentialAllowed(ctx, row)
+	if h.canManageAccessPolicy(user, &row) {
+		out.SharedCredentialStored = h.connectors.SharedCredentialStored(row)
+	}
+	if !row.EnableSSO || out.SharedCredential || user == nil {
+		return
+	}
+	for _, acc := range accounts {
+		if acc.WickUserID == user.ID {
+			return
+		}
+	}
+	out.NeedsConnect = true
+}
+
+// sharedCredentialAllowed is the row's effective shared-credential policy.
+// A lookup error reads as "off": the safe answer for both the callback that
+// would otherwise write the slot and the notice that asks for a connect.
+func (h *Handler) sharedCredentialAllowed(ctx context.Context, row entity.Connector) bool {
+	ok, err := h.connectors.SharedCredentialAllowed(ctx, row)
+	return err == nil && ok
 }
 
 // rowMCPAuthJSON builds the per-instance MCP login state, or nil when the

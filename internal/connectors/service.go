@@ -2108,6 +2108,35 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 
+	// No account named: on a per-user (SSO) OAuth row, run as the caller's
+	// OWN connected account, exactly as if they had picked it. The caller is
+	// the human behind the agent session when there is one — agent spawns
+	// authenticate with a shared principal, so p.UserID alone is not them.
+	// Only the spawn's own session id counts here, never a session_id op
+	// input: that one is model-controlled and must not choose whose account
+	// runs. Same visibility check as an explicit pick.
+	if !virtual && acct == nil && p.AccountID == "" && mod.OAuth != nil && c.EnableSSO {
+		owner := p.UserID
+		if s.sessionOwnerUser != nil && p.SessionID != "" {
+			if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
+				owner = uid
+			}
+		}
+		acc, err := s.OwnAccount(ctx, c.ID, owner)
+		if err != nil {
+			return nil, fmt.Errorf("resolve your connected account: %w", err)
+		}
+		if acc != nil {
+			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+			if tagErr != nil {
+				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
+			}
+			if AccountVisibleTo(*c, *acc, accTags[acc.ID], s.AccountAccessFor(*c, owner, p.IsAdmin, p.TagIDs)) {
+				acct = acc
+			}
+		}
+	}
+
 	// An agent feature switched off takes every instance of its connector
 	// type with it, session instances included.
 	if !KeyAllowed(ctx, c.Key) {
@@ -2188,6 +2217,19 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
 	} else {
 		configs = s.LoadConfigs(*c)
+	}
+
+	// No account resolved and the instance credential is off: fail here with
+	// a message that says what to do, instead of calling the provider with an
+	// empty (or somebody else's) token and relaying its confusing refusal.
+	if !virtual && acct == nil && mod.OAuth != nil {
+		allowed, err := s.SharedCredentialAllowed(ctx, *c)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, s.connectNeededError(mod, *c)
+		}
 	}
 
 	// VisibleWhen gates the op on the instance's own config (e.g. an op only
@@ -2283,6 +2325,13 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		sessionID = v
 	}
 
+	// An auto-picked account is recorded like a named one, so the history
+	// shows who the call ran as.
+	runAccountID := p.AccountID
+	if acct != nil {
+		runAccountID = acct.ID
+	}
+
 	s.metrics.IncActive()
 	startedAt := time.Now()
 	run := &entity.ConnectorRun{
@@ -2290,7 +2339,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		OperationKey: op.Key,
 		UserID:       p.UserID,
 		SessionID:    sessionID,
-		AccountID:    p.AccountID,
+		AccountID:    runAccountID,
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,

@@ -116,3 +116,21 @@ describe("AccountsSection — reconnect needed", () => {
     expect(screen.queryByText("Reconnect needed")).toBeNull();
   });
 });
+
+describe("AccountsSection — connect needed notice", () => {
+  it("asks the viewer to connect when the instance shares no credential", () => {
+    render(AccountsSection, props({ accounts: [], oauth: { display_name: "Slack", start_url: "/start", needs_connect: true } }));
+    expect(screen.getByText("Connect your account to use this connector")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Connect account" }).length).toBeGreaterThan(0);
+  });
+
+  it("tells the viewer to ask an admin when they may not connect", () => {
+    render(AccountsSection, props({ accounts: [], oauth: { display_name: "Slack", start_url: "", needs_connect: true } }));
+    expect(screen.getByText("Ask an admin to let you connect.")).toBeTruthy();
+  });
+
+  it("shows no notice when a connect is not needed", () => {
+    render(AccountsSection, props());
+    expect(screen.queryByText("Connect your account to use this connector")).toBeNull();
+  });
+});

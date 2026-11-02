@@ -209,6 +209,19 @@ export async function setConnectorSessionConfig(
   return r.allow_session_config;
 }
 
+/* Saving false also clears the stored instance user_token / refresh_token,
+   so posting false again is how a leftover legacy value is removed. */
+export async function setConnectorSharedCredential(
+  key: string,
+  id: string,
+  allow: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ allow_shared_credential: boolean }>(`${rowBase(key, id)}/shared-credential`, {
+    allow_shared_credential: allow,
+  });
+  return r.allow_shared_credential;
+}
+
 export async function toggleConnectorOperation(
   key: string,
   id: string,

@@ -790,6 +790,13 @@
                     {/each}
                   {/if}
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
+                  <!-- No shared credential and no account of the viewer's own:
+                       every call they make is refused until they connect, so
+                       say so next to the Connect button. Same red as
+                       "Reconnect needed". -->
+                  {#if row.oauth?.needs_connect}
+                    <span class="flex-shrink-0 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400" title="This instance does not share a credential: calls without your own account are refused" data-needs-connect>Connect your account to use this connector</span>
+                  {/if}
                   {#if row.mcp_auth?.per_user}
                     <!-- Per-user (SSO) MCP instance: it holds no credential of
                          its own, so it is never "not connected". Neutral count

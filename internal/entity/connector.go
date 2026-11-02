@@ -285,6 +285,20 @@ type ConnectorAccount struct {
 	UpdatedAt   time.Time
 }
 
+// ConnectorCredentialPolicy is the per-instance answer to "may a call that
+// resolved no connected account run on the instance-level user_token /
+// refresh_token?". On an OAuth row those two configs are a legacy shared
+// credential: whoever filled them, everyone without an account of their own
+// acts as them. Kept in its own table, keyed by connector id, rather than as a
+// column on connectors — a new column on a live table has broken cached plans
+// behind the DB pooler before. No row means "the default for this instance"
+// (see connectors.SharedCredentialAllowed).
+type ConnectorCredentialPolicy struct {
+	ConnectorID           string `gorm:"type:varchar(36);primaryKey"`
+	AllowSharedCredential bool   `gorm:"not null;default:false"`
+	UpdatedAt             time.Time
+}
+
 func (a *ConnectorAccount) BeforeCreate(tx *gorm.DB) error {
 	if a.ID == "" {
 		a.ID = uuid.NewString()

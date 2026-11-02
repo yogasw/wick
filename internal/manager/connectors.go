@@ -104,6 +104,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/duplicate", auth(h.apiDuplicateConnector))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/access-policy", auth(h.apiSetConnectorAccessPolicy))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/session-config", auth(h.apiSetConnectorSessionConfig))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/shared-credential", auth(h.apiSetConnectorSharedCredential))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/bulk", auth(h.apiBulkToggleOperations))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}", auth(h.apiToggleConnectorOperation))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.apiToggleOperationAdminOnly))

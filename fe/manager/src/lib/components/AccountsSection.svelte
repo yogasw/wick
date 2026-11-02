@@ -126,6 +126,22 @@
       {/if}
     </p>
 
+    {#if oauth.needs_connect}
+      <!-- Same look as the "Reconnect needed" banner: without an account of
+           their own the viewer's calls are refused, not run as someone else. -->
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400" data-needs-connect>
+        <div class="min-w-0">
+          <p class="font-medium">Connect your account to use this connector</p>
+          <p class="mt-0.5 text-xs opacity-80">This instance does not share a credential: calls without your own {oauth.display_name} account are refused.</p>
+        </div>
+        {#if canConnect}
+          <Button variant="secondary" size="sm" disabled={connecting} onclick={connect}>{connecting ? "Connecting…" : "Connect account"}</Button>
+        {:else}
+          <p class="text-xs">Ask an admin to let you connect.</p>
+        {/if}
+      </div>
+    {/if}
+
     {#if accounts.length === 0}
       <p class="mt-3 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 text-sm text-black-700 dark:text-black-600">
         {#if canConnect}

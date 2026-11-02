@@ -308,6 +308,31 @@ func (r *Repo) SetSessionConfigAllowed(ctx context.Context, id string, allowed b
 		}).Error
 }
 
+// SharedCredentialPolicy returns the stored "allow shared instance
+// credential" answer for one instance, or nil when none was ever saved (the
+// caller then applies the default).
+func (r *Repo) SharedCredentialPolicy(ctx context.Context, connectorID string) (*bool, error) {
+	var row entity.ConnectorCredentialPolicy
+	err := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row.AllowSharedCredential, nil
+}
+
+// SetSharedCredentialPolicy upserts the per-instance shared-credential answer.
+func (r *Repo) SetSharedCredentialPolicy(ctx context.Context, connectorID string, allowed bool) error {
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "connector_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"allow_shared_credential", "updated_at"}),
+		}).
+		Create(&entity.ConnectorCredentialPolicy{ConnectorID: connectorID, AllowSharedCredential: allowed, UpdatedAt: time.Now()}).Error
+}
+
 // Delete hard-deletes a connector row plus its operation toggles and
 // connected accounts. Run history is intentionally preserved.
 func (r *Repo) Delete(ctx context.Context, id string) error {
@@ -316,6 +341,9 @@ func (r *Repo) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorAccount{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorCredentialPolicy{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", id).Delete(&entity.Connector{}).Error
