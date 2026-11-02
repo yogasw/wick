@@ -76,3 +76,14 @@ func TestCheckGrantsAccountsOffAndTools(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeGrantsNullListsBecomeEmpty(t *testing.T) {
+	got := DecodeGrants(`[{"connector_id":"c1","accounts":null,"level":"off","ops":null}]`)
+	if len(got) != 1 || got[0].Accounts == nil || got[0].Ops == nil {
+		t.Fatalf("lists should decode as empty, got %#v", got)
+	}
+	enc := EncodeGrants([]ConnectorGrant{{ConnectorID: "c1", Level: LevelOff}})
+	if enc != `[{"connector_id":"c1","accounts":[],"level":"off","ops":[]}]` {
+		t.Fatalf("encode = %s", enc)
+	}
+}

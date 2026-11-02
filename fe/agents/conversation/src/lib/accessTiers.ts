@@ -34,7 +34,8 @@ export function setOverride(grants: ConnectorGrant[], id: string, o: Override): 
 /** Accounts a grant ticks; [] on the grant means every listed account. */
 export function tickedAccounts(g: ConnectorGrant | undefined, all: string[]): Set<string> {
   if (!g) return new Set();
-  return new Set(g.accounts.length === 0 ? all : g.accounts.filter((a) => all.includes(a)));
+  const accs = g.accounts ?? [];
+  return new Set(accs.length === 0 ? all : accs.filter((a) => all.includes(a)));
 }
 
 /** toggleAccount ticks one account independently. Every account ticked
