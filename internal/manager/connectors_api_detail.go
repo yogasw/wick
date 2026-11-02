@@ -738,6 +738,7 @@ func (h *Handler) apiCreateConnectorRow(w http.ResponseWriter, r *http.Request) 
 	}
 	if h.custom != nil {
 		h.custom.EnsureTagsForKey(ctx, key)
+		h.custom.SeedNewInstance(ctx, key, row.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": row.ID})
 }

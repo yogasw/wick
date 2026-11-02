@@ -1009,6 +1009,9 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 			return nil, "", "", err
 		}
 		if perUser {
+			if err := s.setDefPerUser(ctx, def, true); err != nil {
+				return nil, "", "", err
+			}
 			instanceID, err = s.seedPerUserInstance(ctx, def, instanceID, f.OAuthLoginID, createdBy)
 			if err != nil {
 				return nil, "", "", err
@@ -1074,6 +1077,9 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 			return nil, "", "", err
 		}
 	}
+	if err := s.setDefPerUser(ctx, def, perUser); err != nil {
+		return nil, "", "", err
+	}
 	// Rebuild + swap so the new exclusions/credentials serve immediately.
 	instanceID, err := s.registerAndSeed(ctx, def)
 	if err != nil {
@@ -1097,6 +1103,43 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 		}
 	}
 	return row, def.Key, instanceID, nil
+}
+
+// setDefPerUser stores the per-user flag on the definition. Turning it
+// off leaves the instances' own SSO policy alone (the Access policy
+// card's job, per instance).
+func (s *Service) setDefPerUser(ctx context.Context, def *entity.CustomConnector, on bool) error {
+	meta := ParseSourceMeta(def.SourceMeta)
+	if meta.PerUser == on {
+		return nil
+	}
+	meta.PerUser = on
+	def.SourceMeta = mustJSON(meta)
+	if err := s.store.UpdateDef(ctx, def); err != nil {
+		return fmt.Errorf("store per-user flag: %w", err)
+	}
+	return nil
+}
+
+// SeedNewInstance gives an instance added by "+ New row" the per-user
+// (SSO) policy when its connector runs in per-user mode, so it does not
+// start as a shared instance with no credential.
+func (s *Service) SeedNewInstance(ctx context.Context, key, instanceID string) {
+	def, err := s.store.GetDefByKey(ctx, key)
+	if err != nil || !ParseSourceMeta(def.SourceMeta).PerUser {
+		return
+	}
+	row, err := s.conns.Get(ctx, instanceID)
+	if err != nil {
+		return
+	}
+	if err := s.enablePerUserPolicy(ctx, *row); err != nil {
+		log.Warn().Err(err).Str("instance", instanceID).Msg("seed per-user policy on new instance")
+		return
+	}
+	if _, err := s.registerAndSeedFor(ctx, def, instanceID); err != nil {
+		log.Warn().Err(err).Msg("rebuild after seeding a per-user instance")
+	}
 }
 
 // seedPerUserInstance makes sure a fresh per-user (SSO) connector has its
@@ -1168,10 +1211,14 @@ func (s *Service) enablePerUserPolicy(ctx context.Context, row entity.Connector)
 	})
 }
 
-// OAuthPerUser reports whether a connector's oauth MCP instances run in
-// per-user (SSO) mode — any instance InstancePerUser. The edit form
-// prefills its checkbox from it.
+// OAuthPerUser reports whether a connector's MCP server runs in per-user
+// (SSO) mode — the definition's flag, else (servers saved before it
+// existed) any instance InstancePerUser. The edit form prefills its
+// checkbox from it.
 func (s *Service) OAuthPerUser(ctx context.Context, key string) bool {
+	if def, err := s.store.GetDefByKey(ctx, key); err == nil && ParseSourceMeta(def.SourceMeta).PerUser {
+		return true
+	}
 	rows, _ := s.conns.ListByKey(ctx, key)
 	for _, r := range rows {
 		s.loadPerUserMarker(ctx, r)

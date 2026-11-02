@@ -370,3 +370,44 @@ func TestUserTokenPerUserSurvivesRestart(t *testing.T) {
 		t.Error("per-user mode lost after restart")
 	}
 }
+
+// Per-user mode lives on the definition: a server with no instance keeps
+// it across an edit, and a "+ New row" instance starts per-user.
+func TestUserTokenPerUserWithoutInstances(t *testing.T) {
+	ctx := context.Background()
+	f := newTokenFixture(t)
+	form := &ServerForm{Label: "Mocker PU Empty", AuthScheme: "bearer", OAuthPerUser: true}
+	srv, key, instanceID := f.save(t, form, false)
+	if err := f.conns.Delete(ctx, instanceID); err != nil {
+		t.Fatalf("delete instance: %v", err)
+	}
+	if !f.svc.OAuthPerUser(ctx, key) {
+		t.Fatal("per-user lost with no instance left")
+	}
+
+	edit := &ServerForm{Label: "Mocker PU Empty", URL: f.mcpURL, AuthScheme: "bearer", OAuthPerUser: true}
+	if _, _, _, err := f.svc.SaveServer(ctx, edit, false, srv.ID, "admin-1"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if !f.svc.OAuthPerUser(ctx, key) {
+		t.Fatal("per-user lost after editing a server with no instance")
+	}
+
+	inst, err := f.conns.Create(ctx, key, "new row", map[string]string{}, "admin-1")
+	if err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	f.svc.SeedNewInstance(ctx, key, inst.ID)
+	row, _ := f.conns.Get(ctx, inst.ID)
+	if !f.svc.InstancePerUser(*row) || !row.AllowOthersConnectSSO || !row.MultiAccount {
+		t.Errorf("new instance did not start per-user: %+v", row)
+	}
+
+	off := &ServerForm{Label: "Mocker PU Empty", URL: f.mcpURL, AuthScheme: "bearer", AuthSecret: "tok-a"}
+	if _, _, _, err := f.svc.SaveServer(ctx, off, true, srv.ID, "admin-1"); err != nil {
+		t.Fatalf("edit off: %v", err)
+	}
+	if def, _ := f.svc.store.GetDefByKey(ctx, key); ParseSourceMeta(def.SourceMeta).PerUser {
+		t.Error("unticking did not clear the definition flag")
+	}
+}

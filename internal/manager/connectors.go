@@ -306,6 +306,7 @@ func (h *Handler) createConnectorRow(w http.ResponseWriter, r *http.Request) {
 	// fresh row is governed immediately instead of on the next boot.
 	if h.custom != nil {
 		h.custom.EnsureTagsForKey(ctx, key)
+		h.custom.SeedNewInstance(ctx, key, row.ID)
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
