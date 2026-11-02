@@ -1429,6 +1429,26 @@
                       </div>
                     {/if}
                   </div>
+                  <!-- Which bot posts. Channel + op stay locked, but the bot
+                       must stay visible and pickable here: unpinned, the run
+                       posts as whichever bot heard the trigger, so a reply
+                       can come out under another team's bot. -->
+                  <ChannelPicker
+                    label="Bot"
+                    channels={($catalog?.channels ?? []).filter((c) => c.name === node?.channel)}
+                    value={node.channel_instance ? (node.channel ?? "") : ""}
+                    instance={node.channel_instance ?? ""}
+                    onChange={(channel, instance) => {
+                      if (channel && channel !== node?.channel) return;
+                      patch("channel_instance", channel ? instance : "");
+                    }}
+                    helper="Which bot this action posts as."
+                  />
+                  {#if !node.channel_instance}
+                    <div class="rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+                      No bot pinned: the run posts as whichever bot received the trigger, which can change from run to run. Pick a bot above to pin it.
+                    </div>
+                  {/if}
                 {:else}
                   <ChannelPicker
                     channels={$catalog?.channels ?? []}
