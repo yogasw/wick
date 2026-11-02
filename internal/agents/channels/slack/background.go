@@ -23,7 +23,9 @@ import (
 // Teammates a Team agent is waiting on (working team tasks) ride in the same
 // set, marked Teammate. They are not sub-agents, so HideSubAgentStatus does
 // not hide them; the agent's own "Show teammates in channels" does (Hidden),
-// and then the thread sees only the generic working state.
+// and then the thread sees only the generic working state. HideSubAgentStatus
+// does the same for sub-agents: no start message and no names, but the
+// banner still shows the generic working state while they run.
 
 // backgroundRecheckTimeout bounds one stale re-check. It runs off the banner
 // goroutine, so a slow answer only delays the next repaint of the set.
@@ -301,15 +303,18 @@ func (s *Channel) paintBackgroundBanner(channelID, threadTS string, agents []age
 	s.setAssistantStatusWithLoading(channelID, threadTS, backgroundFooter(agents, dot), bubbleLoadingMessages(lines))
 }
 
-// bannerAgents is the part of the background set the banner shows: every
-// teammate (named or, when Hidden, as the generic working state), and the
-// sub-agents unless their status is hidden.
+// bannerAgents is the background set as the banner shows it: every
+// teammate (named or, when Hidden, as the generic working state), and every
+// sub-agent — unnamed (Hidden) when their status is hidden. Hiding names
+// the work, never the fact that work is going on: a thread with no banner
+// reads as finished while a sub-agent is still at it.
 func bannerAgents(agents []agentchannels.DetachedSurvivor, hideSubs bool) []agentchannels.DetachedSurvivor {
 	out := make([]agentchannels.DetachedSurvivor, 0, len(agents))
 	for _, a := range agents {
-		if a.Teammate || !hideSubs {
-			out = append(out, a)
+		if !a.Teammate && hideSubs {
+			a.Hidden = true
 		}
+		out = append(out, a)
 	}
 	return out
 }
@@ -341,9 +346,10 @@ func backgroundFooter(agents []agentchannels.DetachedSurvivor, dot int) string {
 	replied, of := 0, 0
 	for _, a := range agents {
 		switch {
+		case a.Hidden:
 		case !a.Teammate:
 			subs = append(subs, backgroundName(a))
-		case !a.Hidden:
+		default:
 			mates = append(mates, backgroundName(a))
 			replied, of = a.Replied, a.Of
 		}
@@ -358,7 +364,7 @@ func backgroundFooter(agents []agentchannels.DetachedSurvivor, dot int) string {
 	}
 	if len(mates) == 0 {
 		if subText == "" {
-			// Only teammates the channel must not name: a normal turn's look.
+			// Only work the channel must not name: a normal turn's look.
 			return footerWorking + dots
 		}
 		return subText + dots

@@ -75,8 +75,13 @@ func TestTeammatesShownWithSubAgentStatusHidden(t *testing.T) {
 	if got := f.lastStatus(); got != "is waiting on @qa (0/1 replied)" {
 		t.Fatalf("status = %q", got)
 	}
-	// Only the hidden sub-agent left: nothing to show, banner cleared.
+	// Only the hidden sub-agent left: still working, shown unnamed.
 	c.OnBackgroundAgents(bgSID, []agentchannels.DetachedSurvivor{fixer})
+	if got := f.lastStatus(); !strings.HasPrefix(got, footerWorking) {
+		t.Fatalf("status = %q, want the unnamed working state", got)
+	}
+	// Nothing left: banner cleared and its keep-alive stopped.
+	c.OnBackgroundAgents(bgSID, nil)
 	if got := f.lastStatus(); got != "" {
 		t.Fatalf("status = %q, want cleared", got)
 	}
