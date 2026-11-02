@@ -26,6 +26,9 @@ export type ConnectorGrant = {
   /** "off" overrides a Platform/System tier default downwards. */
   level: "all" | "read" | "pick" | "off";
   ops: string[];
+  /** Lent from the owner: a person chatting who cannot reach the connector
+      runs it as the owner; whoever can keeps their own identity. */
+  lend?: boolean;
 };
 
 /** One of an agent's non-main chats as its roster row tells it. */

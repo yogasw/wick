@@ -1890,6 +1890,15 @@ func NewServer() *Server {
 	// A "Same as me" agent run by its caller follows the caller's own
 	// reach, which may hold connectors its owner never sees; their tiers
 	// come from here so tier defaults still apply to them.
+	// A connector an agent's owner lends runs as that owner for a person
+	// chatting who cannot reach it (see connectors.LendingScope).
+	connectorsSvc.SetIdentityLookup(func(ctx context.Context, userID string) (*entity.User, []string, error) {
+		u, err := authSvc.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return u, authSvc.GetUserFilterTagIDs(ctx, userID), nil
+	})
 	teamSvc.SetConnectorTiers(func(ctx context.Context) (map[string]string, error) {
 		rows, err := connectorsSvc.List(connectors.WithoutAgentScope(ctx))
 		if err != nil {

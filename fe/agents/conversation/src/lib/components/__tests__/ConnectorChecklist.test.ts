@@ -172,6 +172,34 @@ describe("ConnectorChecklist", () => {
     expect(off.textContent).toContain("Nothing turned off.");
   });
 
+  test("Lend from me: lend, set level, stop; the instance credential is the default account", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner" } });
+    const lend = screen.getByTestId("lend");
+    expect(lend.textContent).toContain("Nothing lent.");
+    await fireEvent.click(within(lend).getByRole("button", { name: "+ Lend" }));
+    // Type chips filter the picker: two types (slack, http) here.
+    await fireEvent.click(within(lend).getByRole("button", { name: /^slack/ }));
+    expect(screen.queryByLabelText("Lend HTTP")).toBeNull();
+    await fireEvent.click(screen.getByLabelText("Lend Slack"));
+    await fireEvent.click(screen.getByRole("button", { name: "Lend 1 as Read" }));
+    await tick();
+    expect(within(lend).getByText("Slack")).toBeTruthy();
+    const inst = screen.getByLabelText(/Instance credential/) as HTMLInputElement;
+    const mine = screen.getByLabelText(/@me \(yours\)/) as HTMLInputElement;
+    expect(inst.checked).toBe(true);
+    expect(mine.checked).toBe(false);
+    expect(screen.getByTestId("who-gets-what").textContent).toContain("plus 1 lent from you, as you");
+    await fireEvent.click(screen.getByRole("button", { name: "Stop lending Slack" }));
+    await tick();
+    expect(lend.textContent).toContain("Nothing lent.");
+  });
+
+  test("a lent connector stays out of the Selected list", () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [{ connector_id: "slack", accounts: [""], level: "read", ops: [], lend: true }] } });
+    expect(screen.getByTestId("access-empty")).toBeTruthy();
+    expect(within(screen.getByTestId("lend")).getByText("Slack")).toBeTruthy();
+  });
+
   test("All explains whose connectors are used", () => {
     render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner", runAs: "caller" } });
     expect(screen.getByTestId("same-as-me").textContent).toContain("a teammate gets theirs");

@@ -83,6 +83,10 @@ type ConnectorGrant struct {
 	Level string `json:"level"`
 	// Ops is the allow-list used when Level is LevelPick.
 	Ops []string `json:"ops"`
+	// Lend runs the connector as the agent's owner for a person chatting
+	// who cannot reach it on their own (connectors.LendingScope). Whoever
+	// can keeps their own identity. Level and Accounts still apply.
+	Lend bool `json:"lend,omitempty"`
 }
 
 // Features switches the conversation rail panels an agent's chat shows.

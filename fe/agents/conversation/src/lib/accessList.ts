@@ -85,3 +85,30 @@ export function accessPayload(mode: AccessMode, grants: ConnectorGrant[], includ
 } {
   return { access_mode: mode, allowed_connectors: grants, include_new_connectors: includeNew };
 }
+
+/** isLent: c is on the "Lend from me" list (a lend grant that is not off). */
+export const isLent = (c: AgentConnector, grants: ConnectorGrant[]) =>
+  grants.some((g) => g.connector_id === c.id && g.lend === true && g.level !== "off");
+
+/** lendAt puts c on the lent list at level, replacing any other grant on
+    it. A new lend runs as the instance credential when the connector has
+    one; an existing one keeps its accounts. */
+export function lendAt(grants: ConnectorGrant[], c: AgentConnector, level: "read" | "all"): ConnectorGrant[] {
+  const prev = grants.find((g) => g.connector_id === c.id);
+  const keep = prev?.lend ? prev.accounts : null;
+  const accounts = keep ?? ((c.accounts ?? []).some((a) => a.id === "") && (c.accounts ?? []).length > 1 ? [""] : []);
+  return [...grants.filter((g) => g.connector_id !== c.id), { connector_id: c.id, accounts, level, ops: [], lend: true }];
+}
+
+/** stopLending drops c's lend grant; the connector falls back to the mode's
+    own rule (on in All, off in Selected). */
+export const stopLending = (grants: ConnectorGrant[], id: string) =>
+  grants.filter((g) => !(g.connector_id === id && g.lend));
+
+/** typeChips groups rows by connector type for the pickers' filter chips:
+    most instances first, then by name. */
+export function typeChips(rows: AgentConnector[]): { key: string; count: number }[] {
+  const n = new Map<string, number>();
+  for (const c of rows) n.set(c.key, (n.get(c.key) ?? 0) + 1);
+  return [...n.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}

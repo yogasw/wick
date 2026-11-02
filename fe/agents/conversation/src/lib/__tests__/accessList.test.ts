@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   accessPayload, bulkApply, filterCounts, filterRows, normalizeAccessMode, selectState, setRowLevel, toggleOne, toggleShown,
+  isLent, lendAt, stopLending,
 } from "../accessList.js";
 import type { AgentConnector, ConnectorGrant } from "../api/team.js";
 
@@ -80,5 +81,15 @@ describe("access list", () => {
     expect(normalizeAccessMode(undefined)).toBe("choose");
     expect(normalizeAccessMode("owner")).toBe("owner");
     expect(normalizeAccessMode("weird")).toBe("choose");
+  });
+
+  test("lendAt keeps one grant per connector and marks it lent", () => {
+    const slack = { id: "s", key: "slack", label: "S", description: "", accounts: [{ id: "", display_name: "bot" }, { id: "me", display_name: "me" }], ops: [], tier: "" } as never;
+    let g = lendAt([{ connector_id: "s", accounts: [], level: "off", ops: [] }], slack, "read");
+    expect(g).toEqual([{ connector_id: "s", accounts: [""], level: "read", ops: [], lend: true }]);
+    g = lendAt(g, slack, "all");
+    expect(g[0].level).toBe("all");
+    expect(isLent(slack, g)).toBe(true);
+    expect(stopLending(g, "s")).toEqual([]);
   });
 });

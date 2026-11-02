@@ -47,7 +47,7 @@ export function toggleAccount(grants: ConnectorGrant[], id: string, all: string[
   const rest = grants.filter((x) => x.connector_id !== id);
   if (set.size === 0) return rest;
   const accounts = set.size === all.length ? [] : all.filter((a) => set.has(a));
-  return [...rest, { connector_id: id, accounts, level: g?.level ?? "read", ops: g?.ops ?? [] }];
+  return [...rest, { connector_id: id, accounts, level: g?.level ?? "read", ops: g?.ops ?? [], ...(g?.lend ? { lend: true } : {}) }];
 }
 
 /** setLevelFor applies one level to many rows at once ("off" on a

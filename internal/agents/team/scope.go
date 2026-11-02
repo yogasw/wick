@@ -1,6 +1,7 @@
 package team
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/yogasw/wick/internal/connectors"
@@ -59,6 +60,7 @@ type Scope struct {
 var (
 	_ connectors.AgentScope        = (*Scope)(nil)
 	_ connectors.AgentFeatureScope = (*Scope)(nil)
+	_ connectors.LendingScope      = (*Scope)(nil)
 )
 
 // featureGate is what one feature switches off on the server: connector
@@ -179,10 +181,14 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 		return LevelOff, nil
 	}
 	if s.sameAsOwner && inReach && it.Tier == TierConnector && !isToolGrant(connectorID) {
-		if g, ok := s.grants[connectorID]; ok && g.Level == LevelOff {
+		g, ok := s.grants[connectorID]
+		if ok && g.Level == LevelOff {
 			return LevelOff, nil
 		}
-		return LevelAll, nil
+		// A lent connector keeps the level it is lent at, for everyone.
+		if !ok || !g.Lend {
+			return LevelAll, nil
+		}
 	}
 	if g, ok := s.grants[connectorID]; ok {
 		switch g.Level {
@@ -213,6 +219,31 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 		return LevelRead, nil
 	}
 	return LevelOff, nil
+}
+
+// LentBy implements connectors.LendingScope: a lend grant that is not off
+// lends its connector from the agent's owner.
+func (s *Scope) LentBy(connectorID string) (string, bool) {
+	if s.denyAll || s.ownerID == "" {
+		return "", false
+	}
+	g, ok := s.grants[connectorID]
+	if !ok || !g.Lend || s.Level(connectorID) == LevelOff {
+		return "", false
+	}
+	return s.ownerID, true
+}
+
+// LentIDs implements connectors.LendingScope.
+func (s *Scope) LentIDs() []string {
+	var out []string
+	for id := range s.grants {
+		if _, ok := s.LentBy(id); ok {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AllowKey implements connectors.AgentFeatureScope.

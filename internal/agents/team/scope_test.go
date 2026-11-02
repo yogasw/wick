@@ -402,3 +402,31 @@ func TestRosterFeatures(t *testing.T) {
 		t.Error("Browser must read on without a catalog")
 	}
 }
+
+// A lend grant lends its connector from the owner at its own level, in
+// both modes; off or a deny-all scope lends nothing.
+func TestScopeLend(t *testing.T) {
+	reach := Reach{"db": {Key: "metabase"}, "chat": {Key: "slack"}, "ci": {Key: "jenkins"}}
+	grants := `[{"connector_id":"db","level":"read","lend":true},{"connector_id":"ci","level":"off","lend":true}]`
+	for _, mode := range []string{AccessOwner, AccessChoose} {
+		s := ScopeOf(entity.AgentPersona{ID: "a1", OwnerUserID: "owner-1", AccessMode: mode, AllowedConnectors: grants}, reach)
+		if who, ok := s.LentBy("db"); !ok || who != "owner-1" {
+			t.Errorf("%s: db must be lent by the owner, got %q %v", mode, who, ok)
+		}
+		if _, ok := s.LentBy("ci"); ok {
+			t.Errorf("%s: an off grant lends nothing", mode)
+		}
+		if _, ok := s.LentBy("chat"); ok {
+			t.Errorf("%s: an unlent connector is not lent", mode)
+		}
+		if s.Level("db") != LevelRead || s.AllowOp("db", "run_sql", true) {
+			t.Errorf("%s: a lent connector keeps its lent level", mode)
+		}
+		if got := s.LentIDs(); len(got) != 1 || got[0] != "db" {
+			t.Errorf("%s: LentIDs = %v", mode, got)
+		}
+	}
+	if _, ok := DenyAll().LentBy("db"); ok {
+		t.Error("deny-all lends nothing")
+	}
+}
