@@ -667,8 +667,8 @@
     {/if}
   {:else if view === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      Connectors are off until you add them. Platform tools are on for every agent; System
-      tools are for the Captain. An agent never gets more than your own access.
+      All: each person uses the connectors they have. Selected: only the ones you add. Platform
+      tools are on for every agent; System tools are for the Captain.
     </p>
     {#if pruned > 0}
       <p class="text-xs text-black-800 dark:text-black-600">

@@ -276,6 +276,36 @@ func TestScopeSameAsOwner(t *testing.T) {
 	}
 }
 
+// With the every-connector tier map, AccessOwner reaches past the owner's
+// catalog: an untiered connector only the caller sees opens, a System one
+// stays shut for a non-Captain, an explicit off still holds, and a
+// checklist agent is not widened by it.
+func TestScopeSameAsOwnerPastReach(t *testing.T) {
+	reach := Reach{"slack": {Key: "slack"}}
+	tiers := map[string]string{
+		"slack": TierConnector, "theirs": TierConnector, "gone": TierConnector,
+		"wm2": TierSystem, "dt2": TierPlatform,
+	}
+	grants := `[{"connector_id":"gone","level":"off"}]`
+	s := ScopeOf(entity.AgentPersona{AccessMode: AccessOwner, AllowedConnectors: grants}, reach).WithTiers(tiers)
+	for conn, want := range map[string]string{
+		"slack": LevelAll, "theirs": LevelAll, "gone": LevelOff,
+		"wm2": LevelOff, "dt2": LevelAll, "unknown": LevelOff,
+	} {
+		if got := s.Level(conn); got != want {
+			t.Errorf("Level(%q) = %q, want %q", conn, got, want)
+		}
+	}
+	captain := ScopeOf(entity.AgentPersona{AccessMode: AccessOwner, IsCaptain: true}, reach).WithTiers(tiers)
+	if captain.Level("wm2") != LevelAll {
+		t.Error("a Captain keeps the System default past reach")
+	}
+	choose := ScopeOf(entity.AgentPersona{AllowedConnectors: `[{"connector_id":"theirs","level":"all"}]`}, reach).WithTiers(tiers)
+	if choose.Level("theirs") != LevelOff {
+		t.Error("a checklist agent must stay capped at its owner's catalog")
+	}
+}
+
 // A grant naming only a personal account refuses ops run as the bot.
 func TestScopePersonalAccountOnly(t *testing.T) {
 	s := NewScope([]ConnectorGrant{{ConnectorID: "slack", Level: LevelAll, Accounts: []string{"acc-me"}}}, false, false, Reach{"slack": {Key: "slack"}})

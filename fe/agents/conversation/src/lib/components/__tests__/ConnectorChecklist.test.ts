@@ -141,17 +141,39 @@ describe("ConnectorChecklist", () => {
     expect(screen.getByText(/Granted/).textContent).toContain("· 1");
   });
 
-  test("Same as me replaces the Connectors list; tier tabs stay editable", async () => {
+  test("All replaces the Connectors list; tier tabs stay editable", async () => {
     render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner" } });
-    expect(screen.getByRole("radio", { name: "Same as me", checked: true })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "All", checked: true })).toBeTruthy();
     expect(screen.getByTestId("same-as-me")).toBeTruthy();
     expect(screen.queryByTestId("access-empty")).toBeNull();
     expect(screen.queryByText("Open other connectors read-only")).toBeNull();
     await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
     expect(screen.getByText("Notes")).toBeTruthy();
     await fireEvent.click(screen.getByRole("tab", { name: /Connectors/ }));
-    await fireEvent.click(screen.getByRole("radio", { name: "Choose connectors" }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Selected" }));
     await tick();
     expect(screen.getByTestId("access-empty")).toBeTruthy();
+  });
+
+  test("All: turn connectors off and back on", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner" } });
+    const off = screen.getByTestId("turned-off");
+    expect(off.textContent).toContain("Nothing turned off.");
+    await fireEvent.click(within(off).getByRole("button", { name: "+ Turn off" }));
+    // The picker offers connectors only, never Platform / System rows.
+    expect(screen.queryByLabelText("Turn off Notes")).toBeNull();
+    await fireEvent.click(screen.getByLabelText("Turn off HTTP"));
+    await fireEvent.click(screen.getByRole("button", { name: "Turn off 1" }));
+    await tick();
+    expect(within(off).getByText("HTTP")).toBeTruthy();
+    expect(within(off).getByText(/Turned off/).textContent).toContain("· 1");
+    await fireEvent.click(screen.getByRole("button", { name: "Turn HTTP back on" }));
+    await tick();
+    expect(off.textContent).toContain("Nothing turned off.");
+  });
+
+  test("All explains whose connectors are used", () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner", runAs: "caller" } });
+    expect(screen.getByTestId("same-as-me").textContent).toContain("a teammate gets theirs");
   });
 });

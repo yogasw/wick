@@ -73,7 +73,7 @@ describe("access list", () => {
     expect(setRowLevel([g("a", "read", ["acc-me"])], c("a"), "all")).toEqual([g("a", "all", ["acc-me"])]);
   });
 
-  test("Same as me keeps the checklist in the payload", () => {
+  test("All keeps the checklist in the payload", () => {
     const grants = [g("a", "read")];
     expect(accessPayload("owner", grants, false)).toEqual({ access_mode: "owner", allowed_connectors: grants, include_new_connectors: false });
     expect(accessPayload("choose", grants, true).access_mode).toBe("choose");

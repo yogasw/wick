@@ -1887,6 +1887,22 @@ func NewServer() *Server {
 		}
 		return team.ReachOf(cat), nil
 	})
+	// A "Same as me" agent run by its caller follows the caller's own
+	// reach, which may hold connectors its owner never sees; their tiers
+	// come from here so tier defaults still apply to them.
+	teamSvc.SetConnectorTiers(func(ctx context.Context) (map[string]string, error) {
+		rows, err := connectorsSvc.List(connectors.WithoutAgentScope(ctx))
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]string, len(rows))
+		for _, r := range rows {
+			if mod, ok := connectorsSvc.Module(r.Key); ok {
+				out[r.ID] = team.TierOf(mod.Meta.DefaultTags)
+			}
+		}
+		return out, nil
+	})
 
 	// Map an agent session to the Slack bot that owns it, so the Slack
 	// connector's "Sent using @bot" footer always names the session

@@ -8,15 +8,17 @@ import (
 )
 
 // Scope is an agent's checklist in the shape connectors.Service checks.
-// It only ever narrows: the service consults it after the owner's own
-// visibility rules, so nothing here can grant what the owner lacks.
+// It only ever narrows: the service consults it after the visibility rules
+// of whoever the session runs as, so nothing here can grant what that
+// identity lacks.
 //
 // What an agent gets on one connector is decided by Level, in this order:
 // an explicit grant (LevelOff included), else the connector's tier default
 // (TierPlatform: write; TierSystem: write for the Captain only), else the
 // include-new toggle (read only), else nothing. All of it stops at reach.
 // In AccessOwner mode an untiered connector skips the checklist and gets
-// write ops (see sameAsOwner).
+// write ops (see sameAsOwner), and reach widens to every connector (see
+// tiers), so the session's own identity is the only limit.
 type Scope struct {
 	grants map[string]ConnectorGrant
 	// includeNew lets untiered connectors absent from the checklist
@@ -39,6 +41,12 @@ type Scope struct {
 	// reach is the owner's catalog (see Reach). nil (unknown, or the
 	// lookup failed) leaves explicit grants working and every default off.
 	reach Reach
+	// tiers is every connector's tier, whoever can see it. In AccessOwner
+	// mode a connector outside reach still resolves through it: a Caller
+	// agent then follows the person chatting, who may reach more than the
+	// owner, and the service's own visibility check is what limits them.
+	// nil keeps the old cap at reach.
+	tiers map[string]string
 	// denyAll is the disabled-agent scope: it answers no to everything.
 	denyAll bool
 	// offKeys and offTools are what the agent's switched-off features
@@ -135,6 +143,15 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	return s
 }
 
+// WithTiers sets the every-connector tier map (see Scope.tiers) and
+// returns s for chaining.
+func (s *Scope) WithTiers(tiers map[string]string) *Scope {
+	if !s.denyAll {
+		s.tiers = tiers
+	}
+	return s
+}
+
 // DenyAll returns a scope that permits nothing.
 func DenyAll() *Scope { return &Scope{denyAll: true} }
 
@@ -153,6 +170,11 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 		return LevelOff, nil
 	}
 	it, inReach := s.reach[connectorID]
+	if !inReach && s.sameAsOwner {
+		if t, ok := s.tiers[connectorID]; ok {
+			it, inReach = ReachItem{Tier: t}, true
+		}
+	}
 	if s.reach != nil && !inReach && !isToolGrant(connectorID) {
 		return LevelOff, nil
 	}

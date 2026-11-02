@@ -2,8 +2,9 @@
   /* The Access checklist: which of the owner's connectors an agent may use,
      at what level, on which accounts — plus whose access a turn runs with.
      ONE component for the + Agent wizard and Settings › Access; only how
-     the parent saves differs. A mode on top picks "Same as me" (every
-     connector the owner has) or "Choose connectors" (this list). Entries
+     the parent saves differs. A mode on top picks "All" (every connector the
+     session's identity has, minus a Turned off list) or "Selected" (this
+     list). Entries
      split into three type chips by tier: Connectors (granted by hand),
      Platform (on for every agent) and System (on for the Captain); a tier
      row stores a grant only when overridden. Each list is one table: row
@@ -30,7 +31,7 @@
     grants: ConnectorGrant[];
     includeNew?: boolean;
     runAs?: RunAs;
-    /** "owner" = Same as me; the grants are kept for switching back. */
+    /** "owner" = All; the grants are kept for switching back. */
     accessMode?: AccessMode;
     /** Last 400 from the server, already mapped onto rows. */
     errors?: GrantErrors | null;
@@ -62,6 +63,10 @@
   let adding = $state(false);
   let addQuery = $state("");
   let picked = $state<Set<string>>(new Set());
+  // All mode's "Turn off" picker: its own search and selection.
+  let turningOff = $state(false);
+  let offQuery = $state("");
+  let offPicked = $state<Set<string>>(new Set());
 
   const grantOf = (id: string) => grants.find((g) => g.connector_id === id);
   const inTier = (t: Tier) => catalog.filter((c) => tierOf(c) === t);
@@ -88,6 +93,17 @@
   // Selected rows of this tier, hidden ones included: the bulk bar acts on them.
   const selCount = $derived(added.filter((c) => selected.has(c.id)).length);
   const sameAsMe = $derived(tier === "connectors" && accessMode === "owner");
+  // All mode: connectors switched off by an explicit off grant, and the
+  // ones still on that the Turn off picker offers.
+  const isOff = (c: AgentConnector) => grantOf(c.id)?.level === "off";
+  const offRows = $derived(inTier("connectors").filter(isOff));
+  const offAvail = $derived(inTier("connectors").filter((c) => !isOff(c) && matches(c, offQuery)));
+  const offPickSel = $derived(selectState(offPicked, offAvail));
+  function turnOffPicked() {
+    grants = offAvail.filter((c) => offPicked.has(c.id)).reduce((out, c) => setOverride(out, c.id, "off"), grants);
+    turningOff = false;
+    offPicked = new Set();
+  }
 
   // Write ops the Connectors list grants, by their real op keys.
   const writes = $derived.by(() => {
@@ -188,10 +204,10 @@
       class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
       bind:value={runAs}
     >
-      <option value="caller">Caller (default) — your access, limited to this list</option>
-      <option value="owner">Owner — always your access, limited to this list</option>
+      <option value="caller">The person chatting (default) — each person uses their own access</option>
+      <option value="owner">Always me — everyone who chats uses my access</option>
     </select>
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Bot, schedule and cron triggers use the owner's access.</p>
+    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Bot, schedule and cron triggers always use your access.</p>
     {#if errors?.runAs}<p class="mt-1 text-xs text-neg-400">{errors.runAs}</p>{/if}
   </div>
 {/if}
@@ -199,14 +215,16 @@
 <div>
   <p class="mb-1 text-xs font-medium text-black-800 dark:text-black-600" id="cc-mode-label">Connector access</p>
   <div class="inline-flex" role="radiogroup" aria-labelledby="cc-mode-label">
-    {#each [["owner", "Same as me"], ["choose", "Choose connectors"]] as [m, name] (m)}
+    {#each [["owner", "All"], ["choose", "Selected"]] as [m, name] (m)}
       <button type="button" role="radio" aria-checked={accessMode === m} class="{modeSeg} {accessMode === m ? segOn : segOff}"
         onclick={() => (accessMode = m as AccessMode)}>{name}</button>
     {/each}
   </div>
   <p class="mt-1 text-xs text-black-800 dark:text-black-600">
     {accessMode === "owner"
-      ? "Every connector you can use, at your level, new ones included."
+      ? runAs === "owner"
+        ? "Every connector you have, new ones included, minus the ones you turn off."
+        : "Every connector the person chatting has, at their own level, new ones included, minus the ones you turn off."
       : "Only the connectors you add below."}
   </p>
 </div>
@@ -259,9 +277,64 @@
 
 {#if sameAsMe}
   <div class="rounded-xl border border-green-300 bg-green-50 px-4 py-3 text-xs text-black-900 dark:border-green-700 dark:bg-green-900/10 dark:text-white-100" data-testid="same-as-me">
-    <p class="font-medium">This agent uses the same connectors you do ({tierRows.length}), with write access.</p>
-    <p class="mt-1 text-black-800 dark:text-black-600">Connectors you get later are included. Platform and System tools still follow their own tabs. Pick “Choose connectors” to limit it.</p>
+    {#if runAs === "owner"}
+      <p class="font-medium">Everyone who chats uses your connectors ({tierRows.length - offRows.length}), with write access.</p>
+    {:else}
+      <p class="font-medium">Each person uses their own connectors, with their own access: you get yours ({tierRows.length - offRows.length}), a teammate gets theirs.</p>
+      <p class="mt-1 text-black-800 dark:text-black-600">What a teammate looks up stays in this agent's chat and memory, which you can read.</p>
+    {/if}
+    <p class="mt-1 text-black-800 dark:text-black-600">Connectors added later are included. Platform and System tools follow their own tabs.</p>
   </div>
+  <section class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" aria-label="Turned off" data-testid="turned-off">
+    <div class="flex flex-wrap items-center justify-between gap-2 bg-white-200 px-3 py-2 dark:bg-navy-800">
+      <div class="min-w-0">
+        <p class="text-sm font-medium text-black-900 dark:text-white-100">Turned off <span class="text-black-700">· {offRows.length}</span></p>
+        <p class="text-xs text-black-800 dark:text-black-600">Nobody can use these through this agent. Everything else stays on.</p>
+      </div>
+      {#if !turningOff}
+        <button type="button" class={btn} onclick={() => { turningOff = true; offQuery = ""; offPicked = new Set(); }}>+ Turn off</button>
+      {/if}
+    </div>
+    {#if offRows.length === 0}
+      <p class="border-t border-white-300 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">Nothing turned off.</p>
+    {/if}
+    <ul class="divide-y divide-white-300 border-t border-white-300 dark:divide-navy-600 dark:border-navy-600">
+      {#each offRows as c (c.id)}
+        <li class="flex items-center gap-3 px-3 py-2">
+          {@render icon(c)}
+          <span class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{c.label}</span>
+          <button type="button" class="text-xs text-green-600 hover:underline" aria-label="Turn {c.label} back on" onclick={() => (grants = setOverride(grants, c.id, "default"))}>Turn back on</button>
+        </li>
+      {/each}
+    </ul>
+    {#if turningOff}
+      <div class="border-t border-green-300 dark:border-green-700" aria-label="Pick connectors to turn off">
+        <div class="px-3 pt-2">
+          <input type="search" aria-label="Search connectors to turn off" class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={offQuery} placeholder="Search connectors…" />
+        </div>
+        <div class="flex items-center gap-3 px-3 py-2 text-xs text-black-800 dark:text-black-600">
+          <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="cc-off-all" checked={offPickSel === "all"} disabled={offAvail.length === 0}
+            use:indeterminate={offPickSel === "some"} onchange={() => (offPicked = toggleShown(offPicked, offAvail))} aria-label="Select all shown to turn off" />
+          <label for="cc-off-all">Select all shown ({offAvail.length})</label>
+        </div>
+        <ul class="max-h-80 divide-y divide-white-300 overflow-y-auto border-y border-white-300 dark:divide-navy-600 dark:border-navy-600">
+          {#each offAvail as c (c.id)}
+            <li class="flex items-center gap-3 px-3 py-2 {offPicked.has(c.id) ? 'bg-green-50 dark:bg-green-900/10' : ''}">
+              <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="off-{c.id}" checked={offPicked.has(c.id)}
+                onchange={(e) => (offPicked = toggleOne(offPicked, c.id, (e.currentTarget as HTMLInputElement).checked))} aria-label="Turn off {c.label}" />
+              {@render icon(c)}
+              <label for="off-{c.id}" class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{c.label}</label>
+            </li>
+          {/each}
+          {#if offAvail.length === 0}<li class="px-3 py-3 text-xs text-black-800 dark:text-black-600">Nothing matches.</li>{/if}
+        </ul>
+        <div class="flex flex-wrap items-center gap-2 px-3 py-2">
+          <button type="button" class={btnPrimary} disabled={offPicked.size === 0} onclick={turnOffPicked}>Turn off {offPicked.size}</button>
+          <button type="button" class="ml-auto text-xs text-green-600 hover:underline" onclick={() => (turningOff = false)}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+  </section>
 {:else if adding}
   <section class="overflow-hidden rounded-xl border border-green-300 dark:border-green-700" aria-label="Add connectors">
     <div class="border-b border-white-300 px-3 py-2 dark:border-navy-600">

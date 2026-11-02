@@ -70,7 +70,7 @@ describe("AgentSettings › Captain", () => {
     expect(updateAgent.mock.calls.some((c) => "is_captain" in (c[2] as object))).toBe(false);
   });
 
-  test("Make Captain gives your access by default: Run as Owner + Same as me", async () => {
+  test("Make Captain gives your access by default: Run as Owner + All", async () => {
     const p = props(worker, "captain");
     render(AgentSettings, { props: p });
     const btn = screen.getByRole("button", { name: "Make Captain" });
@@ -79,8 +79,8 @@ describe("AgentSettings › Captain", () => {
     const give = await screen.findByTestId("captain-give-access");
     expect((give.querySelector("input") as HTMLInputElement).checked).toBe(true);
     expect(give.textContent).toContain("Give @worker your access");
-    expect(give.textContent).toContain("Run as: Owner · Connector access: Same as me. A Team lead works for you personally.");
-    expect(give.textContent).toContain("Today: Caller · Choose connectors · 0. Untick to keep that.");
+    expect(give.textContent).toContain("Run as: Owner · Connector access: All. A Team lead works for you personally.");
+    expect(give.textContent).toContain("Today: Caller · Selected · 0. Untick to keep that.");
     await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
     await waitFor(() => expect(lastBody()).toEqual({ run_as: "owner", access_mode: "owner" }));
     expect(makeCaptain.mock.invocationCallOrder[0]).toBeLessThan(updateAgent.mock.invocationCallOrder.at(-1)!);
@@ -99,7 +99,7 @@ describe("AgentSettings › Captain", () => {
     expect(updateAgent.mock.calls.some((c) => "run_as" in (c[2] as object) || "access_mode" in (c[2] as object))).toBe(false);
   });
 
-  test("untick then tick again: the access is given once, as Owner + Same as me", async () => {
+  test("untick then tick again: the access is given once, as Owner + All", async () => {
     const p = props(worker, "captain");
     render(AgentSettings, { props: p });
     const btn = screen.getByRole("button", { name: "Make Captain" });
