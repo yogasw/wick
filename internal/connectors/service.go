@@ -2349,6 +2349,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if ferr := s.repo.FinishRun(ctx, run.ID, res.Status, res.ResponseJSON, res.ErrorMessage, latencyMs, 0); ferr != nil {
 			log.Warn().Err(ferr).Str("run_id", run.ID).Msg("connectors: finish run failed")
 		}
+		s.trackAccountAuth(ctx, acct, res)
 		s.metrics.DecActive()
 		s.metrics.RecordRun(c.Key, op.Key, string(res.Status), latencyMs)
 		// Terminal counterpart of the running notice — tells the UI to drop the

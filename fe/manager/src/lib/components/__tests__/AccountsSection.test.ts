@@ -103,3 +103,16 @@ describe("AccountsSection — opening an account", () => {
     expect(push).toHaveBeenCalledWith("/connectors/slack/row-a/accounts/acc-1");
   });
 });
+
+describe("AccountsSection — reconnect needed", () => {
+  it("flags an account whose last call failed on auth", () => {
+    render(AccountsSection, props({ accounts: [acc({ auth_error: "refresh error: invalid_grant" })] }));
+    const badge = screen.getByText("Reconnect needed");
+    expect(badge.getAttribute("title")).toBe("refresh error: invalid_grant");
+  });
+
+  it("shows no flag for a healthy account", () => {
+    render(AccountsSection, props());
+    expect(screen.queryByText("Reconnect needed")).toBeNull();
+  });
+});

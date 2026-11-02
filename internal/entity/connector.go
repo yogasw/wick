@@ -276,6 +276,11 @@ type ConnectorAccount struct {
 	//
 	// Example: {"send_message":false,"get_channel_history":true}
 	OpOverrides string `gorm:"type:text;default:''"`
+	// AuthError is the last call's auth failure on this account (token
+	// revoked, refresh refused), so the UI can ask for a reconnect before
+	// the next call fails too. Cleared by a reconnect or a call that works.
+	AuthError   string `gorm:"type:text;default:''"`
+	AuthErrorAt *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

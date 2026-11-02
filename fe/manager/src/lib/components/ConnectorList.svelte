@@ -890,6 +890,9 @@
                       <span class="pointer-events-none relative flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
                         <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                         <span class="truncate font-medium group-hover/acc:text-green-600">@{acc.display_name}</span>
+                        {#if acc.auth_error}
+                          <span class="flex-shrink-0 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400" title={acc.auth_error}>Reconnect needed</span>
+                        {/if}
                       </span>
                       {#if acc.can_manage}
                         <div class="pointer-events-auto relative z-10 flex-shrink-0">

@@ -148,6 +148,9 @@ export interface ConnectorAccount {
   wick_user_id: string;
   disabled_ops: string[] | null;
   can_manage: boolean;
+  /** Last call failed on auth: the account needs a reconnect. */
+  auth_error?: string;
+  auth_error_at?: string;
 }
 
 export interface ConnectorOAuthMeta {
@@ -285,6 +288,8 @@ export interface AccountDetail {
   display_name: string;
   can_manage: boolean;
   reconnect_url: string;
+  /** Last call failed on auth: the account needs a reconnect. */
+  auth_error?: string;
   ops: AccountOp[] | null;
 }
 

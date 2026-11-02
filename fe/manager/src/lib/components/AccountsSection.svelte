@@ -153,7 +153,7 @@
                 onclick={() => push(`/connectors/${connectorKey}/${connectorId}/accounts/${encodeURIComponent(acc.id)}`)}
               ></button>
               <div class="pointer-events-none relative min-w-0">
-                <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">@{acc.display_name}</p>
+                <p class="flex min-w-0 items-center gap-2 text-sm font-medium text-black-900 dark:text-white-100"><span class="truncate">@{acc.display_name}</span>{#if acc.auth_error}<span class="flex-shrink-0 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400" title={acc.auth_error}>Reconnect needed</span>{/if}</p>
                 {#if acc.disabled_ops && acc.disabled_ops.length}
                   <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">{acc.disabled_ops.length} operation(s) disabled for this account</p>
                 {/if}

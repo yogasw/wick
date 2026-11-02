@@ -180,6 +180,10 @@ type connectorAccountJSON struct {
 	WickUserID  string   `json:"wick_user_id"`
 	DisabledOps []string `json:"disabled_ops"`
 	CanManage   bool     `json:"can_manage"`
+	// AuthError is set when the account's last call failed on auth: the
+	// row shows "Reconnect needed" until a reconnect or a working call.
+	AuthError   string     `json:"auth_error,omitempty"`
+	AuthErrorAt *time.Time `json:"auth_error_at,omitempty"`
 }
 
 // connectorOAuthJSON mirrors the subset of Module.OAuth the SPA needs to
@@ -486,6 +490,8 @@ func (h *Handler) rowAccountsJSON(ctx context.Context, row entity.Connector, use
 			WickUserID:  acc.WickUserID,
 			DisabledOps: accountDisabledOpKeys(&acc),
 			CanManage:   canConfigure || (user != nil && acc.WickUserID == user.ID),
+			AuthError:   acc.AuthError,
+			AuthErrorAt: acc.AuthErrorAt,
 		})
 	}
 	return accounts

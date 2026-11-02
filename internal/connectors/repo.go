@@ -442,6 +442,8 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 			if acc.RefreshToken != "" {
 				updates["refresh_token"] = acc.RefreshToken
 			}
+			// A fresh consent is the reconnect the auth error asked for.
+			updates["auth_error"], updates["auth_error_at"] = "", nil
 			return r.db.WithContext(ctx).Model(&existing).Updates(updates).Error
 		}
 	}
@@ -461,6 +463,19 @@ func (r *Repo) UpdateAccountTokens(ctx context.Context, accountID, access, refre
 	}
 	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
 		Where("id = ?", accountID).Updates(updates).Error
+}
+
+// SetAccountAuthError records (msg != "") or clears (msg == "") the auth
+// failure flagged on one account.
+func (r *Repo) SetAccountAuthError(ctx context.Context, accountID, msg string) error {
+	var at *time.Time
+	if msg != "" {
+		now := time.Now()
+		at = &now
+	}
+	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
+		Where("id = ?", accountID).
+		Updates(map[string]any{"auth_error": msg, "auth_error_at": at}).Error
 }
 
 // DeleteAccount removes one connected account by ID.
