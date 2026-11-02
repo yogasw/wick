@@ -236,7 +236,8 @@ func TestBackgroundStartPostsOnce(t *testing.T) {
 }
 
 // Foreground delegations never reach the channel hooks (the delegation layer
-// only announces async runs); the opt-out silences both behaviours.
+// only announces async runs); the opt-out drops the start message and the
+// names, but the thread still shows that work is going on.
 func TestBackgroundStatusOptOut(t *testing.T) {
 	f := newBannerSlack(t)
 	c := bgChannel(f, false)
@@ -246,8 +247,15 @@ func TestBackgroundStatusOptOut(t *testing.T) {
 	c.OnBackgroundStart(bgSID, fixer, "task", false)
 	c.OnBackgroundAgents(bgSID, []agentchannels.DetachedSurvivor{fixer})
 
-	posts, st := f.snapshot()
-	if len(posts) != 0 || len(st) != 0 {
-		t.Fatalf("opted-out channel posted %d messages and %d banners, want none", len(posts), len(st))
+	posts, _ := f.snapshot()
+	if len(posts) != 0 {
+		t.Fatalf("opted-out channel posted %d messages, want none", len(posts))
+	}
+	if got := f.lastStatus(); !strings.HasPrefix(got, footerWorking) || strings.Contains(got, backgroundName(fixer)) {
+		t.Fatalf("status = %q, want the unnamed working state", got)
+	}
+	c.OnBackgroundAgents(bgSID, nil)
+	if got := f.lastStatus(); got != "" {
+		t.Fatalf("status after the sub-agent ended = %q, want cleared", got)
 	}
 }

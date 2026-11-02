@@ -126,6 +126,22 @@
       {/if}
     </p>
 
+    {#if oauth.needs_connect}
+      <!-- Same look as the "Reconnect needed" banner: without an account of
+           their own the viewer's calls are refused, not run as someone else. -->
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400" data-needs-connect>
+        <div class="min-w-0">
+          <p class="font-medium">Connect your account to use this connector</p>
+          <p class="mt-0.5 text-xs opacity-80">This instance does not share a credential: calls without your own {oauth.display_name} account are refused.</p>
+        </div>
+        {#if canConnect}
+          <Button variant="secondary" size="sm" disabled={connecting} onclick={connect}>{connecting ? "Connecting…" : "Connect account"}</Button>
+        {:else}
+          <p class="text-xs">Ask an admin to let you connect.</p>
+        {/if}
+      </div>
+    {/if}
+
     {#if accounts.length === 0}
       <p class="mt-3 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 text-sm text-black-700 dark:text-black-600">
         {#if canConnect}
@@ -153,7 +169,7 @@
                 onclick={() => push(`/connectors/${connectorKey}/${connectorId}/accounts/${encodeURIComponent(acc.id)}`)}
               ></button>
               <div class="pointer-events-none relative min-w-0">
-                <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">@{acc.display_name}</p>
+                <p class="flex min-w-0 items-center gap-2 text-sm font-medium text-black-900 dark:text-white-100"><span class="truncate">@{acc.display_name}</span>{#if acc.auth_error}<span class="flex-shrink-0 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400" title={acc.auth_error}>Reconnect needed</span>{/if}</p>
                 {#if acc.disabled_ops && acc.disabled_ops.length}
                   <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">{acc.disabled_ops.length} operation(s) disabled for this account</p>
                 {/if}

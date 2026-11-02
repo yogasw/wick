@@ -418,6 +418,9 @@ type Hub struct {
 	batchHub
 	// waitHub reads what a working task's teammate waits on (wait.go).
 	waitHub
+	// userReplies holds replies to a person's @mentions for their chat's
+	// agent (user_replies.go).
+	userReplies userReplies
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -432,6 +435,9 @@ type taskRef struct {
 	// canceled: cancel_task ended the task; whatever the turn still
 	// reports afterwards is ignored.
 	canceled bool
+	// userNoted: the reply to this person's task is held for their chat's
+	// agent already (noteUserReply).
+	userNoted bool
 	// answered is the target's session that answered (FollowUp).
 	answered string
 	// sent holds the dedupe keys (textKey) of what the caller already got.
@@ -532,6 +538,18 @@ const OriginUser = "user"
 
 // userTask reports whether the person, not the agent, owns ref.
 func (r *taskRef) userTask() bool { return r.origin == OriginUser }
+
+// takeUserReplyLocked reports, once, whether the task's reply is to be held
+// for the person's chat: a person's task with a reply, a question or a
+// refusal, and a chat to hand it to. Called with h.mu held.
+func (r *taskRef) takeUserReplyLocked() bool {
+	ok := r.userTask() && !r.userNoted && r.callerSession != "" && strings.TrimSpace(r.reply) != "" &&
+		(r.state == a2a.TaskStateCompleted || r.state == a2a.TaskStateInputRequired || r.state == a2a.TaskStateRejected)
+	if ok {
+		r.userNoted = true
+	}
+	return ok
+}
 
 // answerClaim is what answering changed on a task to claim it, so a send
 // that fails gives back exactly that.
@@ -1088,6 +1106,12 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if userOrigin {
 		ref.origin, ref.originUser = OriginUser, in.SessionUser
 	}
+	// A reply that settled before this registered the task did not know
+	// it was the person's.
+	var early *taskRef
+	if ref.finished && ref.takeUserReplyLocked() {
+		early = &taskRef{callerSession: ref.callerSession, to: ref.to, state: ref.state, reply: ref.reply}
+	}
 	entry := ThreadEntry{Role: ThreadCaptain, Handle: caller.Handle, Name: caller.Name, Text: in.Text, At: sentAt}
 	if in.logText != "" {
 		entry.Text = in.logText
@@ -1118,6 +1142,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 		group = h.byTask[task.ID].ID
 	}
 	h.mu.Unlock()
+	if early != nil {
+		h.noteUserReply(early.callerSession, early.to, task.ID, early.state, early.reply)
+	}
 	h.persist(task.ID)
 	if group != "" {
 		h.saveBatches()
@@ -1840,7 +1867,11 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 	}
 	session, to, opts, echo := ref.callerSession, ref.to, ref.options, ref.echo
 	inBatch := h.byTask[id] != nil
+	userReply := !again && !orphan && ref.takeUserReplyLocked()
 	h.mu.Unlock()
+	if userReply {
+		h.noteUserReply(session, to, id, state, reply)
+	}
 	text := ""
 	// [silent]: nothing to hand back.
 	if deliver && h.Notify != nil && !(state == a2a.TaskStateCompleted && reply == "") && !echo {

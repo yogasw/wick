@@ -765,6 +765,12 @@ func (s *Service) saveAccountTokens(ctx context.Context, instanceID, wickUserID,
 	if label == "" {
 		label = wickUserID
 	}
+	return s.saveAccountTokensAs(ctx, instanceID, wickUserID, label, label, t)
+}
+
+// saveAccountTokensAs is saveAccountTokens with an explicit external id —
+// the account slot the upsert replaces.
+func (s *Service) saveAccountTokensAs(ctx context.Context, instanceID, wickUserID, externalID, label string, t *oauthTokens) error {
 	row, err := s.conns.Get(ctx, instanceID)
 	if err != nil {
 		return err
@@ -792,7 +798,7 @@ func (s *Service) saveAccountTokens(ctx context.Context, instanceID, wickUserID,
 		e := t.ExpiresAt
 		exp = &e
 	}
-	if err := s.conns.SaveAccountTokens(ctx, instanceID, wickUserID, label, label, t.AccessToken, refresh, exp); err != nil {
+	if err := s.conns.SaveAccountTokens(ctx, instanceID, wickUserID, externalID, label, t.AccessToken, refresh, exp); err != nil {
 		return fmt.Errorf("save account: %w", err)
 	}
 	return nil

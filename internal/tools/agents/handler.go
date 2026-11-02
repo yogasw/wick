@@ -2433,6 +2433,16 @@ func sendMessage(c *tool.Ctx) {
 	if note := humanMentionNote(bgCtx, sess, id, req.Text); note != "" {
 		text = req.Text + "\n\n" + note
 	}
+	// What teammates answered the person's earlier @mentions in this chat
+	// reaches the agent here, ahead of the new message: it was never woken
+	// for them (teamlink.Hub.TakeUserReplies).
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			if held := h.TakeUserReplies(id); held != "" {
+				text = held + "\n\n---\n\n" + text
+			}
+		}
+	}
 	if err := globalPool.SendWithAttachments(sendCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})

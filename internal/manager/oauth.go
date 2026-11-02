@@ -110,6 +110,13 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-user token MCP connectors (bearer / custom header): the account
+	// is a typed token, saved through the my-token route — no login.
+	if h.custom != nil && h.custom.UsesUserToken(r.Context(), key) {
+		oauthPopupDone(w, key, "", "this connector takes your own token — use Connect my account on the connector list and enter it there")
+		return
+	}
+
 	// oauth MCP connectors (custom): the flow is the MCP PKCE login with
 	// the server row's discovered client, and the callback saves the
 	// caller's ConnectorAccount — same SSO gates as above.
@@ -339,8 +346,10 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// instance also keeps the legacy instance-level copy, which connectors
 	// still read for accounts saved before the per-account column was used.
 	// A multi-account instance must not: that one shared slot was what let
-	// one person's account refresh with somebody else's token.
-	if refreshToken != "" && !row.MultiAccount {
+	// one person's account refresh with somebody else's token. Nor may an
+	// instance whose shared credential is off: nothing runs on that slot, so
+	// filling it again would only re-create the value the toggle cleared.
+	if refreshToken != "" && !row.MultiAccount && h.sharedCredentialAllowed(r.Context(), *row) {
 		if err := h.connectors.Update(r.Context(), savedRowID, row.Label,
 			map[string]string{"refresh_token": refreshToken}, row.Disabled); err != nil {
 			log.Warn().Err(err).Str("connector", key).Msg("manager oauth: failed to save refresh token")

@@ -96,6 +96,9 @@ type Router struct {
 	globalSem chan struct{}
 	wg        sync.WaitGroup
 	clock     func() time.Time
+	// botRuns caps runs started by bot messages per workflow per thread
+	// (see bot_guard.go).
+	botRuns botRunGuard
 }
 
 // triggerRef pins one trigger inside a registered workflow. TriggerIdx
@@ -361,6 +364,9 @@ func (r *Router) DispatchWithDone(ctx context.Context, evt workflow.Event) []<-c
 		if !r.passesDedup(c.wfID, evt) {
 			continue
 		}
+		if !r.allowBotRun(c.wfID, evt) {
+			continue
+		}
 		r.mu.RLock()
 		q := r.queues[c.wfID]
 		r.mu.RUnlock()
@@ -435,6 +441,9 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 			continue
 		}
 		if !r.passesDedup(c.wfID, evt) {
+			continue
+		}
+		if !r.allowBotRun(c.wfID, evt) {
 			continue
 		}
 		r.mu.RLock()

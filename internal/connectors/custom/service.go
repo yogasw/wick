@@ -812,11 +812,13 @@ type ServerForm struct {
 	// OAuthLoginID references a completed in-flight browser login —
 	// the test/save endpoints resolve it to the session's tokens.
 	OAuthLoginID string `json:"oauth_login_id"`
-	// OAuthPerUser (oauth scheme) = "users connect their own account
-	// (SSO)": save needs no Test/login — discovery + dynamic registration
-	// run server-side — and the instance turns Enable SSO + Allow others
-	// to connect via SSO on, so each wick user connects their own
-	// ConnectorAccount to the one instance.
+	// OAuthPerUser (oauth, bearer and custom_header schemes) = "users
+	// connect their own account (SSO)": save needs no Test/login — for
+	// oauth, discovery + dynamic registration run server-side; for the
+	// token schemes each user types their own token later — and the
+	// instance turns Enable SSO + Allow others to connect via SSO on, so
+	// each wick user connects their own ConnectorAccount to the one
+	// instance.
 	OAuthPerUser bool `json:"oauth_per_user"`
 	// OAuthRedirectURI is the callback the dynamic registration names —
 	// set by the handler, never by the client.
@@ -847,7 +849,7 @@ func (f *ServerForm) validate() error {
 	if err := ValidateIcon(f.Icon); err != nil {
 		return err
 	}
-	if f.AuthScheme == "bearer" && strings.TrimSpace(f.AuthSecret) == "" {
+	if f.AuthScheme == "bearer" && !f.OAuthPerUser && strings.TrimSpace(f.AuthSecret) == "" {
 		return fmt.Errorf("bearer scheme needs a token")
 	}
 	return nil
@@ -903,9 +905,25 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 	if err := s.validateSSO(f); err != nil {
 		return nil, "", "", err
 	}
-	perUser := f.AuthScheme == "oauth" && f.OAuthPerUser
-	if !testedOK && !perUser {
+	perUser := perUserScheme(f.AuthScheme) && f.OAuthPerUser
+	// "Config" header rows are filled per instance after register, so
+	// the form may not authenticate yet — Test is optional then too.
+	perInstance := !perUser && hasConfigHeaders(f)
+	if !testedOK && !perUser && !perInstance {
 		return nil, "", "", fmt.Errorf("test the connection successfully before saving")
+	}
+	// What the admin typed for values filled later is their own account
+	// (per-user) or the first instance's (per-instance) — never the
+	// server row's shared credential.
+	var adminTokens, adminConfig map[string]string
+	if perUser && isTokenScheme(f.AuthScheme) {
+		adminTokens = splitAdminUserTokens(f)
+	}
+	if perInstance {
+		adminConfig = splitAdminConfigHeaders(f)
+	}
+	if !testedOK {
+		adminTokens, adminConfig = nil, nil
 	}
 
 	encryptIfNeeded := func(v string) (string, error) {
@@ -993,7 +1011,13 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 			if err != nil {
 				return nil, "", "", err
 			}
+			if isTokenScheme(f.AuthScheme) {
+				s.keepAdminToken(ctx, def, instanceID, createdBy, adminTokens)
+			}
 			return row, def.Key, instanceID, nil
+		}
+		if perInstance && instanceID == "" {
+			instanceID = s.keepAdminConfig(ctx, def, row, createdBy, adminConfig)
 		}
 		// The oauth register flow already holds a logged-in account —
 		// land it as the first instance so save means "connector +
@@ -1063,6 +1087,12 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 				return nil, "", "", err
 			}
 		}
+		if instanceID == "" && len(rows) > 0 {
+			instanceID = rows[0].ID
+		}
+		if isTokenScheme(f.AuthScheme) {
+			s.keepAdminToken(ctx, def, instanceID, createdBy, adminTokens)
+		}
 	}
 	return row, def.Key, instanceID, nil
 }
@@ -1099,6 +1129,21 @@ func (s *Service) seedPerUserInstance(ctx context.Context, def *entity.CustomCon
 		}
 	}
 	return instanceID, nil
+}
+
+// keepAdminToken lands the token a tested per-user form carried as the
+// saving admin's own account, then rebuilds the module — the per-user
+// marker set after the first build is what turns its SSO account
+// machinery on. Best-effort: the connector is saved either way.
+func (s *Service) keepAdminToken(ctx context.Context, def *entity.CustomConnector, instanceID, createdBy string, vals map[string]string) {
+	if len(vals) > 0 && instanceID != "" && createdBy != "" {
+		if err := s.storeUserToken(ctx, instanceID, createdBy, createdBy, vals); err != nil {
+			log.Warn().Err(err).Msg("attach tested token as the admin's account")
+		}
+	}
+	if _, err := s.registerAndSeedFor(ctx, def, instanceID); err != nil {
+		log.Warn().Err(err).Msg("sync ops after attaching the admin's token")
+	}
 }
 
 // enablePerUserPolicy turns the SSO switches per-user mode needs on,
@@ -1207,12 +1252,20 @@ func (s *Service) ProbeStored(ctx context.Context, serverID string, caller *SSOC
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	if row.AuthScheme == "oauth" {
+	if perUserScheme(row.AuthScheme) {
 		if def := s.defForServer(ctx, row.ID); def != nil && s.OAuthPerUser(ctx, def.Key) {
 			// Per-user (SSO) server: there is no server-wide credential, so
 			// a tokenless tools/list could only fail — and would flip the
 			// connector to Disconnected for everyone. Skip it.
 			return ProbeResult{OK: false, NeedsLogin: true, Error: "per-user login — operations sync when an account connects"}, nil
+		}
+	}
+	if len(configHeaderFields(row)) > 0 {
+		// Per-instance Config headers: probe under a filled instance;
+		// none yet is not a server failure, so leave LastTest alone.
+		def := s.defForServer(ctx, row.ID)
+		if def == nil || !s.borrowInstanceConfig(ctx, def.Key, "", &srv) {
+			return ProbeResult{OK: false, Error: "values are set per instance — operations sync when an instance has them filled"}, nil
 		}
 	}
 	res := s.mcp(nil).Probe(ctx, srv, caller)
@@ -1258,9 +1311,8 @@ func (s *Service) ProbeInstance(ctx context.Context, instanceID string, caller *
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	if srvRow.AuthScheme == "oauth" && s.InstancePerUser(*row) {
+	if perUserScheme(srvRow.AuthScheme) && s.InstancePerUser(*row) {
 		// Per-user (SSO) instance: test the viewer's own account.
-		meta := parseOAuthMeta(srvRow.AuthExtra)
 		var uid string
 		if u := login.GetUser(ctx); u != nil {
 			uid = u.ID
@@ -1269,12 +1321,13 @@ func (s *Service) ProbeInstance(ctx context.Context, instanceID string, caller *
 		if aerr != nil {
 			return ProbeResult{OK: false, Error: "you have not connected your own account — use Connect my account"}, nil
 		}
-		tok, terr := s.accountAccessToken(ctx, &meta, acc)
-		if terr != nil {
+		if terr := s.applyAccount(ctx, srvRow, &srv, acc); terr != nil {
 			return ProbeResult{OK: false, Error: terr.Error()}, nil
 		}
-		srv.AccessToken = tok
 		return s.mcp(nil).Probe(ctx, srv, caller), nil
+	}
+	if missing := applyConfigHeaders(&srv, s.instanceConfigGetter(instanceID)); len(missing) > 0 {
+		return ProbeResult{OK: false, Error: "fill " + strings.Join(missing, ", ") + " on this instance first"}, nil
 	}
 	if srvRow.AuthScheme == "oauth" {
 		meta := parseOAuthMeta(srvRow.AuthExtra)

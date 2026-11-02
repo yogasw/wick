@@ -67,6 +67,10 @@ export interface ConnectorMCPAuth {
   account_count?: number;
   mine_connected?: boolean;
   connect_mine_url?: string;
+  /* Per-user bearer / custom-header instance: "Connect my account" opens
+     a form with these fields and POSTs { values } to connect_token_url. */
+  token_fields?: Array<{ key: string; label: string }>;
+  connect_token_url?: string;
 }
 
 export interface InstanceAuthTestResult {
@@ -144,11 +148,22 @@ export interface ConnectorAccount {
   wick_user_id: string;
   disabled_ops: string[] | null;
   can_manage: boolean;
+  /** Last call failed on auth: the account needs a reconnect. */
+  auth_error?: string;
+  auth_error_at?: string;
 }
 
 export interface ConnectorOAuthMeta {
   display_name: string;
   start_url: string;
+  /* Effective "allow shared instance credential": a call with no connected
+     account of its own may run on the instance user_token / refresh_token. */
+  shared_credential?: boolean;
+  /* The instance still holds a value in those slots (policy managers only). */
+  shared_credential_stored?: boolean;
+  /* SSO on, shared credential off, and the viewer has no account: every
+     call they make fails until they connect. */
+  needs_connect?: boolean;
 }
 
 export interface ConnectorDetail {
@@ -281,6 +296,8 @@ export interface AccountDetail {
   display_name: string;
   can_manage: boolean;
   reconnect_url: string;
+  /** Last call failed on auth: the account needs a reconnect. */
+  auth_error?: string;
   ops: AccountOp[] | null;
 }
 
@@ -415,6 +432,9 @@ export interface McpHeaderRow {
   key: string;
   value: string;
   secret?: boolean;
+  /* Auth header filled after register: per instance (instance config), or
+     by each user when the server runs in per-user (SSO) mode. */
+  config?: boolean;
 }
 
 export interface McpSSOExtra {
@@ -441,8 +461,9 @@ export interface McpServerForm {
   oauth: McpOAuthExtra;
   excluded: string[];
   oauth_login_id: string;
-  /* oauth scheme: "Users connect their own account (SSO)" — save needs no
-     Test, and the first instance turns Enable SSO on. */
+  /* oauth / bearer / custom_header: "Users connect their own account
+     (SSO)" — save needs no Test, and the first instance turns Enable SSO
+     on. Token schemes: each user enters their own token on the instance. */
   oauth_per_user?: boolean;
 }
 

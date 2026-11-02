@@ -50,6 +50,28 @@ describe("renderMarkdown - code block", () => {
   });
 });
 
+describe("renderMarkdown - blockquote", () => {
+  test("consecutive quote lines are one block with a copy button", () => {
+    const html = renderMarkdown("> first line,\n> second \"line\".\n\nafter");
+    expect(html.match(/data-copy-code/g)).toHaveLength(1);
+    expect(html.match(/<blockquote/g)).toHaveLength(2);
+    const btn = html.match(/<button[^>]*data-copy-code[^>]*>/)![0];
+    expect(btn).toContain('data-code="first line,\nsecond &quot;line&quot;."');
+    expect(html.indexOf("after")).toBeGreaterThan(html.indexOf("data-copy-code"));
+  });
+
+  test("nested quote keeps its depth and copies without markers", () => {
+    const html = renderMarkdown(">> deep");
+    expect(html.match(/<blockquote/g)).toHaveLength(2);
+    expect(html).toContain('data-code="deep"');
+  });
+
+  test("a quote marker inside a code fence is not a quote", () => {
+    const html = renderMarkdown("```\n> not a quote\n```");
+    expect(html).not.toContain("<blockquote");
+  });
+});
+
 describe("renderMarkdown - lists", () => {
   test("renders unordered list", () => {
     const html = renderMarkdown("- item one\n- item two");

@@ -50,3 +50,21 @@ func TestApplyNodePatch_EmptyPatch(t *testing.T) {
 		t.Errorf("expected label unchanged, got %q", n.Label)
 	}
 }
+
+// A channel node's bot must be pinnable over MCP: without it an
+// AI-built workflow could only post as whichever bot heard the trigger.
+func TestApplyNodePatch_ChannelInstance(t *testing.T) {
+	n := workflow.Node{ID: "post", Type: workflow.NodeChannel, ChannelName: "slack"}
+	if err := applyNodePatch(&n, map[string]any{"channel_instance": "slack:owner-a"}); err != nil {
+		t.Fatalf("channel_instance must be a known key: %v", err)
+	}
+	if n.ChannelInstance != "slack:owner-a" {
+		t.Fatalf("ChannelInstance = %q, want slack:owner-a", n.ChannelInstance)
+	}
+	if err := applyNodePatch(&n, map[string]any{"channel_instance": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if n.ChannelInstance != "" {
+		t.Errorf("empty string must unpin, got %q", n.ChannelInstance)
+	}
+}

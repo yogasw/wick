@@ -824,3 +824,50 @@ describe("ConnectorList per-user (SSO) MCP instances", () => {
     expect(oauth.startConnectorOAuth).toHaveBeenCalledWith("/manager/connectors/helpdesk/oauth/start?connector_id=row-a");
   });
 });
+
+describe("ConnectorList per-user token instance", () => {
+  const tokenRow = {
+    id: "row-a",
+    label: "Prod",
+    disabled: false,
+    status: "ready",
+    rate_limit_rpm: 0,
+    tags: [],
+    mcp_auth: {
+      connected: false,
+      account: "",
+      start_url: "",
+      per_user: true,
+      account_count: 0,
+      mine_connected: false,
+      token_fields: [{ key: "X-Api-Key", label: "X-Api-Key" }],
+      connect_token_url: "/manager/api/connectors/acme/row-a/my-token",
+    },
+  };
+
+  it("Connect my account opens the token form and saves the typed value", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, rows: [tokenRow] } as never));
+    vi.mocked(api.saveMyToken).mockResolvedValue({ ok: true, account: "Dev A" });
+    render(ConnectorList, { connectorKey: "acme" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Connect my account" }));
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await fireEvent.input(screen.getByLabelText("X-Api-Key"), { target: { value: "key-a" } });
+    expect(save.disabled).toBe(false);
+    await fireEvent.click(save);
+    await waitFor(() =>
+      expect(api.saveMyToken).toHaveBeenCalledWith("/manager/api/connectors/acme/row-a/my-token", { "X-Api-Key": "key-a" }),
+    );
+    expect(stores.toastOk).toHaveBeenCalledWith("Connected as Dev A");
+  });
+
+  it("shows the server's refusal inside the form", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, rows: [tokenRow] } as never));
+    vi.mocked(api.saveMyToken).mockRejectedValue(new Error("the server refused this token: HTTP 401"));
+    render(ConnectorList, { connectorKey: "acme" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Connect my account" }));
+    await fireEvent.input(screen.getByLabelText("X-Api-Key"), { target: { value: "wrong" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(document.querySelector("[data-token-error]")?.textContent).toMatch(/refused/));
+  });
+});

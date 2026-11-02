@@ -867,6 +867,7 @@ func (c *Canvas) mutate(id string, fn func(*workflow.Workflow) error) (workflow.
 	if err := fn(&w); err != nil {
 		return workflow.Workflow{}, err
 	}
+	pruneUnusedScaffoldStart(&w)
 	if r := parse.Validate(w); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("post-edit validation failed: %s", r.Error())
 	}
@@ -889,7 +890,7 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 		"label": {}, "description": {}, "prompt": {},
 		"timeout_sec": {}, "on_failure": {}, "fallback": {}, "provider": {},
 		"model": {}, "preset": {}, "session": {}, "output_cases": {}, "expr": {},
-		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
+		"url": {}, "method": {}, "channel": {}, "channel_instance": {}, "op": {}, "module": {},
 		"row_id": {}, "args": {}, "command": {},
 		"expression": {}, "engine": {}, "result": {},
 		"max_turns": {}, "skills": {}, "tools": {},
@@ -959,6 +960,12 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["channel"].(string); ok {
 		n.ChannelName = v
+	}
+	// channel_instance pins which bot of the channel the action runs as;
+	// without it an AI-built workflow could only post as whichever bot
+	// heard the trigger. Empty string unpins.
+	if v, ok := patch["channel_instance"].(string); ok {
+		n.ChannelInstance = v
 	}
 	if v, ok := patch["op"].(string); ok {
 		n.Op = v

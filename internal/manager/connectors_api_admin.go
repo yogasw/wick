@@ -155,6 +155,42 @@ func (h *Handler) apiSetConnectorSessionConfig(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]bool{"allow_session_config": body.AllowSessionConfig})
 }
 
+// apiSetConnectorSharedCredential serves
+// POST /manager/api/connectors/{key}/{id}/shared-credential. Admin or the
+// instance owner (the access-policy gate), OAuth connectors only. Body:
+// {"allow_shared_credential":bool}. Saving false also clears the stored
+// instance user_token / refresh_token, so posting false on a row that is
+// already off is how a leftover legacy value gets removed.
+func (h *Handler) apiSetConnectorSharedCredential(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	row, errResp, ok := h.loadVisibleRow(r, user)
+	if !ok {
+		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
+		return
+	}
+	if !h.canManageAccessPolicy(user, row) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin or owner only"})
+		return
+	}
+	if mod, ok := h.connectors.Module(row.Key); !ok || mod.OAuth == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this connector has no OAuth flow"})
+		return
+	}
+	var body struct {
+		AllowSharedCredential bool `json:"allow_shared_credential"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if err := h.connectors.SetSharedCredentialAllowed(ctx, *row, body.AllowSharedCredential); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"allow_shared_credential": body.AllowSharedCredential})
+}
+
 // apiToggleConnectorOperation serves
 // POST /manager/api/connectors/{key}/{id}/operations/{opKey}. Body:
 // {"enabled":bool}. Mirrors toggleConnectorOperation: requires configure
