@@ -327,3 +327,46 @@ func TestConfigHeaderTestedValueSeedsFirstInstance(t *testing.T) {
 		t.Errorf("first instance value = %q, want key-a", got)
 	}
 }
+
+// declaredKeyStore mirrors the configs cache: a stored value is only
+// readable once its row was declared through EnsureOwned.
+type declaredKeyStore struct {
+	*fakeKeyStore
+	declared map[string]bool
+}
+
+func (d *declaredKeyStore) GetOwned(owner, key string) string {
+	d.mu.Lock()
+	ok := d.declared[owner+"/"+key]
+	d.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	return d.fakeKeyStore.GetOwned(owner, key)
+}
+
+func (d *declaredKeyStore) EnsureOwned(ctx context.Context, owner string, rows ...entity.Config) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, r := range rows {
+		d.declared[owner+"/"+r.Key] = true
+	}
+	return nil
+}
+
+// A per-user token server stays per-user after a restart: the marker is
+// in storage but nothing declared it yet, and the edit form's checkbox
+// and the per-user call path both read it.
+func TestUserTokenPerUserSurvivesRestart(t *testing.T) {
+	f := newTokenFixture(t)
+	form := &ServerForm{Label: "Mocker PU Restart", AuthScheme: "bearer", AuthSecret: "tok-a", OAuthPerUser: true}
+	_, key, _ := f.save(t, form, true)
+	if !f.svc.OAuthPerUser(context.Background(), key) {
+		t.Fatal("per-user off right after save")
+	}
+
+	restarted := New(Deps{DB: f.svc.store.db, Connectors: f.conns, Keys: &declaredKeyStore{fakeKeyStore: f.keys, declared: map[string]bool{}}})
+	if !restarted.OAuthPerUser(context.Background(), key) {
+		t.Error("per-user mode lost after restart")
+	}
+}

@@ -69,6 +69,8 @@ type Service struct {
 	mu       sync.Mutex
 	loadedAt map[string]time.Time // def ID → last module build
 	keyToID  map[string]string    // def key → def ID
+
+	markerLoaded sync.Map // instance ID → per-user marker row declared
 }
 
 func New(d Deps) *Service {
@@ -1172,6 +1174,7 @@ func (s *Service) enablePerUserPolicy(ctx context.Context, row entity.Connector)
 func (s *Service) OAuthPerUser(ctx context.Context, key string) bool {
 	rows, _ := s.conns.ListByKey(ctx, key)
 	for _, r := range rows {
+		s.loadPerUserMarker(ctx, r)
 		if s.InstancePerUser(r) {
 			return true
 		}
