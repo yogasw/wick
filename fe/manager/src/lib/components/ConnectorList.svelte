@@ -19,6 +19,7 @@
     deleteCustomDef,
     renameCustomDef,
     testInstanceAuth,
+    saveMyToken,
   } from "$lib/api.js";
   import type { PluginProgress } from "$lib/api.js";
   import PluginUpdateProgress from "$lib/components/plugins/PluginUpdateProgress.svelte";
@@ -167,6 +168,41 @@
       });
   }
 
+  /* Per-user token instance (bearer / custom header MCP): "Connect my
+     account" is a form, not a login popup — the user types their own token,
+     the server checks it against the MCP server before storing it. */
+  let tokenRow = $state<ConnectorRow | null>(null);
+  let tokenValues = $state<Record<string, string>>({});
+  let tokenSaving = $state(false);
+  let tokenError = $state("");
+
+  function openTokenForm(row: ConnectorRow): void {
+    tokenRow = row;
+    tokenValues = {};
+    tokenError = "";
+  }
+
+  const tokenFilled = $derived(
+    (tokenRow?.mcp_auth?.token_fields ?? []).every((f) => (tokenValues[f.key] ?? "").trim() !== ""),
+  );
+
+  async function submitToken(): Promise<void> {
+    const url = tokenRow?.mcp_auth?.connect_token_url;
+    if (!url || tokenSaving || !tokenFilled) return;
+    tokenSaving = true;
+    tokenError = "";
+    try {
+      const res = await saveMyToken(url, $state.snapshot(tokenValues));
+      tokenRow = null;
+      toastOk(res.account ? `Connected as ${res.account}` : "Token saved");
+      await load(true);
+    } catch (e) {
+      tokenError = e instanceof Error ? e.message : String(e);
+    } finally {
+      tokenSaving = false;
+    }
+  }
+
   /* Per-account actions, same pair the detail page offers: re-consent without
      destroying the grant first, or disconnect. Disconnect used to be a bare
      red link on the row — one stray click from deleting a token, and no
@@ -174,11 +210,14 @@
      disconnected just to re-connect. */
   function accountMenuItems(row: ConnectorRow, acc: ConnectorAccount) {
     return [
-      {
-        label: connectingId === row.id ? "Re-connecting…" : "Re-connect",
-        onclick: () => connect(row),
-        disabled: !canConnect(row) || connectingId !== "",
-      },
+      row.mcp_auth?.connect_token_url
+        ? /* Per-user token instance: re-connecting = typing a new token. */
+          { label: "Update my token", onclick: () => openTokenForm(row), disabled: false }
+        : {
+            label: connectingId === row.id ? "Re-connecting…" : "Re-connect",
+            onclick: () => connect(row),
+            disabled: !canConnect(row) || connectingId !== "",
+          },
       { label: "Disconnect", onclick: () => (confirmAcc = { row, acc }), danger: true },
     ];
   }
@@ -764,6 +803,11 @@
                         <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
                         You: connected
                       </span>
+                      {#if row.mcp_auth.connect_token_url}
+                        <Button variant="secondary" size="sm" onclick={() => openTokenForm(row)}>Update my token</Button>
+                      {/if}
+                    {:else if row.mcp_auth.connect_token_url}
+                      <Button variant="primary" size="sm" onclick={() => openTokenForm(row)} data-connect-token>Connect my account</Button>
                     {:else if canConnect(row)}
                       <!-- Same look as the instance Connect button: secondary
                            reads as bare text on the dark theme. -->
@@ -876,6 +920,40 @@
     onConfirm={confirmDelete}
     onCancel={() => (confirmRow = null)}
   />
+
+  <!-- Per-user token form: the caller's own bearer token / header values. -->
+  <Modal open={tokenRow !== null} title="Connect my account" size="sm" onClose={() => (tokenRow = null)}>
+    <div class="space-y-3">
+      <p class="text-xs text-black-700 dark:text-black-600">
+        Enter your own token for <strong class="text-black-900 dark:text-white-100">{tokenRow?.label}</strong>. Calls you make through this connector run with it. It is checked against the server, then stored encrypted and only used for you.
+      </p>
+      {#each tokenRow?.mcp_auth?.token_fields ?? [] as f (f.key)}
+        <div>
+          <label for="my-token-{f.key}" class="block text-sm font-medium text-black-900 dark:text-white-100">{f.label}</label>
+          <div class="mt-1">
+            <TextInput
+              id="my-token-{f.key}"
+              type="password"
+              value={tokenValues[f.key] ?? ""}
+              onChange={(v) => (tokenValues = { ...tokenValues, [f.key]: v })}
+              ariaLabel={f.label}
+            />
+          </div>
+        </div>
+      {/each}
+      {#if tokenError}
+        <p class="rounded-lg border border-neg-400 bg-neg-100 px-3 py-2 font-mono text-[11px] text-black-800" data-token-error>{tokenError}</p>
+      {/if}
+    </div>
+    {#snippet footer()}
+      <div class="flex justify-end gap-2">
+        <Button variant="secondary" size="lg" onclick={() => (tokenRow = null)}>Cancel</Button>
+        <Button variant="primary" size="lg" disabled={tokenSaving || !tokenFilled} onclick={submitToken}>
+          {tokenSaving ? "Checking…" : "Save"}
+        </Button>
+      </div>
+    {/snippet}
+  </Modal>
 
   <!-- Rename: display name only. The key stays fixed server-side, so
        instances, access tags, and MCP tool ids are untouched. -->

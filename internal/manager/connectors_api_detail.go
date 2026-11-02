@@ -89,6 +89,12 @@ type connectorMCPAuthJSON struct {
 	// ConnectMineURL is the "Connect my account" popup target (the SSO
 	// start route). Empty when the viewer may not connect.
 	ConnectMineURL string `json:"connect_mine_url"`
+	// TokenFields is set for a per-user bearer / custom-header instance:
+	// "Connect my account" opens a form with these fields and POSTs them
+	// to ConnectTokenURL instead of opening a login popup. Empty
+	// ConnectTokenURL = the viewer may not connect.
+	TokenFields     []customconn.UserTokenField `json:"token_fields,omitempty"`
+	ConnectTokenURL string                      `json:"connect_token_url,omitempty"`
 }
 
 // connectorListJSON is the shape served at GET /manager/api/connectors/{key}:
@@ -528,11 +534,22 @@ func (h *Handler) rowMCPAuthJSON(ctx context.Context, key string, row entity.Con
 		return nil
 	}
 	srv, err := h.custom.Store().GetServer(ctx, serverID)
-	if err != nil || srv == nil || srv.AuthScheme != "oauth" {
+	if err != nil || srv == nil {
 		return nil
 	}
-	if h.custom.InstancePerUser(row) {
-		return h.rowMCPPerUserJSON(ctx, key, row, user)
+	if (srv.AuthScheme == "oauth" || srv.AuthScheme == "bearer" || srv.AuthScheme == "custom_header") && h.custom.InstancePerUser(row) {
+		out := h.rowMCPPerUserJSON(ctx, key, row, user)
+		if srv.AuthScheme != "oauth" {
+			out.TokenFields = customconn.UserTokenFields(srv)
+			if out.ConnectMineURL != "" {
+				out.ConnectTokenURL = "/manager/api/connectors/" + key + "/" + row.ID + "/my-token"
+			}
+			out.ConnectMineURL = ""
+		}
+		return out
+	}
+	if srv.AuthScheme != "oauth" {
+		return nil
 	}
 	cfgs := h.connectors.LoadConfigs(row)
 	out := &connectorMCPAuthJSON{

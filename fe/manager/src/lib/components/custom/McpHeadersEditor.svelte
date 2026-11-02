@@ -3,7 +3,9 @@
      Controlled: the parent owns `rows`; every edit/add/remove calls
      onChange with the full array. Mirrors the legacy renderHeaders +
      add-row handlers in custom_mcp_form.js. Secret rows mask the value
-     input and encrypt at rest server-side. */
+     input and encrypt at rest server-side. With configToggle the rows also
+     get a "Config" toggle: the value is filled after register — per
+     instance, or by each user in per-user mode — the others stay shared. */
   import type { McpHeaderRow } from "$lib/types.js";
 
   type Props = {
@@ -11,8 +13,17 @@
     onChange: (rows: McpHeaderRow[]) => void;
     addLabel?: string;
     defaultSecret?: boolean;
+    configToggle?: boolean;
+    configHint?: string;
   };
-  let { rows, onChange, addLabel = "+ Add row", defaultSecret = false }: Props = $props();
+  let {
+    rows,
+    onChange,
+    addLabel = "+ Add row",
+    defaultSecret = false,
+    configToggle = false,
+    configHint = "filled per instance (optional here)",
+  }: Props = $props();
 
   const inputClass =
     "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5 font-mono text-xs text-black-900 dark:text-white-100 outline-none focus:border-green-500";
@@ -44,10 +55,10 @@
         oninput={(e) => setRow(index, { key: (e.target as HTMLInputElement).value })}
       />
       <input
-        class="{inputClass} col-span-5"
+        class="{inputClass} {configToggle ? 'col-span-4' : 'col-span-5'}"
         aria-label="Header value"
         type={r.secret ? "password" : "text"}
-        placeholder="value"
+        placeholder={configToggle && r.config ? configHint : "value"}
         value={r.value ?? ""}
         oninput={(e) => setRow(index, { value: (e.target as HTMLInputElement).value })}
       />
@@ -61,6 +72,19 @@
         />
         Sec
       </label>
+      {#if configToggle}
+        <label class="col-span-1 flex cursor-pointer items-center gap-1 text-[11px] text-black-800 dark:text-black-600" title="Filled after register, not here">
+          <input
+            type="checkbox"
+            class="accent-green-500"
+            aria-label="Config"
+            data-cc-header-config
+            checked={!!r.config}
+            onchange={(e) => setRow(index, { config: (e.target as HTMLInputElement).checked })}
+          />
+          Config
+        </label>
+      {/if}
       <button
         type="button"
         class="col-span-1 text-xs text-black-700 hover:text-neg-400"

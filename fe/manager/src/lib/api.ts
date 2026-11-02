@@ -138,6 +138,13 @@ export async function runHealthCheck(key: string, id: string): Promise<HealthChe
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
 }
 
+/* Save the caller's own values for a per-user token instance (bearer /
+   custom header MCP). The server checks them against the MCP server first,
+   so a wrong token rejects with its reason. */
+export async function saveMyToken(url: string, values: Record<string, string>): Promise<{ ok: boolean; account: string }> {
+  return apiPost<{ ok: boolean; account: string }>(url, { values });
+}
+
 /* Probe ONE instance's stored credentials. Resolves with ok=false and a
    reason for a refused/expired token — that's a verdict about the account,
    not a transport failure, so it does not reject. */

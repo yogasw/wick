@@ -110,6 +110,13 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-user token MCP connectors (bearer / custom header): the account
+	// is a typed token, saved through the my-token route — no login.
+	if h.custom != nil && h.custom.UsesUserToken(r.Context(), key) {
+		oauthPopupDone(w, key, "", "this connector takes your own token — use Connect my account on the connector list and enter it there")
+		return
+	}
+
 	// oauth MCP connectors (custom): the flow is the MCP PKCE login with
 	// the server row's discovered client, and the callback saves the
 	// caller's ConnectorAccount — same SSO gates as above.

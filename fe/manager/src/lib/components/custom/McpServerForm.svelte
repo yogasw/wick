@@ -146,10 +146,21 @@
     }
   }
 
-  /* Per-user (SSO) oauth: nobody's login is the instance credential, so
-     Test is optional — the server-side save runs discovery + registration. */
-  const perUser = $derived(form.auth_scheme === "oauth" && !!form.oauth_per_user);
-  const canSave = $derived(testedOK || perUser);
+  /* Per-user (SSO) mode: nobody's login or token is the instance
+     credential, so Test is optional — for oauth the server-side save runs
+     discovery + registration, for bearer / custom header each user enters
+     their own token later. */
+  const perUser = $derived(
+    (form.auth_scheme === "oauth" || form.auth_scheme === "bearer" || form.auth_scheme === "custom_header") &&
+      !!form.oauth_per_user,
+  );
+  const perUserToken = $derived(perUser && form.auth_scheme !== "oauth");
+  /* "Config" header rows are filled per instance after register, so the
+     form may not authenticate yet — Test is optional then too. */
+  const perInstance = $derived(
+    !perUser && form.auth_scheme === "custom_header" && form.auth_headers.some((r) => r.key && r.config),
+  );
+  const canSave = $derived(testedOK || perUser || perInstance);
 
   async function save() {
     if (!canSave || saving) return;
@@ -293,7 +304,11 @@
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="text-sm font-semibold text-black-900 dark:text-white-100">Test connection</p>
-              {#if perUser}
+              {#if perInstance}
+                <p class="text-xs text-black-800 dark:text-black-600" data-cc-perinstance-test-note>Optional — Config headers are filled per instance. Fill them here and Test to preview the tools; a tested value becomes the first instance's.</p>
+              {:else if perUserToken}
+                <p class="text-xs text-black-800 dark:text-black-600" data-cc-peruser-test-note>Optional in per-user mode — fill your own token above to preview the tools. A tested token becomes your own account, not the instance's.</p>
+              {:else if perUser}
                 <p class="text-xs text-black-800 dark:text-black-600" data-cc-peruser-test-note>Optional in per-user mode — signs you in to preview the tools. That login becomes your own account, not the instance's.</p>
               {:else}
                 <p class="text-xs text-black-800 dark:text-black-600">Fires initialize + tools/list with the current values. Save unlocks after one success.</p>
@@ -326,7 +341,9 @@
             Read-only list of what this server currently exposes — nothing here is stored. Wick re-reads it on every
             sync, so new server-side tools appear on their own. Use Exclude to hide one.
           </p>
-          {#if perUser && tools.length === 0}
+          {#if perInstance && tools.length === 0}
+            <p class="mt-2 text-xs text-black-800 dark:text-black-600" data-cc-perinstance-tools-note>Waiting for an instance to fill its Config headers — operations sync then.</p>
+          {:else if perUser && tools.length === 0}
             <p class="mt-2 text-xs text-black-800 dark:text-black-600" data-cc-peruser-tools-note>Waiting for the first account to connect — operations sync then.</p>
           {/if}
           <div class="mt-3">

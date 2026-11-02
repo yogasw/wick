@@ -201,6 +201,10 @@ type HeaderRow struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
 	Secret bool   `json:"secret,omitempty"`
+	// Config (auth headers) = the value is filled after register, not on
+	// the server row: per instance as an instance config, or by each wick
+	// user when the server runs in per-user (SSO) mode.
+	Config bool `json:"config,omitempty"`
 }
 
 // ParseHeaderRows decodes a JSON HeaderRow column. Empty input yields

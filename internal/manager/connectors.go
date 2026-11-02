@@ -62,6 +62,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	// Per-instance auth probe: each MCP row holds its own token, so a
 	// connector-wide check cannot answer for a specific account.
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/test-auth", auth(h.apiTestInstanceAuth))
+	// Per-user token instance: the caller saves their own bearer token /
+	// header values as their account (gated like Connect my account).
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/my-token", auth(h.apiSaveMyToken))
 	// Phase 3 — test runner + run history JSON for the SPA. test-meta
 	// exposes each op's input schema (previously templ-only); test runs
 	// the op (alias of the legacy /test JSON handler); history serves the
