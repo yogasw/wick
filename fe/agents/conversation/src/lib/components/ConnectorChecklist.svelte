@@ -75,15 +75,11 @@
   let lendPicked = $state<Set<string>>(new Set());
   let lendType = $state("");
   let addType = $state("");
+  type Preview = "me" | "mate" | "none";
+  let preview = $state<Preview>("mate");
 
   const grantOf = (id: string) => grants.find((g) => g.connector_id === id);
   const inTier = (t: Tier) => catalog.filter((c) => tierOf(c) === t);
-  const tiers = $derived(
-    (["connectors", "platform", "system"] as Tier[])
-      .map((t) => ({ t, items: inTier(t) }))
-      .filter((x) => x.t !== "system" || x.items.length > 0)
-      .map((x) => ({ ...x, custom: x.items.filter((c) => grantOf(c.id)).length })),
-  );
   const matches = (c: AgentConnector, query: string) => {
     const q = query.trim().toLowerCase();
     return !q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q);
@@ -115,6 +111,19 @@
   const lendBase = $derived(inTier("connectors").filter((c) => !isLent(c, grants) && !isOff(c)));
   const lendAvail = $derived(lendBase.filter((c) => ofType(c, lendType) && matches(c, lendQuery)));
   const lendPickSel = $derived(selectState(lendPicked, lendAvail));
+  // Built-in tools: Platform rows, plus System rows for the Captain only.
+  const builtinRows = $derived([...inTier("platform"), ...(isCaptain ? inTier("system") : [])]);
+  const builtinSummary = $derived.by(() => {
+    const changed = builtinRows.filter((c) => overrideOf(grants, c.id) !== "default").length;
+    return `${builtinRows.length} on by default${changed ? ` · ${changed} changed` : ""}`;
+  });
+  const previewText = $derived.by(() => {
+    if (runAs === "owner") return preview === "me" ? "everything set here" : "everything set here, as you";
+    const on = accessMode === "owner";
+    if (preview === "me") return on ? `every connector you have, new ones included${offRows.length ? `, minus ${offRows.length} turned off` : ""}` : `the ${added.length} picked`;
+    if (preview === "mate") return on ? "every connector they have themselves, new ones included" : "the picked ones they also have themselves";
+    return lentRows.length ? "none of their own" : "none";
+  });
   function addLent(level: "read" | "all") {
     grants = lendAvail.filter((c) => lendPicked.has(c.id)).reduce((out, c) => lendAt(out, c, level), grants);
     lending = false;
@@ -142,7 +151,7 @@
   const writeConns = $derived(writeConnectors(grants, catalog));
   const tierLabel: Record<Tier, string> = { connectors: "Connectors", platform: "Platform", system: "System" };
   const tierHint: Record<Tier, string> = {
-    connectors: "Connectors this agent can use.",
+    connectors: "Only these, at the level you set. New connectors stay off until you add them.",
     platform: "wick's own working tools. On for every agent unless you change a row.",
     system: "Tools that build and manage wick. On for the Captain only unless you change a row.",
   };
@@ -218,53 +227,26 @@
   const segOff = "text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600";
 </script>
 
-{#if showRunAs}
-  <div>
-    <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="cc-runas">Run as</label>
-    <select
-      id="cc-runas"
-      class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-      bind:value={runAs}
-    >
-      <option value="caller">The person chatting (default) — each person uses their own access</option>
-      <option value="owner">Always me — everyone who chats uses my access</option>
-    </select>
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Bot, schedule and cron triggers always use your access.</p>
-    {#if errors?.runAs}<p class="mt-1 text-xs text-neg-400">{errors.runAs}</p>{/if}
+{#if showRunAs && runAs === "owner"}
+  <div class="flex flex-wrap items-center gap-2 rounded-xl border border-cau-300 bg-cau-100 px-3 py-2 text-xs text-black-900 dark:bg-navy-800 dark:text-cau-300" data-testid="runs-as-owner">
+    <span class="min-w-0 flex-1">Everyone who chats uses <b>your</b> access on everything below. Lend from me does the same for single connectors only.</span>
+    <button type="button" class={btn} onclick={() => (runAs = "caller")}>Use each person's own access</button>
   </div>
+  {#if errors?.runAs}<p class="text-xs text-neg-400">{errors.runAs}</p>{/if}
 {/if}
 
 <div>
-  <p class="mb-1 text-xs font-medium text-black-800 dark:text-black-600" id="cc-mode-label">Connector access</p>
-  <div class="inline-flex" role="radiogroup" aria-labelledby="cc-mode-label">
-    {#each [["owner", "All"], ["choose", "Selected"]] as [m, name] (m)}
-      <button type="button" role="radio" aria-checked={accessMode === m} class="{modeSeg} {accessMode === m ? segOn : segOff}"
-        onclick={() => (accessMode = m as AccessMode)}>{name}</button>
+  <p class="mb-2 text-sm font-semibold text-black-900 dark:text-white-100" id="cc-mode-label">Which connectors?</p>
+  <div class="grid grid-cols-2 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" role="radiogroup" aria-labelledby="cc-mode-label">
+    {#each [["owner", "All", "Each person uses everything they have. New ones included."], ["choose", "Selected", "Only the ones you pick, for a focused agent."]] as [m, name, hint], i (m)}
+      <button type="button" role="radio" aria-checked={accessMode === m} aria-label={name}
+        class="flex flex-col gap-0.5 px-4 py-2.5 text-left {i === 1 ? 'border-l border-white-300 dark:border-navy-600' : ''} {accessMode === m ? 'bg-green-50 ring-2 ring-inset ring-green-500 dark:bg-green-900/20' : 'hover:bg-white-200 dark:hover:bg-navy-600'}"
+        onclick={() => (accessMode = m as AccessMode)}>
+        <span class="text-sm font-semibold text-black-900 dark:text-white-100">{accessMode === m ? "●" : "○"} {name}</span>
+        <span class="text-xs text-black-800 dark:text-black-600">{hint}</span>
+      </button>
     {/each}
   </div>
-  <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-    {accessMode === "owner"
-      ? runAs === "owner"
-        ? "Every connector you have, new ones included, minus the ones you turn off."
-        : "Every connector the person chatting has, at their own level, new ones included, minus the ones you turn off."
-      : "Only the connectors you add below."}
-  </p>
-</div>
-
-<div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="Access type">
-  {#each tiers as x (x.t)}
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tier === x.t}
-      class="{chip} {tier === x.t ? chipOn : chipOff}"
-      onclick={() => pickTier(x.t)}
-    >
-      {tierLabel[x.t]} <span class="text-black-700">· {x.items.length}</span>
-      {#if x.t === "connectors" && accessMode === "owner"}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">same as you</span>
-      {:else if x.custom > 0}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">{x.custom} {x.t === "connectors" ? "granted" : "changed"}</span>{/if}
-    </button>
-  {/each}
 </div>
 
 {#if loading}
@@ -310,15 +292,6 @@
 {/snippet}
 
 {#if sameAsMe}
-  <div class="rounded-xl border border-green-300 bg-green-50 px-4 py-3 text-xs text-black-900 dark:border-green-700 dark:bg-green-900/10 dark:text-white-100" data-testid="same-as-me">
-    {#if runAs === "owner"}
-      <p class="font-medium">Everyone who chats uses your connectors ({tierRows.length - offRows.length}), with write access.</p>
-    {:else}
-      <p class="font-medium">Each person uses their own connectors, with their own access: you get yours ({tierRows.length - offRows.length}), a teammate gets theirs.</p>
-      <p class="mt-1 text-black-800 dark:text-black-600">What a teammate looks up stays in this agent's chat and memory, which you can read.</p>
-    {/if}
-    <p class="mt-1 text-black-800 dark:text-black-600">Connectors added later are included. Platform and System tools follow their own tabs.</p>
-  </div>
   <section class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" aria-label="Turned off" data-testid="turned-off">
     <div class="flex flex-wrap items-center justify-between gap-2 bg-white-200 px-3 py-2 dark:bg-navy-800">
       <div class="min-w-0">
@@ -414,7 +387,7 @@
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div class="min-w-0">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">
-        {tier === "connectors" ? "Granted" : tierLabel[tier]} <span class="text-black-700">· {added.length}</span>
+        {tier === "connectors" ? "Picked" : tierLabel[tier]} <span class="text-black-700">· {added.length}</span>
       </p>
       <p class="text-xs text-black-800 dark:text-black-600">{tierHint[tier]}</p>
     </div>
@@ -586,20 +559,56 @@
     {/if}
   </section>
 
+  <details class="rounded-xl border border-white-300 dark:border-navy-600" data-testid="built-in">
+    <summary class="flex cursor-pointer select-none items-center justify-between gap-2 px-4 py-2.5 text-sm text-black-900 dark:text-white-100">
+      <span class="font-medium">Built-in tools</span>
+      <span class="text-xs text-black-800 dark:text-black-600">{builtinSummary}</span>
+    </summary>
+    <p class="border-t border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">wick's own tools are on for every agent; nothing to tick. Change a row only to make an exception. Chat panels (Notes, Tickets, Schedule…) also switch in Tools &amp; features.</p>
+    <ul class="divide-y divide-white-300 border-t border-white-300 dark:divide-navy-600 dark:border-navy-600">
+      {#each builtinRows as c (c.id)}
+        {@const ov = overrideOf(grants, c.id)}
+        <li class="flex flex-wrap items-center gap-3 px-4 py-2">
+          <span class="min-w-0 flex-1">
+            <span class="flex items-center gap-2 truncate text-sm text-black-900 dark:text-white-100">{c.label}
+              {#if ov !== "default"}<span class="rounded-full bg-cau-100 px-1.5 text-[10px] text-black-900 dark:bg-navy-600 dark:text-cau-300">Changed</span>{/if}
+              {#if tierOf(c) === "system"}<span class="rounded-full bg-white-200 px-1.5 text-[10px] text-black-800 dark:bg-navy-600 dark:text-black-600">Captain</span>{/if}
+            </span>
+          </span>
+          <div class="inline-flex" role="radiogroup" aria-label="Access level for {c.label}">
+            {#each levelChoices(c).filter(([o]) => o !== "pick") as [o, name] (o)}
+              <button type="button" role="radio" aria-checked={ov === o} class="{seg} {ov === o ? segOn : segOff}" onclick={() => setOv(c, o)}>{name}</button>
+            {/each}
+          </div>
+        </li>
+      {/each}
+    </ul>
+  </details>
+
   <section class="rounded-xl border border-white-300 px-4 py-3 text-xs dark:border-navy-600" aria-label="Who gets what" data-testid="who-gets-what">
-    <p class="mb-2 text-sm font-medium text-black-900 dark:text-white-100">Who gets what</p>
-    <dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-black-900 dark:text-white-100">
-      <dt class="text-black-800 dark:text-black-600">You</dt>
-      <dd>{accessMode === "owner" ? "every connector you have, new ones included" : `the ${added.length + lentRows.length} set here`}{offRows.length > 0 && accessMode === "owner" ? `, minus ${offRows.length} turned off` : ""}</dd>
-      <dt class="text-black-800 dark:text-black-600">Someone chatting</dt>
-      <dd>
-        {#if runAs === "owner"}everything you get, as you{:else if accessMode === "owner"}every connector they have themselves{:else}the picked ones they also have themselves{/if}{#if runAs !== "owner" && lentRows.length > 0}, plus {lentRows.length} lent from you, as you{/if}
-      </dd>
+    <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <p class="text-sm font-medium text-black-900 dark:text-white-100">Who gets what</p>
+      <div class="flex flex-wrap gap-1.5" role="group" aria-label="Preview as">
+        {#each [["me", "You"], ["mate", "A teammate"], ["none", "Someone with no connectors"]] as [k, name] (k)}
+          <button type="button" class="{chip} {preview === k ? chipOn : chipOff}" aria-pressed={preview === k} onclick={() => (preview = k as Preview)}>{name}</button>
+        {/each}
+      </div>
+    </div>
+    <dl class="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1.5 text-black-900 dark:text-white-100">
+      <dt class="text-black-800 dark:text-black-600">Connectors</dt>
+      <dd>{previewText}</dd>
+      {#if lentRows.length > 0 && preview !== "me" && runAs !== "owner"}
+        <dt class="text-black-800 dark:text-black-600">Lent, as you</dt>
+        <dd class="flex flex-wrap gap-1">{#each lentRows as c (c.id)}<span class="rounded-md border border-cau-300 px-1.5">{c.label}</span>{/each}</dd>
+      {/if}
       <dt class="text-black-800 dark:text-black-600">Saved as</dt>
-      <dd>{runAs === "owner" ? "you, whoever chats" : "the person chatting (lent connectors: you)"}</dd>
+      <dd>{preview === "me" || runAs === "owner" ? "you" : "the person chatting"} <span class="text-black-800 dark:text-black-600">· tickets, notes, schedules, Slack posts</span></dd>
       <dt class="text-black-800 dark:text-black-600">Schedules & cron</dt>
-      <dd>you</dd>
+      <dd>run as you</dd>
     </dl>
+    {#if accessMode === "owner" && runAs !== "owner" && preview === "mate"}
+      <p class="mt-2 rounded-lg border border-cau-300 bg-cau-100 px-3 py-1.5 text-black-900 dark:bg-navy-800 dark:text-cau-300">What they look up stays in this agent's chat and memory, which you can read.</p>
+    {/if}
   </section>
 {/if}
 

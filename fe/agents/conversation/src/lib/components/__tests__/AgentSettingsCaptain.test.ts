@@ -119,13 +119,12 @@ describe("AgentSettings › Captain", () => {
   });
 
   test("unticked, Make Captain keeps unsaved Access edits", async () => {
-    // The Run as edit fails to autosave, so it stays an unsaved draft.
+    // The access-mode edit fails to autosave, so it stays an unsaved draft.
     updateAgent.mockImplementationOnce(() => Promise.reject(new Error("offline")));
     const p = props(worker, "access");
     const { rerender } = render(AgentSettings, { props: p });
-    const runAs = (await screen.findByLabelText("Run as")) as HTMLSelectElement;
-    await fireEvent.change(runAs, { target: { value: "owner" } });
-    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ run_as: "owner" })));
+    await fireEvent.click(await screen.findByRole("radio", { name: "All" }));
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ access_mode: "owner" })));
     await rerender({ ...p, tab: "captain" });
     const btn = screen.getByRole("button", { name: "Make Captain" });
     await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
@@ -134,7 +133,7 @@ describe("AgentSettings › Captain", () => {
     await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
     await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
     await rerender({ ...p, tab: "access" });
-    expect(((await screen.findByLabelText("Run as")) as HTMLSelectElement).value).toBe("owner");
+    expect(await screen.findByRole("radio", { name: "All", checked: true })).toBeTruthy();
   });
 
   test("a failed access update shows one error toast and no success toast", async () => {

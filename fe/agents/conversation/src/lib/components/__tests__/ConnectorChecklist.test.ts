@@ -16,38 +16,35 @@ const catalog: AgentConnector[] = [
 ];
 
 describe("ConnectorChecklist", () => {
-  test("type chips split the lists; System hidden without items", async () => {
-    const { unmount } = render(ConnectorChecklist, { props: { catalog, grants: [] } });
-    expect(screen.getByRole("tab", { name: /Connectors/ })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /System/ })).toBeTruthy();
-    // Connectors: nothing added yet → the empty state, not the available rows.
+  test("one list for connectors; built-in tools fold away, System rows only for the Captain", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [] } });
+    expect(screen.queryByRole("tab")).toBeNull();
+    // Selected with nothing added → the empty state, not the available rows.
     expect(screen.getByTestId("access-empty").textContent).toContain("No connectors yet");
-    expect(screen.queryByText("HTTP")).toBeNull();
-    expect(screen.queryByText(/\+ Read|Done adding|Set level for/)).toBeNull();
-    await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
-    expect(screen.getByText("Notes")).toBeTruthy();
-    expect(screen.queryByText("Slack")).toBeNull();
-    expect(screen.getAllByRole("radio", { name: "Default (Write)" }).length).toBe(1);
+    const built = screen.getByTestId("built-in") as HTMLDetailsElement;
+    expect(built.open).toBe(false);
+    expect(built.textContent).toContain("2 on by default");
+    expect(within(built).getByText("Notes")).toBeTruthy();
+    expect(within(built).queryByText("Wick Manager")).toBeNull();
     // wick's own tools only know on and off.
-    expect(screen.getAllByRole("radio", { name: "Default (On)" }).length).toBe(1);
-    unmount();
-    render(ConnectorChecklist, { props: { catalog: catalog.filter((x) => x.tier !== "system"), grants: [] } });
-    expect(screen.queryByRole("tab", { name: /System/ })).toBeNull();
+    expect(within(built).getAllByRole("radio", { name: "Default (On)" }).length).toBe(1);
   });
 
-  test("System defaults to Write only for the Captain", async () => {
+  test("System defaults to Write only for the Captain", () => {
     render(ConnectorChecklist, { props: { catalog, grants: [], isCaptain: true } });
-    await fireEvent.click(screen.getByRole("tab", { name: /System/ }));
-    expect(screen.getByRole("radio", { name: "Default (Write)" })).toBeTruthy();
+    const built = screen.getByTestId("built-in");
+    expect(within(built).getByText("Wick Manager")).toBeTruthy();
+    expect(within(built).getAllByRole("radio", { name: "Default (Write)" }).length).toBe(2);
   });
 
   test("override shows Changed; the Default choice resets it", async () => {
     render(ConnectorChecklist, { props: { catalog, grants: [{ connector_id: "notes", accounts: [], level: "off", ops: [] }] } });
-    await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
-    expect(screen.getByText("Changed")).toBeTruthy();
-    await fireEvent.click(screen.getByRole("radio", { name: "Default (Write)" }));
+    const built = screen.getByTestId("built-in");
+    expect(within(built).getByText("Changed")).toBeTruthy();
+    expect(built.textContent).toContain("1 changed");
+    await fireEvent.click(within(built).getByRole("radio", { name: "Default (Write)" }));
     await tick();
-    expect(screen.queryByText("Changed")).toBeNull();
+    expect(within(built).queryByText("Changed")).toBeNull();
   });
 
   test("account sub-rows untick independently", async () => {
@@ -61,14 +58,15 @@ describe("ConnectorChecklist", () => {
     expect((screen.getByLabelText(/@me \(yours\)/) as HTMLInputElement).checked).toBe(true);
   });
 
-  test("include-new and write ops live on the Connectors chip only", async () => {
+  test("include-new and write ops belong to Selected only", async () => {
     const withWrite = catalog.map((x) => (x.id === "http" ? { ...x, ops: [{ key: "post_req", name: "Post", destructive: true }] } : x));
     render(ConnectorChecklist, { props: { catalog: withWrite, grants: [{ connector_id: "http", accounts: [], level: "all", ops: [] }] } });
     expect(screen.getAllByText("Open other connectors read-only").length).toBeGreaterThan(0);
     const card = screen.getByText(/Write operations allowed \(1\)/).closest("details") as HTMLDetailsElement;
     expect(card.open).toBe(false);
     expect(card.textContent).toContain("post_req");
-    await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
+    await fireEvent.click(screen.getByRole("radio", { name: "All" }));
+    await tick();
     expect(screen.queryByText("Open other connectors read-only")).toBeNull();
     expect(screen.queryByText(/Write operations allowed/)).toBeNull();
   });
@@ -137,22 +135,20 @@ describe("ConnectorChecklist", () => {
   test("levels are explained in plain words", () => {
     render(ConnectorChecklist, { props: { catalog, grants: slackRead } });
     expect(screen.getByText(/Read: can look things up · Write: can also change things/)).toBeTruthy();
-    expect(screen.getByText("Connectors this agent can use.")).toBeTruthy();
-    expect(screen.getByText(/Granted/).textContent).toContain("· 1");
+    expect(screen.getByText(/New connectors stay off until you add them/)).toBeTruthy();
+    expect(screen.getByText(/^Picked/).textContent).toContain("· 1");
   });
 
-  test("All replaces the Connectors list; tier tabs stay editable", async () => {
+  test("All replaces the picked list with Turned off; Selected brings it back", async () => {
     render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner" } });
     expect(screen.getByRole("radio", { name: "All", checked: true })).toBeTruthy();
-    expect(screen.getByTestId("same-as-me")).toBeTruthy();
+    expect(screen.getByTestId("turned-off")).toBeTruthy();
     expect(screen.queryByTestId("access-empty")).toBeNull();
     expect(screen.queryByText("Open other connectors read-only")).toBeNull();
-    await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
-    expect(screen.getByText("Notes")).toBeTruthy();
-    await fireEvent.click(screen.getByRole("tab", { name: /Connectors/ }));
     await fireEvent.click(screen.getByRole("radio", { name: "Selected" }));
     await tick();
     expect(screen.getByTestId("access-empty")).toBeTruthy();
+    expect(screen.queryByTestId("turned-off")).toBeNull();
   });
 
   test("All: turn connectors off and back on", async () => {
@@ -188,7 +184,7 @@ describe("ConnectorChecklist", () => {
     const mine = screen.getByLabelText(/@me \(yours\)/) as HTMLInputElement;
     expect(inst.checked).toBe(true);
     expect(mine.checked).toBe(false);
-    expect(screen.getByTestId("who-gets-what").textContent).toContain("plus 1 lent from you, as you");
+    expect(screen.getByTestId("who-gets-what").textContent).toContain("Lent, as you");
     await fireEvent.click(screen.getByRole("button", { name: "Stop lending Slack" }));
     await tick();
     expect(lend.textContent).toContain("Nothing lent.");
@@ -200,8 +196,26 @@ describe("ConnectorChecklist", () => {
     expect(within(screen.getByTestId("lend")).getByText("Slack")).toBeTruthy();
   });
 
-  test("All explains whose connectors are used", () => {
-    render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner", runAs: "caller" } });
-    expect(screen.getByTestId("same-as-me").textContent).toContain("a teammate gets theirs");
+  test("Who gets what previews each kind of person", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [{ connector_id: "slack", accounts: [""], level: "read", ops: [], lend: true }], accessMode: "owner", runAs: "caller" } });
+    const who = screen.getByTestId("who-gets-what");
+    expect(who.textContent).toContain("every connector they have themselves");
+    expect(who.textContent).toContain("which you can read");
+    expect(within(who).getByText("Slack")).toBeTruthy();
+    await fireEvent.click(within(who).getByRole("button", { name: "You" }));
+    await tick();
+    expect(who.textContent).toContain("every connector you have");
+    expect(within(who).queryByText("Slack")).toBeNull();
+    await fireEvent.click(within(who).getByRole("button", { name: "Someone with no connectors" }));
+    await tick();
+    expect(who.textContent).toContain("none of their own");
+  });
+
+  test("an agent that runs as its owner says so and offers the way back", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [], runAs: "owner" } });
+    const note = screen.getByTestId("runs-as-owner");
+    await fireEvent.click(within(note).getByRole("button", { name: "Use each person's own access" }));
+    await tick();
+    expect(screen.queryByTestId("runs-as-owner")).toBeNull();
   });
 });

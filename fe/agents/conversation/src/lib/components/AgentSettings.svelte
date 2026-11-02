@@ -667,8 +667,8 @@
     {/if}
   {:else if view === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      All: each person uses the connectors they have. Selected: only the ones you add. Platform
-      tools are on for every agent; System tools are for the Captain.
+      What people can use when they chat with this agent. Each person works with their own
+      access; lend single connectors of yours below.
     </p>
     {#if pruned > 0}
       <p class="text-xs text-black-800 dark:text-black-600">
