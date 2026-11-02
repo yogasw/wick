@@ -143,7 +143,7 @@
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium text-black-900 dark:text-white-100">Allow shared instance credential</p>
               <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
-                On: a user with no connected account of their own runs as the token stored on this instance. Off (default for multi-account): they are told to connect their own {data.oauth?.display_name} account, and turning it off clears the stored token.
+                On (default): calls run on this instance's own configured credential, as they always have; a personal account is used only when a call names it. Off: every call runs as the caller's own connected {data.oauth?.display_name} account, someone with none is told to connect one, and turning it off clears the instance's stored user token.
               </p>
             </div>
             <input type="checkbox" disabled={sharedBusy} bind:checked={sharedCredential} onchange={saveSharedCredential} aria-label="Allow shared instance credential" class="h-5 w-9 accent-green-500" />

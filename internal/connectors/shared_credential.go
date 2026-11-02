@@ -17,11 +17,11 @@ import (
 var sharedCredentialKeys = []string{"user_token", "refresh_token"}
 
 // SharedCredentialDefault is the answer for an instance that never saved
-// one. A multi-account row is per-user by design, so it starts OFF: nobody
-// silently borrows another person's identity. A single-account row has one
-// identity the whole instance shares, so it starts ON and keeps working.
-func SharedCredentialDefault(row entity.Connector) bool {
-	return !row.MultiAccount
+// one: ON, so an instance keeps running on its own configured credential
+// (a bot token, say) exactly as it did before the policy existed. Turning
+// it off is the explicit opt-in to per-user accounts.
+func SharedCredentialDefault(entity.Connector) bool {
+	return true
 }
 
 // sharedCredentialApplies reports whether the policy means anything for

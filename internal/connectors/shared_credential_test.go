@@ -66,9 +66,28 @@ func runWhoami(svc *Service, row entity.Connector, userID, sessionID string) (*E
 	})
 }
 
+// sharedOff saves the shared credential policy OFF without clearing the
+// instance tokens, so a test can prove they are not used.
+func sharedOff(t *testing.T, svc *Service, row entity.Connector) {
+	t.Helper()
+	require.NoError(t, svc.repo.SetSharedCredentialPolicy(context.Background(), row.ID, false))
+}
+
+// By default the instance's own credential runs, even for a caller who has
+// an account of their own: nothing changes until the policy is turned off.
+func TestExecuteDefaultKeepsInstanceCredential(t *testing.T) {
+	svc := newSvcSharedCred(t)
+	row := seedSharedCredRow(t, svc, true)
+
+	res, err := runWhoami(svc, row, "u-alice", "")
+	require.NoError(t, err)
+	require.Contains(t, res.ResponseJSON, "tok-legacy")
+}
+
 func TestExecuteAutoPicksCallersOwnAccount(t *testing.T) {
 	svc := newSvcSharedCred(t)
 	row := seedSharedCredRow(t, svc, true)
+	sharedOff(t, svc, row)
 
 	res, err := runWhoami(svc, row, "u-alice", "")
 	require.NoError(t, err)
@@ -83,6 +102,7 @@ func TestExecuteAutoPicksCallersOwnAccount(t *testing.T) {
 func TestExecuteAutoPickUsesSessionOwner(t *testing.T) {
 	svc := newSvcSharedCred(t)
 	row := seedSharedCredRow(t, svc, true)
+	sharedOff(t, svc, row)
 	svc.SetSessionOwnerUserResolver(func(sid string) (string, bool) { return "u-alice", sid == "sess-1" })
 
 	res, err := runWhoami(svc, row, "u-agent", "sess-1")
@@ -93,9 +113,10 @@ func TestExecuteAutoPickUsesSessionOwner(t *testing.T) {
 func TestExecuteWithoutAccountFailsWhenSharedCredentialOff(t *testing.T) {
 	svc := newSvcSharedCred(t)
 	row := seedSharedCredRow(t, svc, true)
+	sharedOff(t, svc, row)
 
 	_, err := runWhoami(svc, row, "u-carol", "")
-	require.Error(t, err, "multi-account rows default to no shared credential")
+	require.Error(t, err, "shared credential off: no fallback to the instance token")
 	require.Contains(t, err.Error(), `no connected Acme Cloud account for you on "Team drive"`)
 	require.Contains(t, err.Error(), "/manager/connectors/shared-cred/"+row.ID)
 	require.NotContains(t, err.Error(), "tok-legacy")

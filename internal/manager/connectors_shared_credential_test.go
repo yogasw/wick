@@ -27,9 +27,9 @@ func getDetailOAuth(t *testing.T, h *Handler, key, id string) *connectorOAuthJSO
 	return got.OAuth
 }
 
-// A multi-account SSO row starts with the shared credential off, so a viewer
-// with no account of their own is told to connect; turning it on drops the
-// notice.
+// An SSO row starts with the shared credential on (no notice); turned off,
+// a viewer with no account of their own is told to connect, and turning it
+// back on drops the notice.
 func TestAPISharedCredentialToggleAndConnectNotice(t *testing.T) {
 	h, svc := newAdminHandler(t)
 	row, _ := svc.Create(t.Context(), "slack", "Prod", map[string]string{"client_id": "cid"}, "u-admin")
@@ -39,8 +39,18 @@ func TestAPISharedCredentialToggleAndConnectNotice(t *testing.T) {
 	seedAccount(t, svc, row.ID, "u-someone-else")
 
 	got := getDetailOAuth(t, h, "slack", row.ID)
+	if !got.SharedCredential || got.NeedsConnect {
+		t.Errorf("rows default to shared credential on with no notice, got %+v", got)
+	}
+
+	off := httptest.NewRecorder()
+	h.apiSetConnectorSharedCredential(off, pathReq(t, http.MethodPost, "/x", "slack", row.ID, map[string]bool{"allow_shared_credential": false}))
+	if off.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", off.Code, off.Body.String())
+	}
+	got = getDetailOAuth(t, h, "slack", row.ID)
 	if got.SharedCredential {
-		t.Errorf("multi-account rows default to shared credential off")
+		t.Errorf("shared credential should be off")
 	}
 	if !got.NeedsConnect {
 		t.Errorf("viewer without an account must see the connect notice")

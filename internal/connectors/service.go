@@ -2108,31 +2108,39 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 
-	// No account named: on a per-user (SSO) OAuth row, run as the caller's
-	// OWN connected account, exactly as if they had picked it. The caller is
+	// No account named on a per-user (SSO) OAuth row whose shared instance
+	// credential is OFF: run as the caller's OWN connected account, exactly
+	// as if they had picked it. With the credential ON (the default) the
+	// call keeps running on the instance's configured credential. The caller is
 	// the human behind the agent session when there is one — agent spawns
 	// authenticate with a shared principal, so p.UserID alone is not them.
 	// Only the spawn's own session id counts here, never a session_id op
 	// input: that one is model-controlled and must not choose whose account
 	// runs. Same visibility check as an explicit pick.
 	if !virtual && acct == nil && p.AccountID == "" && mod.OAuth != nil && c.EnableSSO {
-		owner := p.UserID
-		if s.sessionOwnerUser != nil && p.SessionID != "" {
-			if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
-				owner = uid
-			}
-		}
-		acc, err := s.OwnAccount(ctx, c.ID, owner)
+		shared, err := s.SharedCredentialAllowed(ctx, *c)
 		if err != nil {
-			return nil, fmt.Errorf("resolve your connected account: %w", err)
+			return nil, err
 		}
-		if acc != nil {
-			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
-			if tagErr != nil {
-				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
+		if !shared {
+			owner := p.UserID
+			if s.sessionOwnerUser != nil && p.SessionID != "" {
+				if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
+					owner = uid
+				}
 			}
-			if AccountVisibleTo(*c, *acc, accTags[acc.ID], s.AccountAccessFor(*c, owner, p.IsAdmin, p.TagIDs)) {
-				acct = acc
+			acc, err := s.OwnAccount(ctx, c.ID, owner)
+			if err != nil {
+				return nil, fmt.Errorf("resolve your connected account: %w", err)
+			}
+			if acc != nil {
+				accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+				if tagErr != nil {
+					return nil, fmt.Errorf("resolve account tags: %w", tagErr)
+				}
+				if AccountVisibleTo(*c, *acc, accTags[acc.ID], s.AccountAccessFor(*c, owner, p.IsAdmin, p.TagIDs)) {
+					acct = acc
+				}
 			}
 		}
 	}
