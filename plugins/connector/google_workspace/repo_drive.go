@@ -79,6 +79,15 @@ func drivePost(c *connector.Ctx, path string, body any) ([]byte, error) {
 // and retries once. Returns the response body on success.
 func doWithRefresh(c *connector.Ctx, buildReq func(token string) (*http.Request, error)) ([]byte, error) {
 	token := c.Cfg("user_token")
+	// No access token stored but a refresh token is: Google answers an empty
+	// bearer with 403 "unregistered callers" (not 401), which would skip the
+	// refresh below and read as a dead connection. Mint one up front.
+	if token == "" && c.Cfg("refresh_token") != "" {
+		var err error
+		if token, err = refreshAccessToken(c); err != nil {
+			return nil, err
+		}
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		req, err := buildReq(token)
 		if err != nil {
