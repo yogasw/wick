@@ -9,8 +9,8 @@
 //
 //	POST /run     {run_id, lang, code, input, timeout_ms, features}
 //	              → 429 + status while the runner is over its memory share
-//	              → 200 NDJSON: {"type":"call",id,tool_id,params}… {"type":"file",id,op,path,data}…
-//	                {"type":"done",ok,result,error,logs,features}
+//	              → 200 NDJSON: {"type":"call",id,tool_id,params,timeout_ms}… {"type":"file",id,op,path,data}…
+//	                {"type":"done",ok,result,error,logs,features,timed_out}
 //	POST /result  {run_id, id, ok, result|error}   (one per call or file event)
 //	GET  /status  {heap_mb, budget_mb, running, busy, langs, engine}
 package codemode
@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,8 +39,15 @@ import (
 const RunnerPrefix = "codemode_"
 
 const (
-	DefaultTimeout = 30 * time.Second
+	DefaultTimeout = 60 * time.Second
 	MaxTimeout     = 120 * time.Second
+	// CallTimeout is one connector call's default deadline (shorter when the
+	// run has less left). A call past it fails like any other failed call,
+	// so the script can catch it and go on.
+	CallTimeout = 20 * time.Second
+	runGrace    = 250 * time.Millisecond
+	// minCallTimeout floors a call deadline squeezed by the run's end.
+	minCallTimeout = 100 * time.Millisecond
 	// MaxQueue is how long a run may wait for a busy runner before it gives up.
 	MaxQueue = 2 * time.Minute
 	// MaxResultBytes caps the result handed back to the model; the point of
@@ -271,10 +279,18 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 	if queued > 200*time.Millisecond {
 		res.QueuedMS = queued.Milliseconds()
 	}
+	// The runner's clock started a little earlier: the grace lets its own
+	// timeout report win over a call capped at the run's end. Calls still in
+	// flight when the run ends are cut through runCtx.
+	deadline := time.Now().Add(req.Timeout + runGrace)
+	runCtx, runCancel := context.WithCancelCause(ctx)
+	defer runCancel(nil)
 	var (
-		mu    sync.Mutex
-		wg    sync.WaitGroup
-		count int
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		count    int
+		inflight = map[int64]Call{}
+		started  = map[int64]time.Time{}
 	)
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 64<<20)
@@ -307,7 +323,10 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 					if len(ev.Params) > 0 {
 						_ = json.Unmarshal(ev.Params, &params)
 					}
-					txt, err := h.Exec(ctx, ev.ToolID, params)
+					mu.Lock()
+					inflight[ev.ID], started[ev.ID] = c, t0
+					mu.Unlock()
+					txt, err := h.execCall(runCtx, callTimeout(ev.TimeoutMS, time.Until(deadline)), ev.ToolID, params)
 					if err != nil {
 						out.Error = err.Error()
 					} else {
@@ -317,6 +336,7 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 				}
 				c.OK, c.Error, c.MS = out.OK, firstLine(out.Error), time.Since(t0).Milliseconds()
 				mu.Lock()
+				delete(inflight, ev.ID)
 				res.Calls = append(res.Calls, c)
 				mu.Unlock()
 				post(ctx, rt, out)
@@ -349,6 +369,12 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 			done = true
 			res.OK, res.Error, res.Logs = ev.OK, ev.Error, ev.Logs
 			res.Result, res.Truncated = capResult(ev.Result)
+			if !res.OK && (ev.TimedOut || ev.Error == "timeout" || strings.Contains(ev.Error, "run stopped while waiting")) {
+				mu.Lock()
+				res.Error = timeoutError(req.Timeout, inflight, started)
+				mu.Unlock()
+				runCancel(errors.New("script timeout after " + seconds(req.Timeout)))
+			}
 			if usesFile && !res.OK && !slices.Contains(ev.Features, FeatureFile) {
 				res.Error = "runner too old, update codemode_goja (0.2.0 or later has wick.file): " + res.Error
 			}
@@ -357,6 +383,8 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 			break
 		}
 	}
+	// Calls still running have nobody waiting for them any more.
+	runCancel(errors.New("the run ended"))
 	wg.Wait()
 	res.DurationMS = time.Since(start).Milliseconds()
 	if !done {
@@ -373,6 +401,8 @@ type wireEvent struct {
 	ID     int64           `json:"id"`
 	ToolID string          `json:"tool_id"`
 	Params json.RawMessage `json:"params"`
+	// TimeoutMS is the call's own deadline; 0 (an older runner) = default.
+	TimeoutMS int64 `json:"timeout_ms"`
 	// file
 	Op   string `json:"op"`
 	Path string `json:"path"`
@@ -383,6 +413,8 @@ type wireEvent struct {
 	Error    string          `json:"error"`
 	Logs     []string        `json:"logs"`
 	Features []string        `json:"features"`
+	// TimedOut: the run deadline ended the script.
+	TimedOut bool `json:"timed_out"`
 }
 
 type wireResult struct {
@@ -391,6 +423,80 @@ type wireResult struct {
 	OK     bool            `json:"ok"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
+}
+
+// callTimeout is one call's deadline: ms when the script asked for one,
+// else CallTimeout, never past what the run has left (a second is kept back
+// on the default so the script can still handle the failure).
+func callTimeout(ms int64, remaining time.Duration) time.Duration {
+	t := min(CallTimeout, remaining-time.Second)
+	if ms > 0 {
+		t = time.Duration(ms) * time.Millisecond
+	}
+	if t > remaining || t <= 0 {
+		t = remaining
+	}
+	return max(t, minCallTimeout)
+}
+
+// execCall runs Exec under its own deadline. A connector that ignores its
+// context does not hold the script: the call fails at the deadline and the
+// late answer is dropped.
+func (h Host) execCall(ctx context.Context, d time.Duration, toolID string, params map[string]any) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	type answer struct {
+		txt string
+		err error
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		txt, err := h.Exec(cctx, toolID, params)
+		ch <- answer{txt, err}
+	}()
+	select {
+	case a := <-ch:
+		if a.err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return "", fmt.Errorf("timed out after %s", seconds(d))
+		}
+		return a.txt, a.err
+	case <-cctx.Done():
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("%v while this call was running", context.Cause(ctx))
+		}
+		return "", fmt.Errorf("timed out after %s", seconds(d))
+	}
+}
+
+// timeoutError names what the script was doing when the run deadline hit:
+// the longest-running call, or its own code. Called with mu held.
+func timeoutError(limit time.Duration, inflight map[int64]Call, started map[int64]time.Time) string {
+	msg := "script timeout after " + seconds(limit)
+	var id int64 = -1
+	for k := range inflight {
+		if id < 0 || started[k].Before(started[id]) {
+			id = k
+		}
+	}
+	if id < 0 {
+		return msg + " (busy in script code)"
+	}
+	c := inflight[id]
+	what := c.ToolID + " ("
+	if c.Label != "" {
+		what += c.Label + ", "
+	}
+	what += seconds(time.Since(started[id])) + ")"
+	msg += " while waiting for " + what
+	if n := len(inflight) - 1; n > 0 {
+		msg += fmt.Sprintf(" and %d more call(s)", n)
+	}
+	return msg
+}
+
+// seconds renders d as "30s" or "29.8s".
+func seconds(d time.Duration) string {
+	return strings.TrimSuffix(strconv.FormatFloat(d.Seconds(), 'f', 1, 64), ".0") + "s"
 }
 
 func post(ctx context.Context, rt http.RoundTripper, out wireResult) {

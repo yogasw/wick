@@ -25,6 +25,8 @@ type fakeRunner struct {
 	crash   bool
 	// oldRunner leaves "file" out of done's features (a pre-0.2.0 runner).
 	oldRunner bool
+	// gotTimeout is the timeout_ms of the last run.
+	gotTimeout atomic.Int64
 }
 
 func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,16 +48,39 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		var in struct{ Code string }
+		var in struct {
+			Code      string
+			TimeoutMS int64 `json:"timeout_ms"`
+		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.gotTimeout.Store(in.TimeoutMS)
+		end := time.Now().Add(time.Duration(in.TimeoutMS) * time.Millisecond)
 		fl := w.(http.Flusher)
 		w.WriteHeader(http.StatusOK)
+		// timedOut plays the runner's deadline: HANG sends a call and never
+		// waits for it, SPIN burns the time in script code.
+		timedOut := func() {
+			time.Sleep(time.Until(end))
+			b, _ := json.Marshal(map[string]any{"type": "done", "ok": false, "error": "timeout", "timed_out": true})
+			_, _ = w.Write(append(b, '\n'))
+		}
 		var got []string
 		for _, line := range strings.Split(in.Code, "\n") {
 			line = strings.TrimSpace(line)
 			ev := map[string]any{"type": "call"}
-			if tid, ok := strings.CutPrefix(line, "CALL "); ok {
+			hang := false
+			if line == "SPIN" {
+				timedOut()
+				return
+			} else if tid, ok := strings.CutPrefix(line, "HANG "); ok {
+				ev["tool_id"], hang = tid, true
+			} else if rest, ok := strings.CutPrefix(line, "CALL "); ok {
+				// CALL <tool_id> [timeout_ms]
+				tid, ms, _ := strings.Cut(rest, " ")
 				ev["tool_id"], ev["params"] = tid, map[string]any{"n": 1}
+				if ms != "" {
+					ev["timeout_ms"] = json.Number(ms)
+				}
 			} else if rest, ok := strings.CutPrefix(line, "wick.file "); ok {
 				// wick.file <op> <path> [data]
 				parts := strings.SplitN(rest+"  ", " ", 3)
@@ -72,6 +97,10 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			b, _ := json.Marshal(ev)
 			_, _ = w.Write(append(b, '\n'))
 			fl.Flush()
+			if hang {
+				timedOut()
+				return
+			}
 			res := <-ch
 			if res.OK {
 				got = append(got, string(res.Result))
@@ -103,6 +132,10 @@ func hostFor(t *testing.T, f *fakeRunner) Host {
 			return []Runner{{Key: "codemode_fake", Langs: []string{"ts", "js"}, Transport: func() (http.RoundTripper, error) { return rt, nil }}}
 		},
 		Exec: func(_ context.Context, toolID string, params map[string]any) (string, error) {
+			if strings.HasSuffix(toolID, "/hang") || strings.HasSuffix(toolID, "/slow") {
+				// A connector that ignores its context.
+				time.Sleep(time.Hour)
+			}
 			if strings.HasSuffix(toolID, "/fail") {
 				return "", errors.New("boom\nsecond line")
 			}
@@ -228,3 +261,89 @@ func TestContextCancelStopsQueue(t *testing.T) {
 }
 
 var _ = bufio.NewScanner
+
+func TestDefaultTimeoutIs60s(t *testing.T) {
+	f := &fakeRunner{}
+	h := hostFor(t, f)
+	if _, err := h.Run(context.Background(), Request{Code: "CALL conn:a/list"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.gotTimeout.Load(); got != 60000 {
+		t.Fatalf("timeout_ms = %d, want 60000", got)
+	}
+}
+
+func TestCallTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		ms        int64
+		remaining time.Duration
+		want      time.Duration
+	}{
+		{0, 60 * time.Second, CallTimeout},
+		{0, 10 * time.Second, 9 * time.Second},
+		{0, 500 * time.Millisecond, 500 * time.Millisecond},
+		{5000, 60 * time.Second, 5 * time.Second},
+		{90000, 30 * time.Second, 30 * time.Second},
+		{0, 0, minCallTimeout},
+	} {
+		if got := callTimeout(tc.ms, tc.remaining); got != tc.want {
+			t.Errorf("callTimeout(%d, %s) = %s, want %s", tc.ms, tc.remaining, got, tc.want)
+		}
+	}
+}
+
+func TestHungCallFailsAtItsDeadline(t *testing.T) {
+	h := hostFor(t, &fakeRunner{})
+	start := time.Now()
+	res, err := h.Run(context.Background(), Request{Code: "CALL conn:a/hang 300\nCALL conn:a/list", Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	// The run goes on past the failed call.
+	if !res.OK || string(res.Result) != `"ERR timed out after 0.3s,{\"op\":\"list\"}"` {
+		t.Fatalf("result = %s (%s)", res.Result, res.Error)
+	}
+	if len(res.Calls) != 2 || res.Calls[0].OK || res.Calls[0].Error != "timed out after 0.3s" {
+		t.Fatalf("calls = %+v", res.Calls)
+	}
+}
+
+func TestHungCallDefaultLeavesTheScriptASecond(t *testing.T) {
+	h := hostFor(t, &fakeRunner{})
+	res, err := h.Run(context.Background(), Request{Code: "CALL conn:a/hang\nCALL conn:a/list", Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK || !strings.HasPrefix(string(res.Result), `"ERR timed out after 1`) {
+		t.Fatalf("result = %s (%s)", res.Result, res.Error)
+	}
+}
+
+func TestRunTimeoutNamesInFlightCall(t *testing.T) {
+	h := hostFor(t, &fakeRunner{})
+	res, err := h.Run(context.Background(), Request{Code: "CALL conn:a/list\nHANG conn:a/slow", Timeout: 400 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || !strings.HasPrefix(res.Error, "script timeout after 0.4s while waiting for conn:a/slow (Acme, 0.") {
+		t.Fatalf("error = %q", res.Error)
+	}
+	if len(res.Calls) != 2 || !res.Calls[0].OK || res.Calls[1].ToolID != "conn:a/slow" || res.Calls[1].OK ||
+		res.Calls[1].Error != "script timeout after 0.4s while this call was running" {
+		t.Fatalf("calls = %+v", res.Calls)
+	}
+}
+
+func TestRunTimeoutInScriptCode(t *testing.T) {
+	h := hostFor(t, &fakeRunner{})
+	res, err := h.Run(context.Background(), Request{Code: "CALL conn:a/list\nSPIN", Timeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || res.Error != "script timeout after 0.3s (busy in script code)" || len(res.Calls) != 1 {
+		t.Fatalf("res = %+v", res)
+	}
+}

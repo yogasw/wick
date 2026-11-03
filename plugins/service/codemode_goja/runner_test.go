@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +26,10 @@ type fakeWick struct {
 	// file answers file events; noFiles plays a wick without wick.file.
 	file    func(op, path, data string) callResult
 	noFiles bool
+	// hang lists tool_ids wick never answers (a hung connector on an old
+	// wick); timeouts records each call's timeout_ms.
+	hang     map[string]bool
+	timeouts sync.Map
 }
 
 func newFake(t *testing.T, budget int) *fakeWick {
@@ -78,6 +83,10 @@ func (f *fakeWick) run(lang, code string, input any, timeout time.Duration) (eve
 				}
 				res = f.file(ev.Op, ev.Path, ev.Data)
 			} else {
+				f.timeouts.Store(ev.ToolID, ev.TimeoutMS)
+				if f.hang[ev.ToolID] {
+					continue
+				}
 				var p map[string]any
 				_ = json.Unmarshal(ev.Params, &p)
 				res = f.answer(ev.ToolID, p)

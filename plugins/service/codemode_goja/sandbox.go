@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/evanw/esbuild/pkg/api"
@@ -101,8 +103,9 @@ func render(v goja.Value) string {
 }
 
 // call asks wick to run one tool and waits for the answer. The VM goroutine
-// blocks here; the run's context ends the wait on timeout.
-func (rn *run) call(ctx context.Context, toolID string, params any) callResult {
+// blocks here; the run's context ends the wait on timeout. timeoutMS is the
+// script's own deadline for this call (0 = default).
+func (rn *run) call(ctx context.Context, toolID string, params any, timeoutMS int64) callResult {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return callResult{Error: "params are not JSON: " + err.Error()}
@@ -110,7 +113,53 @@ func (rn *run) call(ctx context.Context, toolID string, params any) callResult {
 	if string(raw) == "null" {
 		raw = []byte("{}")
 	}
-	return rn.ask(ctx, event{Type: "call", ToolID: toolID, Params: raw}, toolID)
+	remaining := maxTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		remaining = time.Until(dl)
+	}
+	d := callDeadline(timeoutMS, remaining)
+	// Wick ends the call at d; past d+callGrace with no answer the runner
+	// stops waiting itself.
+	cctx, cancel := context.WithTimeoutCause(ctx, d+callGrace, fmt.Errorf("timed out after %s", seconds(d)))
+	defer cancel()
+	return rn.ask(cctx, event{Type: "call", ToolID: toolID, Params: raw, TimeoutMS: d.Milliseconds()}, toolID)
+}
+
+// callDeadline is one call's deadline: ms when the script asked for one,
+// else callTimeout, never past what the run has left (a second is kept back
+// on the default so the script can still handle the failure). Same rule as
+// wick's codemode.callTimeout.
+func callDeadline(ms int64, remaining time.Duration) time.Duration {
+	t := min(callTimeout, remaining-time.Second)
+	if ms > 0 {
+		t = time.Duration(ms) * time.Millisecond
+	}
+	if t > remaining || t <= 0 {
+		t = remaining
+	}
+	return max(t, minCallTimeout)
+}
+
+// seconds renders d as "20s" or "0.3s".
+func seconds(d time.Duration) string {
+	return strings.TrimSuffix(strconv.FormatFloat(d.Seconds(), 'f', 1, 64), ".0") + "s"
+}
+
+// timeoutOpt reads timeout_ms (or timeoutMs) from a call's options.
+func timeoutOpt(o map[string]any) int64 {
+	v, ok := o["timeout_ms"]
+	if !ok {
+		v = o["timeoutMs"]
+	}
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	}
+	return 0
 }
 
 // file asks wick for one wick.file op; wick does the IO, never the runner.
@@ -139,6 +188,9 @@ func (rn *run) ask(ctx context.Context, ev event, what string) callResult {
 		rn.mu.Lock()
 		delete(rn.pending, id)
 		rn.mu.Unlock()
+		if c := context.Cause(ctx); c != ctx.Err() {
+			return callResult{Error: c.Error()}
+		}
 		return callResult{Error: "run stopped while waiting for " + what}
 	}
 }
@@ -188,6 +240,7 @@ func (rn *run) exec(ctx context.Context, in runRequest) (out event) {
 			out.OK, out.Result = false, nil
 			out.Error = fmt.Sprintf("runner panic: %v", p)
 		}
+		out.TimedOut = !out.OK && ctx.Err() == context.DeadlineExceeded
 		rn.mu.Lock()
 		out.Logs = rn.logs
 		if rn.logCut {
@@ -217,6 +270,10 @@ func (rn *run) exec(ctx context.Context, in runRequest) (out event) {
 	defer stop()
 
 	if _, err := vm.RunString(fmt.Sprintf(guard, maxAlloc)); err != nil {
+		out.Error = "setup: " + err.Error()
+		return out
+	}
+	if err := bindPure(vm); err != nil {
 		out.Error = "setup: " + err.Error()
 		return out
 	}
@@ -283,18 +340,19 @@ func rejection(v goja.Value) string {
 	return render(v)
 }
 
-// bind installs the only globals a script gets beyond the language itself:
-// wick (call, callMany, tool, file), console and input. files reports
+// bind installs the only globals a script gets beyond the language itself
+// (and the pure helpers of bindPure): wick (call, callMany, tool, file),
+// console and input. files reports
 // whether wick answers file events.
 func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage, files bool) error {
 	throw := func(msg string) { panic(vm.NewGoError(fmt.Errorf("%s", msg))) }
 
-	call := func(toolID string, params any) any {
+	call := func(toolID string, params any, opts map[string]any) any {
 		toolID = strings.TrimSpace(toolID)
 		if toolID == "" {
 			throw("wick.call: tool_id is required")
 		}
-		res := rn.call(ctx, toolID, params)
+		res := rn.call(ctx, toolID, params, timeoutOpt(opts))
 		if !res.OK {
 			throw(toolID + ": " + res.Error)
 		}
@@ -304,7 +362,7 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 	w := vm.NewObject()
 	_ = w.Set("call", call)
 	_ = w.Set("tool", func(toolID string) any {
-		return func(params any) any { return call(toolID, params) }
+		return func(params any, opts map[string]any) any { return call(toolID, params, opts) }
 	})
 	_ = w.Set("callMany", func(list []map[string]any) []map[string]any {
 		out := make([]map[string]any, len(list))
@@ -315,19 +373,19 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 				tid, _ = c["tool_id"].(string)
 			}
 			wg.Add(1)
-			go func(i int, tid string, params any) {
+			go func(i int, tid string, params any, ms int64) {
 				defer wg.Done()
 				if strings.TrimSpace(tid) == "" {
 					out[i] = map[string]any{"ok": false, "error": "toolId is required"}
 					return
 				}
-				res := rn.call(ctx, tid, params)
+				res := rn.call(ctx, tid, params, ms)
 				if !res.OK {
 					out[i] = map[string]any{"ok": false, "toolId": tid, "error": res.Error}
 					return
 				}
 				out[i] = map[string]any{"ok": true, "toolId": tid, "result": decode(res.Result)}
-			}(i, tid, c["params"])
+			}(i, tid, c["params"], timeoutOpt(c))
 		}
 		wg.Wait()
 		return out

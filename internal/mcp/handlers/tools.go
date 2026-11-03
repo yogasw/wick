@@ -234,8 +234,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Use wick_execute for a single small call or for one write you want to see on its own.\n\n" +
 				"IN THE SCRIPT: `await wick.call(toolId, params)` returns the parsed result or throws; " +
 				"`wick.callMany([{toolId, params}, …])` runs calls in parallel and returns [{ok, toolId, result|error}]; " +
-				"`wick.tool(toolId)` gives a callable. `input` holds the input argument; console.log/warn/error go to logs. " +
-				"Top-level await and return are allowed. No fetch, timers, require or process: connectors are the only way out. " +
+				"`wick.tool(toolId)` gives a callable. Each call has its own deadline (default 20s, never past the run's end): " +
+				"a call past it throws \"timed out after 20s\" like any failed call, so catch and retry; override with a third arg " +
+				"`wick.call(id, params, { timeout_ms })` (callMany items take `timeout_ms` too). `input` holds the input argument; console.log/warn/error go to logs. " +
+				"Top-level await and return are allowed. atob/btoa and TextEncoder/TextDecoder (utf-8) exist. No fetch, timers, require or process: connectors are the only way out. " +
 				"FILES: wick.file.read/write(path[, text]), readJSON/writeJSON(path[, value]), list(dir?), exists(path) work ONLY inside codemode/ of this session's project folder (paths relative to it, 1 MB per file) — the way to hand a script big input or keep big output out of the reply. " +
 				"tool_ids and params are exactly the ones wick_search/wick_get give (same as wick_execute, account suffix @… included); " +
 				"wick_get at op level also returns `ts`, the ready-made call line with typed params. " +
@@ -269,7 +271,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"timeout_ms": map[string]any{
 						"type":        "integer",
-						"description": "Script time limit in ms. Default 30000, max 120000. Connector calls count toward it.",
+						"description": "Script time limit in ms. Default 60000, max 120000. Connector calls count toward it; on timeout the error names the call in flight.",
 					},
 				},
 			},

@@ -33,6 +33,8 @@ type event struct {
 	ID     int64           `json:"id,omitempty"`
 	ToolID string          `json:"tool_id,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
+	// TimeoutMS is the call's own deadline, which wick enforces.
+	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 
 	// file: wick does the IO inside the project's codemode/ folder
 	Op   string `json:"op,omitempty"` // "read" | "write" | "list" | "exists"
@@ -46,6 +48,8 @@ type event struct {
 	Logs   []string        `json:"logs,omitempty"`
 	// Features this runner speaks, so wick can name an outdated runner.
 	Features []string `json:"features,omitempty"`
+	// TimedOut: the run deadline ended the script.
+	TimedOut bool `json:"timed_out,omitempty"`
 }
 
 type callResult struct {
@@ -66,8 +70,14 @@ type status struct {
 }
 
 const (
-	defaultTimeout = 30 * time.Second
+	defaultTimeout = 60 * time.Second
 	maxTimeout     = 120 * time.Second
+	// callTimeout is one call's default deadline, as in wick. callGrace is
+	// how much longer the runner waits for wick's own timeout answer before
+	// giving up on the call itself (a wick that never answers).
+	callTimeout    = 20 * time.Second
+	minCallTimeout = 100 * time.Millisecond
+	callGrace      = 500 * time.Millisecond
 	// admitRatio: new runs are refused (429) while the heap is above this
 	// share of the budget; the running ones keep going.
 	admitRatio = 0.8
