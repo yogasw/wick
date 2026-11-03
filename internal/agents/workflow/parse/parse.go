@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/codemode/scriptpath"
 )
 
 // IdentRe is the Go-template identifier pattern. Used for node ids,
@@ -665,8 +666,19 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required"})
 		}
 	case workflow.NodeRunCode:
-		if n.Code == "" {
-			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required"})
+		hasCode, hasPath := strings.TrimSpace(n.Code) != "", strings.TrimSpace(n.ScriptPath) != ""
+		switch {
+		case hasCode && hasPath:
+			r.Errors = append(r.Errors, Error{Path: path + ".script_path", Message: "takes code or script_path, not both"})
+		case !hasCode && !hasPath:
+			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required (or script_path)"})
+		case hasPath:
+			if err := scriptpath.Valid(n.ScriptPath); err != nil {
+				r.Errors = append(r.Errors, Error{Path: path + ".script_path", Message: err.Error()})
+			}
+			if strings.TrimSpace(n.Workspace) == "" {
+				r.Errors = append(r.Errors, Error{Path: path + ".workspace", Message: "is required with script_path (the project whose folder holds the script)"})
+			}
 		}
 		if n.Lang != "" && n.Lang != "ts" && n.Lang != "js" {
 			r.Errors = append(r.Errors, Error{Path: path + ".lang", Message: fmt.Sprintf("%q is not a run_code language (ts, js)", n.Lang)})

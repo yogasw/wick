@@ -27,3 +27,25 @@ func TestValidate_RunCode(t *testing.T) {
 		}
 	}
 }
+
+// script_path replaces code, stays relative and needs the project it is read from.
+func TestValidate_RunCodeScriptPath(t *testing.T) {
+	ok := Validate(wfWithNode(workflow.Node{Type: workflow.NodeRunCode, ScriptPath: "scripts/report.ts", Workspace: "proj-1"}))
+	if len(ok.Errors) != 0 {
+		t.Fatalf("valid script_path rejected: %v", ok.Errors)
+	}
+	cases := []struct {
+		n    workflow.Node
+		path string
+	}{
+		{workflow.Node{Type: workflow.NodeRunCode, Code: "return 1", ScriptPath: "a.ts", Workspace: "proj-1"}, "graph.nodes[start].script_path"},
+		{workflow.Node{Type: workflow.NodeRunCode, ScriptPath: "../a.ts", Workspace: "proj-1"}, "graph.nodes[start].script_path"},
+		{workflow.Node{Type: workflow.NodeRunCode, ScriptPath: "/etc/a.ts", Workspace: "proj-1"}, "graph.nodes[start].script_path"},
+		{workflow.Node{Type: workflow.NodeRunCode, ScriptPath: "a.ts"}, "graph.nodes[start].workspace"},
+	}
+	for _, c := range cases {
+		if bad := errorPaths(Validate(wfWithNode(c.n))); !bad[c.path] {
+			t.Errorf("%+v: missing error at %s; got %v", c.n, c.path, bad)
+		}
+	}
+}

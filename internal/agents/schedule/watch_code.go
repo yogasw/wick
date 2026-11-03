@@ -6,12 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/codemode/scriptpath"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -37,10 +36,9 @@ import (
 const StepKindCode = "code"
 
 const (
-	codeMaxBytes     = 64 << 10 // inline code
-	codeFileMaxBytes = 256 << 10
-	codeMaxTimeout   = 120
-	codeDefaultLang  = "ts"
+	codeMaxBytes    = 64 << 10 // inline code
+	codeMaxTimeout  = 120
+	codeDefaultLang = "ts"
 	// codeQueueSlack is how long a code step may wait for a busy runner on
 	// top of its own timeout.
 	codeQueueSlack = 2 * time.Minute
@@ -102,7 +100,7 @@ func validateCode(s *Step, at string) error {
 		return fmt.Errorf("%s.code: too long (%d bytes, max %d) — put it in a file and use script_path", at, len(s.Code), codeMaxBytes)
 	}
 	if hasPath {
-		if err := validScriptPath(s.ScriptPath); err != nil {
+		if err := scriptpath.Valid(s.ScriptPath); err != nil {
 			return fmt.Errorf("%s.script_path: %q %v", at, s.ScriptPath, err)
 		}
 	}
@@ -119,59 +117,15 @@ func validateCode(s *Step, at string) error {
 	return nil
 }
 
-// validScriptPath is the shape check done when the step is stored; where the
-// path really leads is checked again on every run (readScript).
-func validScriptPath(p string) error {
-	if filepath.IsAbs(p) || strings.HasPrefix(p, "~") {
-		return errors.New("must be relative to the project folder")
-	}
-	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
-		if part == ".." {
-			return errors.New("must stay inside the project folder (no ..)")
-		}
-	}
-	return nil
-}
-
-// readScript loads script_path from dir. The real path (symlinks resolved)
-// must sit inside dir's real path; anything else is refused as denied, since
-// it cannot heal by itself.
+// readScript loads script_path from dir (scriptpath.Read); a path that
+// leads outside the folder is refused as denied, since it cannot heal by
+// itself.
 func readScript(dir, rel string) (string, error) {
-	if dir == "" {
-		return "", errors.New("no project folder to read script_path from")
+	src, err := scriptpath.Read(dir, rel)
+	if errors.Is(err, scriptpath.ErrDenied) {
+		return "", watchDenied(err.Error())
 	}
-	if err := validScriptPath(rel); err != nil {
-		return "", watchDenied("script_path " + rel + ": " + err.Error())
-	}
-	root, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return "", fmt.Errorf("project folder: %w", err)
-	}
-	real, err := filepath.EvalSymlinks(filepath.Join(root, rel))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("script_path %s: file not found in the project folder", rel)
-		}
-		return "", fmt.Errorf("script_path %s: %w", rel, err)
-	}
-	if !strings.HasPrefix(real, root+string(os.PathSeparator)) {
-		return "", watchDenied("script_path " + rel + " resolves outside the project folder")
-	}
-	fi, err := os.Stat(real)
-	if err != nil {
-		return "", fmt.Errorf("script_path %s: %w", rel, err)
-	}
-	if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("script_path %s: not a regular file", rel)
-	}
-	if fi.Size() > codeFileMaxBytes {
-		return "", fmt.Errorf("script_path %s: too large (%d bytes, max %d)", rel, fi.Size(), codeFileMaxBytes)
-	}
-	b, err := os.ReadFile(real)
-	if err != nil {
-		return "", fmt.Errorf("script_path %s: %w", rel, err)
-	}
-	return string(b), nil
+	return src, err
 }
 
 // codeReturn is the shape a code step's script returns.

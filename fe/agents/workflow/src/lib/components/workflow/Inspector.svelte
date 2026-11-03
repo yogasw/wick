@@ -120,6 +120,17 @@
         </label>
       {/if}
 
+      {#if n.type === "run_code"}
+        <label class="flex flex-col gap-1">
+          <span>Script path (instead of code)</span>
+          <input class="rounded border px-2 py-1 font-mono" placeholder="scripts/report.ts" value={n.script_path ?? ""} oninput={(e) => patch("script_path", (e.target as HTMLInputElement).value)} />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span>Project (workspace id)</span>
+          <input class="rounded border px-2 py-1 font-mono" value={n.workspace ?? ""} oninput={(e) => patch("workspace", (e.target as HTMLInputElement).value)} />
+        </label>
+      {/if}
+
       {#if n.type === "connector"}
         <label class="flex flex-col gap-1">
           <span>Module</span>

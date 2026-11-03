@@ -8,6 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/pool"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/canvas"
 	"github.com/yogasw/wick/internal/agents/workflow/channel"
@@ -252,7 +253,9 @@ func (m *Manager) WithAgentRuntime(p *pool.Pool, sub nodes.AgentSubscribeFn) *Ma
 // function lives on the server (mcp handlers.RunCodeAs) and is injected
 // to keep this package free of the connectors service import.
 func (m *Manager) WithCodeRunner(run nodes.RunCodeFn) *Manager {
-	m.Engine.Register(workflow.NodeRunCode, nodes.NewRunCodeExecutor(m.Connectors, run))
+	ex := nodes.NewRunCodeExecutor(m.Connectors, run)
+	ex.ProjectDir = func(id string) (string, error) { return project.ResolvePath(m.Layout, id) }
+	m.Engine.Register(workflow.NodeRunCode, ex)
 	return m
 }
 

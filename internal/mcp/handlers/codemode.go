@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/codemode"
+	"github.com/yogasw/wick/internal/codemode/scriptpath"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -28,7 +32,6 @@ var CodeModeInstall func(ctx context.Context) error
 // WickRunCode runs a script in a Code Mode runner. Every wick.call it makes
 // goes through the same path as wick_execute, as this caller.
 func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
-	code, _ := args["code"].(string)
 	lang, _ := args["lang"].(string)
 	var input json.RawMessage
 	if v, ok := args["input"]; ok && v != nil {
@@ -41,6 +44,11 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 	}
 	timeout := time.Duration(intArg(args, "timeout_ms")) * time.Millisecond
 	sessionID := CallSession(r, args)
+	code, err := runCodeSource(layout, sessionID, args)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), "")
+		return
+	}
 
 	host := codemode.Host{
 		Runners: CodeModeRunners,
@@ -74,6 +82,36 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		return
 	}
 	rsp.WriteResult(w, req.ID, ToolCallResult{Content: []ToolContent{{Type: "text", Text: string(out)}}})
+}
+
+// runCodeSource is the script wick_run_code runs: code inline, or
+// script_path read fresh on every run from the calling session's project
+// folder, with the watch code step's rules (scriptpath.Read).
+func runCodeSource(layout agentconfig.Layout, sessionID string, args map[string]any) (string, error) {
+	code, _ := args["code"].(string)
+	rel, _ := args["script_path"].(string)
+	rel = strings.TrimSpace(rel)
+	if (strings.TrimSpace(code) != "") == (rel != "") {
+		return "", errors.New(`pass exactly one of code (inline) or script_path (relative to the session's project folder), e.g. "script_path":"scripts/report.ts"`)
+	}
+	if rel == "" {
+		return code, nil
+	}
+	if sessionID == "" {
+		return "", errors.New("script_path needs a session: it is read from the session's project folder; pass code instead")
+	}
+	sess, err := session.Load(layout, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("script_path: session %s: %w", sessionID, err)
+	}
+	if sess.Meta.ProjectID == "" || !project.Exists(layout, sess.Meta.ProjectID) {
+		return "", errors.New("script_path: this session has no project folder; pass code instead")
+	}
+	dir, err := project.ResolvePath(layout, sess.Meta.ProjectID)
+	if err != nil {
+		return "", fmt.Errorf("script_path: project folder: %w", err)
+	}
+	return scriptpath.Read(dir, rel)
 }
 
 // RunCodeAs runs a script for a caller that has no HTTP request — a watch

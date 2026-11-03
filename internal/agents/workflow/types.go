@@ -267,7 +267,10 @@ type Node struct {
 
 	// run_code — Code Mode script language: "ts" (default) or "js".
 	// Code holds the script, Input the JSON handed to it as `input`.
-	Lang string `json:"lang,omitempty"`
+	// ScriptPath replaces Code with a file relative to the folder of the
+	// project named in Workspace, read fresh on every run.
+	Lang       string `json:"lang,omitempty"`
+	ScriptPath string `json:"script_path,omitempty"`
 
 	// branch
 	Expr string `json:"expr,omitempty"`

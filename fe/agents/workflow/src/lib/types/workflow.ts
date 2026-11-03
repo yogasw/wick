@@ -180,6 +180,9 @@ export type Node = {
   code?: string;
   // run_code — "ts" (default) | "js"
   lang?: string;
+  // run_code — script file relative to the `workspace` project's folder,
+  // used instead of code
+  script_path?: string;
 
   // branch
   expr?: string;

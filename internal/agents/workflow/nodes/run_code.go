@@ -13,16 +13,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/codemode"
+	"github.com/yogasw/wick/internal/codemode/scriptpath"
 	"github.com/yogasw/wick/internal/entity"
 )
 
 // RunCodeSchema reflects the inspector form. Code uses the textarea
 // widget; the UI swaps it for an Ace editor (TypeScript / JavaScript).
 type RunCodeSchema struct {
-	Code    string `wick:"required;key=code;textarea;desc=TypeScript or JavaScript run by Code Mode. Call connectors with await wick.call('conn:<id>/<op>', params) and return the result. The JSON from the input field is the global input."`
-	Lang    string `wick:"key=lang;dropdown=ts|js;desc=Script language (default ts)."`
-	Input   string `wick:"key=input;textarea;desc=Optional JSON handed to the script as input. Rendered as a template first, so {{.Node.<id>.<field>}} works, and must be valid JSON after rendering."`
-	Timeout string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 30, max 120)."`
+	Code       string `wick:"key=code;textarea;desc=TypeScript or JavaScript run by Code Mode. Call connectors with await wick.call('conn:<id>/<op>', params) and return the result. The JSON from the input field is the global input. Leave empty when script_path is set."`
+	ScriptPath string `wick:"key=script_path;desc=Instead of code: a script file relative to the project folder named in workspace (no .. or absolute path, max 256 KB), read fresh on every run. Example: scripts/report.ts"`
+	Workspace  string `wick:"key=workspace;desc=Project (workspace id) whose folder script_path is read from. Required with script_path, ignored for inline code."`
+	Lang       string `wick:"key=lang;dropdown=ts|js;desc=Script language (default ts)."`
+	Input      string `wick:"key=input;textarea;desc=Optional JSON handed to the script as input. Rendered as a template first, so {{.Node.<id>.<field>}} works, and must be valid JSON after rendering."`
+	Timeout    string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 30, max 120)."`
 }
 
 // RunCodeFn runs one Code Mode request with every wick.call executed as
@@ -41,6 +44,9 @@ type RunCodeFn func(ctx context.Context, req codemode.Request, user *entity.User
 type RunCodeExecutor struct {
 	Registry *connector.Registry
 	Run      RunCodeFn
+	// ProjectDir resolves a project id to its folder, for script_path.
+	// nil fails every script_path node with a clear error.
+	ProjectDir func(projectID string) (string, error)
 }
 
 // NewRunCodeExecutor wires the executor. A nil run fails every run_code
@@ -74,8 +80,9 @@ func (e *RunCodeExecutor) Descriptor() engine.NodeDescriptor {
 // runner and maps the result into node fields. A failed script fails the
 // node; the returned output still carries its calls and logs.
 func (e *RunCodeExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflow.RunContext) (workflow.NodeOutput, error) {
-	if strings.TrimSpace(n.Code) == "" {
-		return workflow.NodeOutput{}, fmt.Errorf("run_code node %q has no code", n.ID)
+	code, err := e.source(n)
+	if err != nil {
+		return workflow.NodeOutput{}, err
 	}
 	lang := strings.ToLower(strings.TrimSpace(n.Lang))
 	if lang == "" {
@@ -110,7 +117,7 @@ func (e *RunCodeExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 
 	res, err := e.Run(ctx, codemode.Request{
 		Lang:    lang,
-		Code:    n.Code,
+		Code:    code,
 		Input:   input,
 		Timeout: runCodeTimeout(n.TimeoutSec),
 	}, u, tagIDs)
@@ -133,6 +140,38 @@ func (e *RunCodeExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 		return out, fmt.Errorf("run_code: %s (%d calls)", msg, len(res.Calls))
 	}
 	return out, nil
+}
+
+// source is the script to run: inline code, or script_path read fresh from
+// the folder of the project in n.Workspace with the watch code step's rules
+// (scriptpath.Read).
+func (e *RunCodeExecutor) source(n workflow.Node) (string, error) {
+	rel := strings.TrimSpace(n.ScriptPath)
+	hasCode := strings.TrimSpace(n.Code) != ""
+	switch {
+	case hasCode && rel != "":
+		return "", fmt.Errorf("run_code node %q takes code or script_path, not both", n.ID)
+	case hasCode:
+		return n.Code, nil
+	case rel == "":
+		return "", fmt.Errorf("run_code node %q has no code", n.ID)
+	}
+	pid := strings.TrimSpace(n.Workspace)
+	if pid == "" {
+		return "", fmt.Errorf("run_code node %q: script_path needs workspace (the project whose folder holds the script)", n.ID)
+	}
+	if e.ProjectDir == nil {
+		return "", errors.New("run_code: script_path is not wired on this server")
+	}
+	dir, err := e.ProjectDir(pid)
+	if err != nil {
+		return "", fmt.Errorf("run_code node %q: project %s: %w", n.ID, pid, err)
+	}
+	src, err := scriptpath.Read(dir, rel)
+	if err != nil {
+		return "", fmt.Errorf("run_code node %q: %w", n.ID, err)
+	}
+	return src, nil
 }
 
 // runCodeTimeout clamps timeout_sec to Code Mode's limits.

@@ -123,7 +123,7 @@
   let projectOptions = $state<{ id: string; name: string; path: string; no_access?: boolean }[]>([]);
   let projectOptionsLoaded = $state(false);
   $effect(() => {
-    if (node?.type !== "session_init" || projectOptionsLoaded) return;
+    if ((node?.type !== "session_init" && node?.type !== "run_code") || projectOptionsLoaded) return;
     projectOptionsLoaded = true;
     // Ask for the saved workspace by id as well. Without it a project the
     // editor cannot reach is simply absent from the list, and the select
@@ -1198,9 +1198,36 @@
                     <option value="js">JavaScript</option>
                   </select>
                 </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Script path (optional)</span>
+                  <input
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    placeholder="scripts/report.ts"
+                    value={node.script_path ?? ""}
+                    oninput={(e) => patch("script_path", (e.target as HTMLInputElement).value)}
+                  />
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
+                    Instead of code: a file relative to the project folder below, read fresh on every run. Leave the editor empty when set.
+                  </span>
+                </label>
+                {#if node.script_path}
+                  <label class="flex flex-col gap-1">
+                    <span class="text-xs font-medium">Project</span>
+                    <select
+                      class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                      value={node.workspace ?? ""}
+                      onchange={(e) => patch("workspace", (e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="">(pick the project holding the script)</option>
+                      {#each projectOptions as p (p.id)}
+                        <option value={p.id}>{p.name || p.id}{p.no_access ? " — no access" : ""}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
                 <div class="space-y-1">
                   <div class="flex items-center justify-between gap-2">
-                    <span class="text-xs font-medium">Code</span>
+                    <span class="text-xs font-medium">Code{node.script_path ? " (unused while script path is set)" : ""}</span>
                     <div class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
                       {#each ["fixed", "expression"] as m}
                         <button

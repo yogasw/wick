@@ -245,6 +245,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"  const t = await wick.call(threadReplies, { channel: input.channel, thread_ts: input.ts });\n" +
 				"  return t.messages.filter(m => m.user === input.user).map(m => m.text);\n" +
 				"Return a small summary, not raw data (results over 20 KB are cut). " +
+				"Pass exactly one of code or script_path. Prefer script_path for a script reused across runs or a watch code step: a file relative to this session's project folder, read fresh every run; vary it through `input`. " +
 				"Result: {ok, result, error, logs, calls:[{tool_id, label, ok, ms, error}], duration_ms}; a failed script is isError with the calls already made listed.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -252,6 +253,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"code": map[string]any{
 						"type":        "string",
 						"description": "Script body. Runs inside an async function: use await and return freely.",
+					},
+					"script_path": map[string]any{
+						"type":        "string",
+						"description": "Instead of code: a script file relative to this session's project folder (no .., no absolute path, max 256 KB), e.g. scripts/report.ts.",
 					},
 					"lang": map[string]any{
 						"type":        "string",
@@ -266,7 +271,6 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description": "Script time limit in ms. Default 30000, max 120000. Connector calls count toward it.",
 					},
 				},
-				"required": []string{"code"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:           "Run code against wick connectors",
