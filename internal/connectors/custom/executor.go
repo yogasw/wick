@@ -171,6 +171,9 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 		// Author opt-in: lets users override this def's config per agent
 		// session (still gated by the per-instance admin toggle).
 		AllowSessionConfig: def.AllowSessionConfig,
+		// The def toggle alone is enough: a session clone fills its own
+		// config, so a saved instance as parent adds nothing.
+		SessionBaseFromDefinition: def.AllowSessionConfig,
 	}, nil
 }
 

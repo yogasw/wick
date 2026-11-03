@@ -100,33 +100,19 @@ func WickSessionWorkspace(
 }
 
 // baseConnector is one connector module the user is allowed to clone into
-// a session workspace (capability declared + an admin enabled the toggle
-// on at least one visible instance).
+// a session workspace (see connectors.Service.SessionBases).
 type baseConnector struct {
 	Key   string `json:"base_key"`
 	Label string `json:"label"`
 }
 
 // sessionWorkspaceBases returns the base connector keys the caller may
-// add as session instances: module capability AllowSessionConfig AND a
-// visible connector row with the per-instance toggle on.
+// add as session instances.
 func sessionWorkspaceBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []baseConnector {
-	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
-	if err != nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	out := make([]baseConnector, 0)
-	for _, row := range rows {
-		if seen[row.Key] {
-			continue
-		}
-		mod, ok := svc.Module(row.Key)
-		if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
-			continue
-		}
-		seen[row.Key] = true
-		out = append(out, baseConnector{Key: row.Key, Label: mod.Meta.Name})
+	mods := svc.SessionBases(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
+	out := make([]baseConnector, 0, len(mods))
+	for _, mod := range mods {
+		out = append(out, baseConnector{Key: mod.Meta.Key, Label: mod.Meta.Name})
 	}
 	return out
 }
@@ -211,7 +197,7 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 		return
 	}
 	if !sessionWorkspaceBaseAllowed(r, svc, tagIDs, isAdmin, baseKey) {
-		rsp.ToolError(w, req.ID, fmt.Sprintf("connector %q is not available for session instances — its module must declare AllowSessionConfig and an admin must enable the per-instance toggle", baseKey), sessionWorkspaceToolName)
+		rsp.ToolError(w, req.ID, fmt.Sprintf("connector %q is not available for session instances — enable session config on its custom connector definition, or on a saved instance you can see", baseKey), sessionWorkspaceToolName)
 		return
 	}
 	mod, _ := svc.Module(baseKey)

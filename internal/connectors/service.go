@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -696,6 +697,36 @@ func (s *Service) Modules() []connector.Module {
 		out = append(out, m)
 	}
 	return out
+}
+
+// SessionBases lists the connectors the caller may clone into a session
+// workspace: every module offered from its definition, plus capable
+// modules with a visible instance whose per-instance toggle is on.
+// Deduped by key; instance-backed first, the rest sorted by key.
+func (s *Service) SessionBases(ctx context.Context, userID string, tagIDs []string, isAdmin bool) []connector.Module {
+	seen := map[string]bool{}
+	out := make([]connector.Module, 0)
+	if rows, err := s.ListVisibleTo(ctx, userID, tagIDs, isAdmin); err == nil {
+		for _, row := range rows {
+			if seen[row.Key] {
+				continue
+			}
+			mod, ok := s.Module(row.Key)
+			if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
+				continue
+			}
+			seen[row.Key] = true
+			out = append(out, mod)
+		}
+	}
+	var defs []connector.Module
+	for _, mod := range s.Modules() {
+		if mod.SessionBaseFromDefinition && !seen[mod.Meta.Key] {
+			defs = append(defs, mod)
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Meta.Key < defs[j].Meta.Key })
+	return append(out, defs...)
 }
 
 // Module looks up a definition by Key. The second return is false when
@@ -2064,6 +2095,11 @@ type ExecuteResult struct {
 // connector key a session-workspace instance clones. Grants name rows,
 // not keys, so the instance inherits the widest grant among them.
 func (s *Service) baseAllowsOp(ctx context.Context, scope AgentScope, key string, op *connector.Operation) (bool, error) {
+	// A base offered from its definition has no row to grant: any
+	// agent may run it with the config its session brought.
+	if mod, ok := s.Module(key); ok && mod.SessionBaseFromDefinition {
+		return true, nil
+	}
 	rows, err := s.repo.ListByKey(ctx, key)
 	if err != nil {
 		return false, fmt.Errorf("resolve base connector: %w", err)

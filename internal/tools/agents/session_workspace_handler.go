@@ -145,8 +145,8 @@ func wsStatus(specs []entity.Config, cfg map[string]string) string {
 	return "ready"
 }
 
-// wsBases lists the base connectors the caller may add: module declares
-// AllowSessionConfig AND a visible instance has the per-instance toggle on.
+// wsBases lists the base connectors the caller may add (see
+// connectors.Service.SessionBases).
 func wsBases(c *tool.Ctx) []wsBaseVM {
 	if globalConnectors == nil {
 		return nil
@@ -159,22 +159,10 @@ func wsBases(c *tool.Ctx) []wsBaseVM {
 	if globalAuth != nil {
 		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
 	}
-	rows, err := globalConnectors.ListVisibleTo(c.Context(), user.ID, tagIDs, user.IsAdmin())
-	if err != nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	out := make([]wsBaseVM, 0)
-	for _, row := range rows {
-		if seen[row.Key] {
-			continue
-		}
-		mod, ok := globalConnectors.Module(row.Key)
-		if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
-			continue
-		}
-		seen[row.Key] = true
-		out = append(out, wsBaseVM{BaseKey: row.Key, Label: mod.Meta.Name})
+	mods := globalConnectors.SessionBases(c.Context(), user.ID, tagIDs, user.IsAdmin())
+	out := make([]wsBaseVM, 0, len(mods))
+	for _, mod := range mods {
+		out = append(out, wsBaseVM{BaseKey: mod.Meta.Key, Label: mod.Meta.Name})
 	}
 	return out
 }
