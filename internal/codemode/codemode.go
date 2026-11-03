@@ -101,6 +101,9 @@ type Host struct {
 	// Describe labels a tool_id for the call list (connector label, whether
 	// the op is destructive). Optional.
 	Describe func(toolID string) (label string, destructive bool)
+	// Install, when set, runs when no runner is installed at all (see
+	// Installer.Ensure); the run then picks again from Runners. Optional.
+	Install func(ctx context.Context) error
 }
 
 var toolIDLiteral = regexp.MustCompile("conn:[A-Za-z0-9_.:-]+/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?")
@@ -122,23 +125,42 @@ func ToolIDs(code string) []string {
 // ErrNoRunner means no installed runner takes the language.
 var ErrNoRunner = errors.New("no Code Mode runner is installed for this language")
 
-func (h Host) pick(lang string) (Runner, error) {
-	if h.Runners == nil {
-		return Runner{}, ErrNoRunner
-	}
-	var avail []string
-	for _, r := range h.Runners() {
-		for _, l := range r.Langs {
-			if l == lang {
-				return r, nil
-			}
-			avail = append(avail, l)
+func (h Host) pick(ctx context.Context, lang string) (Runner, error) {
+	r, n, avail := h.find(lang)
+	if n == 0 && h.Install != nil {
+		// No runner at all: install the default one, then look again on
+		// this same run.
+		if err := h.Install(ctx); err != nil {
+			return Runner{}, fmt.Errorf("%w: %v", ErrNoRunner, err)
 		}
+		r, _, avail = h.find(lang)
+	}
+	if r.Key != "" {
+		return r, nil
 	}
 	if len(avail) == 0 {
 		return Runner{}, fmt.Errorf("%w (install the codemode_goja service plugin)", ErrNoRunner)
 	}
 	return Runner{}, fmt.Errorf("%w %q; available: %s", ErrNoRunner, lang, strings.Join(avail, ", "))
+}
+
+// find returns the runner taking lang (zero Runner when none), how many
+// runners are installed, and the languages they take.
+func (h Host) find(lang string) (Runner, int, []string) {
+	if h.Runners == nil {
+		return Runner{}, 0, nil
+	}
+	var avail []string
+	rs := h.Runners()
+	for _, r := range rs {
+		for _, l := range r.Langs {
+			if l == lang {
+				return r, len(rs), nil
+			}
+			avail = append(avail, l)
+		}
+	}
+	return Runner{}, len(rs), avail
 }
 
 // Run executes req. Failures of the script itself come back as a Result with
@@ -178,7 +200,7 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
-	rn, err := h.pick(req.Lang)
+	rn, err := h.pick(ctx, req.Lang)
 	if err != nil {
 		return nil, err
 	}

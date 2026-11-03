@@ -20,6 +20,11 @@ import (
 // tests can swap in a fake runner.
 var CodeModeRunners = codemode.PluginRunners(plugin.Default)
 
+// CodeModeInstall downloads and loads the default runner when none is
+// installed (codemode.Installer.Ensure, set by the server). nil = no
+// download, a run without a runner fails with codemode.ErrNoRunner.
+var CodeModeInstall func(ctx context.Context) error
+
 // WickRunCode runs a script in a Code Mode runner. Every wick.call it makes
 // goes through the same path as wick_execute, as this caller.
 func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
@@ -39,6 +44,7 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 
 	host := codemode.Host{
 		Runners: CodeModeRunners,
+		Install: CodeModeInstall,
 		Check: func(ctx context.Context, toolID string) error {
 			return checkToolAccess(ctx, svc, layout, toolID, sessionID, user, tagIDs)
 		},
@@ -82,6 +88,7 @@ func RunCodeAs(ctx context.Context, svc *connectors.Service, layout agentconfig.
 	ctx = login.WithUser(ctx, user, tagIDs)
 	host := codemode.Host{
 		Runners: CodeModeRunners,
+		Install: CodeModeInstall,
 		Check: func(ctx context.Context, toolID string) error {
 			return checkToolAccess(ctx, svc, layout, toolID, sessionID, user, tagIDs)
 		},

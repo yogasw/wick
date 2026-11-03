@@ -91,6 +91,11 @@ func BuildCatalog(releases []GHRelease, fetchManifest ManifestFetcher) []Availab
 					}
 					a.Description = mf.Module.Meta.Description
 					a.DefaultTags = mf.Module.Meta.DefaultTags
+					// Connector entries stay kind-less (older readers);
+					// any other kind is named so they skip it.
+					if k := wickplugin.NormalizeKind(mf.Kind); k != wickplugin.KindConnector {
+						a.Kind = k
+					}
 				}
 			}
 		}

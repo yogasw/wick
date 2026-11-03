@@ -3534,6 +3534,24 @@ func NewServer() *Server {
 			}
 		},
 	}
+	// Code Mode: a run that finds no runner installs codemode_goja from the
+	// official catalog through the verified source path and loads it live
+	// (OnInstalled above), once for all concurrent runs.
+	mcphandlers.CodeModeInstall = (&codemode.Installer{Install: func(ctx context.Context) error {
+		key := codemode.DefaultRunnerKey
+		if !jobPluginStore.Enabled(key) {
+			return fmt.Errorf("%s is turned off in Admin → Plugins", key)
+		}
+		if _, ok := servicePlugins.Get(key); !ok {
+			if _, err := pluginSources.InstallFromIndex(ctx, connplugin.DefaultRegistry().URL(), key, wickplugin.KindService, "codemode-auto-install"); err != nil {
+				return err
+			}
+		}
+		if _, ok := servicePlugins.Get(key); !ok {
+			return fmt.Errorf("%s was installed but did not load (see the plugin log)", key)
+		}
+		return nil
+	}}).Ensure
 	pluginSourcesHandler := &manager.PluginSourcesHandler{
 		Sources: pluginSources,
 		Health: manager.InstalledHealth(func(kind, key string) (bool, string) {

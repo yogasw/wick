@@ -12,7 +12,9 @@ const sampleCatalog = `[
              "linux/amd64":"https://example.com/gmail-1.2.0-linux-amd64.zip"}},
   {"name":"slack","description":"Slack","version":"0.9.1",
    "assets":{"darwin/arm64":"https://example.com/slack-0.9.1-darwin-arm64.zip"}},
-  {"description":"skip me, no key/name","version":"1.0.0","assets":{}}
+  {"description":"skip me, no key/name","version":"1.0.0","assets":{}},
+  {"key":"runner_x","kind":"service","version":"0.1.0",
+   "assets":{"linux/amd64":"https://example.com/runner_x-0.1.0-linux-amd64.zip"}}
 ]`
 
 func TestParseCatalog(t *testing.T) {
@@ -21,7 +23,7 @@ func TestParseCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("want 2 entries (keyless/nameless skipped), got %d: %+v", len(got), got)
+		t.Fatalf("want 2 entries (keyless/nameless and non-connector skipped), got %d: %+v", len(got), got)
 	}
 	// Sorted by key → gmail first. gmail has explicit key+name.
 	if got[0].Key != "gmail" || got[0].Name != "Gmail" || got[0].Version != "1.2.0" {
