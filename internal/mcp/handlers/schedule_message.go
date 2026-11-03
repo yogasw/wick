@@ -309,7 +309,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 			rsp.ToolError(w, req.ID, "load session: "+err.Error(), scheduleToolName)
 			return
 		}
-		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, sessionID) != nil {
+		if !(scheduleOwnAgentSession(r, sessionID) || canManageSession(user, sess.Meta.UserID)) || team.CheckAgentSession(r.Context(), layout, sessionID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), scheduleToolName)
 			return
 		}
@@ -330,7 +330,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	targetSessionID := strings.TrimSpace(argString(args, "target_session_id"))
 	if targetSessionID != "" && targetSessionID != sessionID {
 		sess, err := session.Load(layout, targetSessionID)
-		if err != nil || !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, targetSessionID) != nil {
+		if err != nil || !(scheduleOwnAgentSession(r, targetSessionID) || canManageSession(user, sess.Meta.UserID)) || team.CheckAgentSession(r.Context(), layout, targetSessionID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", targetSessionID), scheduleToolName)
 			return
 		}
@@ -767,9 +767,13 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 		}
 		// A ticket room (or a member's backing session) never takes a
 		// scheduled turn: it runs only through the room's own send.
-		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, target.SessionID) != nil || team.RefuseRoomSession(layout, target.SessionID) != nil {
+		if !(scheduleOwnAgentSession(r, target.SessionID) || canManageSession(user, sess.Meta.UserID)) || team.CheckAgentSession(r.Context(), layout, target.SessionID) != nil || team.RefuseRoomSession(layout, target.SessionID) != nil {
 			// Match the title tools: don't leak that the session exists.
 			return "", fmt.Errorf("session not found: %s", target.SessionID)
+		}
+		if sess.Meta.UserID == "" {
+			// A bot-opened thread has no owner; never leave the row orphaned.
+			return scheduleUserID(user), nil
 		}
 		return sess.Meta.UserID, nil
 	}
@@ -797,6 +801,9 @@ func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.Sche
 	if !scheduleAgentMayManage(r, layout, m) {
 		return false
 	}
+	if scheduleOwnAgentSession(r, m.SessionID) || scheduleOwnAgentSession(r, m.SourceSessionID) {
+		return true
+	}
 	if owner, ok := team.AgentOwner(r.Context()); ok {
 		// No admin / see-all bypass for an agent: its owner's rows, or a
 		// project row the owner reaches as a plain member.
@@ -814,6 +821,16 @@ func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.Sche
 		return false
 	}
 	return project.CanAccess(p.Meta, scheduleProjectAccess(r, user))
+}
+
+// scheduleOwnAgentSession reports whether sid is the agent session the call
+// runs in. An agent always reaches its own conversation, whoever's turn it
+// is running: a Run-as-caller agent runs as the person chatting, who is
+// often not the session's owner, and the owner/admin rule would otherwise
+// refuse it "check back in 10 minutes" on its own thread. Agent calls only:
+// a person in someone else's session keeps the owner rule.
+func scheduleOwnAgentSession(r *http.Request, sid string) bool {
+	return sid != "" && team.InAgent(r.Context()) && sid == SessionOf(r)
 }
 
 // scheduleAgentMayManage applies the Team data scope to a schedule acted on
