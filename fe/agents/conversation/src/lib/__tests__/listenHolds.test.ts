@@ -33,4 +33,10 @@ describe("linkListenHolds", () => {
     expect(isProblemHold("cancelled")).toBe(true);
     expect(isProblemHold("sent")).toBe(false);
   });
+
+  test("a hold merged into a mention is no row", () => {
+    const out = linkListenHolds([hold("h1", "merged", "", "Listen · answered together with the mention"), user("u1")]);
+    expect(out.turns.map((t) => t.turn_id)).toEqual(["u1"]);
+    expect(isProblemHold("merged")).toBe(false);
+  });
 });

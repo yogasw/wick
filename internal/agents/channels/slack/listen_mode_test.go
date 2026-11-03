@@ -173,6 +173,22 @@ func TestListenHeldReportedAndCancelled(t *testing.T) {
 	}
 }
 
+// A mention that answers the thread ends the hold as merged, not cancelled:
+// the held message reaches the agent through the mention's turn.
+func TestListenHeldMergedByMention(t *testing.T) {
+	ch, rec, got := modeChannel(t, agentconfig.SlackChannelConfig{ChannelReplyRules: rulesJSON})
+	ch.queueListenMessage(t.Context(), "S", msgIn("CLIS", "UA", "halo", "100.2"), nil)
+	ch.mergeListenWait("S")
+	if s := strings.Join(rec.states(), ","); s != "held,merged" {
+		t.Fatalf("merge not reported: %q", s)
+	}
+	select {
+	case r := <-got:
+		t.Fatalf("merged hold dispatched on its own %v", r)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestListenNoteAutoReply(t *testing.T) {
 	n := listenNote(listenTurn{auto: true, waited: 3 * time.Second})
 	if !strings.HasPrefix(n, "[auto-reply · held 3s]") || !strings.Contains(n, "never [silent]") {

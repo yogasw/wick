@@ -139,6 +139,10 @@ const (
 	heldStateSent      = "sent"
 	heldStateSkipped   = "skipped"
 	heldStateCancelled = "cancelled"
+	// heldStateMerged: a mention answered the thread before the delay ran
+	// out, and that turn already reads the held message. Not a problem — the
+	// message did reach the agent, just through the mention.
+	heldStateMerged = "merged"
 )
 
 // HeldFn records where a held reply stands in its session's timeline, so
@@ -179,6 +183,8 @@ func (s *Channel) reportHeld(sessionID string, w *listenWait, state, why string)
 		text = fmt.Sprintf("%s · passed to the agent after %s", modeLabel, time.Since(w.started).Round(time.Second))
 	case heldStateSkipped:
 		text = fmt.Sprintf("%s · not passed on: %s", modeLabel, why)
+	case heldStateMerged:
+		text = fmt.Sprintf("%s · answered together with the mention", modeLabel)
 	default:
 		text = fmt.Sprintf("%s · dropped: %s", modeLabel, why)
 	}
