@@ -1081,6 +1081,9 @@
             {:else}
               <span>{traceOpen ? "⊖" : "⊕"}</span>
               <span>{traceOpen ? "hide trace" : "show trace ›"}</span>
+              {#if (turn.tool_calls ?? 0) > 0}
+                <span>· {turn.tool_calls} tool call{turn.tool_calls === 1 ? "" : "s"}</span>
+              {/if}
             {/if}
           </button>
 

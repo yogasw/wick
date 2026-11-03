@@ -207,6 +207,8 @@ export type ConversationTurn = {
   /** One sentence naming who, and what they did. Absent when unknown. */
   interrupted_note?: string;
   has_trace: boolean;
+  /** tool_use events in the trace; absent on turns written before it existed. */
+  tool_calls?: number;
   events: TurnEvent[];
   attachments: Attachment[];
   has_artifact?: boolean;
