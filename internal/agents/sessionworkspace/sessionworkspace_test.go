@@ -423,26 +423,91 @@ func TestExpiredInstanceHiddenBeforeReap(t *testing.T) {
 	}
 }
 
-func TestSetExpiryPinsAndUnpins(t *testing.T) {
+func TestSetLifetimePinsAndUnpins(t *testing.T) {
 	layout, sid := newLayout(t)
 	in, err := Add(layout, sid, Instance{BaseKey: "httprest"})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	stamp := ExpiryStamp(time.Now(), 4*time.Hour)
-	if err := SetExpiry(layout, sid, in.ID, stamp); err != nil {
+	if err := SetLifetime(layout, sid, in.ID, stamp, 0); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	if got, _, _ := Get(layout, sid, in.ID); got.ExpiresAt != stamp || !got.Pinned() {
 		t.Fatalf("pin not stored: %+v", got)
 	}
-	if err := SetExpiry(layout, sid, in.ID, ""); err != nil {
+	if err := SetLifetime(layout, sid, in.ID, "", 0); err != nil {
 		t.Fatalf("unpin: %v", err)
 	}
 	if got, _, _ := Get(layout, sid, in.ID); got.Pinned() {
 		t.Fatalf("unpin not stored: %+v", got)
 	}
-	if err := SetExpiry(layout, sid, "sw_missing", stamp); !os.IsNotExist(errors.Unwrap(err)) {
+	if err := SetLifetime(layout, sid, "sw_missing", stamp, 0); !os.IsNotExist(errors.Unwrap(err)) {
 		t.Errorf("missing instance: want ErrNotExist, got %v", err)
+	}
+}
+
+func TestIdleAfterWidensIdleWindow(t *testing.T) {
+	layout, _ := newLayout(t)
+	now := time.Now()
+	// Idle for 2h: the default instance goes, the one kept for 1d of
+	// inactivity stays.
+	writeMeta(t, layout, "s1", session.StatusIdle, now.Add(-2*time.Hour))
+	if _, err := Add(layout, "s1", Instance{BaseKey: "httprest", Label: "default"}); err != nil {
+		t.Fatalf("add default: %v", err)
+	}
+	if _, err := Add(layout, "s1", Instance{BaseKey: "httprest", Label: "staging", IdleAfterSec: 86400}); err != nil {
+		t.Fatalf("add staging: %v", err)
+	}
+	remaining, err := sweepOnce(layout, now)
+	if err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("expected the staging instance to remain, got %d", remaining)
+	}
+	got, _ := List(layout, "s1")
+	if len(got) != 1 || got[0].Label != "staging" {
+		t.Fatalf("only staging should survive, got %+v", got)
+	}
+	// A day later it goes too.
+	if _, err := sweepOnce(layout, now.Add(23*time.Hour)); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	if got, _ := List(layout, "s1"); len(got) != 0 {
+		t.Fatalf("staging should be reaped after its idle window, got %+v", got)
+	}
+}
+
+func TestParseLifetime(t *testing.T) {
+	now := time.Now()
+	if _, _, err := ParseLifetime(now, "1h", "1d"); err == nil {
+		t.Error("both knobs should be refused")
+	}
+	stamp, idle, err := ParseLifetime(now, "", "1d")
+	if err != nil || stamp != "" || idle != 24*time.Hour {
+		t.Errorf("idle_after: stamp=%q idle=%v err=%v", stamp, idle, err)
+	}
+	stamp, idle, err = ParseLifetime(now, "2h", "")
+	if err != nil || stamp == "" || idle != 0 {
+		t.Errorf("expires_in: stamp=%q idle=%v err=%v", stamp, idle, err)
+	}
+	if stamp, idle, err := ParseLifetime(now, "none", ""); err != nil || stamp != "" || idle != 0 {
+		t.Errorf("none: stamp=%q idle=%v err=%v", stamp, idle, err)
+	}
+}
+
+func TestSetLifetimeIdleClearsPin(t *testing.T) {
+	layout, sid := newLayout(t)
+	in, err := Add(layout, sid, Instance{BaseKey: "httprest", ExpiresAt: ExpiryStamp(time.Now(), time.Hour)})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := SetLifetime(layout, sid, in.ID, "", 3*time.Hour); err != nil {
+		t.Fatalf("set idle: %v", err)
+	}
+	got, _, _ := Get(layout, sid, in.ID)
+	if got.Pinned() || got.IdleWindow() != 3*time.Hour {
+		t.Fatalf("idle mode not stored: %+v", got)
 	}
 }

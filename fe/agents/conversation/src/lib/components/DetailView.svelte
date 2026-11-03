@@ -3814,8 +3814,8 @@
               .then(loadWorkspace)
               .catch((e: unknown) => toastError(`Remove: ${e instanceof Error ? e.message : String(e)}`));
           }}
-          onExpiry={(cid, expiresIn) => {
-            run(setWorkspaceExpiry(base, sessionId, cid, expiresIn).pipe(Effect.provide(WickClientLayer)))
+          onExpiry={(cid, lifetime) => {
+            run(setWorkspaceExpiry(base, sessionId, cid, lifetime).pipe(Effect.provide(WickClientLayer)))
               .then(loadWorkspace)
               .catch((e: unknown) => toastError(`Expiry: ${e instanceof Error ? e.message : String(e)}`));
           }}
@@ -4046,8 +4046,8 @@
                   .then(loadWorkspace)
                   .catch((e: unknown) => toastError(`Remove: ${e instanceof Error ? e.message : String(e)}`));
               }}
-              onExpiry={(cid, expiresIn) => {
-                run(setWorkspaceExpiry(base, sessionId, cid, expiresIn).pipe(Effect.provide(WickClientLayer)))
+              onExpiry={(cid, lifetime) => {
+                run(setWorkspaceExpiry(base, sessionId, cid, lifetime).pipe(Effect.provide(WickClientLayer)))
                   .then(loadWorkspace)
                   .catch((e: unknown) => toastError(`Expiry: ${e instanceof Error ? e.message : String(e)}`));
               }}

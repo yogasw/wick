@@ -555,7 +555,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Name: "wick_session_workspace",
 			Description: "Spin up throwaway connector instances scoped to the CURRENT SESSION — a private clone of a base connector " +
 				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
-				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while, unless an expiry is set (expires_in): then they survive idleness and are deleted when it passes — action=list reports either kind under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
+				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while, unless a lifetime is set: expires_in (deleted when it passes, idle or not) or idle_after (a longer idle window, e.g. 1d) — action=list reports either kind under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
 				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
 				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +
@@ -565,7 +565,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
 				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
 				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
-				"'set_expiry' sets (expires_in, e.g. 4h) or clears (expires_in=none) an instance's expiry — set one when the user wants a connector kept longer than the idle window. " +
+				"'set_expiry' sets an instance's lifetime — expires_in (e.g. 4h) or idle_after (e.g. 1d), or neither to go back to the default idle window — use it when the user wants a connector kept longer. " +
 				"'remove' deletes a session instance (use it to clean up an instance you no longer need). " +
 				"After adding+configuring, the instance's id shows in wick_list (pass the same session_id) and you wick_execute it like any connector.",
 			InputSchema: map[string]any{
@@ -599,6 +599,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"expires_in": map[string]any{
 						"type":        "string",
 						"description": "action=add/set_expiry: keep the instance for this long (e.g. 90m, 4h, 2d; max 7d) even while the session is idle, then delete it. Omit (or none) for the default: deleted once the session sits idle.",
+					},
+					"idle_after": map[string]any{
+						"type":        "string",
+						"description": "action=add/set_expiry: delete the instance once the session has been idle this long (e.g. 3h, 1d; max 7d) instead of the default few minutes. Exclusive with expires_in.",
 					},
 					"prompt": map[string]any{
 						"type":        "boolean",

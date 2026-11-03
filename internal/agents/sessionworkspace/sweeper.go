@@ -96,7 +96,8 @@ func runSweeper(layout agentconfig.Layout) {
 }
 
 // sweepOnce scans every session workspace once, reaping the unpinned
-// instances of any session that has gone idle past IdleGrace, and returns how
+// instances whose session has been idle past their idle window (IdleGrace, or
+// the instance's own IdleAfterSec), and returns how
 // many unpinned instances remain across all sessions (in still-active
 // sessions). The reaper uses that count to decide whether to keep ticking;
 // pinned instances are the expiry job's (ReapExpired), not this loop's.
@@ -126,16 +127,22 @@ func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
 		if unpinned == 0 {
 			continue
 		}
-		if sessionIdle(layout, sid, now) {
-			if n, rerr := reapAll(layout, sid, "session idle", now); rerr != nil {
-				log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace sweeper: reap failed")
-			} else if n > 0 {
-				log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: reaped idle session's connectors")
-				notifyReaped(layout, sid, n)
-			}
+		idle, ok := sessionIdleFor(layout, sid, now)
+		if !ok {
+			remaining += unpinned
 			continue
 		}
-		remaining += unpinned
+		n, rerr := reapIdle(layout, sid, "session idle", idle, now)
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace sweeper: reap failed")
+			remaining += unpinned
+			continue
+		}
+		if n > 0 {
+			log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: reaped idle session's connectors")
+			notifyReaped(layout, sid, n)
+		}
+		remaining += unpinned - n
 	}
 	return remaining, nil
 }
@@ -188,18 +195,17 @@ func notifyReaped(layout agentconfig.Layout, sessionID string, n int) {
 	reapNotify(sessionID, tombs)
 }
 
-// sessionIdle reports whether a session is quiet enough to reap: it must not
-// have a live subprocess (Status idle) AND its last activity must be older than
-// IdleGrace. A running/queued session is never reaped, so instances stay alive
-// as long as work is happening. A session whose meta.json is gone (deleted) is
-// treated as idle — its instances should not outlive it.
-func sessionIdle(layout agentconfig.Layout, sessionID string, now time.Time) bool {
+// sessionIdleFor reports how long a session has been quiet: ok=false while
+// it has a live subprocess (Status running/queued), so instances stay alive as
+// long as work is happening. A session whose meta.json is gone (deleted)
+// counts as idle forever — its instances should not outlive it.
+func sessionIdleFor(layout agentconfig.Layout, sessionID string, now time.Time) (time.Duration, bool) {
 	sess, err := session.Load(layout, sessionID)
 	if err != nil {
-		return true // no/unreadable meta → session is gone; reap its instances
+		return time.Duration(1<<62 - 1), true
 	}
 	if sess.Meta.Status != session.StatusIdle {
-		return false // running or queued — active work, keep alive
+		return 0, false
 	}
-	return now.Sub(sess.Meta.LastActive) > IdleGrace
+	return now.Sub(sess.Meta.LastActive), true
 }

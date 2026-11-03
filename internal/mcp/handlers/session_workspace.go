@@ -143,10 +143,12 @@ type instanceVM struct {
 	// ExpiresAt is the user-set expiry (RFC3339); empty = deleted when the
 	// session goes idle.
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// IdleAfterSec is the custom idle window; 0 = the default one.
+	IdleAfterSec int `json:"idle_after_sec,omitempty"`
 }
 
 func sessionWorkspaceVM(svc *connectors.Service, in sessionworkspace.Instance) instanceVM {
-	vm := instanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt}
+	vm := instanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt, IdleAfterSec: in.IdleAfterSec}
 	mod, ok := svc.Module(in.BaseKey)
 	if !ok {
 		return vm
@@ -224,16 +226,17 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 	if label == "" {
 		label = mod.Meta.Name + " (session)"
 	}
-	ttl, err := sessionworkspace.ParseExpiresIn(argString(args, "expires_in"))
+	expiresAt, idleAfter, err := sessionworkspace.ParseLifetime(time.Now(), argString(args, "expires_in"), argString(args, "idle_after"))
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
 		return
 	}
 	inst, err := sessionworkspace.Add(layout, sessionID, sessionworkspace.Instance{
-		BaseKey:   baseKey,
-		Label:     label,
-		CreatedBy: "ai",
-		ExpiresAt: sessionworkspace.ExpiryStamp(time.Now(), ttl),
+		BaseKey:      baseKey,
+		Label:        label,
+		CreatedBy:    "ai",
+		ExpiresAt:    expiresAt,
+		IdleAfterSec: int(idleAfter / time.Second),
 	})
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
@@ -295,11 +298,12 @@ func sessionWorkspaceDuplicate(w http.ResponseWriter, req RPCRequest, rsp Respon
 		cfg[k] = v
 	}
 	inst, err := sessionworkspace.Add(layout, sessionID, sessionworkspace.Instance{
-		BaseKey:   orig.BaseKey,
-		Label:     label,
-		Config:    cfg,
-		CreatedBy: "ai",
-		ExpiresAt: orig.ExpiresAt,
+		BaseKey:      orig.BaseKey,
+		Label:        label,
+		Config:       cfg,
+		CreatedBy:    "ai",
+		ExpiresAt:    orig.ExpiresAt,
+		IdleAfterSec: orig.IdleAfterSec,
 	})
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
@@ -494,12 +498,12 @@ func sessionWorkspaceSetExpiry(w http.ResponseWriter, req RPCRequest, rsp Respon
 		rsp.ToolError(w, req.ID, "connector_id is required (the session instance to set the expiry on)", sessionWorkspaceToolName)
 		return
 	}
-	ttl, err := sessionworkspace.ParseExpiresIn(argString(args, "expires_in"))
+	expiresAt, idleAfter, err := sessionworkspace.ParseLifetime(time.Now(), argString(args, "expires_in"), argString(args, "idle_after"))
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
 		return
 	}
-	if err := sessionworkspace.SetExpiry(layout, sessionID, cid, sessionworkspace.ExpiryStamp(time.Now(), ttl)); err != nil {
+	if err := sessionworkspace.SetLifetime(layout, sessionID, cid, expiresAt, idleAfter); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
 		return
 	}

@@ -15,7 +15,7 @@
     onRename: (cid: string, label: string) => void;
     onDuplicate: (cid: string) => void;
     onDelete: (cid: string) => void;
-    onExpiry?: (cid: string, expiresIn: string) => void;
+    onExpiry?: (cid: string, lifetime: { expires_in?: string; idle_after?: string }) => void;
   };
 
   let {

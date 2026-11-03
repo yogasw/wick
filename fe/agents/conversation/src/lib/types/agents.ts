@@ -523,6 +523,8 @@ export type WsInstance = {
   fields?: WsField[];
   /** User-set expiry (RFC3339). Absent = deleted once the session sits idle. */
   expires_at?: string;
+  /** Custom idle window in seconds; absent = the default few minutes. */
+  idle_after_sec?: number;
 };
 
 // WsTombstone is a connector auto-deleted when the session went idle — shown as

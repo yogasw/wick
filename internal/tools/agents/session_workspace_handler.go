@@ -54,6 +54,8 @@ type wsInstanceVM struct {
 	// ExpiresAt is the user-set expiry (RFC3339); empty = deleted when the
 	// session goes idle.
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// IdleAfterSec is the custom idle window; 0 = the default one.
+	IdleAfterSec int `json:"idle_after_sec,omitempty"`
 }
 
 // wsTombstoneVM is the trace of a session instance that was auto-deleted for
@@ -182,7 +184,7 @@ func wsBaseAllowed(c *tool.Ctx, key string) bool {
 }
 
 func wsInstanceToVM(in sessionworkspace.Instance) wsInstanceVM {
-	vm := wsInstanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt}
+	vm := wsInstanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt, IdleAfterSec: in.IdleAfterSec}
 	mod, ok := globalConnectors.Module(in.BaseKey)
 	if !ok {
 		return vm
@@ -405,11 +407,12 @@ func sessionWorkspaceDuplicateUI(c *tool.Ctx) {
 		cfg[k] = v
 	}
 	copyInst, err := sessionworkspace.Add(globalLayout, sid, sessionworkspace.Instance{
-		BaseKey:   inst.BaseKey,
-		Label:     inst.Label + " (copy)",
-		Config:    cfg,
-		CreatedBy: "user",
-		ExpiresAt: inst.ExpiresAt,
+		BaseKey:      inst.BaseKey,
+		Label:        inst.Label + " (copy)",
+		Config:       cfg,
+		CreatedBy:    "user",
+		ExpiresAt:    inst.ExpiresAt,
+		IdleAfterSec: inst.IdleAfterSec,
 	})
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
@@ -461,8 +464,8 @@ func sessionWorkspaceRenameUI(c *tool.Ctx) {
 	c.JSON(http.StatusOK, wsInstanceToVM(inst))
 }
 
-// sessionWorkspaceExpiryUI sets (expires_in, e.g. "4h") or clears
-// (expires_in "none") a session instance's expiry.
+// sessionWorkspaceExpiryUI sets a session instance's lifetime: expires_in
+// ("4h"), idle_after ("1d"), or neither for the default idle window.
 func sessionWorkspaceExpiryUI(c *tool.Ctx) {
 	sid := c.PathValue("id")
 	cid := c.PathValue("cid")
@@ -471,17 +474,18 @@ func sessionWorkspaceExpiryUI(c *tool.Ctx) {
 	}
 	var body struct {
 		ExpiresIn string `json:"expires_in"`
+		IdleAfter string `json:"idle_after"`
 	}
 	if err := c.BindJSON(&body); err != nil {
 		c.Error(http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	ttl, err := sessionworkspace.ParseExpiresIn(body.ExpiresIn)
+	expiresAt, idleAfter, err := sessionworkspace.ParseLifetime(time.Now(), body.ExpiresIn, body.IdleAfter)
 	if err != nil {
 		c.Error(http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := sessionworkspace.SetExpiry(globalLayout, sid, cid, sessionworkspace.ExpiryStamp(time.Now(), ttl)); err != nil {
+	if err := sessionworkspace.SetLifetime(globalLayout, sid, cid, expiresAt, idleAfter); err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -74,6 +74,20 @@ type Instance struct {
 	// session-connectors-expiry job once this time passes. Empty = the
 	// default lifetime, reaped when the session sits idle past IdleGrace.
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// IdleAfterSec widens the idle window for this instance alone: it is
+	// reaped once its session has been idle this long instead of IdleGrace
+	// (e.g. a staging connector kept for a day of inactivity). Zero = the
+	// default window. Ignored when ExpiresAt is set.
+	IdleAfterSec int `json:"idle_after_sec,omitempty"`
+}
+
+// IdleWindow is how long the instance's session may sit idle before the
+// instance is reaped.
+func (in Instance) IdleWindow() time.Duration {
+	if in.IdleAfterSec > 0 {
+		return time.Duration(in.IdleAfterSec) * time.Second
+	}
+	return IdleGrace
 }
 
 // MaxExpiry caps how far ahead an instance may be pinned. The config holds
@@ -95,7 +109,8 @@ func (in Instance) Expired(now time.Time) bool {
 	return err != nil || !now.Before(t)
 }
 
-// ParseExpiresIn turns a user-supplied lifetime ("90m", "4h", "2d") into a
+// ParseExpiresIn turns a user-supplied lifetime ("90m", "4h", "2d") — an
+// expires_in or an idle_after — into a
 // duration. "", "0", "none" and "idle" mean "no pin" (zero). Anything above
 // MaxExpiry or below one minute is refused rather than silently clamped, so
 // the caller learns the real limit.
@@ -109,19 +124,38 @@ func ParseExpiresIn(s string) (time.Duration, error) {
 	if days, ok := strings.CutSuffix(s, "d"); ok {
 		n, err := strconv.Atoi(days)
 		if err != nil {
-			return 0, fmt.Errorf("expires_in %q: want e.g. 90m, 4h or 2d", s)
+			return 0, fmt.Errorf("%q: want e.g. 90m, 4h or 2d", s)
 		}
 		d = time.Duration(n) * 24 * time.Hour
 	} else {
 		var err error
 		if d, err = time.ParseDuration(s); err != nil {
-			return 0, fmt.Errorf("expires_in %q: want e.g. 90m, 4h or 2d", s)
+			return 0, fmt.Errorf("%q: want e.g. 90m, 4h or 2d", s)
 		}
 	}
 	if d < time.Minute || d > MaxExpiry {
-		return 0, fmt.Errorf("expires_in %q: must be between 1m and %s", s, "7d")
+		return 0, fmt.Errorf("%q: must be between 1m and 7d", s)
 	}
 	return d, nil
+}
+
+// ParseLifetime reads the two lifetime knobs a caller may pass — expires_in
+// (fixed lifetime) and idle_after (custom idle window) — and returns what
+// SetLifetime takes. Passing both is refused; passing neither (or "none")
+// means the default idle window.
+func ParseLifetime(now time.Time, expiresIn, idleAfter string) (string, time.Duration, error) {
+	ttl, err := ParseExpiresIn(expiresIn)
+	if err != nil {
+		return "", 0, fmt.Errorf("expires_in %w", err)
+	}
+	idle, err := ParseExpiresIn(idleAfter)
+	if err != nil {
+		return "", 0, fmt.Errorf("idle_after %w", err)
+	}
+	if ttl > 0 && idle > 0 {
+		return "", 0, fmt.Errorf("pass expires_in or idle_after, not both")
+	}
+	return ExpiryStamp(now, ttl), idle, nil
 }
 
 // ExpiryStamp returns the ExpiresAt value for a lifetime starting now; zero
@@ -262,15 +296,22 @@ func Add(layout agentconfig.Layout, sessionID string, in Instance) (Instance, er
 	return in, nil
 }
 
-// reapAll removes every UNPINNED instance in a session and records a
-// tombstone for each (config dropped), returning how many were reaped. Used by
-// the sweeper when a session has gone idle past the grace window — those
-// instances existed only for the duration of active work on that session.
+// reapIdle removes the UNPINNED instances of a session that has been idle for
+// `idle` whose own idle window (IdleWindow) is shorter than that, records a
+// tombstone for each (config dropped), and returns how many were reaped.
 // Pinned instances (ExpiresAt set) are left for the expiry job. Tombstones
 // accumulate so the "deleted — re-create" notice survives across reloads; a
 // later Add of the same label clears its matching tombstone.
+func reapIdle(layout agentconfig.Layout, sessionID, reason string, idle time.Duration, now time.Time) (int, error) {
+	return reapWhere(layout, sessionID, reason, now, func(in Instance) bool {
+		return !in.Pinned() && idle > in.IdleWindow()
+	})
+}
+
+// reapAll removes every unpinned instance of a session regardless of idle
+// windows — the session is gone, or the caller wants it emptied.
 func reapAll(layout agentconfig.Layout, sessionID, reason string, now time.Time) (int, error) {
-	return reapWhere(layout, sessionID, reason, now, func(in Instance) bool { return !in.Pinned() })
+	return reapIdle(layout, sessionID, reason, time.Duration(1<<62-1), now)
 }
 
 // reapExpired removes the pinned instances of a session whose expiry passed.
@@ -315,10 +356,11 @@ func reapWhere(layout agentconfig.Layout, sessionID, reason string, now time.Tim
 	return n, nil
 }
 
-// SetExpiry pins an instance to expiresAt (RFC3339), or unpins it with "" so
-// it goes back to the idle reap. Returns an os.ErrNotExist-wrapped error when
-// the instance is gone.
-func SetExpiry(layout agentconfig.Layout, sessionID, instanceID, expiresAt string) error {
+// SetLifetime sets how an instance dies: pinned to expiresAt (RFC3339), or
+// reaped after idleAfter of session inactivity, or — both zero — the default
+// idle window. The two are exclusive; setting one clears the other. Returns
+// an os.ErrNotExist-wrapped error when the instance is gone.
+func SetLifetime(layout agentconfig.Layout, sessionID, instanceID, expiresAt string, idleAfter time.Duration) error {
 	mu.Lock()
 	defer mu.Unlock()
 	ws, err := Load(layout, sessionID)
@@ -328,6 +370,10 @@ func SetExpiry(layout agentconfig.Layout, sessionID, instanceID, expiresAt strin
 	for i := range ws.Instances {
 		if ws.Instances[i].ID == instanceID {
 			ws.Instances[i].ExpiresAt = expiresAt
+			ws.Instances[i].IdleAfterSec = 0
+			if expiresAt == "" {
+				ws.Instances[i].IdleAfterSec = int(idleAfter / time.Second)
+			}
 			return save(layout, sessionID, ws)
 		}
 	}
