@@ -27,6 +27,9 @@ type TeamWorkingSession struct {
 	// Since is when its current turn was first seen running (WorkingSessions)
 	// or when it last moved (LastSession).
 	Since *time.Time `json:"since,omitempty"`
+	// Action is the tool the running turn waits on ("" = thinking), so the
+	// row says what the chat is doing, not only who it works for.
+	Action string `json:"action,omitempty"`
 }
 
 // lastSessionTTL is how long a finished non-main chat keeps the row's
@@ -108,6 +111,7 @@ func workingSessionsOf(sessions []session.Session, mainID string, live teamLive,
 				since = now
 			}
 			item.Since = timePtr(since)
+			item.Action = live.actions[s.ID]
 			work = append(work, running{item, since})
 			continue
 		case "queued":

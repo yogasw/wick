@@ -41,12 +41,14 @@ func TestRosterWorkingSessions(t *testing.T) {
 	l := teamTurnsNow()
 	l.lifecycles[helperMain], l.lifecycles[taskChat], l.lifecycles[ownChat] = "working", "working", "spawning"
 	l.since = map[string]time.Time{ownChat: t0, taskChat: t0.Add(time.Minute)}
+	l.actions[taskChat] = "Bash"
 	names := &teamTaskNames{name: func(string) string { return "Captain" }, viewer: sessionUserOf}
 	l.addTeamTasks([]teamlink.LiveTask{{FromSession: capMain, FromAgentID: "a-cap", ToID: p.ID, ToHandle: "helper", Chat: taskChat, Working: true}}, names)
 	var it TeamAgentItem
 	fillChatState(&it, owner.ID, p.ID, nil, l)
 	if len(it.WorkingSessions) != 2 || it.WorkingSessions[0].ID != ownChat || it.WorkingSessions[0].Trigger != "you" ||
-		it.WorkingSessions[1].ID != taskChat || it.WorkingSessions[1].Trigger != "Captain" || it.LastSession != nil {
+		it.WorkingSessions[1].ID != taskChat || it.WorkingSessions[1].Trigger != "Captain" || it.LastSession != nil ||
+		it.WorkingSessions[0].Action != "" || it.WorkingSessions[1].Action != "Bash" {
 		t.Fatalf("working = %+v last = %+v", it.WorkingSessions, it.LastSession)
 	}
 

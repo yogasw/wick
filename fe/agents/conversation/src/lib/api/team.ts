@@ -44,6 +44,8 @@ export type WorkingSession = {
   source?: string;
   /** Turn start while running; last activity once finished. */
   since?: string;
+  /** The tool the running turn waits on; absent while it thinks. */
+  action?: string;
 };
 
 export type AgentItem = {
