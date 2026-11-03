@@ -623,7 +623,7 @@
 
     {#each visible as s (s.id)}
       <div
-        class="rounded-xl border border-white-300 dark:border-navy-600 p-3 space-y-1.5 [content-visibility:auto] [contain-intrinsic-size:auto_9rem]"
+        class="rounded-xl border border-white-300 dark:border-navy-600 p-3 space-y-1.5"
         data-sid={s.id}
       >
         <!-- The summary opens the detail/edit modal. A real button so keyboard
