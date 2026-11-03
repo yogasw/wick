@@ -115,3 +115,5 @@ return { changed: rows, snapshot: rows.length ? rows[rows.length - 1].id : input
 Fields `code` or `script_path`, `workspace` (project id: required with
 `script_path` or `wick.file`), `lang`, `input`, `timeout_sec`. Runs as the
 workflow creator. See the `wick-workflows` skill.
+
+From a shell (cron, build step): `support-tools codemode run` with a CLI token, see the `wick-cli-channel` skill.
