@@ -17,15 +17,36 @@
 
   let { instance, open = false, onSave, onTest, onRename, onDuplicate, onDelete, onExpiry }: Props = $props();
 
-  /* Lifetimes the picker offers; the server caps at 7d. */
-  const EXPIRY_OPTIONS: { value: string; label: string }[] = [
-    { value: "none", label: "Until the session goes idle" },
-    { value: "1h", label: "Keep 1 hour" },
-    { value: "4h", label: "Keep 4 hours" },
-    { value: "1d", label: "Keep 1 day" },
-    { value: "3d", label: "Keep 3 days" },
-    { value: "7d", label: "Keep 7 days" },
-  ];
+  /* Quick picks; anything else goes through the custom hours/minutes or
+     "until" fields. The server caps a lifetime at 7 days. */
+  const EXPIRY_QUICK = [1, 2, 3];
+  const MAX_EXPIRY_MIN = 7 * 24 * 60;
+
+  let customAmount = $state("");
+  let customUnit = $state<"m" | "h" | "d">("h");
+  const UNIT_MIN = { m: 1, h: 60, d: 1440 } as const;
+  let untilValue = $state("");
+  let expiryError = $state("");
+
+  /* Sends a lifetime in whole minutes, which the server parses as "<n>m". */
+  function setExpiryMinutes(mins: number) {
+    expiryError = "";
+    if (!onExpiry) return;
+    if (!(mins >= 1) || mins > MAX_EXPIRY_MIN) {
+      expiryError = "Pick between 1 minute and 7 days.";
+      return;
+    }
+    onExpiry(instance.id, `${Math.round(mins)}m`);
+  }
+
+  function applyCustom() {
+    setExpiryMinutes(Number(customAmount || 0) * UNIT_MIN[customUnit]);
+  }
+
+  function applyUntil() {
+    if (!untilValue) return;
+    setExpiryMinutes(Math.ceil((new Date(untilValue).getTime() - Date.now()) / 60000));
+  }
 
   /* "3h 20m" / "2d 4h" until expires_at; "" when unpinned or already past. */
   function timeLeft(expiresAt?: string): string {
@@ -39,13 +60,6 @@
     if (d > 0) return `${d}d ${h}h`;
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
-  }
-
-  function handleExpiryChange(e: Event) {
-    const sel = e.currentTarget as HTMLSelectElement;
-    const v = sel.value;
-    sel.value = "";
-    if (v && onExpiry) onExpiry(instance.id, v);
   }
 
   let isOpen = $state(false);
@@ -283,13 +297,35 @@
       {/if}
 
       {#if onExpiry}
-        <div class="space-y-1">
-          <select class={INPUT_CLASS} onchange={handleExpiryChange} data-testid="expiry-picker">
-            <option value="">{instance.expires_at ? `Expires ${new Date(instance.expires_at).toLocaleString()} — change…` : "Deleted when the session goes idle — keep longer…"}</option>
-            {#each EXPIRY_OPTIONS as o (o.value)}
-              <option value={o.value}>{o.label}</option>
+        <div class="space-y-2 rounded-lg border border-white-300 dark:border-navy-600 p-2" data-testid="expiry-picker">
+          <p class="text-[11px] text-black-700 dark:text-black-600">
+            {instance.expires_at
+              ? `Expires ${new Date(instance.expires_at).toLocaleString()}`
+              : "Deleted when the session goes idle. Keep it longer:"}
+          </p>
+          <div class="flex flex-wrap items-center gap-1.5">
+            {#each EXPIRY_QUICK as h (h)}
+              <button type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" onclick={() => setExpiryMinutes(h * 60)} data-testid="expiry-quick">{h}h</button>
             {/each}
-          </select>
+            <input type="number" min="1" placeholder="0" bind:value={customAmount} class="w-16 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none" data-testid="expiry-amount" />
+            <select bind:value={customUnit} class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none" data-testid="expiry-unit">
+              <option value="m">minutes</option>
+              <option value="h">hours</option>
+              <option value="d">days</option>
+            </select>
+            <button type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" onclick={applyCustom} data-testid="expiry-custom-set">Set</button>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="text-[11px] text-black-700 dark:text-black-600">until</span>
+            <input type="datetime-local" bind:value={untilValue} class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none" data-testid="expiry-until" />
+            <button type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" onclick={applyUntil} data-testid="expiry-until-set">Set</button>
+            {#if instance.expires_at}
+              <button type="button" class="ml-auto text-[11px] font-medium text-black-700 dark:text-black-600 hover:underline" onclick={() => onExpiry?.(instance.id, "none")} data-testid="expiry-clear">Back to idle</button>
+            {/if}
+          </div>
+          {#if expiryError}
+            <p class="text-xs font-medium text-neg-400" data-testid="expiry-error">{expiryError}</p>
+          {/if}
         </div>
       {/if}
 

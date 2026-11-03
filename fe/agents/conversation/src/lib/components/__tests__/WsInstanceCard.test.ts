@@ -316,12 +316,47 @@ describe("WsInstanceCard", () => {
     expect(screen.queryByTestId("expiry-picker")).toBeNull();
   });
 
-  test("expiry picker calls onExpiry with the chosen lifetime", async () => {
+  test("quick pick sends hours as minutes", async () => {
     const onExpiry = vi.fn();
     render(WsInstanceCard, { props: makeProps({ onExpiry }) });
-    const sel = screen.getByTestId("expiry-picker") as HTMLSelectElement;
-    await fireEvent.change(sel, { target: { value: "4h" } });
-    expect(onExpiry).toHaveBeenCalledWith("cid-1", "4h");
+    await fireEvent.click(screen.getAllByTestId("expiry-quick")[1]);
+    expect(onExpiry).toHaveBeenCalledWith("cid-1", "120m");
+  });
+
+  test("custom amount in minutes", async () => {
+    const onExpiry = vi.fn();
+    render(WsInstanceCard, { props: makeProps({ onExpiry }) });
+    await fireEvent.input(screen.getByTestId("expiry-amount"), { target: { value: "45" } });
+    await fireEvent.change(screen.getByTestId("expiry-unit"), { target: { value: "m" } });
+    await fireEvent.click(screen.getByTestId("expiry-custom-set"));
+    expect(onExpiry).toHaveBeenCalledWith("cid-1", "45m");
+  });
+
+  test("custom amount in days", async () => {
+    const onExpiry = vi.fn();
+    render(WsInstanceCard, { props: makeProps({ onExpiry }) });
+    await fireEvent.input(screen.getByTestId("expiry-amount"), { target: { value: "2" } });
+    await fireEvent.change(screen.getByTestId("expiry-unit"), { target: { value: "d" } });
+    await fireEvent.click(screen.getByTestId("expiry-custom-set"));
+    expect(onExpiry).toHaveBeenCalledWith("cid-1", "2880m");
+  });
+
+  test("custom above 7 days is refused locally", async () => {
+    const onExpiry = vi.fn();
+    render(WsInstanceCard, { props: makeProps({ onExpiry }) });
+    await fireEvent.input(screen.getByTestId("expiry-amount"), { target: { value: "8" } });
+    await fireEvent.change(screen.getByTestId("expiry-unit"), { target: { value: "d" } });
+    await fireEvent.click(screen.getByTestId("expiry-custom-set"));
+    expect(onExpiry).not.toHaveBeenCalled();
+    expect(screen.getByTestId("expiry-error")).toBeDefined();
+  });
+
+  test("back to idle clears a pinned expiry", async () => {
+    const onExpiry = vi.fn();
+    const inst: WsInstance = { ...INSTANCE_READY, expires_at: new Date(Date.now() + 3600_000).toISOString() };
+    render(WsInstanceCard, { props: makeProps({ instance: inst, onExpiry }) });
+    await fireEvent.click(screen.getByTestId("expiry-clear"));
+    expect(onExpiry).toHaveBeenCalledWith("cid-1", "none");
   });
 
   test("shows time left badge for a pinned instance", () => {
