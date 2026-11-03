@@ -12,12 +12,14 @@ package event
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 )
 
 func init() {
 	RegisterDetector(KindImage, 100, detectBinary)
+	RegisterDetector(KindJSON, 95, detectCodeModeResult)
 	RegisterDetector(KindError, 90, detectError)
 	RegisterDetector(KindCommand, 80, detectBashCall)
 	RegisterDetector(KindFile, 80, detectFileCall)
@@ -286,8 +288,10 @@ func detectMCPCall(in DetectInput) (Display, bool) {
 // same shape internal/codemode pre-checks).
 var toolIDLiteral = regexp.MustCompile("conn:[A-Za-z0-9_.:-]+/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?")
 
-// codeModeCall shows a wick_run_code call as its script, highlighted, with
-// the number of distinct tools it names in the header.
+// codeModeCall shows a wick_run_code call as its script: the inline code
+// highlighted, or for script_path only the path (the card reads the file
+// through the session file endpoints, under the viewer's own access). The
+// input, when given, follows as a JSON part.
 func codeModeCall(d *Display, text string) {
 	m := jsonObject(text)
 	if m == nil {
@@ -298,16 +302,96 @@ func codeModeCall(d *Display, text string) {
 	if lang == "" {
 		lang = "ts"
 	}
-	d.Body, d.Lang = code, "typescript"
+	d.Kind, d.Body, d.Lang = KindCodeMode, code, "typescript"
 	if lang == "js" {
 		d.Lang = "javascript"
 	}
-	seen := map[string]bool{}
-	for _, id := range toolIDLiteral.FindAllString(code, -1) {
-		seen[id] = true
-	}
 	d.Connector, d.Op = "code mode", lang
-	d.Summary = fmt.Sprintf("code mode · %s · %d tool%s", lang, len(seen), plural(len(seen)))
+	if p := str(m, "script_path"); p != "" && code == "" {
+		d.Path = p
+		d.Summary = "code mode · " + lang + " · " + path.Base(p)
+	} else {
+		seen := map[string]bool{}
+		for _, id := range toolIDLiteral.FindAllString(code, -1) {
+			seen[id] = true
+		}
+		d.Summary = fmt.Sprintf("code mode · %s · %d tool%s", lang, len(seen), plural(len(seen)))
+	}
+	if v, ok := m["input"]; ok && v != nil {
+		if b, err := json.MarshalIndent(v, "", "  "); err == nil {
+			d.Parts = []Display{{Kind: KindJSON, Lang: "json", Title: "input", Body: string(b)}}
+		}
+	}
+}
+
+// detectCodeModeResult shows what a wick_run_code run returned: the
+// script's return value as the body, then its error, the connector calls it
+// made and its logs as parts. A failed run lands here too, not on the
+// generic error card, so the calls already made stay readable.
+func detectCodeModeResult(in DetectInput) (Display, bool) {
+	if in.Call || !strings.HasSuffix(in.ToolName, "wick_run_code") {
+		return Display{}, false
+	}
+	m := jsonObject(in.Text)
+	if m == nil {
+		return Display{}, false
+	}
+	if _, ok := m["run_id"]; !ok {
+		return Display{}, false
+	}
+	var r struct {
+		OK     bool            `json:"ok"`
+		Result json.RawMessage `json:"result"`
+		Error  string          `json:"error"`
+		Logs   []string        `json:"logs"`
+		Calls  []struct {
+			ToolID string `json:"tool_id"`
+			Label  string `json:"label"`
+			OK     bool   `json:"ok"`
+			MS     int64  `json:"ms"`
+			Error  string `json:"error"`
+		} `json:"calls"`
+		DurationMS int64 `json:"duration_ms"`
+	}
+	if json.Unmarshal([]byte(in.Text), &r) != nil {
+		return Display{}, false
+	}
+	d := Display{Kind: KindJSON, Lang: "json", Body: "null"}
+	if len(r.Result) > 0 {
+		var v any
+		if json.Unmarshal(r.Result, &v) == nil {
+			if b, err := json.MarshalIndent(v, "", "  "); err == nil {
+				d.Body = string(b)
+			}
+		}
+	}
+	status := "ok"
+	if !r.OK {
+		status = "failed"
+	}
+	d.Summary = fmt.Sprintf("%s · %d call%s · %d ms", status, len(r.Calls), plural(len(r.Calls)), r.DurationMS)
+	if r.Error != "" {
+		d.Parts = append(d.Parts, Display{Kind: KindError, Title: "error", Body: r.Error})
+	}
+	if len(r.Calls) > 0 {
+		lines := make([]string, 0, len(r.Calls))
+		for _, c := range r.Calls {
+			mark := "✓"
+			if !c.OK {
+				mark = "✗"
+			}
+			line := fmt.Sprintf("%s %s · %d ms", mark, c.ToolID, c.MS)
+			if c.Error != "" {
+				line += " · " + c.Error
+			}
+			lines = append(lines, line)
+		}
+		d.Parts = append(d.Parts, Display{Kind: KindText, Title: "calls", Body: strings.Join(lines, "\n")})
+	}
+	if len(r.Logs) > 0 {
+		d.Parts = append(d.Parts, Display{Kind: KindTerminal, Title: "logs", Body: strings.Join(r.Logs, "\n")})
+	}
+	return d, true
 }
 
 func plural(n int) string {

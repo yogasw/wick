@@ -17,6 +17,7 @@ import SearchBlock from "./blocks/SearchBlock.svelte";
 import McpBlock from "./blocks/McpBlock.svelte";
 import BinaryChip from "./blocks/BinaryChip.svelte";
 import SkillBlock from "./blocks/SkillBlock.svelte";
+import CodeModeBlock from "./blocks/CodeModeBlock.svelte";
 
 export type TraceRendererProps = { display: TraceDisplay; ctx?: TraceContext };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,4 +45,5 @@ registerTraceRenderer("file", FileBlock);
 registerTraceRenderer("search", SearchBlock);
 registerTraceRenderer("mcp", McpBlock);
 registerTraceRenderer("skill", SkillBlock);
+registerTraceRenderer("codemode", CodeModeBlock);
 for (const k of ["image", "pdf", "audio", "video", "binary"]) registerTraceRenderer(k, BinaryChip);

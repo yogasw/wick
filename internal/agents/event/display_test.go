@@ -161,7 +161,7 @@ func TestHumanBytes(t *testing.T) {
 func TestCodeModeCallShowsScript(t *testing.T) {
 	in := `{"code":"const a = \"conn:x-1/list\"; // A\nconst b = \"conn:y-2/get@acc\";\nawait wick.call(a, {}); await wick.call(a, {});","lang":"ts"}`
 	d := ClassifyCall("mcp__wick__wick_run_code", in)
-	if d.Kind != KindMCP || d.Lang != "typescript" || !strings.HasPrefix(d.Body, `const a = "conn:x-1/list"`) {
+	if d.Kind != KindCodeMode || d.Lang != "typescript" || !strings.HasPrefix(d.Body, `const a = "conn:x-1/list"`) {
 		t.Fatalf("display = %+v", d)
 	}
 	if d.Summary != "code mode · ts · 2 tools" {

@@ -39,9 +39,13 @@
 
   const d = $derived.by<TraceDisplay>(() => {
     let out = display ?? classify();
+    // A wick_run_code display stored before the codemode kind showed a
+    // script_path call as its raw JSON; the classifier knows better now.
+    if (call && raw && out.connector === "code mode" && out.kind !== "codemode") out = classify();
     // A Large event's index display is header-only: the body arrives with
     // the payload. Keep the backend's kind and card fields, take the body.
-    if (!out.body && !out.command && !isBinaryKind(out.kind) && raw) {
+    // A script_path call has no body by design: its file is the script.
+    if (!out.body && !out.command && !isBinaryKind(out.kind) && raw && !(out.kind === "codemode" && out.path)) {
       out = { ...out, body: classify().body ?? raw };
     }
     // Live turn (inflight / SSE): the backend display has no blob_ref yet
@@ -101,6 +105,7 @@
     {/if}
     {#each d.parts ?? [] as p, i (i)}
       {@const Part = getTraceRenderer(p.kind)}
+      {#if p.title}<p data-trace-part-title class="px-3 pt-2 text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">{p.title}</p>{/if}
       <Part display={p} {ctx} />
     {/each}
   {/if}
