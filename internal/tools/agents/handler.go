@@ -3857,6 +3857,12 @@ func streamSSE(c *tool.Ctx) {
 	ctx := c.R.Context()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	var handoff <-chan struct{}
+	if sessionID != "" {
+		handoff = streamHandoff(ctx, sessionID)
+	} else {
+		handoff = streamHandoff(ctx)
+	}
 
 	flush := func() { _ = rc.Flush() }
 
@@ -3894,6 +3900,10 @@ func streamSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining with nothing of this session left here: the
+			// client reconnects to the successor.
+			return
 		case <-ctx.Done():
 			return
 		}
@@ -3988,6 +3998,7 @@ func streamMultiSSE(c *tool.Ctx) {
 	}
 
 	keepalive := time.NewTicker(15 * time.Second)
+	handoff := streamHandoff(ctx, ids...)
 	defer keepalive.Stop()
 	flush := func() { _ = rc.Flush() }
 
@@ -4013,6 +4024,9 @@ func streamMultiSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining with no turn of these sessions left here.
+			return
 		case <-ctx.Done():
 			return
 		}
