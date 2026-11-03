@@ -894,8 +894,8 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 		"row_id": {}, "args": {}, "command": {},
 		"expression": {}, "engine": {}, "result": {},
 		"max_turns": {}, "skills": {}, "tools": {},
-		// go_script body + sticky_note fields.
-		"code": {}, "content": {}, "color": {}, "width": {}, "height": {}, "texts": {},
+		// go_script / run_code body + sticky_note fields.
+		"code": {}, "lang": {}, "input": {}, "content": {}, "color": {}, "width": {}, "height": {}, "texts": {},
 	}
 	var unknown []string
 	for k := range patch {
@@ -987,6 +987,12 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["code"].(string); ok {
 		n.Code = v
+	}
+	if v, ok := patch["lang"].(string); ok {
+		n.Lang = v
+	}
+	if v, ok := patch["input"].(string); ok {
+		n.Input = v
 	}
 	if v, ok := patch["content"].(string); ok {
 		n.Content = v

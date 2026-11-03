@@ -1185,6 +1185,61 @@
                 </div>
               {/if}
 
+              <!-- ── run_code (Code Mode) ───────────────────────── -->
+              {#if node.type === "run_code"}
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Language</span>
+                  <select
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    value={node.lang || "ts"}
+                    onchange={(e) => patch("lang", (e.target as HTMLSelectElement).value)}
+                  >
+                    <option value="ts">TypeScript</option>
+                    <option value="js">JavaScript</option>
+                  </select>
+                </label>
+                <div class="space-y-1">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs font-medium">Code</span>
+                    <div class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
+                      {#each ["fixed", "expression"] as m}
+                        <button
+                          type="button"
+                          class="px-2 py-0.5 transition-colors"
+                          class:bg-emerald-500={modeFor("code") === m}
+                          class:text-white-100={modeFor("code") === m}
+                          class:text-black-700={modeFor("code") !== m}
+                          class:text-black-600={modeFor("code") !== m}
+                          onclick={() => patchMode("code", m)}
+                        >{m}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <CodeEditor
+                    value={node.code ?? ""}
+                    language={node.lang === "js" ? "javascript" : "typescript"}
+                    rows={14}
+                    theme={{ light: "github", dark: "tomorrow_night" }}
+                    onChange={(v) => patch("code", v)}
+                  />
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
+                    Runs as the workflow creator. Call connectors with <code>await wick.call(tool_id, params)</code> and return a JSON value. Session connectors are not available.
+                  </span>
+                </div>
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Input (JSON)</span>
+                  <textarea
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono min-h-[80px]"
+                    placeholder={'{"name": "{{.Node.fetch.name}}"}'}
+                    value={node.input ?? ""}
+                    oninput={(e) => patch("input", (e.target as HTMLTextAreaElement).value)}
+                  ></textarea>
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
+                    Rendered as a template, then passed to the script as <code>input</code>. Must be valid JSON after rendering.
+                  </span>
+                </label>
+              {/if}
+
               <!-- ── transform ──────────────────────────────────── -->
               {#if node.type === "transform"}
                 <label class="flex flex-col gap-1">

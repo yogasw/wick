@@ -60,6 +60,17 @@ func explainRun(rec *RunRecord, steps []Step) {
 		default:
 			why = firstRule(sr.Rules, func(r RuleResult) bool { return !r.Fail && !r.OK })
 		}
+	case StepKindCode:
+		switch {
+		case !sr.OK:
+			why = "error " + firstLineOf(sr.Error)
+		case sr.ExitCode == 1:
+			why = "nothing changed"
+		case rec.Done:
+			why = "done"
+		default:
+			why = "changed"
+		}
 	default:
 		why = firstLineOf(sr.Error)
 	}

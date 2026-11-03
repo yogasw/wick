@@ -664,6 +664,14 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Code == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required"})
 		}
+	case workflow.NodeRunCode:
+		if n.Code == "" {
+			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required"})
+		}
+		if n.Lang != "" && n.Lang != "ts" && n.Lang != "js" {
+			r.Errors = append(r.Errors, Error{Path: path + ".lang", Message: fmt.Sprintf("%q is not a run_code language (ts, js)", n.Lang)})
+		}
+		checkTemplate(r, path, "input", n.Input)
 	case workflow.NodeParallel:
 		if len(n.Branches) == 0 {
 			r.Errors = append(r.Errors, Error{Path: path + ".branches", Message: "is required"})

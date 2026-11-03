@@ -76,6 +76,8 @@ type Runner struct {
 	// connExec runs a watch's connector steps; nil fails them (stdio,
 	// tests that don't need one).
 	connExec ConnectorExecutor
+	// codeExec runs a watch's code steps; nil fails them.
+	codeExec CodeExecutor
 	// watchSem bounds how many watch runs execute at once. A watch run can
 	// take up to a couple of minutes (a slow script), so they run off the
 	// tick loop — this keeps a burst of them from piling onto the host.

@@ -145,6 +145,9 @@ const (
 	// ConnectorRunSourceWorkflow marks runs a workflow connector node made,
 	// as the workflow's owner.
 	ConnectorRunSourceWorkflow ConnectorRunSource = "workflow"
+	// ConnectorRunSourceCodeMode marks runs a wick_run_code script made, as
+	// the session that ran the script.
+	ConnectorRunSourceCodeMode ConnectorRunSource = "code_mode"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.

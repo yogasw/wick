@@ -25,6 +25,7 @@ const (
 	NodeShell           NodeType = "shell"
 	NodeSwitch          NodeType = "switch"
 	NodeGoScript        NodeType = "go_script"
+	NodeRunCode         NodeType = "run_code"
 	NodePython          NodeType = "python"
 	NodeHTTP            NodeType = "http"
 	NodeDBQuery         NodeType = "db_query"
@@ -263,6 +264,10 @@ type Node struct {
 	// go_script — full Go program. Engine pipes RenderCtx JSON to
 	// stdin, parses stdout as JSON for the result.
 	Code string `json:"code,omitempty"`
+
+	// run_code — Code Mode script language: "ts" (default) or "js".
+	// Code holds the script, Input the JSON handed to it as `input`.
+	Lang string `json:"lang,omitempty"`
 
 	// branch
 	Expr string `json:"expr,omitempty"`

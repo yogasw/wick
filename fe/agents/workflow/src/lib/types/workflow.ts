@@ -9,6 +9,7 @@ export type NodeType =
   | "shell"
   | "switch"
   | "go_script"
+  | "run_code"
   | "python"
   | "http"
   | "db_query"
@@ -172,11 +173,13 @@ export type Node = {
   sql?: string;
   sql_args?: string[];
 
-  // transform / go_script
+  // transform / go_script / run_code
   engine?: string;
   input?: string;
   expression?: string;
   code?: string;
+  // run_code — "ts" (default) | "js"
+  lang?: string;
 
   // branch
   expr?: string;

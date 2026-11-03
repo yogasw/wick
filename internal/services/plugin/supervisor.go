@@ -134,6 +134,8 @@ func spawnProcess(binary, socket string, env []string, stderr io.Writer) (func()
 	if rc := client.ReattachConfig(); rc != nil {
 		pid = rc.Pid
 	}
+	pids.Store(socket, pid)
+	go func() { <-exited; pids.Delete(socket) }()
 	kill := func() { terminate(pid, exited, StopGrace); client.Kill() }
 	return kill, conn, exited, nil
 }
@@ -195,7 +197,14 @@ type Supervisor struct {
 	// autoOff reports whether the service may sleep and its idle limit
 	// (nil = never).
 	autoOff func() (bool, time.Duration)
-	Logs    *RingLog
+	// maxRSS is the resident-memory cap in bytes (0 = none), read on every
+	// check so an admin's change applies without a restart.
+	maxRSS func() int64
+	Logs   *RingLog
+	// socket is the running process's socket ("" when none).
+	socket string
+	// memKilled marks the last exit as the memory cap's doing.
+	memKilled bool
 
 	// active counts requests in flight through Transport (a remote turn's
 	// event stream stays open for the whole turn).
@@ -452,11 +461,15 @@ func (s *Supervisor) loop(ctx context.Context, wake chan struct{}) {
 		s.rt, s.kill, s.conn = nil, nil, nil
 		s.status.State = StateBackoff
 		s.status.Restarts++
-		if err != nil {
+		switch {
+		case err != nil:
 			s.status.LastError = err.Error()
-		} else {
+		case s.memKilled:
+			s.status.LastError = "restarted: memory over its " + ConfigMaxRSSMB + " limit"
+		default:
 			s.status.LastError = "process exited"
 		}
+		s.memKilled = false
 		s.status.NextStart = time.Now().Add(backoff)
 		s.mu.Unlock()
 		s.Logs.Printf("restarting in %s", backoff)
@@ -481,12 +494,16 @@ func (s *Supervisor) loop(ctx context.Context, wake chan struct{}) {
 func (s *Supervisor) watch(ctx context.Context, exited <-chan struct{}) (slept, done bool) {
 	t := time.NewTicker(idleCheckEvery)
 	defer t.Stop()
+	m := time.NewTicker(memCheckEvery)
+	defer m.Stop()
 	for {
 		select {
 		case <-exited:
 			return false, false
 		case <-ctx.Done():
 			return false, true
+		case <-m.C:
+			s.checkMemory()
 		case <-t.C:
 			if !s.trySleep() {
 				continue
@@ -499,6 +516,35 @@ func (s *Supervisor) watch(ctx context.Context, exited <-chan struct{}) (slept, 
 			return true, false
 		}
 	}
+}
+
+// checkMemory restarts the process when it is over its memory cap. The
+// kill makes watch see an exit, so the loop restarts it with the usual
+// backoff and the page shows why.
+func (s *Supervisor) checkMemory() {
+	if s.maxRSS == nil {
+		return
+	}
+	limit := s.maxRSS()
+	if limit <= 0 {
+		return
+	}
+	s.mu.Lock()
+	socket, kill := s.socket, s.kill
+	running := s.status.State == StateRunning
+	s.mu.Unlock()
+	if !running || socket == "" || kill == nil {
+		return
+	}
+	rss := rssOfSocket(socket)
+	if rss <= limit {
+		return
+	}
+	s.Logs.Printf("memory %d MB is over the %d MB limit (%s); restarting", rss>>20, limit>>20, ConfigMaxRSSMB)
+	s.mu.Lock()
+	s.memKilled = true
+	s.mu.Unlock()
+	kill()
 }
 
 // trySleep stops the process gracefully (as an admin stop does) when the
@@ -562,7 +608,7 @@ func (s *Supervisor) runOnce(ctx context.Context) (<-chan struct{}, error) {
 		killAll()
 		return nil, ctx.Err()
 	}
-	s.kill, s.rt, s.conn = killAll, unixTransport(socket), conn
+	s.kill, s.rt, s.conn, s.socket = killAll, unixTransport(socket), conn, socket
 	s.status.State = StateRunning
 	s.status.StartedAt = time.Now()
 	s.lastActive = s.status.StartedAt

@@ -109,6 +109,8 @@ func New(layout config.Layout) *Manager {
 	eng.Register(workflow.NodeWebhookRespond, nodes.NewWebhookRespondExecutor())
 	eng.Register(workflow.NodeChannel, nodes.NewChannelExecutor(intReg))
 	eng.Register(workflow.NodeConnector, nodes.NewConnectorExecutor(conReg))
+	// run_code needs the server's Code Mode runner — WithCodeRunner wires it.
+	eng.Register(workflow.NodeRunCode, nodes.NewRunCodeExecutor(conReg, nil))
 	eng.Register(workflow.NodeDBQuery, nodes.NewDBQueryExecutor())
 	// DataTable: one executor serves 7 node types — register each with its own descriptor.
 	dtExec := nodes.NewDataTableExecutor(dtSvc)
@@ -243,6 +245,14 @@ func (m *Manager) WithAgentRuntime(p *pool.Pool, sub nodes.AgentSubscribeFn) *Ma
 	m.AgentSubscribe = sub
 	m.Engine.Register(workflow.NodeAgent, nodes.NewAgentExecutor(m.Providers, p, sub))
 	m.Engine.Register(workflow.NodeSessionInit, nodes.NewSessionInitExecutor(p))
+	return m
+}
+
+// WithCodeRunner wires the Code Mode runner into the run_code node. The
+// function lives on the server (mcp handlers.RunCodeAs) and is injected
+// to keep this package free of the connectors service import.
+func (m *Manager) WithCodeRunner(run nodes.RunCodeFn) *Manager {
+	m.Engine.Register(workflow.NodeRunCode, nodes.NewRunCodeExecutor(m.Connectors, run))
 	return m
 }
 

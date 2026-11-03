@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -83,6 +84,28 @@ func newWatchSet() *watchSet {
 func (r *Runner) WithConnectorExecutor(exec ConnectorExecutor) *Runner {
 	r.connExec = exec
 	return r
+}
+
+// WithCodeExecutor installs the executor watch code steps run through (Code
+// Mode, as the run-as identity); without it code steps fail.
+func (r *Runner) WithCodeExecutor(exec CodeExecutor) *Runner {
+	r.codeExec = exec
+	return r
+}
+
+// watchExecFor gathers what m's steps need to run: the confined bash cwd,
+// the script_path folder and the code steps' last snapshots.
+func (r *Runner) watchExecFor(m entity.ScheduledMessage, steps []Step) (watchExec, error) {
+	x := watchExec{tmpDir: watchTmpDir(m), conn: r.connExec, code: r.codeExec}
+	var cwdErr error
+	if HasBash(steps) {
+		x.cwd, cwdErr = watchExecDir(r.layout, m)
+	}
+	if HasCode(steps) {
+		x.codeDir = r.watchCodeDir(m, steps)
+		x.snapshots = loadWatchState(watchStatePath(r.layout, m)).Snapshots
+	}
+	return x, cwdErr
 }
 
 // sameStamp compares updated_at values across a DB round trip, which may
@@ -331,13 +354,8 @@ func (r *Runner) testWatch(ctx context.Context, m entity.ScheduledMessage, overr
 		rec = RunRecord{ScheduleID: m.ID, StartedAt: started.UTC(), FinishedAt: started.UTC(), Result: entity.WatchResultError,
 			Error: denied, Reason: clip(denied)}
 	} else {
-		cwd := ""
-		if HasBash(steps) {
-			if dir, derr := watchExecDir(r.layout, m); derr == nil {
-				cwd = dir
-			}
-		}
-		rec, _ = executeWatch(ctx, m, steps, cwd, watchTmpDir(m), r.connExec, nil)
+		x, _ := r.watchExecFor(m, steps)
+		rec, _ = executeWatchWith(ctx, m, steps, x, nil)
 	}
 	rec.Type, rec.Manual, rec.DryRun, rec.StepsRev = entity.ScheduledTypeWatch, true, true, m.StepsRev
 	if override != nil {
@@ -405,19 +423,15 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 	} else if denied := r.watchAccessOK(ctx, e, steps); denied != "" {
 		rec = RunRecord{ScheduleID: m.ID, StartedAt: firedAt.UTC(), FinishedAt: firedAt.UTC(), Result: entity.WatchResultError, Error: denied, Denied: true}
 	} else {
-		cwd := ""
-		if HasBash(steps) {
-			if dir, derr := watchExecDir(r.layout, m); derr == nil {
-				cwd = dir
-			} else {
-				l.Warn().Str("id", m.ID).Err(derr).Msg("watch: bash cwd refused")
-			}
+		x, derr := r.watchExecFor(m, steps)
+		if derr != nil {
+			l.Warn().Str("id", m.ID).Err(derr).Msg("watch: bash cwd refused")
 		}
 		var input []byte
 		if ev != nil {
 			input = ev.payload
 		}
-		rec, result = executeWatch(ctx, m, steps, cwd, watchTmpDir(m), r.connExec, input)
+		rec, result = executeWatchWith(ctx, m, steps, x, input)
 	}
 	if ev != nil {
 		rec.Event = ev.topic
@@ -466,6 +480,18 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 		}
 	}
 
+	// Code steps' snapshots move on only with a run that did not error, so
+	// what a failed run saw is reported again next fire.
+	if len(rec.snapshots) > 0 && rec.Result != entity.WatchResultError {
+		if state().Snapshots == nil {
+			st.Snapshots = map[string]json.RawMessage{}
+		}
+		for k, v := range rec.snapshots {
+			st.Snapshots[k] = v
+		}
+		saveState = true
+	}
+
 	out := WatchOutcome{Result: rec.Result, RunCount: m.RunCount, ManualRuns: m.ManualRuns, LastRunAt: m.LastRunAt}
 	if rec.Result == entity.WatchResultError {
 		out.LastError = Redact(rec.Error)
@@ -476,7 +502,7 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 	case oneShot && !manual:
 		terminal, text = entity.ScheduledStatusDone, watchOnceText(m, rec, result)
 	case rec.Result == entity.WatchResultMatched:
-		if onMatch != OnMatchContinue || rec.Outcome == OutcomeFail || oneShot {
+		if onMatch != OnMatchContinue || rec.Outcome == OutcomeFail || oneShot || rec.Done {
 			terminal, text = entity.ScheduledStatusDone, watchMatchedText(m, rec, result)
 		} else if h := matchHash(rec, result); h != state().LastHash {
 			st.LastHash, saveState = h, true
@@ -543,6 +569,12 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 		out.Status, out.LastSessionID, out.At = terminal, target, stamp()
 		if err := r.store.SaveWatchOutcome(ctx, m.ID, m.Kind, out); err != nil {
 			l.Warn().Str("id", m.ID).Err(err).Msg("watch: save outcome failed")
+		}
+		if saveState {
+			// A resumed watch goes on from what was just told.
+			if err := saveWatchState(statePath, st); err != nil {
+				l.Warn().Str("id", m.ID).Err(err).Msg("watch: save state failed")
+			}
 		}
 		r.dropWatch(e)
 		l.Info().Str("id", m.ID).Str("session", target).Str("status", terminal).Str("result", rec.Result).Msg("watch finished")
@@ -717,24 +749,34 @@ type ConnectorCall func(ctx context.Context, toolID string, params map[string]an
 // lookup is an error: there is no fallback to a broader identity.
 func NewConnectorExecutor(lookup UserLookup, call ConnectorCall) ConnectorExecutor {
 	return func(ctx context.Context, m entity.ScheduledMessage, toolID string, params map[string]any) (string, error) {
-		runAs := m.EffectiveRunAsUser()
-		if runAs == "" {
-			return "", watchDenied("watch has no owner or run-as user to run connector steps as")
-		}
-		u, tags, err := lookup(ctx, runAs)
+		u, tags, sessionID, err := resolveRunAs(ctx, lookup, m)
 		if err != nil {
-			// A lookup that failed says nothing about the user: retry.
-			return "", errors.New("run-as user " + runAs + " lookup failed: " + err.Error())
-		}
-		if u == nil || !u.Approved {
-			return "", watchDenied("run-as user " + runAs + " is missing or not approved")
-		}
-		sessionID := m.SessionID
-		if sessionID == "" {
-			sessionID = m.SourceSessionID
+			return "", err
 		}
 		return call(ctx, toolID, params, sessionID, u, tags)
 	}
+}
+
+// resolveRunAs is the identity a watch's connector and code steps run as,
+// and the session whose agent scope narrows it.
+func resolveRunAs(ctx context.Context, lookup UserLookup, m entity.ScheduledMessage) (*entity.User, []string, string, error) {
+	runAs := m.EffectiveRunAsUser()
+	if runAs == "" {
+		return nil, nil, "", watchDenied("watch has no owner or run-as user to run connector steps as")
+	}
+	u, tags, err := lookup(ctx, runAs)
+	if err != nil {
+		// A lookup that failed says nothing about the user: retry.
+		return nil, nil, "", errors.New("run-as user " + runAs + " lookup failed: " + err.Error())
+	}
+	if u == nil || !u.Approved {
+		return nil, nil, "", watchDenied("run-as user " + runAs + " is missing or not approved")
+	}
+	sessionID := m.SessionID
+	if sessionID == "" {
+		sessionID = m.SourceSessionID
+	}
+	return u, tags, sessionID, nil
 }
 
 // watchDeniedError is a permission refusal (no identity, user gone or

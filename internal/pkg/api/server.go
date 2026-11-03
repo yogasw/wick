@@ -80,6 +80,7 @@ import (
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/channelidentity"
+	"github.com/yogasw/wick/internal/codemode"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
@@ -2020,6 +2021,12 @@ func NewServer() *Server {
 	// runs have no cookie session to stamp login.GetUser. See connector
 	// node executor.
 	wfMgr.Connectors.SetUserResolver(wfsetup.UserResolverAdapter(authSvc))
+	// run_code nodes: Code Mode as the workflow owner, every wick.call
+	// through RunCodeAs. Workflows have no session, so no session
+	// connectors ("").
+	wfMgr.WithCodeRunner(func(ctx context.Context, req codemode.Request, u *entity.User, tagIDs []string) (*codemode.Result, error) {
+		return mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, req, "", u, tagIDs)
+	})
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to. (Earlier here than in
@@ -3673,7 +3680,25 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, resyncSessions: agentsMgr.Registry().ResyncFromDisk, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
+	// Watch code steps: the same identity, every wick.call through ExecuteAs.
+	scheduleCodeExec := schedule.NewCodeExecutor(
+		func(ctx context.Context, userID string) (*entity.User, []string, error) {
+			u, err := authSvc.GetUserByID(ctx, userID)
+			if err != nil || u == nil {
+				return nil, nil, err
+			}
+			return u, authSvc.GetUserFilterTagIDs(ctx, userID), nil
+		},
+		func(ctx context.Context, run schedule.CodeRun, sessionID string, u *entity.User, tagIDs []string) (*schedule.CodeOutcome, error) {
+			ctx = mcp.WithAgentScope(ctx, sessionID)
+			res, err := mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, codemode.Request{Lang: run.Lang, Code: run.Code, Input: run.Input, Timeout: run.Timeout}, sessionID, u, tagIDs)
+			if err != nil {
+				return nil, err
+			}
+			return &schedule.CodeOutcome{OK: res.OK, Result: res.Result, Error: res.Error, Logs: res.Logs, Calls: len(res.Calls)}, nil
+		},
+	)
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, scheduleCodeExec: scheduleCodeExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, resyncSessions: agentsMgr.Registry().ResyncFromDisk, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
 }
 
 type Server struct {
@@ -3715,6 +3740,8 @@ type Server struct {
 	runAsUsable func(ctx context.Context, userID string) bool
 	// scheduleConnExec runs watch schedules' connector steps.
 	scheduleConnExec schedule.ConnectorExecutor
+	// scheduleCodeExec runs watch schedules' code steps (Code Mode).
+	scheduleCodeExec schedule.CodeExecutor
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -4285,6 +4312,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			go schedule.NewRunner(s.scheduleStore, agentstool.RoomGuardScheduleSender(s.agentsPool, s.agentsLayout), s.agentsLayout).
 				WithRunAsCheck(s.runAsUsable).
 				WithConnectorExecutor(s.scheduleConnExec).
+				WithCodeExecutor(s.scheduleCodeExec).
 				Run(ctx)
 		}
 		close(s.intakeReady)

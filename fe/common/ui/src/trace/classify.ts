@@ -92,6 +92,7 @@ export function toolFamily(name: string): string {
     case "webfetch": case "web_fetch": case "fetch":
       return "fetch";
     case "wick_execute":
+    case "wick_run_code":
       return "mcp";
   }
   return n.includes(".") ? "mcp" : "";
@@ -446,8 +447,26 @@ registerTraceDetector(80, (in_) => {
   if (connector) d.connector = connector;
   if (op) d.op = op;
   d.summary = nonEmpty(connector, op).join(" · ");
+  if (op.endsWith("wick_run_code")) codeModeCall(d, in_.text);
   return d;
 });
+
+// Same shape internal/codemode pre-checks: the tool_ids a script names.
+const TOOL_ID_LITERAL = /conn:[A-Za-z0-9_.:-]+\/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?/g;
+
+/** A wick_run_code call shows its script, highlighted, and how many tools it names. */
+function codeModeCall(d: TraceDisplay, text: string): void {
+  const m = jsonObject(text);
+  if (!m) return;
+  const code = str(m, "code");
+  const lang = str(m, "lang") || "ts";
+  d.body = code;
+  d.lang = lang === "js" ? "javascript" : "typescript";
+  const n = new Set(code.match(TOOL_ID_LITERAL) ?? []).size;
+  d.connector = "code mode";
+  d.op = lang;
+  d.summary = `code mode · ${lang} · ${n} tool${n === 1 ? "" : "s"}`;
+}
 
 registerTraceDetector(70, (in_) => {
   if (in_.call) return null;

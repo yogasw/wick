@@ -276,7 +276,7 @@ func ToolFamily(name string) string {
 		return ToolWebSearch
 	case "webfetch", "web_fetch", "fetch":
 		return ToolFetch
-	case "wick_execute":
+	case "wick_execute", "wick_run_code":
 		return ToolMCP
 	}
 	// codex names MCP tools "<server>.<tool>".

@@ -104,6 +104,11 @@ type Step struct {
 	// Script / TimeoutSec: kind=bash. Run as `bash -c script`.
 	Script     string `json:"script,omitempty"`
 	TimeoutSec int    `json:"timeout_sec,omitempty"`
+	// Code / ScriptPath / Lang: kind=code (watch_code.go); Params and
+	// TimeoutSec are shared with connector / bash.
+	Code       string `json:"code,omitempty"`
+	ScriptPath string `json:"script_path,omitempty"`
+	Lang       string `json:"lang,omitempty"`
 	// Match / Rules / FailRules / Extract: kind=check (watch_check.go).
 	Match     string            `json:"match,omitempty"`
 	Rules     []Rule            `json:"rules,omitempty"`
@@ -268,8 +273,8 @@ func ValidateStepsFor(steps []Step, wakeOn string) error {
 			if err := validToolID(s.ToolID); err != nil {
 				return fmt.Errorf("%s.tool_id: %q %v", at, s.ToolID, err)
 			}
-			if s.Script != "" || len(s.Rules)+len(s.FailRules) > 0 {
-				return fmt.Errorf("%s: a connector step takes tool_id + params only (script/rules belong to bash/check steps)", at)
+			if s.Script != "" || s.Code != "" || s.ScriptPath != "" || len(s.Rules)+len(s.FailRules) > 0 {
+				return fmt.Errorf("%s: a connector step takes tool_id + params only (script/code/rules belong to bash/code/check steps)", at)
 			}
 		case StepKindBash:
 			if strings.TrimSpace(s.Script) == "" {
@@ -281,7 +286,7 @@ func ValidateStepsFor(steps []Step, wakeOn string) error {
 			if s.TimeoutSec < 0 || s.TimeoutSec > bashMaxTimeoutSec {
 				return fmt.Errorf("%s.timeout_sec: %d out of range; use 1-%d (default 30)", at, s.TimeoutSec, bashMaxTimeoutSec)
 			}
-			if s.ToolID != "" || len(s.Rules)+len(s.FailRules) > 0 {
+			if s.ToolID != "" || s.Code != "" || s.ScriptPath != "" || len(s.Rules)+len(s.FailRules) > 0 {
 				return fmt.Errorf("%s: a bash step takes script (+ timeout_sec) only", at)
 			}
 		case StepKindCheck:
@@ -291,10 +296,14 @@ func ValidateStepsFor(steps []Step, wakeOn string) error {
 			if err := validateCheck(s, at); err != nil {
 				return err
 			}
+		case StepKindCode:
+			if err := validateCode(s, at); err != nil {
+				return err
+			}
 		case "go":
-			return fmt.Errorf(`%s.kind: "go" is not supported; use one of: connector, bash, check (put complex logic in a wick workflow)`, at)
+			return fmt.Errorf(`%s.kind: "go" is not supported; use one of: connector, bash, check, code (put complex logic in a wick workflow)`, at)
 		default:
-			return fmt.Errorf("%s.kind: %q is not a kind; use one of: connector, bash, check", at, s.Kind)
+			return fmt.Errorf("%s.kind: %q is not a kind; use one of: connector, bash, check, code", at, s.Kind)
 		}
 		s.OnOK = strings.ToLower(strings.TrimSpace(s.OnOK))
 		if s.OnOK != "" && s.OnOK != OnOKNext && s.OnOK != OnOKDone {
@@ -379,6 +388,12 @@ type RunRecord struct {
 	// Denied marks a run refused for lack of permission (identity gone,
 	// Bash turned off): it cannot heal by itself, so it ends the watch.
 	Denied bool `json:"denied,omitempty"`
+	// Done: a code step returned done:true — the watch ends on this match
+	// even with on_match continue.
+	Done bool `json:"done,omitempty"`
+	// snapshots are the code steps' new snapshots (step index → JSON), for
+	// the runner to keep in watch-state.json.
+	snapshots map[string]json.RawMessage
 }
 
 // StopPoint names the step a run ended on.
@@ -410,6 +425,12 @@ type StepRecord struct {
 	Decision string `json:"decision,omitempty"`
 	// Rules is a check step's verdict per rule.
 	Rules []RuleResult `json:"rules,omitempty"`
+	// CodeHash is the hash of the script a code step ran (16 hex of its
+	// sha256), ScriptPath where it came from, Calls how many connector
+	// calls it made.
+	CodeHash   string `json:"code_hash,omitempty"`
+	ScriptPath string `json:"script_path,omitempty"`
+	Calls      int    `json:"calls,omitempty"`
 }
 
 // watchEnv is the whole environment a bash step sees. Nothing is inherited
@@ -510,6 +531,22 @@ func runBash(ctx context.Context, s Step, cwd string, stdin []byte, env []string
 // input is what the first step reads as its previous output: the event
 // payload of a wake_on run, nil on a timed run.
 func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, cwd, tmpDir string, conn ConnectorExecutor, input []byte) (rec RunRecord, result string) {
+	return executeWatchWith(ctx, m, steps, watchExec{cwd: cwd, tmpDir: tmpDir, conn: conn}, input)
+}
+
+// watchExec is what a run's steps may use besides their own definition.
+type watchExec struct {
+	cwd, tmpDir string
+	conn        ConnectorExecutor
+	code        CodeExecutor
+	// codeDir is the confined folder script_path is read from.
+	codeDir string
+	// snapshots are the code steps' snapshots from the previous fire.
+	snapshots map[string]json.RawMessage
+}
+
+func executeWatchWith(ctx context.Context, m entity.ScheduledMessage, steps []Step, x watchExec, input []byte) (rec RunRecord, result string) {
+	cwd, tmpDir, conn := x.cwd, x.tmpDir, x.conn
 	rec = RunRecord{ScheduleID: m.ID, StartedAt: time.Now().UTC(), Manual: m.ManualFire, Result: entity.WatchResultError, StepsRev: m.StepsRev}
 	defer func() {
 		rec.FinishedAt = time.Now().UTC()
@@ -538,6 +575,7 @@ func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, 
 		var out []byte
 		var err error
 		var res, chk string // a check's result and outcome
+		var cs codeStepResult
 		switch s.Kind {
 		case StepKindConnector:
 			if conn == nil {
@@ -589,6 +627,23 @@ func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, 
 			case res == entity.WatchResultPending:
 				sr.ExitCode = 1
 			}
+		case StepKindCode:
+			cs, err = runCodeStep(ctx, m, s, i, x, prev)
+			sr.CodeHash, sr.ScriptPath, sr.Calls = cs.hash, s.ScriptPath, cs.calls
+			sr.Stderr = Redact(string(capBytes([]byte(cs.logs), runFileOutputCap)))
+			out = cs.out
+			switch {
+			case err != nil:
+				sr.ExitCode = -1
+			case cs.pending:
+				sr.ExitCode = 1
+			}
+			if err == nil {
+				if rec.snapshots == nil {
+					rec.snapshots = map[string]json.RawMessage{}
+				}
+				rec.snapshots[snapshotKey(i)] = cs.snapshot
+			}
 		default:
 			err = fmt.Errorf("unknown kind %q", s.Kind)
 			sr.ExitCode = -1
@@ -618,6 +673,14 @@ func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, 
 			if err == nil {
 				status = stepOK
 			}
+		case StepKindCode:
+			switch {
+			case err != nil:
+			case cs.pending:
+				status = stepPending
+			default:
+				status = stepOK
+			}
 		case StepKindCheck:
 			switch {
 			case err != nil:
@@ -629,11 +692,12 @@ func executeWatch(ctx context.Context, m entity.ScheduledMessage, steps []Step, 
 			}
 		}
 		switch {
-		case status == stepOK && i < last && s.OnOK != OnOKDone:
+		case status == stepOK && i < last && s.OnOK != OnOKDone && !cs.done:
 			sr.Decision = DecisionNext
 		case status == stepOK:
 			sr.Decision = DecisionOKDone
 			rec.Result, rec.Outcome = entity.WatchResultMatched, OutcomeSuccess
+			rec.Done = cs.done
 		case status == stepPending:
 			sr.Decision = DecisionWait
 			rec.Result = entity.WatchResultPending

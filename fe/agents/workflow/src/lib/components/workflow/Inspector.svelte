@@ -113,7 +113,7 @@
         </label>
       {/if}
 
-      {#if n.type === "go_script" || n.type === "python"}
+      {#if n.type === "go_script" || n.type === "python" || n.type === "run_code"}
         <label class="flex flex-col gap-1">
           <span>Code</span>
           <textarea class="rounded border px-2 py-1 font-mono min-h-[180px]" value={n.code ?? ""} oninput={(e) => patch("code", (e.target as HTMLTextAreaElement).value)}></textarea>

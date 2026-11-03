@@ -265,6 +265,17 @@
   "op": "send_message"
  },
  {
+  "name": "call: wick_run_code",
+  "tool": "mcp__wick__wick_run_code",
+  "call": true,
+  "input": "{\"code\":\"const a = \\\"conn:acme-1/list_rows\\\"; // Acme\\nconst b = \\\"conn:acme-1/get_row@acc-1\\\";\\nreturn (await wick.call(a, {})).length;\",\"lang\":\"ts\"}",
+  "kind": "mcp",
+  "lang": "typescript",
+  "connector": "code mode",
+  "op": "ts",
+  "summary": "code mode · ts · 2 tools"
+ },
+ {
   "name": "call: generic tool args",
   "tool": "TodoWrite",
   "call": true,

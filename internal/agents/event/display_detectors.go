@@ -276,7 +276,45 @@ func detectMCPCall(in DetectInput) (Display, bool) {
 		}
 	}
 	d.Summary = strings.Join(nonEmpty(d.Connector, d.Op), " · ")
+	if strings.HasSuffix(d.Op, "wick_run_code") {
+		codeModeCall(&d, in.Text)
+	}
 	return d, true
+}
+
+// toolIDLiteral matches the tool_ids a wick_run_code script names (the
+// same shape internal/codemode pre-checks).
+var toolIDLiteral = regexp.MustCompile("conn:[A-Za-z0-9_.:-]+/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?")
+
+// codeModeCall shows a wick_run_code call as its script, highlighted, with
+// the number of distinct tools it names in the header.
+func codeModeCall(d *Display, text string) {
+	m := jsonObject(text)
+	if m == nil {
+		return
+	}
+	code := str(m, "code")
+	lang := str(m, "lang")
+	if lang == "" {
+		lang = "ts"
+	}
+	d.Body, d.Lang = code, "typescript"
+	if lang == "js" {
+		d.Lang = "javascript"
+	}
+	seen := map[string]bool{}
+	for _, id := range toolIDLiteral.FindAllString(code, -1) {
+		seen[id] = true
+	}
+	d.Connector, d.Op = "code mode", lang
+	d.Summary = fmt.Sprintf("code mode · %s · %d tool%s", lang, len(seen), plural(len(seen)))
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // detectToolResult shapes results whose tool has a natural rendering.

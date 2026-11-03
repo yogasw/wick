@@ -12,6 +12,7 @@ describe("node registry", () => {
       "db_query",
       "shell",
       "go_script",
+      "run_code",
       "python",
       "transform",
       "end",
