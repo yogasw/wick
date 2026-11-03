@@ -2,7 +2,7 @@
   import { ScheduleEditModal, scheduleCadence as cadence } from "@wick-fe/common-ui";
   import type { SchedulePatchInput } from "@wick-fe/common-ui";
   import type { Schedule, WatchDryRun } from "../types/agents.js";
-  import { parseWatchSteps, WATCH_STEPS_EXAMPLE } from "../watchSteps.js";
+  import { parseWatchSteps, WATCH_CODE_STEP_EXAMPLE, WATCH_STEPS_EXAMPLE } from "../watchSteps.js";
 
   type CreateArgs = {
     message: string;
@@ -428,7 +428,7 @@
         {/if}
       </div>
       <label class="block space-y-0.5">
-        <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Steps (JSON, 1-8 · kind connector | check | bash)</span>
+        <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Steps (JSON, 1-8 · kind connector | check | bash | code)</span>
         <textarea
           class={INPUT_CLASS + " font-mono text-[11px]"}
           rows="9"
@@ -437,6 +437,10 @@
           data-testid="watch-steps"
         ></textarea>
       </label>
+      <details class="text-[11px] text-black-700 dark:text-black-600" data-testid="watch-code-example">
+        <summary class="cursor-pointer">Code step example (script returns changed, snapshot, done)</summary>
+        <pre class="mt-1 whitespace-pre-wrap break-all rounded-lg bg-white-200 dark:bg-navy-800 px-2 py-1.5 font-mono text-[11px] text-black-800 dark:text-white-200">{WATCH_CODE_STEP_EXAMPLE}</pre>
+      </details>
       {#if "error" in watchParse}
         <p class="text-[11px] text-neg-400" data-testid="watch-steps-error">{watchParse.error}</p>
       {/if}

@@ -76,8 +76,12 @@ export type WatchRule = { path: string; op: string; value?: unknown };
 
 export type WatchStep = {
   name?: string;
-  kind: "connector" | "bash" | "check";
+  kind: "connector" | "bash" | "check" | "code";
   tool_id?: string;
+  /* kind=code: inline TS/JS xor a project-relative script_path. */
+  code?: string;
+  script_path?: string;
+  lang?: "ts" | "js";
   params?: Record<string, unknown>;
   script?: string;
   timeout_sec?: number;
@@ -152,6 +156,8 @@ export function ruleText(r: WatchRule): string {
   return `${r.path} ${r.op} ${v}`;
 }
 
+const isComment = (l: string) => l.startsWith("//") || l.startsWith("/*") || l.startsWith("*");
+
 /** One line describing what a step does. */
 export function stepSummary(st: WatchStep): string {
   switch (st.kind) {
@@ -166,6 +172,12 @@ export function stepSummary(st: WatchStep): string {
       const parts = [(st.rules ?? []).map(ruleText).join(join)];
       if (st.fail_rules?.length) parts.push("fail if " + st.fail_rules.map(ruleText).join(" OR "));
       return parts.filter(Boolean).join(" · ");
+    }
+    case "code": {
+      const lang = st.lang || "ts";
+      if (st.script_path) return `${lang} · ${st.script_path}`;
+      const first = (st.code ?? "").split("\n").map((l) => l.trim()).find((l) => l && !isComment(l)) ?? "";
+      return `${lang} · ${first.length > 80 ? first.slice(0, 80) + "…" : first}`;
     }
     default:
       return "";

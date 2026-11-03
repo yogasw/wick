@@ -151,7 +151,7 @@
     matched: "border-green-500 bg-green-50 dark:border-green-700 dark:bg-green-900/20",
     "": "border-white-300 dark:border-navy-600",
   };
-  const kindIcon: Record<string, string> = { connector: "🔌", bash: "⌨", check: "✓" };
+  const kindIcon: Record<string, string> = { connector: "🔌", bash: "⌨", check: "✓", code: "{}" };
 
   function fmtDur(ms: number): string {
     if (!ms || ms < 1000) return `${ms ?? 0} ms`;
@@ -267,6 +267,12 @@
                 <span class="truncate text-xs font-medium text-black-900 dark:text-white-100">{st.name || st.kind}</span>
               </div>
               <p class="mt-1 break-all font-mono text-[11px] text-black-800 dark:text-white-200">{stepSummary(st)}</p>
+              {#if st.kind === "code" && st.code}
+                <details class="mt-1" data-testid="step-code">
+                  <summary class="cursor-pointer text-[10px] text-black-700 dark:text-black-600">show code</summary>
+                  <pre class="mt-1 max-h-64 overflow-auto whitespace-pre rounded bg-white-200 dark:bg-navy-800 px-2 py-1.5 font-mono text-[11px] text-black-800 dark:text-white-200">{st.code}</pre>
+                </details>
+              {/if}
               {#if st.on_ok === "done" || st.on_fail === "pending"}
                 <p class="mt-0.5 text-[10px] text-black-700 dark:text-black-600">
                   {st.on_ok === "done" ? "ok → finish here" : ""}{st.on_ok === "done" && st.on_fail === "pending" ? " · " : ""}{st.on_fail === "pending" ? "fail → retry" : ""}
@@ -297,7 +303,7 @@
             <div class="flex items-center gap-2">
               <button type="button" class={btn} onclick={save} disabled={saving} data-testid="save-steps">{saving ? "Saving…" : "Save steps"}</button>
               <button type="button" class={btn} onclick={() => { editing = false; draft = ""; saveError = ""; }}>Discard</button>
-              <span class="text-[11px] text-black-700 dark:text-black-600">kinds: connector · bash · check — saving bumps the rev.</span>
+              <span class="text-[11px] text-black-700 dark:text-black-600">kinds: connector · bash · check · code — saving bumps the rev.</span>
             </div>
           </div>
         </details>

@@ -24,6 +24,15 @@ describe("watch helpers", () => {
     ).toBe("state.name in [COMPLETED] OR state.stage.name equals PAUSED · fail if state.result.name in [FAILED]");
   });
 
+  test("stepSummary for code steps", () => {
+    expect(stepSummary({ kind: "code", script_path: "watches/new_rows.ts" })).toBe("ts · watches/new_rows.ts");
+    expect(stepSummary({ kind: "code", lang: "js", code: "// poll the board\n/* rows */\n\n  const rows = await wick.call('x', {});\nreturn {}" })).toBe(
+      "js · const rows = await wick.call('x', {});",
+    );
+    expect(stepSummary({ kind: "code", code: "const x = " + "a".repeat(100) })).toBe("ts · const x = " + "a".repeat(70) + "…");
+    expect(stepSummary({ kind: "code", code: "// only a comment" })).toBe("ts · ");
+  });
+
   test("scheduleType defaults legacy rows to message", () => {
     expect(scheduleType({ type: "watch" } as Schedule)).toBe("watch");
     expect(scheduleType({} as Schedule)).toBe("message");
