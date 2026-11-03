@@ -36,9 +36,11 @@ import (
 const StepKindCode = "code"
 
 const (
-	codeMaxBytes    = 64 << 10 // inline code
-	codeMaxTimeout  = 120
-	codeDefaultLang = "ts"
+	codeMaxBytes   = 64 << 10 // inline code
+	codeMaxTimeout = 300
+	// codeDefaultTimeout matches wick_run_code's default (codemode.DefaultTimeout).
+	codeDefaultTimeout = 120 * time.Second
+	codeDefaultLang    = "ts"
 	// codeQueueSlack is how long a code step may wait for a busy runner on
 	// top of its own timeout.
 	codeQueueSlack = 2 * time.Minute
@@ -113,7 +115,7 @@ func validateCode(s *Step, at string) error {
 		s.Lang = codeDefaultLang
 	}
 	if s.TimeoutSec < 0 || s.TimeoutSec > codeMaxTimeout {
-		return fmt.Errorf("%s.timeout_sec: %d out of range; use 1-%d (default 30)", at, s.TimeoutSec, codeMaxTimeout)
+		return fmt.Errorf("%s.timeout_sec: %d out of range; use 1-%d (default 120)", at, s.TimeoutSec, codeMaxTimeout)
 	}
 	if s.ToolID != "" || s.Script != "" || len(s.Rules)+len(s.FailRules) > 0 {
 		return fmt.Errorf("%s: a code step takes code or script_path (+ lang, params, timeout_sec) only", at)
@@ -178,7 +180,7 @@ func runCodeStep(ctx context.Context, m entity.ScheduledMessage, s Step, i int, 
 	if err != nil {
 		return r, fmt.Errorf("input: %w", err)
 	}
-	timeout := bashDefaultTimeout
+	timeout := codeDefaultTimeout
 	if s.TimeoutSec > 0 {
 		timeout = time.Duration(s.TimeoutSec) * time.Second
 	}

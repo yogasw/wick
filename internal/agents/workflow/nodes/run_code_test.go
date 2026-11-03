@@ -147,7 +147,7 @@ func TestRunCode_NoCreatorRefuses(t *testing.T) {
 }
 
 func TestRunCode_TimeoutClamped(t *testing.T) {
-	cases := map[int]time.Duration{0: codemode.DefaultTimeout, 5: 5 * time.Second, 120: 120 * time.Second, 600: 120 * time.Second}
+	cases := map[int]time.Duration{0: codemode.DefaultTimeout, 5: 5 * time.Second, 300: 300 * time.Second, 600: 300 * time.Second}
 	for sec, want := range cases {
 		f := &fakeRun{res: &codemode.Result{OK: true}}
 		n := workflow.Node{ID: "rc", Type: workflow.NodeRunCode, Code: "return 1", TimeoutSec: sec}

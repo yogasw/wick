@@ -234,7 +234,7 @@ cat job.js | support-tools codemode run - --lang js --timeout 90s --json
 
 - Exactly one source: a file, `-` for stdin, or `--script-path` (relative to
   the session's project folder, same rules as `wick_run_code`).
-- `--input '<json>'` or `--input-file f.json`; `--timeout` at most 120s.
+- `--input '<json>'` or `--input-file f.json`; `--timeout` at most 300s (default 120s).
 - stdout: the script's `result` as JSON (`--json`: the whole run). stderr:
   the logs and one line `codemode: N calls, K failed (tool_ids) · Xms`.
 - Exit 1 = the script ran and failed (error on stderr); 2–5 as below.

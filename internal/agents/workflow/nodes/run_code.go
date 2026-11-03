@@ -25,7 +25,7 @@ type RunCodeSchema struct {
 	Workspace  string `wick:"key=workspace;desc=Project (workspace id) whose folder script_path is read from and whose codemode/ subfolder wick.file reads and writes. Required with script_path or wick.file."`
 	Lang       string `wick:"key=lang;dropdown=ts|js;desc=Script language (default ts)."`
 	Input      string `wick:"key=input;textarea;desc=Optional JSON handed to the script as input. Rendered as a template first, so {{.Node.<id>.<field>}} works, and must be valid JSON after rendering."`
-	Timeout    string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 60, max 120)."`
+	Timeout    string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 120, max 300)."`
 }
 
 // RunCodeFn runs one Code Mode request with every wick.call executed as

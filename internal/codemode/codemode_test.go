@@ -262,14 +262,14 @@ func TestContextCancelStopsQueue(t *testing.T) {
 
 var _ = bufio.NewScanner
 
-func TestDefaultTimeoutIs60s(t *testing.T) {
+func TestDefaultTimeoutIs120s(t *testing.T) {
 	f := &fakeRunner{}
 	h := hostFor(t, f)
 	if _, err := h.Run(context.Background(), Request{Code: "CALL conn:a/list"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.gotTimeout.Load(); got != 60000 {
-		t.Fatalf("timeout_ms = %d, want 60000", got)
+	if got := f.gotTimeout.Load(); got != 120000 {
+		t.Fatalf("timeout_ms = %d, want 120000", got)
 	}
 }
 
@@ -279,7 +279,7 @@ func TestCallTimeout(t *testing.T) {
 		remaining time.Duration
 		want      time.Duration
 	}{
-		{0, 60 * time.Second, CallTimeout},
+		{0, 120 * time.Second, CallTimeout},
 		{0, 10 * time.Second, 9 * time.Second},
 		{0, 500 * time.Millisecond, 500 * time.Millisecond},
 		{5000, 60 * time.Second, 5 * time.Second},

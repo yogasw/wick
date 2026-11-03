@@ -78,7 +78,7 @@ func codemodeRunCmd() *cobra.Command {
 	c.Flags().StringVar(&o.lang, "lang", "", "ts | js (default: from the file extension, else ts)")
 	c.Flags().StringVar(&o.input, "input", "", "JSON passed to the script as input")
 	c.Flags().StringVar(&o.inputFile, "input-file", "", "read the input JSON from a file")
-	c.Flags().DurationVar(&o.timeout, "timeout", 0, "script timeout (default: wick's, at most 120s)")
+	c.Flags().DurationVar(&o.timeout, "timeout", 0, "script timeout (default: wick's, at most 300s)")
 	c.Flags().StringVar(&o.scriptPath, "script-path", "", "script relative to the session's project folder, read by wick")
 	c.Flags().BoolVar(&o.asJSON, "json", false, "print the whole run (result, logs, calls) as JSON")
 	c.Flags().StringVar(&o.token, "token", "", "CLI token (default: $"+envToken+")")

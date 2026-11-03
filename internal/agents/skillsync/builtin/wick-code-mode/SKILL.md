@@ -38,8 +38,8 @@ return { open: list.items.length, stale: details.filter(d => d.ok).map(d => d.re
 - `await wick.call(toolId, params)` returns the parsed result or throws.
   `wick.callMany([{toolId, params}])` runs in parallel and returns
   `[{ok, toolId, result|error}]`. `wick.tool(toolId)` gives a callable.
-- Every call has its own deadline: 20 s by default (less when the run has
-  less left). A hung connector then throws `timed out after 20s` like any
+- Every call has its own deadline: 60 s by default (less when the run has
+  less left). A hung connector then throws `timed out after 60s` like any
   failed call: catch it, retry or skip, the run goes on. Override per call
   with `wick.call(id, params, { timeout_ms: 45000 })`, a `timeout_ms` field on
   a `callMany` item, or `wick.tool(id)(params, { timeout_ms })`; it never goes
@@ -92,7 +92,7 @@ project gets a clear "no project folder" error.
 
 - Result over 20 KB is cut: filter or aggregate in the script.
 - At most 1000 calls (file ops included) per run.
-- Timeout 60 s by default, `timeout_ms` up to 120 s. A run timeout names
+- Timeout 2 min by default, `timeout_ms` up to 5 min. A run timeout names
   what the script was doing (`… while waiting for conn:…/op (Label, 59.8s)`
   or `(busy in script code)`); calls already done stay in `calls`.
 - No `fetch`, timers, `require`, `process` or filesystem besides `wick.file`:

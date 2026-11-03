@@ -70,12 +70,12 @@ type status struct {
 }
 
 const (
-	defaultTimeout = 60 * time.Second
-	maxTimeout     = 120 * time.Second
+	defaultTimeout = 120 * time.Second
+	maxTimeout     = 300 * time.Second
 	// callTimeout is one call's default deadline, as in wick. callGrace is
 	// how much longer the runner waits for wick's own timeout answer before
 	// giving up on the call itself (a wick that never answers).
-	callTimeout    = 20 * time.Second
+	callTimeout    = 60 * time.Second
 	minCallTimeout = 100 * time.Millisecond
 	callGrace      = 500 * time.Millisecond
 	// admitRatio: new runs are refused (429) while the heap is above this

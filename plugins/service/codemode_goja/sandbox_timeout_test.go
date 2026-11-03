@@ -12,7 +12,7 @@ func TestCallDeadline(t *testing.T) {
 		remaining time.Duration
 		want      time.Duration
 	}{
-		{0, 60 * time.Second, callTimeout},
+		{0, 120 * time.Second, callTimeout},
 		{0, 5 * time.Second, 4 * time.Second},
 		{0, 300 * time.Millisecond, 300 * time.Millisecond},
 		{2500, 60 * time.Second, 2500 * time.Millisecond},

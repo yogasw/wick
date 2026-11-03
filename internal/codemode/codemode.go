@@ -39,12 +39,12 @@ import (
 const RunnerPrefix = "codemode_"
 
 const (
-	DefaultTimeout = 60 * time.Second
-	MaxTimeout     = 120 * time.Second
+	DefaultTimeout = 120 * time.Second
+	MaxTimeout     = 300 * time.Second
 	// CallTimeout is one connector call's default deadline (shorter when the
 	// run has less left). A call past it fails like any other failed call,
 	// so the script can catch it and go on.
-	CallTimeout = 20 * time.Second
+	CallTimeout = 60 * time.Second
 	runGrace    = 250 * time.Millisecond
 	// minCallTimeout floors a call deadline squeezed by the run's end.
 	minCallTimeout = 100 * time.Millisecond

@@ -62,7 +62,7 @@ calls for test / runs / delete. Each fire runs the steps in order:
 | `connector` | `tool_id` (`conn:<connector_id>/<op>[@<account_id>]`), `params` | the same op as `wick_execute`, through the same gate/audit, as the schedule's owner. Fetch the op schema with `wick_get` first. |
 | `check` | `rules`, `fail_rules`, `match`, `extract` | tests the previous step's JSON — no code, no Bash permission |
 | `bash` | `script`, `timeout_sec` (default 30, max 120) | `bash -c` in the project directory |
-| `code` | `code` or `script_path`, `lang` (`ts`/`js`), `params`, `timeout_sec` (max 120) | a Code Mode script (as `wick_run_code`) that reports what is NEW — see below |
+| `code` | `code` or `script_path`, `lang` (`ts`/`js`), `params`, `timeout_sec` (default 120, max 300) | a Code Mode script (as `wick_run_code`) that reports what is NEW — see below |
 
 Output flows forward: step N's output is step N+1's stdin AND `$PREV` (64KB, trailing newline trimmed); every
 earlier output is a file at `$STEP_<i>_OUT`.
