@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { Modal } from "@wick-fe/common-ui";
+  import { Modal, STEP_KIND_ICON } from "@wick-fe/common-ui";
   import type { Schedule, WatchRun, WatchRunSummary, WatchStep } from "./api.js";
   import { listRuns, getRun, testWatch, saveSteps, stepSummary, stopLabel, ruleText, ago } from "./api.js";
 
@@ -151,7 +151,6 @@
     matched: "border-green-500 bg-green-50 dark:border-green-700 dark:bg-green-900/20",
     "": "border-white-300 dark:border-navy-600",
   };
-  const kindIcon: Record<string, string> = { connector: "🔌", bash: "⌨", check: "✓", code: "{}" };
 
   function fmtDur(ms: number): string {
     if (!ms || ms < 1000) return `${ms ?? 0} ms`;
@@ -263,7 +262,7 @@
             <li class={"min-w-[10rem] max-w-xs flex-1 rounded-lg border px-3 py-2 " + toneCls[stepTone(i)]} data-testid="watch-step" data-tone={stepTone(i)}>
               <div class="flex items-center gap-2">
                 <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white-300 dark:bg-navy-600 text-[10px] font-semibold tabular-nums text-black-800 dark:text-white-200">{i + 1}</span>
-                <span class="text-xs" title={st.kind} aria-label={st.kind}>{kindIcon[st.kind] ?? "•"}</span>
+                <span class="text-xs" title={st.kind} aria-label={st.kind}>{STEP_KIND_ICON[st.kind] ?? "•"}</span>
                 <span class="truncate text-xs font-medium text-black-900 dark:text-white-100">{st.name || st.kind}</span>
               </div>
               <p class="mt-1 break-all font-mono text-[11px] text-black-800 dark:text-white-200">{stepSummary(st)}</p>

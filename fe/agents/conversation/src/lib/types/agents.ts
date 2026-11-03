@@ -1,4 +1,5 @@
 import type { TraceDisplay } from "@wick-fe/common-ui";
+import type { WatchStep } from "@wick-fe/common-ui/watch-steps";
 export type AskOption = { label: string; value: string; description?: string };
 
 export type AskField = {
@@ -580,6 +581,8 @@ export type Schedule = {
      last_result is the watch's latest run: matched | pending | error. */
   type?: "message" | "watch";
   step_count?: number;
+  /* A watch's steps, shown one line each on its row. */
+  steps?: WatchStep[];
   last_result?: string;
   /* Watch: "stop" (default) or "continue" (keeps running, notifies on new
      data); notified counts continue notices; no_timeout = no time limit. */

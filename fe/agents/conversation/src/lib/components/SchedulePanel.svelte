@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ScheduleEditModal, scheduleCadence as cadence } from "@wick-fe/common-ui";
-  import type { SchedulePatchInput } from "@wick-fe/common-ui";
+  import { matchesScheduleType, ScheduleEditModal, scheduleCadence as cadence, SCHEDULE_TYPE_FILTERS, STEP_KIND_ICON, stepSummary } from "@wick-fe/common-ui";
+  import type { SchedulePatchInput, ScheduleTypeFilter } from "@wick-fe/common-ui";
   import type { Schedule, WatchDryRun } from "../types/agents.js";
   import { parseWatchSteps, WATCH_CODE_STEP_EXAMPLE, WATCH_STEPS_EXAMPLE } from "../watchSteps.js";
 
@@ -80,11 +80,16 @@
   const rowIsDone = (s: Schedule) =>
     s.status === "done" || s.status === "cancelled" || s.status === "failed";
 
-  const liveCount = $derived(schedules.filter(rowIsLive).length);
-  const doneCount = $derived(schedules.filter(rowIsDone).length);
+  /* Type filter, the same chips as the global Scheduled page. The status
+     counts follow it, so "Live 2" means two live rows of this type. */
+  let typeFilter = $state<ScheduleTypeFilter>("all");
+  const typed = $derived(schedules.filter((s) => matchesScheduleType(s, typeFilter)));
+
+  const liveCount = $derived(typed.filter(rowIsLive).length);
+  const doneCount = $derived(typed.filter(rowIsDone).length);
 
   const visible = $derived(
-    schedules.filter((s) =>
+    typed.filter((s) =>
       listFilter === "live" ? rowIsLive(s) : listFilter === "done" ? rowIsDone(s) : true,
     ),
   );
@@ -92,7 +97,7 @@
   const LIST_FILTERS = $derived([
     { id: "live" as ListFilter, label: "Live", count: liveCount },
     { id: "done" as ListFilter, label: "Finished", count: doneCount },
-    { id: "all" as ListFilter, label: "All", count: schedules.length },
+    { id: "all" as ListFilter, label: "All", count: typed.length },
   ]);
 
   /* The create form starts collapsed when there is already something to look
@@ -592,11 +597,27 @@
           <span class="ml-1 tabular-nums text-black-700 dark:text-black-600">{f.count}</span>
         </button>
       {/each}
+      <div class="mb-1 ml-auto inline-flex rounded-lg border border-white-400 dark:border-navy-600 p-0.5" role="group" aria-label="Type">
+        {#each SCHEDULE_TYPE_FILTERS as ty (ty.id)}
+          <button
+            type="button"
+            class={"rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors " +
+              (typeFilter === ty.id
+                ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+                : "text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-200")}
+            aria-pressed={typeFilter === ty.id}
+            onclick={() => (typeFilter = ty.id)}
+            data-testid={"type-filter-" + ty.id}
+          >{ty.label}</button>
+        {/each}
+      </div>
     </div>
 
     {#if visible.length === 0}
       <p class="text-xs text-black-700 dark:text-black-600" data-testid="list-empty">
-        {listFilter === "live" ? "Nothing scheduled right now." : "No finished schedules."}
+        {typed.length === 0
+          ? typeFilter === "watch" ? "No watches." : "No message schedules."
+          : listFilter === "live" ? "Nothing scheduled right now." : "No finished schedules."}
       </p>
     {/if}
 
@@ -683,6 +704,19 @@
               <span class="rounded-full bg-white-300 px-1.5 py-0.5 font-medium text-black-600 dark:bg-navy-700 dark:text-black-600">no limit</span>
             {/if}
           </p>
+        {/if}
+
+        {#if s.type === "watch" && s.steps?.length}
+          <ol class="space-y-0.5" data-testid="row-watch-steps">
+            {#each s.steps as st, i (i)}
+              <li class="flex min-w-0 items-baseline gap-1.5 text-[11px] text-black-700 dark:text-black-600">
+                <span class="shrink-0 tabular-nums">{i + 1}.</span>
+                <span class="shrink-0" aria-label={st.kind}>{STEP_KIND_ICON[st.kind] ?? "•"}</span>
+                <span class="shrink-0 font-medium text-black-800 dark:text-white-200">{st.name || st.kind}</span>
+                <span class="truncate font-mono">{stepSummary(st)}</span>
+              </li>
+            {/each}
+          </ol>
         {/if}
 
         {#if s.type === "watch" && s.last_result}

@@ -31,6 +31,8 @@ export {
   renderSessionTemplate,
   scheduleCadence,
 } from "./schedule-edit-types.js";
+export type { ScheduleType, ScheduleTypeFilter, WatchRule, WatchStep } from "./watch-steps.js";
+export { matchesScheduleType, ruleText, SCHEDULE_TYPE_FILTERS, scheduleType, STEP_KIND_ICON, stepSummary } from "./watch-steps.js";
 export { default as Breadcrumb } from "./Breadcrumb.svelte";
 export type { BreadcrumbItem } from "./Breadcrumb.svelte";
 export { default as KebabMenu } from "./KebabMenu.svelte";

@@ -3,7 +3,8 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
-  import { ToastHost, ScheduleEditModal, ConfirmDialog } from "@wick-fe/common-ui";
+  import { ToastHost, ScheduleEditModal, ConfirmDialog, matchesScheduleType, SCHEDULE_TYPE_FILTERS } from "@wick-fe/common-ui";
+  import type { ScheduleTypeFilter } from "@wick-fe/common-ui";
   import type { ProjectOption, ReschedulePatch, Schedule } from "./lib/api.js";
   import {
     listAll,
@@ -80,14 +81,8 @@
   }
 
   /* Type: a Message wakes the agent every fire; a Watch polls without it. */
-  type TypeFilter = "all" | "message" | "watch";
-  let typeFilter = $state<TypeFilter>("all");
-  const TYPES: { id: TypeFilter; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "message", label: "Message" },
-    { id: "watch", label: "Watch" },
-  ];
-  const matchesType = (s: Schedule) => typeFilter === "all" || scheduleType(s) === typeFilter;
+  let typeFilter = $state<ScheduleTypeFilter>("all");
+  const matchesType = (s: Schedule) => matchesScheduleType(s, typeFilter);
 
   const filtered = $derived(
     schedules.filter((s) => matchesFilter(s) && matchesScope(s) && matchesType(s)),
@@ -318,7 +313,7 @@
         {/each}
       </div>
       <div class="mb-2 ml-auto inline-flex rounded-lg border border-white-400 dark:border-navy-600 p-0.5" role="group" aria-label="Type">
-        {#each TYPES as ty (ty.id)}
+        {#each SCHEDULE_TYPE_FILTERS as ty (ty.id)}
           <button
             type="button"
             class={"rounded-md px-2.5 py-1 text-xs font-medium transition-colors " +
