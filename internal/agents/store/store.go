@@ -122,6 +122,7 @@ type ConversationTurn struct {
 	InterruptedBy   string       `json:"interrupted_by,omitempty"`   // "user" | "agent" | "wick"
 	InterruptedNote string       `json:"interrupted_note,omitempty"` // one sentence: who, and what they did
 	HasTrace        bool         `json:"has_trace,omitempty"`        // true when thinking/<TurnID>.json exists
+	ToolCalls       int          `json:"tool_calls,omitempty"`       // tool_use events in the trace; 0 on turns written before it existed
 	Events          []TurnEvent  `json:"events,omitempty"`           // legacy: populated only when reading old turns
 	Attachments     []Attachment `json:"attachments,omitempty"`      // user turn only
 	HasArtifact     bool         `json:"has_artifact,omitempty"`     // assistant turn — true when Artifacts derived
@@ -1022,6 +1023,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Truncated:   truncated,
 		Interrupted: wasInterrupted,
 		HasTrace:    hasTrace,
+		ToolCalls:   countToolCalls(evSnap),
 		RemoteNote:  note,
 		Replaces:    s.replacedBy(note),
 	}
@@ -1207,6 +1209,18 @@ func compactionText(trigger string, info *event.CompactionInfo) string {
 // thinking/<turn_id>/<event_id>.json. Returns true when the index was
 // successfully written.
 // writeTraceIndexStatic is the package-level variant for callers without a *Store.
+// countToolCalls is the number shown next to "show trace" so a finished
+// turn tells how much work it did without loading the trace.
+func countToolCalls(evs []TurnEvent) int {
+	n := 0
+	for _, e := range evs {
+		if e.Type == "tool_use" {
+			n++
+		}
+	}
+	return n
+}
+
 func writeTraceIndexStatic(layout config.Layout, sessionID, turnID string, evs []TurnEvent, inlineBytes int) bool {
 	s := &Store{layout: layout, sessionID: sessionID, traceInlineBytes: inlineBytes}
 	return s.writeTraceIndex(turnID, evs)
@@ -1514,6 +1528,7 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 		Truncated:   true,
 		Interrupted: true,
 		HasTrace:    hasTrace,
+		ToolCalls:   countToolCalls(events),
 	}
 	if err := storage.AppendJSONL(
 		layout.SessionConversation(sessionID),

@@ -62,7 +62,21 @@ func OversizedResult(text string) string {
 	if n <= MaxToolResultBytes {
 		return ""
 	}
-	return fmt.Sprintf("result too large (%.1f MB, limit %d MB); it was not sent because a message this big closes the connection. Narrow the request (fewer rows, a filter, a smaller page), split a batch into smaller ones, or use the op's file option when it has one (e.g. save_to_artifacts) so the content is written to artifacts/ and only the path comes back", float64(n)/(1<<20), MaxToolResultBytes>>20)
+	return fmt.Sprintf("result too large (%.1f MB, limit %d MB); it was not sent because a message this big closes the connection. Narrow the request (fewer rows, a filter, a smaller page), split a batch into smaller ones, or use the op's file option when it has one (e.g. save_to_artifacts) so the content is written to artifacts/ and only the path comes back. To read it and keep only what matters, call it from wick_run_code and return a summary", float64(n)/(1<<20), MaxToolResultBytes>>20)
+}
+
+// CodeModeHintBytes is the wick_execute result size past which the reply
+// suggests wick_run_code: the model read a lot to use a little.
+const CodeModeHintBytes = 16 << 10
+
+// ExecuteContent is the content of a wick_execute result: the result itself
+// and, when it is big, a one-line nudge toward wick_run_code.
+func ExecuteContent(text string) []ToolContent {
+	out := []ToolContent{{Type: "text", Text: text}}
+	if len(text) > CodeModeHintBytes {
+		out = append(out, ToolContent{Type: "text", Text: fmt.Sprintf("[wick] This result is %d KB. If you only need part of it (a filter, a count, a few fields), or will call more tools with it, do it in wick_run_code next time: the raw data stays in the script and only the summary comes back.", len(text)>>10)})
+	}
+	return out
 }
 
 // escapedLen is len(text) once encoded as a JSON string (without quotes),

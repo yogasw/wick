@@ -441,4 +441,44 @@ describe("SchedulePanel — Watch tab", () => {
     expect(screen.getByTestId("row-watch-result").textContent).toContain("pending");
     expect(screen.getByTestId("row-watch-detail").getAttribute("href")).toBe("/tools/agents/scheduled?open=sm_w");
   });
+
+  test("the type chips split watches from messages, and the counts follow", async () => {
+    render(SchedulePanel, { props: { schedules: [WATCH, RECUR, ONCE], ...cbs() } });
+    expect(screen.getByTestId("type-filter-all").getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelectorAll("[data-sid]")).toHaveLength(3);
+    await fireEvent.click(screen.getByTestId("type-filter-watch"));
+    expect([...document.querySelectorAll("[data-sid]")].map((e) => e.getAttribute("data-sid"))).toEqual(["sm_w"]);
+    expect(screen.getByTestId("list-filter-live").textContent).toContain("1");
+    await fireEvent.click(screen.getByTestId("type-filter-message"));
+    expect([...document.querySelectorAll("[data-sid]")].map((e) => e.getAttribute("data-sid")).sort()).toEqual(["sm_1", "sm_2"]);
+    expect(screen.queryByTestId("row-watch")).toBeNull();
+  });
+
+  test("a type with no rows says so", async () => {
+    render(SchedulePanel, { props: { schedules: [RECUR], ...cbs() } });
+    await fireEvent.click(screen.getByTestId("type-filter-watch"));
+    expect(screen.getByTestId("list-empty").textContent).toContain("No watches.");
+  });
+
+  test("a watch row lists its steps, code steps included", () => {
+    const steps = [
+      { kind: "code" as const, name: "new rows", code: "// diff\nconst rows = await wick.call('x', {});" },
+      { kind: "code" as const, name: "from file", lang: "js" as const, script_path: "watches/a.js" },
+    ];
+    render(SchedulePanel, { props: { schedules: [{ ...WATCH, steps }], ...cbs() } });
+    const lines = [...screen.getByTestId("row-watch-steps").querySelectorAll("li")].map((l) => l.textContent?.replace(/\s+/g, " ").trim());
+    expect(lines).toEqual(["1. {} new rows ts · const rows = await wick.call('x', {});", "2. {} from file js · watches/a.js"]);
+  });
+
+  test("the Watch tab accepts a code step and sends it as-is", async () => {
+    const c = cbs();
+    render(SchedulePanel, { props: { schedules: [], ...c } });
+    await fireEvent.click(screen.getByTestId("mode-watch"));
+    await fireEvent.input(screen.getByTestId("sched-message"), { target: { value: "new rows" } });
+    const step = { kind: "code", script_path: "watches/new_rows.ts" };
+    await fireEvent.input(screen.getByTestId("watch-steps"), { target: { value: JSON.stringify([step]) } });
+    expect(screen.queryByTestId("watch-steps-error")).toBeNull();
+    await fireEvent.click(screen.getByText("Schedule"));
+    expect(c.onCreate.mock.calls[0][0].steps).toEqual([step]);
+  });
 });

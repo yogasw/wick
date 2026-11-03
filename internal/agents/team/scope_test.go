@@ -276,6 +276,36 @@ func TestScopeSameAsOwner(t *testing.T) {
 	}
 }
 
+// With the every-connector tier map, AccessOwner reaches past the owner's
+// catalog: an untiered connector only the caller sees opens, a System one
+// stays shut for a non-Captain, an explicit off still holds, and a
+// checklist agent is not widened by it.
+func TestScopeSameAsOwnerPastReach(t *testing.T) {
+	reach := Reach{"slack": {Key: "slack"}}
+	tiers := map[string]string{
+		"slack": TierConnector, "theirs": TierConnector, "gone": TierConnector,
+		"wm2": TierSystem, "dt2": TierPlatform,
+	}
+	grants := `[{"connector_id":"gone","level":"off"}]`
+	s := ScopeOf(entity.AgentPersona{AccessMode: AccessOwner, AllowedConnectors: grants}, reach).WithTiers(tiers)
+	for conn, want := range map[string]string{
+		"slack": LevelAll, "theirs": LevelAll, "gone": LevelOff,
+		"wm2": LevelOff, "dt2": LevelAll, "unknown": LevelOff,
+	} {
+		if got := s.Level(conn); got != want {
+			t.Errorf("Level(%q) = %q, want %q", conn, got, want)
+		}
+	}
+	captain := ScopeOf(entity.AgentPersona{AccessMode: AccessOwner, IsCaptain: true}, reach).WithTiers(tiers)
+	if captain.Level("wm2") != LevelAll {
+		t.Error("a Captain keeps the System default past reach")
+	}
+	choose := ScopeOf(entity.AgentPersona{AllowedConnectors: `[{"connector_id":"theirs","level":"all"}]`}, reach).WithTiers(tiers)
+	if choose.Level("theirs") != LevelOff {
+		t.Error("a checklist agent must stay capped at its owner's catalog")
+	}
+}
+
 // A grant naming only a personal account refuses ops run as the bot.
 func TestScopePersonalAccountOnly(t *testing.T) {
 	s := NewScope([]ConnectorGrant{{ConnectorID: "slack", Level: LevelAll, Accounts: []string{"acc-me"}}}, false, false, Reach{"slack": {Key: "slack"}})
@@ -370,5 +400,33 @@ func TestRosterFeatures(t *testing.T) {
 	}
 	if !f.Browser {
 		t.Error("Browser must read on without a catalog")
+	}
+}
+
+// A lend grant lends its connector from the owner at its own level, in
+// both modes; off or a deny-all scope lends nothing.
+func TestScopeLend(t *testing.T) {
+	reach := Reach{"db": {Key: "metabase"}, "chat": {Key: "slack"}, "ci": {Key: "jenkins"}}
+	grants := `[{"connector_id":"db","level":"read","lend":true},{"connector_id":"ci","level":"off","lend":true}]`
+	for _, mode := range []string{AccessOwner, AccessChoose} {
+		s := ScopeOf(entity.AgentPersona{ID: "a1", OwnerUserID: "owner-1", AccessMode: mode, AllowedConnectors: grants}, reach)
+		if who, ok := s.LentBy("db"); !ok || who != "owner-1" {
+			t.Errorf("%s: db must be lent by the owner, got %q %v", mode, who, ok)
+		}
+		if _, ok := s.LentBy("ci"); ok {
+			t.Errorf("%s: an off grant lends nothing", mode)
+		}
+		if _, ok := s.LentBy("chat"); ok {
+			t.Errorf("%s: an unlent connector is not lent", mode)
+		}
+		if s.Level("db") != LevelRead || s.AllowOp("db", "run_sql", true) {
+			t.Errorf("%s: a lent connector keeps its lent level", mode)
+		}
+		if got := s.LentIDs(); len(got) != 1 || got[0] != "db" {
+			t.Errorf("%s: LentIDs = %v", mode, got)
+		}
+	}
+	if _, ok := DenyAll().LentBy("db"); ok {
+		t.Error("deny-all lends nothing")
 	}
 }

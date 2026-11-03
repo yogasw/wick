@@ -329,6 +329,20 @@ describe("ThreadMessage - show trace toggle", () => {
     expect(screen.getByText(/show trace/i)).toBeDefined();
   });
 
+  test("show trace toggle carries the tool call count when known", () => {
+    const turn = makeTurn({ role: "assistant", has_trace: true, tool_calls: 12 });
+    const loadTrace = vi.fn().mockResolvedValue([]);
+    render(ThreadMessage, { props: { turn, loadTrace } });
+    expect(screen.getByText(/12 tool calls/)).toBeDefined();
+  });
+
+  test("show trace toggle omits the count on older turns without tool_calls", () => {
+    const turn = makeTurn({ role: "assistant", has_trace: true });
+    const loadTrace = vi.fn().mockResolvedValue([]);
+    const { container } = render(ThreadMessage, { props: { turn, loadTrace } });
+    expect(container.innerHTML).not.toContain("tool call");
+  });
+
   test("user turn does NOT render show trace toggle even if has_trace:true", () => {
     const turn = makeTurn({ role: "user", has_trace: true });
     const loadTrace = vi.fn().mockResolvedValue([]);

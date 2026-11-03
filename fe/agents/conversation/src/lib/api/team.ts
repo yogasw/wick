@@ -26,6 +26,9 @@ export type ConnectorGrant = {
   /** "off" overrides a Platform/System tier default downwards. */
   level: "all" | "read" | "pick" | "off";
   ops: string[];
+  /** Lent from the owner: a person chatting who cannot reach the connector
+      runs it as the owner; whoever can keeps their own identity. */
+  lend?: boolean;
 };
 
 /** One of an agent's non-main chats as its roster row tells it. */
@@ -41,6 +44,8 @@ export type WorkingSession = {
   source?: string;
   /** Turn start while running; last activity once finished. */
   since?: string;
+  /** The tool the running turn waits on; absent while it thinks. */
+  action?: string;
 };
 
 export type AgentItem = {
@@ -61,7 +66,7 @@ export type AgentItem = {
   avatar: AgentAvatarSpec;
   allowed_connectors: ConnectorGrant[] | null;
   include_new_connectors: boolean;
-  /** "owner" = Same as me (every connector the owner has, write included);
+  /** "owner" = All (every connector the session's identity has, write included);
       older servers omit it, which reads as "choose". */
   access_mode?: "choose" | "owner";
   /** Whose access a turn runs with; rows older than the field read "caller". */

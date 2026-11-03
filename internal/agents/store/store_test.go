@@ -395,6 +395,23 @@ func TestApplyThinkingRunsSplitByToolUse(t *testing.T) {
 	}
 }
 
+// TestToolCallsCountedOnTurn verifies the turn carries how many tools it
+// called, so the UI can label a collapsed trace without loading it.
+func TestToolCallsCountedOnTurn(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "plan"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.ToolResult, Text: "ok", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Read", ToolInput: "{}", ToolUseID: "t2"})
+	st.Apply(event.AgentEvent{Type: event.ToolResult, Text: "ok", ToolUseID: "t2"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "done"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 || lines[0].ToolCalls != 2 {
+		t.Fatalf("tool_calls: %+v, want 2", lines)
+	}
+}
+
 // TestApplyTextSegmentRecordedBeforeTool verifies narration text streamed
 // BEFORE a tool call is recorded into the trace as a "text" event so it keeps
 // its position between tool cards, while the conversation turn still carries

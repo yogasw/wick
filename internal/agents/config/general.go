@@ -168,6 +168,12 @@ type GeneralConfig struct {
 	SubAgentsMinConfidence    string `wick:"group=Sub-agents;desc=Minimum checker confidence before a customer-facing draft may be produced: low, medium, or high. Default: medium."`
 	SubAgentsNoEvidenceRounds int    `wick:"number;group=Sub-agents;desc=Consecutive rounds that add no new evidence before an investigation stops. 1 would abandon a run that came up empty once and would have landed the next round. Default: 2."`
 
+	// Code Mode deadlines (wick_run_code, watch code steps, run_code
+	// nodes, the CLI). Read on every run through codemode.CurrentLimits.
+	CodemodeDefaultTimeoutSec int `wick:"number;key=codemode_default_timeout_sec;group=Code Mode|Time limits of Code Mode scripts (wick_run_code, watch code steps, workflow run_code nodes, wick codemode run). Changes apply to the next run.;desc=Seconds a script may run when it asks for no timeout. Empty or 0 = default 120. Never above the max."`
+	CodemodeMaxTimeoutSec     int `wick:"number;key=codemode_max_timeout_sec;group=Code Mode;desc=Most seconds a script may ask for, a longer timeout is cut to this. Empty or 0 = default 300, at most 3600."`
+	CodemodeCallTimeoutSec    int `wick:"number;key=codemode_call_timeout_sec;group=Code Mode;desc=Seconds one wick.call may take when the script gives it no timeout_ms. A call past it fails like any failed call. Empty or 0 = default 60. Never above the max."`
+
 	// Boot markers. SetOwned refuses a key with no declared meta row, so
 	// a marker that is not listed here is silently never persisted — the
 	// role seeder's marker had exactly that bug, which made every boot
@@ -286,6 +292,10 @@ func DefaultGeneralConfig() GeneralConfig {
 		SubAgentsMaxRuntimeMin:    delegationDefaultMaxRuntimeMin,
 		SubAgentsMinConfidence:    "medium",
 		SubAgentsNoEvidenceRounds: delegationDefaultNoEvidenceRounds,
+		// Code Mode's built-in limits (codemode.DefaultLimits).
+		CodemodeDefaultTimeoutSec: 120,
+		CodemodeMaxTimeoutSec:     300,
+		CodemodeCallTimeoutSec:    60,
 	}
 }
 

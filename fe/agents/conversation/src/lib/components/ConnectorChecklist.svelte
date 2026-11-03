@@ -2,8 +2,9 @@
   /* The Access checklist: which of the owner's connectors an agent may use,
      at what level, on which accounts — plus whose access a turn runs with.
      ONE component for the + Agent wizard and Settings › Access; only how
-     the parent saves differs. A mode on top picks "Same as me" (every
-     connector the owner has) or "Choose connectors" (this list). Entries
+     the parent saves differs. A mode on top picks "All" (every connector the
+     session's identity has, minus a Turned off list) or "Selected" (this
+     list). Entries
      split into three type chips by tier: Connectors (granted by hand),
      Platform (on for every agent) and System (on for the Captain); a tier
      row stores a grant only when overridden. Each list is one table: row
@@ -19,6 +20,7 @@
   } from "../accessTiers.js";
   import {
     filterRows, selectState, toggleShown, toggleOne, bulkApply, setRowLevel,
+    isLent, lendAt, stopLending, typeChips,
     type AccessMode, type BulkAction,
   } from "../accessList.js";
 
@@ -30,7 +32,7 @@
     grants: ConnectorGrant[];
     includeNew?: boolean;
     runAs?: RunAs;
-    /** "owner" = Same as me; the grants are kept for switching back. */
+    /** "owner" = All; the grants are kept for switching back. */
     accessMode?: AccessMode;
     /** Last 400 from the server, already mapped onto rows. */
     errors?: GrantErrors | null;
@@ -62,15 +64,22 @@
   let adding = $state(false);
   let addQuery = $state("");
   let picked = $state<Set<string>>(new Set());
+  // All mode's "Turn off" picker: its own search and selection.
+  let turningOff = $state(false);
+  let offQuery = $state("");
+  let offPicked = $state<Set<string>>(new Set());
+  let offType = $state("");
+  // The "Lend from me" picker, and the Add picker's type filter.
+  let lending = $state(false);
+  let lendQuery = $state("");
+  let lendPicked = $state<Set<string>>(new Set());
+  let lendType = $state("");
+  let addType = $state("");
+  type Preview = "me" | "mate" | "none";
+  let preview = $state<Preview>("mate");
 
   const grantOf = (id: string) => grants.find((g) => g.connector_id === id);
   const inTier = (t: Tier) => catalog.filter((c) => tierOf(c) === t);
-  const tiers = $derived(
-    (["connectors", "platform", "system"] as Tier[])
-      .map((t) => ({ t, items: inTier(t) }))
-      .filter((x) => x.t !== "system" || x.items.length > 0)
-      .map((x) => ({ ...x, custom: x.items.filter((c) => grantOf(c.id)).length })),
-  );
   const matches = (c: AgentConnector, query: string) => {
     const q = query.trim().toLowerCase();
     return !q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q);
@@ -78,16 +87,54 @@
   const tierRows = $derived(inTier(tier));
   // Connectors: the main list holds only what is added, the picker only
   // what is not. Platform / System rows are all listed.
-  const added = $derived(tier === "connectors" ? filterRows(tierRows, grants, "granted", isCaptain) : tierRows);
+  // Lent connectors have their own list below, never the Picked one.
+  const added = $derived(tier === "connectors" ? filterRows(tierRows, grants, "granted", isCaptain).filter((c) => !isLent(c, grants)) : tierRows);
   const available = $derived(tier === "connectors" ? filterRows(tierRows, grants, "not_granted", isCaptain) : []);
   const shown = $derived(added.filter((c) => matches(c, query)));
-  const availShown = $derived(available.filter((c) => matches(c, addQuery)));
+  const ofType = (c: AgentConnector, t: string) => !t || c.key === t;
+  const availShown = $derived(available.filter((c) => ofType(c, addType) && matches(c, addQuery)));
   const pickSel = $derived(selectState(picked, availShown));
   const pickCount = $derived(available.filter((c) => picked.has(c.id)).length);
   const sel = $derived(selectState(selected, shown));
   // Selected rows of this tier, hidden ones included: the bulk bar acts on them.
   const selCount = $derived(added.filter((c) => selected.has(c.id)).length);
   const sameAsMe = $derived(tier === "connectors" && accessMode === "owner");
+  // All mode: connectors switched off by an explicit off grant, and the
+  // ones still on that the Turn off picker offers.
+  const isOff = (c: AgentConnector) => grantOf(c.id)?.level === "off";
+  const offRows = $derived(inTier("connectors").filter(isOff));
+  const offBase = $derived(inTier("connectors").filter((c) => !isOff(c)));
+  const offAvail = $derived(offBase.filter((c) => ofType(c, offType) && matches(c, offQuery)));
+  // Lend from me: what is lent, and what the Lend picker still offers (a
+  // turned-off connector stays off: turn it back on first).
+  const lentRows = $derived(inTier("connectors").filter((c) => isLent(c, grants)));
+  const lendBase = $derived(inTier("connectors").filter((c) => !isLent(c, grants) && !isOff(c)));
+  const lendAvail = $derived(lendBase.filter((c) => ofType(c, lendType) && matches(c, lendQuery)));
+  const lendPickSel = $derived(selectState(lendPicked, lendAvail));
+  // Built-in tools: Platform rows, plus System rows for the Captain only.
+  const builtinRows = $derived([...inTier("platform"), ...(isCaptain ? inTier("system") : [])]);
+  const builtinSummary = $derived.by(() => {
+    const changed = builtinRows.filter((c) => overrideOf(grants, c.id) !== "default").length;
+    return `${builtinRows.length} on by default${changed ? ` · ${changed} changed` : ""}`;
+  });
+  const previewText = $derived.by(() => {
+    if (runAs === "owner") return preview === "me" ? "everything set here" : "everything set here, as you";
+    const on = accessMode === "owner";
+    if (preview === "me") return on ? `every connector you have, new ones included${offRows.length ? `, minus ${offRows.length} turned off` : ""}` : `the ${added.length} picked`;
+    if (preview === "mate") return on ? "every connector they have themselves, new ones included" : "the picked ones they also have themselves";
+    return lentRows.length ? "none of their own" : "none";
+  });
+  function addLent(level: "read" | "all") {
+    grants = lendAvail.filter((c) => lendPicked.has(c.id)).reduce((out, c) => lendAt(out, c, level), grants);
+    lending = false;
+    lendPicked = new Set();
+  }
+  const offPickSel = $derived(selectState(offPicked, offAvail));
+  function turnOffPicked() {
+    grants = offAvail.filter((c) => offPicked.has(c.id)).reduce((out, c) => setOverride(out, c.id, "off"), grants);
+    turningOff = false;
+    offPicked = new Set();
+  }
 
   // Write ops the Connectors list grants, by their real op keys.
   const writes = $derived.by(() => {
@@ -104,7 +151,7 @@
   const writeConns = $derived(writeConnectors(grants, catalog));
   const tierLabel: Record<Tier, string> = { connectors: "Connectors", platform: "Platform", system: "System" };
   const tierHint: Record<Tier, string> = {
-    connectors: "Connectors this agent can use.",
+    connectors: "Only these, at the level you set. New connectors stay off until you add them.",
     platform: "wick's own working tools. On for every agent unless you change a row.",
     system: "Tools that build and manage wick. On for the Captain only unless you change a row.",
   };
@@ -180,51 +227,26 @@
   const segOff = "text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600";
 </script>
 
-{#if showRunAs}
-  <div>
-    <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="cc-runas">Run as</label>
-    <select
-      id="cc-runas"
-      class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-      bind:value={runAs}
-    >
-      <option value="caller">Caller (default) — your access, limited to this list</option>
-      <option value="owner">Owner — always your access, limited to this list</option>
-    </select>
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Bot, schedule and cron triggers use the owner's access.</p>
-    {#if errors?.runAs}<p class="mt-1 text-xs text-neg-400">{errors.runAs}</p>{/if}
+{#if showRunAs && runAs === "owner"}
+  <div class="flex flex-wrap items-center gap-2 rounded-xl border border-cau-300 bg-cau-100 px-3 py-2 text-xs text-black-900 dark:bg-navy-800 dark:text-cau-300" data-testid="runs-as-owner">
+    <span class="min-w-0 flex-1">Everyone who chats uses <b>your</b> access on everything below. Lend from me does the same for single connectors only.</span>
+    <button type="button" class={btn} onclick={() => (runAs = "caller")}>Use each person's own access</button>
   </div>
+  {#if errors?.runAs}<p class="text-xs text-neg-400">{errors.runAs}</p>{/if}
 {/if}
 
 <div>
-  <p class="mb-1 text-xs font-medium text-black-800 dark:text-black-600" id="cc-mode-label">Connector access</p>
-  <div class="inline-flex" role="radiogroup" aria-labelledby="cc-mode-label">
-    {#each [["owner", "Same as me"], ["choose", "Choose connectors"]] as [m, name] (m)}
-      <button type="button" role="radio" aria-checked={accessMode === m} class="{modeSeg} {accessMode === m ? segOn : segOff}"
-        onclick={() => (accessMode = m as AccessMode)}>{name}</button>
+  <p class="mb-2 text-sm font-semibold text-black-900 dark:text-white-100" id="cc-mode-label">Which connectors?</p>
+  <div class="grid grid-cols-2 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" role="radiogroup" aria-labelledby="cc-mode-label">
+    {#each [["owner", "All", "Each person uses everything they have. New ones included."], ["choose", "Selected", "Only the ones you pick, for a focused agent."]] as [m, name, hint], i (m)}
+      <button type="button" role="radio" aria-checked={accessMode === m} aria-label={name}
+        class="flex flex-col gap-0.5 px-4 py-2.5 text-left {i === 1 ? 'border-l border-white-300 dark:border-navy-600' : ''} {accessMode === m ? 'bg-green-50 ring-2 ring-inset ring-green-500 dark:bg-green-900/20' : 'hover:bg-white-200 dark:hover:bg-navy-600'}"
+        onclick={() => (accessMode = m as AccessMode)}>
+        <span class="text-sm font-semibold text-black-900 dark:text-white-100">{accessMode === m ? "●" : "○"} {name}</span>
+        <span class="text-xs text-black-800 dark:text-black-600">{hint}</span>
+      </button>
     {/each}
   </div>
-  <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-    {accessMode === "owner"
-      ? "Every connector you can use, at your level, new ones included."
-      : "Only the connectors you add below."}
-  </p>
-</div>
-
-<div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="Access type">
-  {#each tiers as x (x.t)}
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tier === x.t}
-      class="{chip} {tier === x.t ? chipOn : chipOff}"
-      onclick={() => pickTier(x.t)}
-    >
-      {tierLabel[x.t]} <span class="text-black-700">· {x.items.length}</span>
-      {#if x.t === "connectors" && accessMode === "owner"}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">same as you</span>
-      {:else if x.custom > 0}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">{x.custom} {x.t === "connectors" ? "granted" : "changed"}</span>{/if}
-    </button>
-  {/each}
 </div>
 
 {#if loading}
@@ -253,15 +275,74 @@
   {/if}
 {/snippet}
 
+{#snippet typeFilter(rows: AgentConnector[], current: string, pick: (t: string) => void, label: string)}
+  {@const types = typeChips(rows)}
+  {#if types.length > 1}
+    <div class="flex gap-1.5 overflow-x-auto px-3 pt-2" role="group" aria-label="{label} by type">
+      <button type="button" class="{chip} shrink-0 {current === '' ? chipOn : chipOff}" aria-pressed={current === ""} onclick={() => pick("")}>All <span class="text-black-700">{rows.length}</span></button>
+      {#each types as t (t.key)}
+        <button type="button" class="{chip} shrink-0 {current === t.key ? chipOn : chipOff}" aria-pressed={current === t.key} onclick={() => pick(t.key)}>{t.key}{#if t.count > 1} <span class="text-black-700">{t.count}</span>{/if}</button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet icon(c: AgentConnector)}
   <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white-200 text-sm font-semibold text-black-800 dark:bg-navy-600 dark:text-black-600" aria-hidden="true">{(c.label || c.key).slice(0, 1).toUpperCase()}</span>
 {/snippet}
 
 {#if sameAsMe}
-  <div class="rounded-xl border border-green-300 bg-green-50 px-4 py-3 text-xs text-black-900 dark:border-green-700 dark:bg-green-900/10 dark:text-white-100" data-testid="same-as-me">
-    <p class="font-medium">This agent uses the same connectors you do ({tierRows.length}), with write access.</p>
-    <p class="mt-1 text-black-800 dark:text-black-600">Connectors you get later are included. Platform and System tools still follow their own tabs. Pick “Choose connectors” to limit it.</p>
-  </div>
+  <section class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" aria-label="Turned off" data-testid="turned-off">
+    <div class="flex flex-wrap items-center justify-between gap-2 bg-white-200 px-3 py-2 dark:bg-navy-800">
+      <div class="min-w-0">
+        <p class="text-sm font-medium text-black-900 dark:text-white-100">Turned off <span class="text-black-700">· {offRows.length}</span></p>
+        <p class="text-xs text-black-800 dark:text-black-600">Nobody can use these through this agent. Everything else stays on.</p>
+      </div>
+      {#if !turningOff}
+        <button type="button" class={btn} onclick={() => { turningOff = true; offQuery = ""; offType = ""; offPicked = new Set(); }}>+ Turn off</button>
+      {/if}
+    </div>
+    {#if offRows.length === 0}
+      <p class="border-t border-white-300 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">Nothing turned off.</p>
+    {/if}
+    <ul class="divide-y divide-white-300 border-t border-white-300 dark:divide-navy-600 dark:border-navy-600">
+      {#each offRows as c (c.id)}
+        <li class="flex items-center gap-3 px-3 py-2">
+          {@render icon(c)}
+          <span class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{c.label}</span>
+          <button type="button" class="text-xs text-green-600 hover:underline" aria-label="Turn {c.label} back on" onclick={() => (grants = setOverride(grants, c.id, "default"))}>Turn back on</button>
+        </li>
+      {/each}
+    </ul>
+    {#if turningOff}
+      <div class="border-t border-green-300 dark:border-green-700" aria-label="Pick connectors to turn off">
+        {@render typeFilter(offBase, offType, (t) => (offType = t), "Turn off")}
+        <div class="px-3 pt-2">
+          <input type="search" aria-label="Search connectors to turn off" class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={offQuery} placeholder="Search connectors…" />
+        </div>
+        <div class="flex items-center gap-3 px-3 py-2 text-xs text-black-800 dark:text-black-600">
+          <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="cc-off-all" checked={offPickSel === "all"} disabled={offAvail.length === 0}
+            use:indeterminate={offPickSel === "some"} onchange={() => (offPicked = toggleShown(offPicked, offAvail))} aria-label="Select all shown to turn off" />
+          <label for="cc-off-all">Select all shown ({offAvail.length})</label>
+        </div>
+        <ul class="max-h-80 divide-y divide-white-300 overflow-y-auto border-y border-white-300 dark:divide-navy-600 dark:border-navy-600">
+          {#each offAvail as c (c.id)}
+            <li class="flex items-center gap-3 px-3 py-2 {offPicked.has(c.id) ? 'bg-green-50 dark:bg-green-900/10' : ''}">
+              <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="off-{c.id}" checked={offPicked.has(c.id)}
+                onchange={(e) => (offPicked = toggleOne(offPicked, c.id, (e.currentTarget as HTMLInputElement).checked))} aria-label="Turn off {c.label}" />
+              {@render icon(c)}
+              <label for="off-{c.id}" class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{c.label}</label>
+            </li>
+          {/each}
+          {#if offAvail.length === 0}<li class="px-3 py-3 text-xs text-black-800 dark:text-black-600">Nothing matches.</li>{/if}
+        </ul>
+        <div class="flex flex-wrap items-center gap-2 px-3 py-2">
+          <button type="button" class={btnPrimary} disabled={offPicked.size === 0} onclick={turnOffPicked}>Turn off {offPicked.size}</button>
+          <button type="button" class="ml-auto text-xs text-green-600 hover:underline" onclick={() => (turningOff = false)}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+  </section>
 {:else if adding}
   <section class="overflow-hidden rounded-xl border border-green-300 dark:border-green-700" aria-label="Add connectors">
     <div class="border-b border-white-300 px-3 py-2 dark:border-navy-600">
@@ -271,6 +352,7 @@
     {#if available.length === 0}
       <p class="px-3 py-4 text-xs text-black-800 dark:text-black-600">Every connector is already added.</p>
     {:else}
+      {@render typeFilter(available, addType, (t) => (addType = t), "Available connectors")}
       <div class="px-3 pt-2">
         <input type="search" aria-label="Search available connectors" class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={addQuery} placeholder="Search connectors…" />
       </div>
@@ -305,7 +387,7 @@
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div class="min-w-0">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">
-        {tier === "connectors" ? "Granted" : tierLabel[tier]} <span class="text-black-700">· {added.length}</span>
+        {tier === "connectors" ? "Picked" : tierLabel[tier]} <span class="text-black-700">· {added.length}</span>
       </p>
       <p class="text-xs text-black-800 dark:text-black-600">{tierHint[tier]}</p>
     </div>
@@ -394,6 +476,140 @@
     </div>
     <p class="text-xs text-black-800 dark:text-black-600">{levelHelp.read} · {levelHelp.all} · {levelHelp.pick}.</p>
   {/if}
+{/if}
+
+{#if tier === "connectors" && !adding}
+  <section class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" aria-label="Lend from me" data-testid="lend">
+    <div class="flex flex-wrap items-center justify-between gap-2 bg-white-200 px-3 py-2 dark:bg-navy-800">
+      <div class="min-w-0">
+        <p class="text-sm font-medium text-black-900 dark:text-white-100">Lend from me <span class="text-black-700">· {lentRows.length}</span></p>
+        <p class="text-xs text-black-800 dark:text-black-600">Optional. Someone chatting who doesn't have one of these runs it as you; anyone who has it keeps their own.</p>
+      </div>
+      {#if !lending}
+        <button type="button" class={btn} onclick={() => { lending = true; lendQuery = ""; lendType = ""; lendPicked = new Set(); }}>+ Lend</button>
+      {/if}
+    </div>
+    {#if lentRows.length === 0}
+      <p class="border-t border-white-300 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">Nothing lent. Everyone only uses their own access.</p>
+    {/if}
+    <ul class="divide-y divide-white-300 border-t border-white-300 dark:divide-navy-600 dark:border-navy-600">
+      {#each lentRows as c (c.id)}
+        {@const g = grantOf(c.id)}
+        {@const all = accIds(c)}
+        {@const ticked = tickedAccounts(g, all)}
+        {@const st = opStats(c)}
+        <li class="px-3 py-2">
+          <div class="flex flex-wrap items-center gap-3">
+            {@render icon(c)}
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium text-black-900 dark:text-white-100">{c.label}</span>
+              <span class="block truncate text-xs text-black-800 dark:text-black-600">{c.key}</span>
+            </span>
+            <div class="inline-flex" role="radiogroup" aria-label="Lent level for {c.label}">
+              {#each st.write > 0 ? [["read", "Read"], ["all", "Write"]] : [["read", "Read"]] as [o, name] (o)}
+                <button type="button" role="radio" aria-checked={g?.level === o} title={levelHelp[o] ?? ""} class="{seg} {g?.level === o ? segOn : segOff}" onclick={() => (grants = lendAt(grants, c, o as "read" | "all"))}>{name}</button>
+              {/each}
+            </div>
+            <button type="button" class="text-xs text-green-600 hover:underline" aria-label="Stop lending {c.label}" onclick={() => (grants = stopLending(grants, c.id))}>Stop lending</button>
+          </div>
+          {#if all.length > 1}
+            <ul class="mt-2 space-y-1 pl-11" aria-label="Accounts {c.label} runs as">
+              {#each c.accounts ?? [] as acc (acc.id)}
+                <li class="flex items-center gap-2 text-xs text-black-900 dark:text-white-100">
+                  <input type="checkbox" class="h-3.5 w-3.5 accent-green-500" id="lend-acc-{c.id}-{acc.id}" checked={ticked.has(acc.id)}
+                    onchange={(e) => (grants = toggleAccount(grants, c.id, all, acc.id, (e.currentTarget as HTMLInputElement).checked))} />
+                  <label for="lend-acc-{c.id}-{acc.id}">
+                    {#if acc.id === ""}🔑 Instance credential <span class="text-black-800 dark:text-black-600">· whatever the instance is set up with</span>{:else}👤 @{acc.display_name || acc.id} (yours) <span class="text-cau-400">· posts as you</span>{/if}
+                  </label>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+    {#if lending}
+      <div class="border-t border-green-300 dark:border-green-700" aria-label="Pick connectors to lend">
+        {@render typeFilter(lendBase, lendType, (t) => (lendType = t), "Lend")}
+        <div class="px-3 pt-2">
+          <input type="search" aria-label="Search connectors to lend" class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={lendQuery} placeholder="Search your connectors…" />
+        </div>
+        <div class="flex items-center gap-3 px-3 py-2 text-xs text-black-800 dark:text-black-600">
+          <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="cc-lend-all" checked={lendPickSel === "all"} disabled={lendAvail.length === 0}
+            use:indeterminate={lendPickSel === "some"} onchange={() => (lendPicked = toggleShown(lendPicked, lendAvail))} aria-label="Select all shown to lend" />
+          <label for="cc-lend-all">Select all shown ({lendAvail.length})</label>
+        </div>
+        <ul class="max-h-80 divide-y divide-white-300 overflow-y-auto border-y border-white-300 dark:divide-navy-600 dark:border-navy-600">
+          {#each lendAvail as c (c.id)}
+            <li class="flex items-center gap-3 px-3 py-2 {lendPicked.has(c.id) ? 'bg-green-50 dark:bg-green-900/10' : ''}">
+              <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="lend-{c.id}" checked={lendPicked.has(c.id)}
+                onchange={(e) => (lendPicked = toggleOne(lendPicked, c.id, (e.currentTarget as HTMLInputElement).checked))} aria-label="Lend {c.label}" />
+              {@render icon(c)}
+              <label for="lend-{c.id}" class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{c.label}</label>
+            </li>
+          {/each}
+          {#if lendAvail.length === 0}<li class="px-3 py-3 text-xs text-black-800 dark:text-black-600">Nothing matches.</li>{/if}
+        </ul>
+        <div class="flex flex-wrap items-center gap-2 px-3 py-2">
+          <button type="button" class={btnPrimary} disabled={lendPicked.size === 0} title={levelHelp.read} onclick={() => addLent("read")}>Lend {lendPicked.size} as Read</button>
+          <button type="button" class={btn} disabled={lendPicked.size === 0} title={levelHelp.all} onclick={() => addLent("all")}>Lend {lendPicked.size} as Write</button>
+          <button type="button" class="ml-auto text-xs text-green-600 hover:underline" onclick={() => (lending = false)}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+  </section>
+
+  <details class="rounded-xl border border-white-300 dark:border-navy-600" data-testid="built-in">
+    <summary class="flex cursor-pointer select-none items-center justify-between gap-2 px-4 py-2.5 text-sm text-black-900 dark:text-white-100">
+      <span class="font-medium">Built-in tools</span>
+      <span class="text-xs text-black-800 dark:text-black-600">{builtinSummary}</span>
+    </summary>
+    <p class="border-t border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">wick's own tools are on for every agent; nothing to tick. Change a row only to make an exception. Chat panels (Notes, Tickets, Schedule…) also switch in Tools &amp; features.</p>
+    <ul class="divide-y divide-white-300 border-t border-white-300 dark:divide-navy-600 dark:border-navy-600">
+      {#each builtinRows as c (c.id)}
+        {@const ov = overrideOf(grants, c.id)}
+        <li class="flex flex-wrap items-center gap-3 px-4 py-2">
+          <span class="min-w-0 flex-1">
+            <span class="flex items-center gap-2 truncate text-sm text-black-900 dark:text-white-100">{c.label}
+              {#if ov !== "default"}<span class="rounded-full bg-cau-100 px-1.5 text-[10px] text-black-900 dark:bg-navy-600 dark:text-cau-300">Changed</span>{/if}
+              {#if tierOf(c) === "system"}<span class="rounded-full bg-white-200 px-1.5 text-[10px] text-black-800 dark:bg-navy-600 dark:text-black-600">Captain</span>{/if}
+            </span>
+          </span>
+          <div class="inline-flex" role="radiogroup" aria-label="Access level for {c.label}">
+            {#each levelChoices(c).filter(([o]) => o !== "pick") as [o, name] (o)}
+              <button type="button" role="radio" aria-checked={ov === o} class="{seg} {ov === o ? segOn : segOff}" onclick={() => setOv(c, o)}>{name}</button>
+            {/each}
+          </div>
+        </li>
+      {/each}
+    </ul>
+  </details>
+
+  <section class="rounded-xl border border-white-300 px-4 py-3 text-xs dark:border-navy-600" aria-label="Who gets what" data-testid="who-gets-what">
+    <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <p class="text-sm font-medium text-black-900 dark:text-white-100">Who gets what</p>
+      <div class="flex flex-wrap gap-1.5" role="group" aria-label="Preview as">
+        {#each [["me", "You"], ["mate", "A teammate"], ["none", "Someone with no connectors"]] as [k, name] (k)}
+          <button type="button" class="{chip} {preview === k ? chipOn : chipOff}" aria-pressed={preview === k} onclick={() => (preview = k as Preview)}>{name}</button>
+        {/each}
+      </div>
+    </div>
+    <dl class="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1.5 text-black-900 dark:text-white-100">
+      <dt class="text-black-800 dark:text-black-600">Connectors</dt>
+      <dd>{previewText}</dd>
+      {#if lentRows.length > 0 && preview !== "me" && runAs !== "owner"}
+        <dt class="text-black-800 dark:text-black-600">Lent, as you</dt>
+        <dd class="flex flex-wrap gap-1">{#each lentRows as c (c.id)}<span class="rounded-md border border-cau-300 px-1.5">{c.label}</span>{/each}</dd>
+      {/if}
+      <dt class="text-black-800 dark:text-black-600">Saved as</dt>
+      <dd>{preview === "me" || runAs === "owner" ? "you" : "the person chatting"} <span class="text-black-800 dark:text-black-600">· tickets, notes, schedules, Slack posts</span></dd>
+      <dt class="text-black-800 dark:text-black-600">Schedules & cron</dt>
+      <dd>run as you</dd>
+    </dl>
+    {#if accessMode === "owner" && runAs !== "owner" && preview === "mate"}
+      <p class="mt-2 rounded-lg border border-cau-300 bg-cau-100 px-3 py-1.5 text-black-900 dark:bg-navy-800 dark:text-cau-300">What they look up stays in this agent's chat and memory, which you can read.</p>
+    {/if}
+  </section>
 {/if}
 
 {#if showIncludeNew && tier === "connectors" && accessMode !== "owner" && !adding}

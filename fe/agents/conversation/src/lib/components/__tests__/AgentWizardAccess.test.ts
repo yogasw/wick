@@ -40,7 +40,7 @@ async function pickModelAndCreate() {
 describe("AgentWizard › the Captain runs as its owner", () => {
   beforeEach(() => createAgent.mockClear());
 
-  test("Same as me, the summary says it runs as you, and run_as owner is sent", async () => {
+  test("All, the summary says it runs as you, and run_as owner is sent", async () => {
     render(AgentWizard, { props: props({ firstAgent: true }) });
     await toAccess("Lead");
     const summary = screen.getByTestId("aw-access-summary").textContent ?? "";
@@ -48,7 +48,7 @@ describe("AgentWizard › the Captain runs as its owner", () => {
     expect(summary).toContain("runs as you");
     expect(summary).toContain("a Team lead works for you personally");
     await next();
-    // Same as me never warns about connectors.
+    // All never warns about connectors.
     expect(screen.queryByTestId("aw-no-connectors")).toBeNull();
     await pickModelAndCreate();
     await waitFor(() => expect(lastBody()).toMatchObject({ run_as: "owner", access_mode: "owner" }));

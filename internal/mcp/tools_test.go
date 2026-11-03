@@ -479,7 +479,7 @@ func TestAskUserDisabledReturnsError(t *testing.T) {
 
 func TestToolsListContainsAllExpectedTools(t *testing.T) {
 	want := []string{
-		"wick_list", "wick_search", "wick_get", "wick_execute",
+		"wick_list", "wick_search", "wick_get", "wick_execute", "wick_run_code",
 		"wick_info", "wick_encrypt", "wick_decrypt",
 		"todo", "ask_user", "wick_list_providers",
 		"wick_skill_list", "wick_skill_sync",

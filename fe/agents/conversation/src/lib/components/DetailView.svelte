@@ -71,7 +71,7 @@
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
-    duplicateWorkspace, renameWorkspace, removeWorkspace,
+    duplicateWorkspace, renameWorkspace, removeWorkspace, setWorkspaceExpiry,
   } from "../api/workspace.js";
   import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule, rescheduleSchedule, runScheduleNow, testWatchSteps } from "../api/schedules.js";
   import { listNotes } from "../api/tickets.js";
@@ -3814,6 +3814,11 @@
               .then(loadWorkspace)
               .catch((e: unknown) => toastError(`Remove: ${e instanceof Error ? e.message : String(e)}`));
           }}
+          onExpiry={(cid, lifetime) => {
+            run(setWorkspaceExpiry(base, sessionId, cid, lifetime).pipe(Effect.provide(WickClientLayer)))
+              .then(loadWorkspace)
+              .catch((e: unknown) => toastError(`Expiry: ${e instanceof Error ? e.message : String(e)}`));
+          }}
         />
       {:else if railTab === "scheduled"}
         <SchedulePanel
@@ -4040,6 +4045,11 @@
                 run(removeWorkspace(base, sessionId, cid).pipe(Effect.provide(WickClientLayer)))
                   .then(loadWorkspace)
                   .catch((e: unknown) => toastError(`Remove: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+              onExpiry={(cid, lifetime) => {
+                run(setWorkspaceExpiry(base, sessionId, cid, lifetime).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadWorkspace)
+                  .catch((e: unknown) => toastError(`Expiry: ${e instanceof Error ? e.message : String(e)}`));
               }}
             />
           {:else if railTab === "scheduled"}

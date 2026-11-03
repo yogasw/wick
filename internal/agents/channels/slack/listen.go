@@ -587,19 +587,33 @@ func (s *Channel) noteOtherLocked(sessionID string, w *listenWait) bool {
 	return false
 }
 
-// cancelListenWait drops a held reply: the thread stopped listening, or a
-// mention is answering now and already sees it.
+// cancelListenWait drops a held reply because the thread stopped listening.
 func (s *Channel) cancelListenWait(sessionID string) {
+	if w := s.takeListenWait(sessionID); w != nil {
+		s.releaseHeld(sessionID, w, heldStateCancelled, "listening was switched off")
+	}
+}
+
+// mergeListenWait ends a held reply because a mention is answering the thread
+// now: that turn already reads the held message, so it is not lost and is not
+// reported as a problem. Listening stays on.
+func (s *Channel) mergeListenWait(sessionID string) {
+	if w := s.takeListenWait(sessionID); w != nil {
+		s.releaseHeld(sessionID, w, heldStateMerged, "")
+	}
+}
+
+// takeListenWait removes and returns sessionID's held reply, its timer
+// stopped; nil when nothing is held.
+func (s *Channel) takeListenWait(sessionID string) *listenWait {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	w := s.listenWaits[sessionID]
 	if w != nil {
 		w.timer.Stop()
 		delete(s.listenWaits, sessionID)
 	}
-	s.mu.Unlock()
-	if w != nil {
-		s.releaseHeld(sessionID, w, heldStateCancelled, "a mention or a stop took it over")
-	}
+	return w
 }
 
 // fireListenWait hands a held reply to the agent once its delay ran out.

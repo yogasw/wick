@@ -668,6 +668,7 @@ func Run() {
 		versionCmd,
 		agentExecCmd(),
 		agentChannelCmd(),
+		codemodeCmd(),
 	)
 
 	if err := root.Execute(); err != nil {

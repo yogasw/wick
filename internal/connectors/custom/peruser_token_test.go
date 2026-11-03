@@ -327,3 +327,87 @@ func TestConfigHeaderTestedValueSeedsFirstInstance(t *testing.T) {
 		t.Errorf("first instance value = %q, want key-a", got)
 	}
 }
+
+// declaredKeyStore mirrors the configs cache: a stored value is only
+// readable once its row was declared through EnsureOwned.
+type declaredKeyStore struct {
+	*fakeKeyStore
+	declared map[string]bool
+}
+
+func (d *declaredKeyStore) GetOwned(owner, key string) string {
+	d.mu.Lock()
+	ok := d.declared[owner+"/"+key]
+	d.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	return d.fakeKeyStore.GetOwned(owner, key)
+}
+
+func (d *declaredKeyStore) EnsureOwned(ctx context.Context, owner string, rows ...entity.Config) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, r := range rows {
+		d.declared[owner+"/"+r.Key] = true
+	}
+	return nil
+}
+
+// A per-user token server stays per-user after a restart: the marker is
+// in storage but nothing declared it yet, and the edit form's checkbox
+// and the per-user call path both read it.
+func TestUserTokenPerUserSurvivesRestart(t *testing.T) {
+	f := newTokenFixture(t)
+	form := &ServerForm{Label: "Mocker PU Restart", AuthScheme: "bearer", AuthSecret: "tok-a", OAuthPerUser: true}
+	_, key, _ := f.save(t, form, true)
+	if !f.svc.OAuthPerUser(context.Background(), key) {
+		t.Fatal("per-user off right after save")
+	}
+
+	restarted := New(Deps{DB: f.svc.store.db, Connectors: f.conns, Keys: &declaredKeyStore{fakeKeyStore: f.keys, declared: map[string]bool{}}})
+	if !restarted.OAuthPerUser(context.Background(), key) {
+		t.Error("per-user mode lost after restart")
+	}
+}
+
+// Per-user mode lives on the definition: a server with no instance keeps
+// it across an edit, and a "+ New row" instance starts per-user.
+func TestUserTokenPerUserWithoutInstances(t *testing.T) {
+	ctx := context.Background()
+	f := newTokenFixture(t)
+	form := &ServerForm{Label: "Mocker PU Empty", AuthScheme: "bearer", OAuthPerUser: true}
+	srv, key, instanceID := f.save(t, form, false)
+	if err := f.conns.Delete(ctx, instanceID); err != nil {
+		t.Fatalf("delete instance: %v", err)
+	}
+	if !f.svc.OAuthPerUser(ctx, key) {
+		t.Fatal("per-user lost with no instance left")
+	}
+
+	edit := &ServerForm{Label: "Mocker PU Empty", URL: f.mcpURL, AuthScheme: "bearer", OAuthPerUser: true}
+	if _, _, _, err := f.svc.SaveServer(ctx, edit, false, srv.ID, "admin-1"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if !f.svc.OAuthPerUser(ctx, key) {
+		t.Fatal("per-user lost after editing a server with no instance")
+	}
+
+	inst, err := f.conns.Create(ctx, key, "new row", map[string]string{}, "admin-1")
+	if err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	f.svc.SeedNewInstance(ctx, key, inst.ID)
+	row, _ := f.conns.Get(ctx, inst.ID)
+	if !f.svc.InstancePerUser(*row) || !row.AllowOthersConnectSSO || !row.MultiAccount {
+		t.Errorf("new instance did not start per-user: %+v", row)
+	}
+
+	off := &ServerForm{Label: "Mocker PU Empty", URL: f.mcpURL, AuthScheme: "bearer", AuthSecret: "tok-a"}
+	if _, _, _, err := f.svc.SaveServer(ctx, off, true, srv.ID, "admin-1"); err != nil {
+		t.Fatalf("edit off: %v", err)
+	}
+	if def, _ := f.svc.store.GetDefByKey(ctx, key); ParseSourceMeta(def.SourceMeta).PerUser {
+		t.Error("unticking did not clear the definition flag")
+	}
+}

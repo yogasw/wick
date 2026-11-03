@@ -537,6 +537,8 @@ func Register(r tool.Router) {
 	r.POST("/api/cli/send", apiCLISend)
 	r.POST("/api/cli/todo", apiCLITodo)
 	r.GET("/api/cli/whoami", apiCLIWhoami)
+	// A Code Mode script run as the token's session (api_cli_codemode.go).
+	r.POST("/api/cli/codemode/run", apiCLICodemodeRun)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
 	// code so the settings UI and the docs cannot drift from what actually
@@ -629,6 +631,7 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/workspace/{cid}", sessionWorkspaceSetUI)
 	r.POST("/sessions/{id}/workspace/{cid}/duplicate", sessionWorkspaceDuplicateUI)
 	r.POST("/sessions/{id}/workspace/{cid}/rename", sessionWorkspaceRenameUI)
+	r.POST("/sessions/{id}/workspace/{cid}/expiry", sessionWorkspaceExpiryUI)
 	r.POST("/sessions/{id}/workspace/{cid}/test", sessionWorkspaceTestUI)
 	r.DELETE("/sessions/{id}/workspace/{cid}", sessionWorkspaceRemoveUI)
 
@@ -3854,6 +3857,12 @@ func streamSSE(c *tool.Ctx) {
 	ctx := c.R.Context()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	var handoff <-chan struct{}
+	if sessionID != "" {
+		handoff = streamHandoff(ctx, sessionID)
+	} else {
+		handoff = streamHandoff(ctx)
+	}
 
 	flush := func() { _ = rc.Flush() }
 
@@ -3891,6 +3900,10 @@ func streamSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining with nothing of this session left here: the
+			// client reconnects to the successor.
+			return
 		case <-ctx.Done():
 			return
 		}
@@ -3985,6 +3998,7 @@ func streamMultiSSE(c *tool.Ctx) {
 	}
 
 	keepalive := time.NewTicker(15 * time.Second)
+	handoff := streamHandoff(ctx, ids...)
 	defer keepalive.Stop()
 	flush := func() { _ = rc.Flush() }
 
@@ -4010,6 +4024,9 @@ func streamMultiSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining with no turn of these sessions left here.
+			return
 		case <-ctx.Done():
 			return
 		}

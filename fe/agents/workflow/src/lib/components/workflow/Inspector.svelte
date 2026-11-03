@@ -113,10 +113,21 @@
         </label>
       {/if}
 
-      {#if n.type === "go_script" || n.type === "python"}
+      {#if n.type === "go_script" || n.type === "python" || n.type === "run_code"}
         <label class="flex flex-col gap-1">
           <span>Code</span>
           <textarea class="rounded border px-2 py-1 font-mono min-h-[180px]" value={n.code ?? ""} oninput={(e) => patch("code", (e.target as HTMLTextAreaElement).value)}></textarea>
+        </label>
+      {/if}
+
+      {#if n.type === "run_code"}
+        <label class="flex flex-col gap-1">
+          <span>Script path (instead of code)</span>
+          <input class="rounded border px-2 py-1 font-mono" placeholder="scripts/report.ts" value={n.script_path ?? ""} oninput={(e) => patch("script_path", (e.target as HTMLInputElement).value)} />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span>Project (workspace id)</span>
+          <input class="rounded border px-2 py-1 font-mono" value={n.workspace ?? ""} oninput={(e) => patch("workspace", (e.target as HTMLInputElement).value)} />
         </label>
       {/if}
 

@@ -14,6 +14,10 @@
       "types": "./src/usage/base/index.ts",
       "default": "./src/usage/base/index.ts"
     },
+    "./watch-steps": {
+      "types": "./src/watch-steps.ts",
+      "default": "./src/watch-steps.ts"
+    },
     "./model-list-meta": {
       "types": "./src/model-list-meta.ts",
       "default": "./src/model-list-meta.ts"

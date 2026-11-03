@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,8 +119,16 @@ type Service struct {
 	// reading a module — see SetCatalogRefresh. Set once at boot.
 	catalogRefresh func(ctx context.Context, key, instanceID string)
 
+	// identity loads a user and their filter tags, for running a lent
+	// connector as its lender — see SetIdentityLookup. nil lends nothing.
+	identity IdentityLookup
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
+
+	// oauth serializes and remembers access-token refreshes for
+	// generic-OAuth connectors — see ensureOAuthToken.
+	oauth oauthRefreshState
 
 	// cfgs delegates per-instance configuration storage to the central
 	// configs table (owner = "connector:{id}"). nil means storage falls
@@ -344,6 +353,40 @@ func (s *Service) SetMetrics(rec metrics.Recorder) {
 		return
 	}
 	s.metrics = rec
+}
+
+// IdentityLookup returns a user and their filter tag ids.
+type IdentityLookup func(ctx context.Context, userID string) (*entity.User, []string, error)
+
+// SetIdentityLookup wires the user lookup lent connectors run through
+// (see LendingScope). Set once at boot.
+func (s *Service) SetIdentityLookup(f IdentityLookup) { s.identity = f }
+
+// lendIdentity is who a call on connectorID runs as when the agent scope
+// on ctx lends it and the caller cannot reach it on their own: the
+// lender, with their tags. false keeps the caller — nothing is lent, the
+// caller reaches it already (their own access comes first), or the
+// lender lost it.
+func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (*entity.User, []string, bool) {
+	ls, ok := AgentScopeFrom(ctx).(LendingScope)
+	if !ok || s.identity == nil {
+		return nil, nil, false
+	}
+	lenderID, ok := ls.LentBy(connectorID)
+	if !ok || lenderID == "" || lenderID == userID {
+		return nil, nil, false
+	}
+	if own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin); err != nil || own {
+		return nil, nil, false
+	}
+	lender, tags, err := s.identity(ctx, lenderID)
+	if err != nil || lender == nil {
+		return nil, nil, false
+	}
+	if vis, err := s.isVisibleDirect(ctx, connectorID, lender.ID, tags, lender.IsAdmin()); err != nil || !vis {
+		return nil, nil, false
+	}
+	return lender, tags, true
 }
 
 // NewServiceFromDB is a convenience constructor for the web server and
@@ -656,6 +699,36 @@ func (s *Service) Modules() []connector.Module {
 	return out
 }
 
+// SessionBases lists the connectors the caller may clone into a session
+// workspace: every module offered from its definition, plus capable
+// modules with a visible instance whose per-instance toggle is on.
+// Deduped by key; instance-backed first, the rest sorted by key.
+func (s *Service) SessionBases(ctx context.Context, userID string, tagIDs []string, isAdmin bool) []connector.Module {
+	seen := map[string]bool{}
+	out := make([]connector.Module, 0)
+	if rows, err := s.ListVisibleTo(ctx, userID, tagIDs, isAdmin); err == nil {
+		for _, row := range rows {
+			if seen[row.Key] {
+				continue
+			}
+			mod, ok := s.Module(row.Key)
+			if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
+				continue
+			}
+			seen[row.Key] = true
+			out = append(out, mod)
+		}
+	}
+	var defs []connector.Module
+	for _, mod := range s.Modules() {
+		if mod.SessionBaseFromDefinition && !seen[mod.Meta.Key] {
+			defs = append(defs, mod)
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Meta.Key < defs[j].Meta.Key })
+	return append(out, defs...)
+}
+
 // Module looks up a definition by Key. The second return is false when
 // no module is registered for the key (typical when a DB row outlives
 // its code definition after a deploy that drops the connector).
@@ -754,7 +827,26 @@ func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs [
 		return nil, err
 	}
 	// An agent session sees only its checklist, whatever its owner reaches.
-	return filterRowsByScope(ctx, rows), nil
+	rows = filterRowsByScope(ctx, rows)
+	// Plus what the agent's owner lends and the caller cannot reach.
+	if ls, ok := AgentScopeFrom(ctx).(LendingScope); ok {
+		have := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			have[r.ID] = true
+		}
+		for _, id := range ls.LentIDs() {
+			if have[id] {
+				continue
+			}
+			if _, _, lent := s.lendIdentity(ctx, id, userID, userTagIDs, isAdmin); !lent {
+				continue
+			}
+			if row, err := s.repo.Get(ctx, id); err == nil && !row.Disabled {
+				rows = append(rows, *row)
+			}
+		}
+	}
+	return rows, nil
 }
 
 func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
@@ -879,7 +971,21 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 //
 // Must agree with ListVisibleTo, ownership included: a row the caller can
 // see but not dispatch is a listing that lies.
+//
+// A connector the agent's owner lends counts as visible (see
+// LendingScope).
 func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	ok, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin)
+	if err != nil || ok {
+		return ok, err
+	}
+	_, _, lent := s.lendIdentity(ctx, connectorID, userID, userTagIDs, isAdmin)
+	return lent, nil
+}
+
+// isVisibleDirect is IsVisibleTo without lending: the caller's own reach,
+// narrowed by the agent scope.
+func (s *Service) isVisibleDirect(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
 	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
 		return false, nil
 	}
@@ -1989,6 +2095,11 @@ type ExecuteResult struct {
 // connector key a session-workspace instance clones. Grants name rows,
 // not keys, so the instance inherits the widest grant among them.
 func (s *Service) baseAllowsOp(ctx context.Context, scope AgentScope, key string, op *connector.Operation) (bool, error) {
+	// A base offered from its definition has no row to grant: any
+	// agent may run it with the config its session brought.
+	if mod, ok := s.Module(key); ok && mod.SessionBaseFromDefinition {
+		return true, nil
+	}
 	rows, err := s.repo.ListByKey(ctx, key)
 	if err != nil {
 		return false, fmt.Errorf("resolve base connector: %w", err)
@@ -2019,6 +2130,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	var c *entity.Connector
 	var mod connector.Module
 	virtual := p.SessionInstance != nil
+	// lent: the call runs as the lender (see lendIdentity), so the
+	// session's own human never picks the account below.
+	lent := false
 	if virtual {
 		// Session-workspace instance: clone the base module, no DB row.
 		m, ok := s.Module(p.SessionInstance.BaseKey)
@@ -2038,6 +2152,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		c = row
 		if c.Disabled {
 			return nil, fmt.Errorf("connector %q is disabled", c.ID)
+		}
+		// A connector the agent's owner lends, which the caller cannot
+		// reach, runs as the owner: their accounts, their audit row.
+		if lender, tags, ok := s.lendIdentity(ctx, c.ID, p.UserID, p.TagIDs, p.IsAdmin); ok {
+			p.UserID, p.IsAdmin, p.TagIDs = lender.ID, lender.IsAdmin(), tags
+			lent = true
 		}
 		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
 			return nil, err
@@ -2124,7 +2244,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 		if !shared {
 			owner := p.UserID
-			if s.sessionOwnerUser != nil && p.SessionID != "" {
+			if !lent && s.sessionOwnerUser != nil && p.SessionID != "" {
 				if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
 					owner = uid
 				}
@@ -2323,6 +2443,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		masker.add(decCfg)
 		masker.add(decIn)
 		masker.add(collectSensitiveValues(mod, op, configs, input))
+	}
+
+	// Renew an expired OAuth access token before the op sees it and keep
+	// the result, so a provider like Google is not asked for a new token on
+	// every call (the connector cannot write its config back itself).
+	if !virtual {
+		if minted := s.ensureOAuthToken(ctx, mod, *c, acct, configs); minted != "" {
+			masker.add([]string{minted})
+		}
 	}
 
 	// Resolve the session id up front (an explicit `session_id` op input wins

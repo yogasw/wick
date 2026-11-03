@@ -79,6 +79,8 @@
         await import("ace-builds/src-noconflict/mode-python");
         await import("ace-builds/src-noconflict/mode-sh");
         await import("ace-builds/src-noconflict/mode-json");
+        await import("ace-builds/src-noconflict/mode-javascript");
+        await import("ace-builds/src-noconflict/mode-typescript");
         // ext-searchbox gives Ace its own in-editor find widget so Ctrl+F /
         // Cmd+F searches within the editor instead of triggering the browser
         // page-find. Ace binds the keys automatically once this is loaded.

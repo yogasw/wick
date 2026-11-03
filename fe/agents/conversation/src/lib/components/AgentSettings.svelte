@@ -23,7 +23,7 @@
   import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { normalizeAccessMode, type AccessMode } from "../accessList.js";
-  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
+  import { HANDLE_RE, splitPick, joinPick, grantsOf, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { navigate, type SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, PERSONA_UPDATE_FIELDS, improveInput, type PersonaDraft, type PersonaUpdateField } from "../personaGen.js";
@@ -72,7 +72,7 @@
       handle: a.handle, name: a.name, tagline: a.tagline ?? "", description: a.description,
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
-      grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
+      grants: grantsOf($state.snapshot(a.allowed_connectors) as ConnectorGrant[] | null),
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, force_default_provider: !!a.force_default_provider, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, stop_after_team_task: a.stop_after_team_task !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
@@ -316,7 +316,7 @@
       const av = avatarToSave(d.avatar);
       if (!sameValue(av, avatarCmp(saved.avatar))) p.avatar = av;
     }
-    if (!sameValue(d.grants, saved.allowed_connectors ?? [])) {
+    if (!sameValue(d.grants, grantsOf(saved.allowed_connectors))) {
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
     if (d.include_new_connectors !== saved.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
@@ -667,8 +667,8 @@
     {/if}
   {:else if view === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      Connectors are off until you add them. Platform tools are on for every agent; System
-      tools are for the Captain. An agent never gets more than your own access.
+      What people can use when they chat with this agent. Each person works with their own
+      access; lend single connectors of yours below.
     </p>
     {#if pruned > 0}
       <p class="text-xs text-black-800 dark:text-black-600">

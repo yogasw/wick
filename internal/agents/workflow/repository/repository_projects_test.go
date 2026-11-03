@@ -27,4 +27,9 @@ func TestCheckProjects(t *testing.T) {
 	if err := r.checkProjects(w, ""); err != nil {
 		t.Fatal("no editor identity (CLI/tests) skips the check")
 	}
+	// run_code reads script_path from its workspace: same gate.
+	w.Graph.Nodes = append(w.Graph.Nodes, wf.Node{ID: "script", Type: wf.NodeRunCode, ScriptPath: "a.ts", Workspace: "secret"})
+	if err := r.checkProjects(w, "u1"); err == nil {
+		t.Fatal("run_code reading from a project the author cannot access must be refused")
+	}
 }

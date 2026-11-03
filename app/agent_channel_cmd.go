@@ -300,6 +300,18 @@ func messageBody(text, file string) (string, error) {
 // callCLIAPI performs one request against the CLI channel and turns every
 // failure into an error carrying the right exit code.
 func callCLIAPI(method, base, token, path string, payload any) (map[string]any, error) {
+	raw, err := doCLIAPI(method, base, token, path, payload, 20*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return out, nil
+}
+
+// doCLIAPI is callCLIAPI returning the raw body, with the client timeout a
+// caller needs: a script run can outlast the 20 seconds a send gets.
+func doCLIAPI(method, base, token, path string, payload any, timeout time.Duration) ([]byte, error) {
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv(envToken))
 	}
@@ -332,12 +344,12 @@ func callCLIAPI(method, base, token, path string, payload any) (map[string]any, 
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return nil, exitErr(exitUnreach, fmt.Errorf("cannot reach wick at %s: %w", base, err))
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
@@ -353,7 +365,7 @@ func callCLIAPI(method, base, token, path string, payload any) (map[string]any, 
 	case resp.StatusCode >= 400:
 		return nil, exitErr(exitRejected, fmt.Errorf("wick said no (%d): %s", resp.StatusCode, msg))
 	}
-	return out, nil
+	return raw, nil
 }
 
 // exitErr wraps an error with the process exit code it should produce.

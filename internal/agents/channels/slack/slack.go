@@ -2590,7 +2590,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 			return
 		}
 		if !isListen {
-			s.cancelListenWait(sessionID)
+			s.mergeListenWait(sessionID)
 		}
 	}
 

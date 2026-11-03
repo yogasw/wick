@@ -48,6 +48,17 @@ export const renameWorkspace = (base: string, sessionId: string, cid: string, la
     { label },
   );
 
+export const setWorkspaceExpiry = (
+  base: string,
+  sessionId: string,
+  cid: string,
+  lifetime: { expires_in?: string; idle_after?: string },
+) =>
+  apiPostE<WsInstance>(
+    `${base}/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(cid)}/expiry`,
+    lifetime,
+  ).pipe(Effect.map(normalizeInstance));
+
 export const testWorkspace = (
   base: string,
   sessionId: string,

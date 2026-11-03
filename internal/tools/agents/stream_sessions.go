@@ -101,6 +101,7 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 
 	ctx := c.R.Context()
 	keepalive := time.NewTicker(15 * time.Second)
+	handoff := streamHandoff(ctx)
 	defer keepalive.Stop()
 	// The `pool` signal: something in the pool moved (a turn started or
 	// ended, a session was queued). Bare — no session id, no counts — so
@@ -187,6 +188,9 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining: the sidebar reconnects to the successor.
+			return
 		case <-ctx.Done():
 			return
 		}

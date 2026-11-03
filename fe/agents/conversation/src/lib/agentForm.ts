@@ -111,6 +111,11 @@ export function clearAll(grants: ConnectorGrant[], visible: AgentConnector[]): C
   return grants.filter((g) => !drop.has(g.connector_id));
 }
 
+/** grantsOf reads a stored checklist; an older row can carry null lists. */
+export function grantsOf(raw: ConnectorGrant[] | null | undefined): ConnectorGrant[] {
+  return (raw ?? []).map((g) => ({ ...g, accounts: g.accounts ?? [], ops: g.ops ?? [] }));
+}
+
 /** accountTicked reads a chip: an empty list means every account. */
 export function accountTicked(g: ConnectorGrant, id: string): boolean {
   return g.accounts.length === 0 || g.accounts.includes(id);

@@ -79,6 +79,18 @@ func drivePost(c *connector.Ctx, path string, body any) ([]byte, error) {
 // and retries once. Returns the response body on success.
 func doWithRefresh(c *connector.Ctx, buildReq func(token string) (*http.Request, error)) ([]byte, error) {
 	token := c.Cfg("user_token")
+	if t := cachedAccessToken(c); t != "" {
+		token = t
+	}
+	// No access token stored but a refresh token is: Google answers an empty
+	// bearer with 403 "unregistered callers" (not 401), which would skip the
+	// refresh below and read as a dead connection. Mint one up front.
+	if token == "" && c.Cfg("refresh_token") != "" {
+		var err error
+		if token, err = refreshAccessToken(c); err != nil {
+			return nil, err
+		}
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		req, err := buildReq(token)
 		if err != nil {
@@ -94,6 +106,7 @@ func doWithRefresh(c *connector.Ctx, buildReq func(token string) (*http.Request,
 			return nil, fmt.Errorf("read response: %w", err)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			forgetAccessToken(c)
 			token, err = refreshAccessToken(c)
 			if err != nil {
 				return nil, err
@@ -109,7 +122,8 @@ func doWithRefresh(c *connector.Ctx, buildReq func(token string) (*http.Request,
 }
 
 // refreshAccessToken uses the stored refresh_token to obtain a new access_token
-// from Google. The new token is used only for the current call (not persisted).
+// from Google. wick's config is not updated; the token is kept in the
+// in-process cache (token_cache.go) until shortly before it expires.
 func refreshAccessToken(c *connector.Ctx) (string, error) {
 	refreshToken := c.Cfg("refresh_token")
 	if refreshToken == "" {
@@ -136,6 +150,7 @@ func refreshAccessToken(c *connector.Ctx) (string, error) {
 
 	var result struct {
 		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
 		Error       string `json:"error"`
 		ErrorDesc   string `json:"error_description"`
 	}
@@ -148,14 +163,34 @@ func refreshAccessToken(c *connector.Ctx) (string, error) {
 	if result.AccessToken == "" {
 		return "", fmt.Errorf("empty access_token in refresh response")
 	}
+	storeAccessToken(c, result.AccessToken, result.ExpiresIn)
 	return result.AccessToken, nil
 }
 
 // probeTokenScopes calls Google tokeninfo to get the granted OAuth scopes
-// for the current user_token. Used by HealthCheck.
+// for the current user_token. Used by HealthCheck. The stored access token
+// expires after ~1 hour, so a rejected token is refreshed once and probed
+// again — otherwise a healthy connection would look disconnected.
 func probeTokenScopes(c *connector.Ctx) (string, error) {
+	token := c.Cfg("user_token")
+	if t := cachedAccessToken(c); t != "" {
+		token = t
+	}
+	scope, err := tokenInfoScopes(c, token)
+	if err == nil || c.Cfg("refresh_token") == "" {
+		return scope, err
+	}
+	forgetAccessToken(c)
+	token, rerr := refreshAccessToken(c)
+	if rerr != nil {
+		return "", rerr
+	}
+	return tokenInfoScopes(c, token)
+}
+
+func tokenInfoScopes(c *connector.Ctx, token string) (string, error) {
 	params := url.Values{}
-	params.Set("access_token", c.Cfg("user_token"))
+	params.Set("access_token", token)
 	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet,
 		"https://www.googleapis.com/oauth2/v1/tokeninfo?"+params.Encode(), nil)
 	if err != nil {

@@ -39,9 +39,13 @@
 
   const d = $derived.by<TraceDisplay>(() => {
     let out = display ?? classify();
+    // A wick_run_code display stored before the codemode kind showed a
+    // script_path call as its raw JSON; the classifier knows better now.
+    if (call && raw && out.connector === "code mode" && out.kind !== "codemode") out = classify();
     // A Large event's index display is header-only: the body arrives with
     // the payload. Keep the backend's kind and card fields, take the body.
-    if (!out.body && !out.command && !isBinaryKind(out.kind) && raw) {
+    // A script_path call has no body by design: its file is the script.
+    if (!out.body && !out.command && !isBinaryKind(out.kind) && raw && !(out.kind === "codemode" && out.path)) {
       out = { ...out, body: classify().body ?? raw };
     }
     // Live turn (inflight / SSE): the backend display has no blob_ref yet
@@ -75,6 +79,14 @@
 
 </script>
 
+{#snippet parts()}
+  {#each d.parts ?? [] as p, i (i)}
+    {@const Part = getTraceRenderer(p.kind)}
+    {#if p.title}<p data-trace-part-title class="px-3 pt-2 text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">{p.title}</p>{/if}
+    <Part display={p} {ctx} />
+  {/each}
+{/snippet}
+
 <div data-trace-body data-kind={d.kind} class="text-xs">
   <div class="flex items-center gap-1 px-2 pt-1">
     <span class="mr-auto text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">{d.kind}{d.lang && d.lang !== d.kind ? ` · ${d.lang}` : ""}</span>
@@ -92,6 +104,8 @@
       <pre data-trace-raw-text class="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-black-800 dark:text-black-600">{rawPreview(rawText, binary || !!d.parts?.length)}</pre>
     </ScrollBox>
   {:else}
+    <!-- A code mode call reads input first, then the script it fed. -->
+    {#if d.kind === "codemode"}{@render parts()}{/if}
     {#if binary}
       <Renderer display={d} {ctx} />
     {:else}
@@ -99,10 +113,7 @@
         <Renderer display={d} {ctx} />
       </ScrollBox>
     {/if}
-    {#each d.parts ?? [] as p, i (i)}
-      {@const Part = getTraceRenderer(p.kind)}
-      <Part display={p} {ctx} />
-    {/each}
+    {#if d.kind !== "codemode"}{@render parts()}{/if}
   {/if}
   {#if banner}
     <p data-trace-truncated class="px-3 py-1.5 text-[10px] italic text-amber-700 dark:text-amber-300">{banner}</p>

@@ -257,28 +257,40 @@ describe("Team tasks (team_message / @mention)", () => {
     const s = rosterStatus(row({ replying_to: "Captain" }));
     expect(s.work).toBe("replying");
     expect(s.presence).toBe("working");
-    expect(s.typing).toBe("replying to Captain…");
-    expect(s.label).toBe("replying to Captain…");
+    // No turn of the task seen running yet: say so instead of a bare "replying".
+    expect(s.typing).toBe("for Captain · waiting to start…");
+    expect(s.label).toBe("for Captain · waiting to start…");
+    // The task runs in the main chat: its own activity.
+    expect(rosterStatus(row({ status: "running", current_action: "Bash", replying_to: "Captain" })).typing).toBe("for Captain · running Bash…");
+    // The task runs in a side chat: that chat's activity, not another one's.
+    const chats = [
+      { id: "own", label: "", trigger: "you", action: "Read" },
+      { id: "task", label: "", trigger: "Captain" },
+    ];
+    expect(rosterStatus(row({ replying_to: "Captain", replying_session: "task", working_sessions: chats })).typing).toBe("for Captain · thinking…");
+    chats[1] = { ...chats[1], action: "Bash" };
+    expect(rosterStatus(row({ replying_to: "Captain", replying_session: "task", working_sessions: chats })).typing).toBe("for Captain · running Bash…");
     expect(rosterStatus(row({ status: "running", current_action: "Bash", replying_to: "Captain", team_waiting: ["a"] })).work).toBe("replying");
   });
 
   it("a chat other than the main one running reads as replying to whoever it works for", () => {
     const ws = (trigger: string) => [{ id: "s1", label: "x", trigger }];
-    expect(rosterStatus(row({ working_sessions: ws("Captain") })).typing).toBe("replying to Captain…");
+    expect(rosterStatus(row({ working_sessions: ws("Captain") })).typing).toBe("for Captain · thinking…");
+    expect(rosterStatus(row({ working_sessions: [{ id: "s1", label: "x", trigger: "Captain", action: "Bash" }] })).typing).toBe("for Captain · running Bash…");
     const own = rosterStatus(row({ working_sessions: ws("you") }));
     expect(own.work).toBe("replying");
-    expect(own.typing).toBe("working on your request…");
+    expect(own.typing).toBe("for you · thinking…");
     expect(own.presence).toBe("working");
     // The main chat's own turn and Team waits keep their line.
     expect(rosterStatus(row({ status: "running", working_sessions: ws("you") })).work).toBe("thinking");
     expect(rosterStatus(row({ team_waiting: ["a"], working_sessions: ws("you") })).work).toBe("team");
     // A Team task's sender names it first; a disabled agent shows none.
-    expect(rosterStatus(row({ replying_to: "Captain", working_sessions: ws("you") })).typing).toBe("replying to Captain…");
+    expect(rosterStatus(row({ replying_to: "Captain", working_sessions: ws("you") })).typing).toBe("for Captain · waiting to start…");
     expect(rosterStatus(row({ disabled: true, working_sessions: ws("you") })).work).toBe("idle");
     // Nobody on the Team asked (an outside caller, a channel): a plain working line.
     const outside = rosterStatus(row({ working_sessions: [{ id: "s1", label: "x", trigger: "", source: "A2A" }] }));
     expect(outside.work).toBe("replying");
-    expect(outside.typing).toBe("working…");
+    expect(outside.typing).toBe("thinking…");
   });
 
   it("a teammate asking its sender needs attention", () => {

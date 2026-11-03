@@ -131,3 +131,33 @@ func TestOSArchFromZipName(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildCatalogKind names a non-connector kind from the released manifest
+// (so the connector marketplace skips it) and leaves connectors kind-less.
+func TestBuildCatalogKind(t *testing.T) {
+	releases := []GHRelease{
+		{TagName: "runner_x/v0.1.0", Assets: []GHAsset{{Name: "runner_x-0.1.0-linux-amd64.zip", DownloadURL: "u/runner"}}},
+		{TagName: "echo/v1.0.0", Assets: []GHAsset{{Name: "echo-1.0.0-linux-amd64.zip", DownloadURL: "u/echo"}}},
+	}
+	fetch := func(url string) (*wickplugin.Manifest, error) {
+		if url == "u/runner" {
+			return &wickplugin.Manifest{Kind: wickplugin.KindService, Module: connector.Module{Meta: connector.Meta{Key: "runner_x", Name: "Runner X"}}}, nil
+		}
+		return &wickplugin.Manifest{Kind: wickplugin.KindConnector, Module: connector.Module{Meta: connector.Meta{Key: "echo", Name: "Echo"}}}, nil
+	}
+	got := BuildCatalog(releases, fetch)
+	if len(got) != 2 || got[0].Key != "echo" || got[1].Key != "runner_x" {
+		t.Fatalf("catalog: %+v", got)
+	}
+	if got[0].Kind != "" || got[1].Kind != wickplugin.KindService {
+		t.Fatalf("kinds: echo=%q runner_x=%q", got[0].Kind, got[1].Kind)
+	}
+	data, err := MarshalCatalog(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := parseCatalog(data)
+	if err != nil || len(listed) != 1 || listed[0].Key != "echo" {
+		t.Fatalf("connector marketplace should list only echo: %+v %v", listed, err)
+	}
+}

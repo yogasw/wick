@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
+import type { ScheduleType, WatchStep } from "@wick-fe/common-ui/watch-steps";
 
 /** How the delivery target is resolved at each fire. */
 export type SessionMode = "existing" | "new" | "template";
@@ -70,24 +71,8 @@ export type Schedule = {
   can_edit?: boolean;
 };
 
-export type ScheduleType = "message" | "watch";
-
-export type WatchRule = { path: string; op: string; value?: unknown };
-
-export type WatchStep = {
-  name?: string;
-  kind: "connector" | "bash" | "check";
-  tool_id?: string;
-  params?: Record<string, unknown>;
-  script?: string;
-  timeout_sec?: number;
-  match?: "all" | "any";
-  rules?: WatchRule[];
-  fail_rules?: WatchRule[];
-  extract?: Record<string, string>;
-  on_ok?: "next" | "done";
-  on_fail?: "done" | "pending";
-};
+export type { ScheduleType, WatchRule, WatchStep } from "@wick-fe/common-ui/watch-steps";
+export { ruleText, scheduleType, stepSummary } from "@wick-fe/common-ui/watch-steps";
 
 /** How a step ended: ok→next, ok→done, pending, fail→done, fail→pending. */
 export type StepDecision = "ok→next" | "ok→done" | "pending" | "fail→done" | "fail→pending";
@@ -142,35 +127,6 @@ export type WatchRun = Omit<WatchRunSummary, "steps"> & {
   finished_at: string;
   steps: WatchStepRecord[];
 };
-
-export const scheduleType = (s: Schedule): ScheduleType => (s.type === "watch" ? "watch" : "message");
-
-/** A rule as people read it: `state.name in [COMPLETED]`. */
-export function ruleText(r: WatchRule): string {
-  if (r.op === "exists" || r.op === "not_exists") return `${r.path} ${r.op}`;
-  const v = Array.isArray(r.value) ? `[${r.value.map(String).join(", ")}]` : String(r.value);
-  return `${r.path} ${r.op} ${v}`;
-}
-
-/** One line describing what a step does. */
-export function stepSummary(st: WatchStep): string {
-  switch (st.kind) {
-    case "connector":
-      return st.tool_id ?? "";
-    case "bash": {
-      const first = (st.script ?? "").split("\n")[0];
-      return first.length > 80 ? first.slice(0, 80) + "…" : first;
-    }
-    case "check": {
-      const join = st.match === "any" ? " OR " : " AND ";
-      const parts = [(st.rules ?? []).map(ruleText).join(join)];
-      if (st.fail_rules?.length) parts.push("fail if " + st.fail_rules.map(ruleText).join(" OR "));
-      return parts.filter(Boolean).join(" · ");
-    }
-    default:
-      return "";
-  }
-}
 
 /** "12s ago" / "4m ago" / "3h ago" / "2d ago". */
 export function ago(iso: string | undefined, now: number = Date.now()): string {

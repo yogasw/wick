@@ -203,6 +203,7 @@ func (h *Host) Add(key, version string, sm wickplugin.ServiceModule, binary stri
 	sup.env = func() []string { return h.processEnv(key, sm.CallbackScopes) }
 	sup.cfg = func() map[string]string { return h.configValues(key) }
 	sup.autoOff = h.autoOffFunc(key)
+	sup.maxRSS = func() int64 { return maxRSSFrom(h.configValues(key)) }
 	if h.Configs != nil && len(sm.Configs) > 0 {
 		if err := h.Configs.EnsureOwned(context.Background(), ConfigOwner(key), sm.Configs...); err != nil {
 			log.Warn().Str("service", key).Err(err).Msg("service plugin: config seed failed")

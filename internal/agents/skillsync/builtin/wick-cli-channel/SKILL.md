@@ -219,11 +219,33 @@ support-tools agent send --text "$RESULT" || echo "undelivered; left in /var/tmp
 The next turn reads the file. A report is worth more on disk than lost to a
 connection that was never going to answer.
 
+## Run a Code Mode script — `codemode run`
+
+The same token runs a `wick_run_code` script from a shell, as THIS session:
+every `wick.call` is checked as the session's caller (agent scope, session
+connectors, audit source `code_mode`). No agent turn in between, so a cron
+job or a build step can run a connector script on its own.
+
+```bash
+support-tools codemode run report.ts --input '{"days":7}'      # local file, sent
+support-tools codemode run --script-path codemode/report.ts    # read by wick from the project folder
+cat job.js | support-tools codemode run - --lang js --timeout 90s --json
+```
+
+- Exactly one source: a file, `-` for stdin, or `--script-path` (relative to
+  the session's project folder, same rules as `wick_run_code`).
+- `--input '<json>'` or `--input-file f.json`; `--timeout` at most 300s (default 120s).
+- stdout: the script's `result` as JSON (`--json`: the whole run). stderr:
+  the logs and one line `codemode: N calls, K failed (tool_ids) · Xms`.
+- Exit 1 = the script ran and failed (error on stderr); 2–5 as below.
+- Script syntax and `wick.*`: the `wick-code-mode` skill.
+
 ## Exit codes — branch on these
 
 | Code | Meaning | What the script should do |
 |---|---|---|
 | 0 | delivered | carry on |
+| 1 | `codemode run` only: the script ran and failed | read stderr; fix the script |
 | 2 | usage: no token, empty message | fix the invocation; nothing was sent |
 | 3 | token expired/revoked, or the session is gone | do not retry — mint a new token next turn |
 | 4 | wick unreachable on that host | retry, or write the result to a file for later |

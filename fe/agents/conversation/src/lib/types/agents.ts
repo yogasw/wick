@@ -1,4 +1,5 @@
 import type { TraceDisplay } from "@wick-fe/common-ui";
+import type { WatchStep } from "@wick-fe/common-ui/watch-steps";
 export type AskOption = { label: string; value: string; description?: string };
 
 export type AskField = {
@@ -206,6 +207,8 @@ export type ConversationTurn = {
   /** One sentence naming who, and what they did. Absent when unknown. */
   interrupted_note?: string;
   has_trace: boolean;
+  /** tool_use events in the trace; absent on turns written before it existed. */
+  tool_calls?: number;
   events: TurnEvent[];
   attachments: Attachment[];
   has_artifact?: boolean;
@@ -518,6 +521,10 @@ export type WsInstance = {
   label?: string;
   status: string;
   fields?: WsField[];
+  /** User-set expiry (RFC3339). Absent = deleted once the session sits idle. */
+  expires_at?: string;
+  /** Custom idle window in seconds; absent = the default few minutes. */
+  idle_after_sec?: number;
 };
 
 // WsTombstone is a connector auto-deleted when the session went idle — shown as
@@ -580,6 +587,8 @@ export type Schedule = {
      last_result is the watch's latest run: matched | pending | error. */
   type?: "message" | "watch";
   step_count?: number;
+  /* A watch's steps, shown one line each on its row. */
+  steps?: WatchStep[];
   last_result?: string;
   /* Watch: "stop" (default) or "continue" (keeps running, notifies on new
      data); notified counts continue notices; no_timeout = no time limit. */

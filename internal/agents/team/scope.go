@@ -1,6 +1,7 @@
 package team
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/yogasw/wick/internal/connectors"
@@ -8,15 +9,17 @@ import (
 )
 
 // Scope is an agent's checklist in the shape connectors.Service checks.
-// It only ever narrows: the service consults it after the owner's own
-// visibility rules, so nothing here can grant what the owner lacks.
+// It only ever narrows: the service consults it after the visibility rules
+// of whoever the session runs as, so nothing here can grant what that
+// identity lacks.
 //
 // What an agent gets on one connector is decided by Level, in this order:
 // an explicit grant (LevelOff included), else the connector's tier default
 // (TierPlatform: write; TierSystem: write for the Captain only), else the
 // include-new toggle (read only), else nothing. All of it stops at reach.
 // In AccessOwner mode an untiered connector skips the checklist and gets
-// write ops (see sameAsOwner).
+// write ops (see sameAsOwner), and reach widens to every connector (see
+// tiers), so the session's own identity is the only limit.
 type Scope struct {
 	grants map[string]ConnectorGrant
 	// includeNew lets untiered connectors absent from the checklist
@@ -39,6 +42,12 @@ type Scope struct {
 	// reach is the owner's catalog (see Reach). nil (unknown, or the
 	// lookup failed) leaves explicit grants working and every default off.
 	reach Reach
+	// tiers is every connector's tier, whoever can see it. In AccessOwner
+	// mode a connector outside reach still resolves through it: a Caller
+	// agent then follows the person chatting, who may reach more than the
+	// owner, and the service's own visibility check is what limits them.
+	// nil keeps the old cap at reach.
+	tiers map[string]string
 	// denyAll is the disabled-agent scope: it answers no to everything.
 	denyAll bool
 	// offKeys and offTools are what the agent's switched-off features
@@ -51,6 +60,7 @@ type Scope struct {
 var (
 	_ connectors.AgentScope        = (*Scope)(nil)
 	_ connectors.AgentFeatureScope = (*Scope)(nil)
+	_ connectors.LendingScope      = (*Scope)(nil)
 )
 
 // featureGate is what one feature switches off on the server: connector
@@ -135,6 +145,15 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	return s
 }
 
+// WithTiers sets the every-connector tier map (see Scope.tiers) and
+// returns s for chaining.
+func (s *Scope) WithTiers(tiers map[string]string) *Scope {
+	if !s.denyAll {
+		s.tiers = tiers
+	}
+	return s
+}
+
 // DenyAll returns a scope that permits nothing.
 func DenyAll() *Scope { return &Scope{denyAll: true} }
 
@@ -153,14 +172,23 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 		return LevelOff, nil
 	}
 	it, inReach := s.reach[connectorID]
+	if !inReach && s.sameAsOwner {
+		if t, ok := s.tiers[connectorID]; ok {
+			it, inReach = ReachItem{Tier: t}, true
+		}
+	}
 	if s.reach != nil && !inReach && !isToolGrant(connectorID) {
 		return LevelOff, nil
 	}
 	if s.sameAsOwner && inReach && it.Tier == TierConnector && !isToolGrant(connectorID) {
-		if g, ok := s.grants[connectorID]; ok && g.Level == LevelOff {
+		g, ok := s.grants[connectorID]
+		if ok && g.Level == LevelOff {
 			return LevelOff, nil
 		}
-		return LevelAll, nil
+		// A lent connector keeps the level it is lent at, for everyone.
+		if !ok || !g.Lend {
+			return LevelAll, nil
+		}
 	}
 	if g, ok := s.grants[connectorID]; ok {
 		switch g.Level {
@@ -191,6 +219,31 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 		return LevelRead, nil
 	}
 	return LevelOff, nil
+}
+
+// LentBy implements connectors.LendingScope: a lend grant that is not off
+// lends its connector from the agent's owner.
+func (s *Scope) LentBy(connectorID string) (string, bool) {
+	if s.denyAll || s.ownerID == "" {
+		return "", false
+	}
+	g, ok := s.grants[connectorID]
+	if !ok || !g.Lend || s.Level(connectorID) == LevelOff {
+		return "", false
+	}
+	return s.ownerID, true
+}
+
+// LentIDs implements connectors.LendingScope.
+func (s *Scope) LentIDs() []string {
+	var out []string
+	for id := range s.grants {
+		if _, ok := s.LentBy(id); ok {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AllowKey implements connectors.AgentFeatureScope.

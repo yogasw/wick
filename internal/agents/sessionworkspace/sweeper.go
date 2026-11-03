@@ -95,10 +95,12 @@ func runSweeper(layout agentconfig.Layout) {
 	l.Debug().Msg("stopped (no instances left)")
 }
 
-// sweepOnce scans every session workspace once, reaping the instances of any
-// session that has gone idle past IdleGrace, and returns how many LIVE
-// instances remain across all sessions (in still-active sessions). The reaper
-// uses that count to decide whether to keep ticking.
+// sweepOnce scans every session workspace once, reaping the unpinned
+// instances whose session has been idle past their idle window (IdleGrace, or
+// the instance's own IdleAfterSec), and returns how
+// many unpinned instances remain across all sessions (in still-active
+// sessions). The reaper uses that count to decide whether to keep ticking;
+// pinned instances are the expiry job's (ReapExpired), not this loop's.
 func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
 	// ListAll walks into the nested sub-agent sessions too. A sub-agent
 	// spins up its own connector instances, so scanning only the top level
@@ -116,38 +118,94 @@ func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
 		if err != nil || len(ws.Instances) == 0 {
 			continue // unreadable, or nothing live to reap (tombstones-only is fine)
 		}
-		if sessionIdle(layout, sid, now) {
-			if n, rerr := reapAll(layout, sid, "session idle", now); rerr != nil {
-				log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace sweeper: reap failed")
-			} else if n > 0 {
-				log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: reaped idle session's connectors")
-				// Tell the agent its connectors are gone (silent turn). Fetch
-				// the tombstones just written so the message can name them.
-				if reapNotify != nil {
-					if tombs, terr := Tombstones(layout, sid); terr == nil && len(tombs) > 0 {
-						reapNotify(sid, tombs)
-					}
-				}
+		unpinned := 0
+		for _, in := range ws.Instances {
+			if !in.Pinned() {
+				unpinned++
 			}
+		}
+		if unpinned == 0 {
 			continue
 		}
-		remaining += len(ws.Instances)
+		idle, ok := sessionIdleFor(layout, sid, now)
+		if !ok {
+			remaining += unpinned
+			continue
+		}
+		n, rerr := reapIdle(layout, sid, "session idle", idle, now)
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace sweeper: reap failed")
+			remaining += unpinned
+			continue
+		}
+		if n > 0 {
+			log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: reaped idle session's connectors")
+			notifyReaped(layout, sid, n)
+		}
+		remaining += unpinned - n
 	}
 	return remaining, nil
 }
 
-// sessionIdle reports whether a session is quiet enough to reap: it must not
-// have a live subprocess (Status idle) AND its last activity must be older than
-// IdleGrace. A running/queued session is never reaped, so instances stay alive
-// as long as work is happening. A session whose meta.json is gone (deleted) is
-// treated as idle — its instances should not outlive it.
-func sessionIdle(layout agentconfig.Layout, sessionID string, now time.Time) bool {
+// ReapExpired deletes, across every session, the pinned instances whose
+// expiry passed, and returns how many it deleted. Run on a schedule by the
+// session-connectors-expiry job; a session's activity does not matter here —
+// the user chose the lifetime.
+func ReapExpired(layout agentconfig.Layout, now time.Time) (int, error) {
+	sessionIDs, err := session.ListAll(layout)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	total := 0
+	for _, sid := range sessionIDs {
+		ws, err := Load(layout, sid)
+		if err != nil || len(ws.Instances) == 0 {
+			continue
+		}
+		n, rerr := reapExpired(layout, sid, now)
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace: expiry reap failed")
+			continue
+		}
+		if n > 0 {
+			log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: deleted expired connectors")
+			notifyReaped(layout, sid, n)
+			total += n
+		}
+	}
+	return total, nil
+}
+
+// notifyReaped tells the agent which connectors just went (silent turn): the
+// last n tombstones are the ones this reap wrote.
+func notifyReaped(layout agentconfig.Layout, sessionID string, n int) {
+	if reapNotify == nil {
+		return
+	}
+	tombs, err := Tombstones(layout, sessionID)
+	if err != nil || len(tombs) == 0 {
+		return
+	}
+	if n < len(tombs) {
+		tombs = tombs[len(tombs)-n:]
+	}
+	reapNotify(sessionID, tombs)
+}
+
+// sessionIdleFor reports how long a session has been quiet: ok=false while
+// it has a live subprocess (Status running/queued), so instances stay alive as
+// long as work is happening. A session whose meta.json is gone (deleted)
+// counts as idle forever — its instances should not outlive it.
+func sessionIdleFor(layout agentconfig.Layout, sessionID string, now time.Time) (time.Duration, bool) {
 	sess, err := session.Load(layout, sessionID)
 	if err != nil {
-		return true // no/unreadable meta → session is gone; reap its instances
+		return time.Duration(1<<62 - 1), true
 	}
 	if sess.Meta.Status != session.StatusIdle {
-		return false // running or queued — active work, keep alive
+		return 0, false
 	}
-	return now.Sub(sess.Meta.LastActive) > IdleGrace
+	return now.Sub(sess.Meta.LastActive), true
 }

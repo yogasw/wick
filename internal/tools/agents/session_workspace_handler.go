@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"time"
+
 	"net/http"
 	"sort"
 	"strings"
@@ -49,6 +51,11 @@ type wsInstanceVM struct {
 	Label   string      `json:"label"`
 	Status  string      `json:"status"` // ready | needs_setup
 	Fields  []wsFieldVM `json:"fields"`
+	// ExpiresAt is the user-set expiry (RFC3339); empty = deleted when the
+	// session goes idle.
+	ExpiresAt string `json:"expires_at,omitempty"`
+	// IdleAfterSec is the custom idle window; 0 = the default one.
+	IdleAfterSec int `json:"idle_after_sec,omitempty"`
 }
 
 // wsTombstoneVM is the trace of a session instance that was auto-deleted for
@@ -145,8 +152,8 @@ func wsStatus(specs []entity.Config, cfg map[string]string) string {
 	return "ready"
 }
 
-// wsBases lists the base connectors the caller may add: module declares
-// AllowSessionConfig AND a visible instance has the per-instance toggle on.
+// wsBases lists the base connectors the caller may add (see
+// connectors.Service.SessionBases).
 func wsBases(c *tool.Ctx) []wsBaseVM {
 	if globalConnectors == nil {
 		return nil
@@ -159,22 +166,10 @@ func wsBases(c *tool.Ctx) []wsBaseVM {
 	if globalAuth != nil {
 		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
 	}
-	rows, err := globalConnectors.ListVisibleTo(c.Context(), user.ID, tagIDs, user.IsAdmin())
-	if err != nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	out := make([]wsBaseVM, 0)
-	for _, row := range rows {
-		if seen[row.Key] {
-			continue
-		}
-		mod, ok := globalConnectors.Module(row.Key)
-		if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
-			continue
-		}
-		seen[row.Key] = true
-		out = append(out, wsBaseVM{BaseKey: row.Key, Label: mod.Meta.Name})
+	mods := globalConnectors.SessionBases(c.Context(), user.ID, tagIDs, user.IsAdmin())
+	out := make([]wsBaseVM, 0, len(mods))
+	for _, mod := range mods {
+		out = append(out, wsBaseVM{BaseKey: mod.Meta.Key, Label: mod.Meta.Name})
 	}
 	return out
 }
@@ -189,7 +184,7 @@ func wsBaseAllowed(c *tool.Ctx, key string) bool {
 }
 
 func wsInstanceToVM(in sessionworkspace.Instance) wsInstanceVM {
-	vm := wsInstanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup"}
+	vm := wsInstanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt, IdleAfterSec: in.IdleAfterSec}
 	mod, ok := globalConnectors.Module(in.BaseKey)
 	if !ok {
 		return vm
@@ -412,10 +407,12 @@ func sessionWorkspaceDuplicateUI(c *tool.Ctx) {
 		cfg[k] = v
 	}
 	copyInst, err := sessionworkspace.Add(globalLayout, sid, sessionworkspace.Instance{
-		BaseKey:   inst.BaseKey,
-		Label:     inst.Label + " (copy)",
-		Config:    cfg,
-		CreatedBy: "user",
+		BaseKey:      inst.BaseKey,
+		Label:        inst.Label + " (copy)",
+		Config:       cfg,
+		CreatedBy:    "user",
+		ExpiresAt:    inst.ExpiresAt,
+		IdleAfterSec: inst.IdleAfterSec,
 	})
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
@@ -460,6 +457,35 @@ func sessionWorkspaceRenameUI(c *tool.Ctx) {
 		return
 	}
 	if err := sessionworkspace.SetLabel(globalLayout, sid, cid, body.Label); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	inst, _, _ := sessionworkspace.Get(globalLayout, sid, cid)
+	c.JSON(http.StatusOK, wsInstanceToVM(inst))
+}
+
+// sessionWorkspaceExpiryUI sets a session instance's lifetime: expires_in
+// ("4h"), idle_after ("1d"), or neither for the default idle window.
+func sessionWorkspaceExpiryUI(c *tool.Ctx) {
+	sid := c.PathValue("id")
+	cid := c.PathValue("cid")
+	if _, _, ok := wsResolve(c, sid, cid); !ok {
+		return
+	}
+	var body struct {
+		ExpiresIn string `json:"expires_in"`
+		IdleAfter string `json:"idle_after"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.Error(http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	expiresAt, idleAfter, err := sessionworkspace.ParseLifetime(time.Now(), body.ExpiresIn, body.IdleAfter)
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := sessionworkspace.SetLifetime(globalLayout, sid, cid, expiresAt, idleAfter); err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}

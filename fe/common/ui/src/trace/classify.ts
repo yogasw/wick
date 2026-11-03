@@ -92,6 +92,7 @@ export function toolFamily(name: string): string {
     case "webfetch": case "web_fetch": case "fetch":
       return "fetch";
     case "wick_execute":
+    case "wick_run_code":
       return "mcp";
   }
   return n.includes(".") ? "mcp" : "";
@@ -446,6 +447,73 @@ registerTraceDetector(80, (in_) => {
   if (connector) d.connector = connector;
   if (op) d.op = op;
   d.summary = nonEmpty(connector, op).join(" · ");
+  if (op.endsWith("wick_run_code")) codeModeCall(d, in_.text);
+  return d;
+});
+
+/** A wick_run_code call shows its script: the inline code highlighted, or
+    for script_path only the path (the card reads the file through the
+    session file endpoints, under the viewer's own access). The input, when
+    given, follows as a JSON part. */
+function codeModeCall(d: TraceDisplay, text: string): void {
+  const m = jsonObject(text);
+  if (!m) return;
+  const code = str(m, "code");
+  const lang = str(m, "lang") || "ts";
+  d.kind = "codemode";
+  // A script_path call has no body: Copy then takes the raw call.
+  d.body = code || undefined;
+  d.lang = lang === "js" ? "javascript" : "typescript";
+  d.connector = "code mode";
+  d.op = lang;
+  if (typeof m.timeout_ms === "number" && m.timeout_ms > 0) d.timeout = Math.trunc(m.timeout_ms);
+  // No tool count here: the tool_ids a script names say nothing about the
+  // calls it makes (a script_path call names none, a loop calls one many
+  // times). The result card counts the calls the run actually made.
+  d.summary = `code mode · ${lang} · inline`;
+  const p = str(m, "script_path");
+  if (p && !code) {
+    d.path = p;
+    d.summary = `code mode · ${lang} · ${p.split("/").pop()}`;
+  }
+  if (m.input !== undefined && m.input !== null) {
+    d.parts = [{ kind: "json", lang: "json", title: "input", body: JSON.stringify(m.input, null, 2) }];
+  }
+}
+
+/* What a wick_run_code run returned: the script's return value as the body,
+   then its error, the connector calls it made and its logs as parts. A
+   failed run lands here too, not on the generic error card, so the calls
+   already made stay readable. */
+type CodeModeRun = {
+  ok?: boolean;
+  result?: unknown;
+  error?: string;
+  logs?: string[];
+  calls?: { tool_id?: string; ok?: boolean; ms?: number; error?: string }[];
+  duration_ms?: number;
+};
+
+registerTraceDetector(95, (in_) => {
+  if (in_.call || !in_.toolName.endsWith("wick_run_code")) return null;
+  const m = jsonObject(in_.text);
+  if (!m || !("run_id" in m)) return null;
+  const r = m as CodeModeRun;
+  const calls = Array.isArray(r.calls) ? r.calls : [];
+  const d: TraceDisplay = {
+    kind: "json",
+    lang: "json",
+    body: r.result === undefined ? "null" : JSON.stringify(r.result, null, 2),
+    summary: `${r.ok ? "ok" : "failed"} · ${calls.length} call${calls.length === 1 ? "" : "s"} · ${r.duration_ms ?? 0} ms`,
+  };
+  const parts: TraceDisplay[] = [];
+  if (r.error) parts.push({ kind: "error", title: "error", body: r.error });
+  if (calls.length) {
+    const lines = calls.map((c) => `${c.ok ? "✓" : "✗"} ${c.tool_id ?? ""} · ${c.ms ?? 0} ms${c.error ? ` · ${c.error}` : ""}`);
+    parts.push({ kind: "text", title: "calls", body: lines.join("\n") });
+  }
+  if (Array.isArray(r.logs) && r.logs.length) parts.push({ kind: "terminal", title: "logs", body: r.logs.join("\n") });
+  if (parts.length) d.parts = parts;
   return d;
 });
 

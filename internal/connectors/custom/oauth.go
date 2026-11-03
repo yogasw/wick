@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
@@ -747,6 +748,25 @@ func (s *Service) markPerUser(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("mark per-user instance: %w", err)
 	}
 	return nil
+}
+
+// loadPerUserMarker declares the marker row of an SSO instance so its
+// stored value reaches the configs cache. The cache only holds declared
+// rows, and token-scheme modules declare the marker only once it reads
+// "1" — after a restart nothing loaded it, so per-user mode looked off.
+// Once per instance per process.
+func (s *Service) loadPerUserMarker(ctx context.Context, row entity.Connector) {
+	if !row.EnableSSO || s.keys == nil {
+		return
+	}
+	if _, done := s.markerLoaded.LoadOrStore(row.ID, true); done {
+		return
+	}
+	marker := DefField{Key: cfgOAuthPerUser, Hidden: true, Desc: "Per-user (SSO) mode marker (managed automatically)."}
+	if err := s.keys.EnsureOwned(ctx, "connector:"+row.ID, FieldsToConfigs([]DefField{marker})...); err != nil {
+		s.markerLoaded.Delete(row.ID)
+		log.Warn().Err(err).Str("instance", row.ID).Msg("load per-user marker")
+	}
 }
 
 // InstancePerUser reports whether an oauth MCP instance runs in per-user

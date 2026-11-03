@@ -42,7 +42,7 @@ export type RosterStatus = {
 
 type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
   Partial<
-    Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working" | "team_waiting" | "replying_to" | "team_asks" | "working_sessions">
+    Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working" | "team_waiting" | "replying_to" | "team_asks" | "working_sessions" | "replying_session">
   >;
 
 /** subagentLabel is the working line for background sub-agents: the one
@@ -67,19 +67,32 @@ export function avatarWorking(status: string, w: WorkState): boolean {
   return isWorking(status) || busyWork(w);
 }
 
-/** replyingLabel is the working line for a chat it works on for someone:
-    "replying to Captain…", "working on your request…" for the person's
-    own, or a plain "working…" for one nobody on the Team asked for (an
-    outside caller, a channel, a schedule). */
-export function replyingLabel(to: string): string {
-  if (!to) return "working…";
-  return to === "you" ? "working on your request…" : `replying to ${to}…`;
+/** replyingLabel is the working line for a chat it works on for someone,
+    with what that chat is doing: "for Captain · running Bash…", "for you ·
+    thinking…", or the bare activity for one nobody on the Team asked for
+    (an outside caller, a channel, a schedule). doing is the activity
+    label, or null when no turn of that chat is seen running (queued,
+    between two turns of the task). */
+export function replyingLabel(to: string, doing: string | null = THINKING_LABEL): string {
+  const what = doing ?? "waiting to start…";
+  return to ? `for ${to} · ${what}` : doing ?? "working…";
 }
 
 /** teamWaitingLabel is the working line while open Team tasks wait on
     teammates: the one handle, or how many when there are more. */
 export function teamWaitingLabel(handles: string[]): string {
   return handles.length === 1 ? `waiting on @${handles[0]}…` : `waiting on ${handles.length} teammates…`;
+}
+
+/** replyDoing is what the chat a "replying" row works in is doing: a
+    Team task's chat (replying_session, or the main chat when absent), else
+    the oldest running side chat. null = no turn of it seen running. */
+function replyDoing(a: Row, mainWorking: boolean, mainAction: string): string | null {
+  const ws = a.working_sessions ?? [];
+  const doing = (action?: string) => (action ? toolActivityLabel(action) : THINKING_LABEL);
+  if ((a.replying_to ?? "").trim() && !a.replying_session) return mainWorking ? doing(mainAction) : null;
+  const chat = a.replying_session ? ws.find((w) => w.id === a.replying_session) : ws[0];
+  return chat ? doing(chat.action) : null;
 }
 
 /** rosterStatus reads one row. activeId is the agent whose chat is on
@@ -112,7 +125,7 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
       : work === "waiting"
         ? `${remoteWaitTarget({ handle: a.handle ?? "", slack_remote: a.slack_remote })}…`
         : work === "replying"
-          ? replyingLabel(replyTo ?? "")
+          ? replyingLabel(replyTo ?? "", replyDoing(a, working, action))
           : work === "team"
             ? teamWaitingLabel(team)
             : work === "tool"

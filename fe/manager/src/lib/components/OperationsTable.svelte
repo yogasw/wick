@@ -412,11 +412,13 @@
                             />
                           </td>
                         {/if}
-                        <td class="px-4 py-3">
-                          <div class="flex items-center gap-2">
+                        <!-- min-w + flex-wrap + nowrap pills: a narrow column used to
+                             squeeze the pills into a tall, one-word-per-line blob. -->
+                        <td class="min-w-[14rem] px-4 py-3">
+                          <div class="flex flex-wrap items-center gap-1.5">
                             <span class="font-medium text-black-900 dark:text-white-100">{op.name}</span>
                             {#if op.destructive}
-                              <span class="rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">destructive</span>
+                              <span class="whitespace-nowrap rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">destructive</span>
                             {/if}
                             {#if op.hidden_by_config}
                               <!-- VisibleWhen unmet by this instance's config: the op
@@ -424,7 +426,7 @@
                                    toggle stays editable so the choice survives a
                                    config change that makes the op visible again. -->
                               <span
-                                class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-mono text-[10px] font-medium text-black-700 dark:text-black-600"
+                                class="whitespace-nowrap rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-mono text-[10px] font-medium text-black-700 dark:text-black-600"
                                 title="Not exposed to agents until this instance's config matches."
                               >Hidden: requires {op.visible_when}</span>
                             {/if}

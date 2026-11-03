@@ -11,6 +11,7 @@ import HttpNode from "./HttpNode.svelte";
 import DbQueryNode from "./DbQueryNode.svelte";
 import ShellNode from "./ShellNode.svelte";
 import GoScriptNode from "./GoScriptNode.svelte";
+import RunCodeNode from "./RunCodeNode.svelte";
 import PythonNode from "./PythonNode.svelte";
 import TransformNode from "./TransformNode.svelte";
 import EndNode from "./EndNode.svelte";
@@ -30,6 +31,7 @@ export const nodeRegistry: Record<NodeType, Component> = {
   db_query: DbQueryNode,
   shell: ShellNode,
   go_script: GoScriptNode,
+  run_code: RunCodeNode,
   python: PythonNode,
   transform: TransformNode,
   end: EndNode,
