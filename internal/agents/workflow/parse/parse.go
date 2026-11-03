@@ -680,6 +680,9 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 				r.Errors = append(r.Errors, Error{Path: path + ".workspace", Message: "is required with script_path (the project whose folder holds the script)"})
 			}
 		}
+		if hasCode && strings.Contains(n.Code, "wick.file") && strings.TrimSpace(n.Workspace) == "" {
+			r.Errors = append(r.Errors, Error{Path: path + ".workspace", Message: "is required when the script uses wick.file (the project whose codemode/ folder it reads and writes)"})
+		}
 		if n.Lang != "" && n.Lang != "ts" && n.Lang != "js" {
 			r.Errors = append(r.Errors, Error{Path: path + ".lang", Message: fmt.Sprintf("%q is not a run_code language (ts, js)", n.Lang)})
 		}

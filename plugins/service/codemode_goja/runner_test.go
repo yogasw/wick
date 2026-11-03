@@ -22,6 +22,9 @@ type fakeWick struct {
 	srv    *httptest.Server
 	calls  atomic.Int64
 	answer func(toolID string, params map[string]any) callResult
+	// file answers file events; noFiles plays a wick without wick.file.
+	file    func(op, path, data string) callResult
+	noFiles bool
 }
 
 func newFake(t *testing.T, budget int) *fakeWick {
@@ -41,7 +44,11 @@ func newFake(t *testing.T, budget int) *fakeWick {
 func (f *fakeWick) run(lang, code string, input any, timeout time.Duration) (event, int) {
 	f.t.Helper()
 	in, _ := json.Marshal(input)
-	body, _ := json.Marshal(runRequest{RunID: fmt.Sprintf("r%d", time.Now().UnixNano()), Lang: lang, Code: code, Input: in, TimeoutMS: timeout.Milliseconds()})
+	rr := runRequest{RunID: fmt.Sprintf("r%d", time.Now().UnixNano()), Lang: lang, Code: code, Input: in, TimeoutMS: timeout.Milliseconds()}
+	if !f.noFiles {
+		rr.Features = []string{featureFile}
+	}
+	body, _ := json.Marshal(rr)
 	resp, err := http.Post(f.srv.URL+"/_wick/codemode/run", "application/json", bytes.NewReader(body))
 	if err != nil {
 		f.t.Fatal(err)
@@ -62,11 +69,19 @@ func (f *fakeWick) run(lang, code string, input any, timeout time.Duration) (eve
 			f.t.Fatalf("bad event %q: %v", sc.Text(), err)
 		}
 		switch ev.Type {
-		case "call":
+		case "call", "file":
 			f.calls.Add(1)
-			var p map[string]any
-			_ = json.Unmarshal(ev.Params, &p)
-			res := f.answer(ev.ToolID, p)
+			var res callResult
+			if ev.Type == "file" {
+				if f.file == nil {
+					f.t.Fatalf("unexpected file event %+v", ev)
+				}
+				res = f.file(ev.Op, ev.Path, ev.Data)
+			} else {
+				var p map[string]any
+				_ = json.Unmarshal(ev.Params, &p)
+				res = f.answer(ev.ToolID, p)
+			}
 			res.RunID, res.ID = runID, ev.ID
 			go func() {
 				b, _ := json.Marshal(res)

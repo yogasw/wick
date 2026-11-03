@@ -539,7 +539,8 @@ type watchExec struct {
 	cwd, tmpDir string
 	conn        ConnectorExecutor
 	code        CodeExecutor
-	// codeDir is the confined folder script_path is read from.
+	// codeDir is the confined folder script_path is read from (and
+	// wick.file's codemode/ lives in).
 	codeDir string
 	// snapshots are the code steps' snapshots from the previous fire.
 	snapshots map[string]json.RawMessage

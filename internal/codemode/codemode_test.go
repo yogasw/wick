@@ -23,6 +23,8 @@ type fakeRunner struct {
 	pending map[int64]chan wireResult
 	next    atomic.Int64
 	crash   bool
+	// oldRunner leaves "file" out of done's features (a pre-0.2.0 runner).
+	oldRunner bool
 }
 
 func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,16 +52,24 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		var got []string
 		for _, line := range strings.Split(in.Code, "\n") {
-			tid, ok := strings.CutPrefix(strings.TrimSpace(line), "CALL ")
-			if !ok {
+			line = strings.TrimSpace(line)
+			ev := map[string]any{"type": "call"}
+			if tid, ok := strings.CutPrefix(line, "CALL "); ok {
+				ev["tool_id"], ev["params"] = tid, map[string]any{"n": 1}
+			} else if rest, ok := strings.CutPrefix(line, "wick.file "); ok {
+				// wick.file <op> <path> [data]
+				parts := strings.SplitN(rest+"  ", " ", 3)
+				ev["type"], ev["op"], ev["path"], ev["data"] = "file", parts[0], parts[1], strings.TrimSpace(parts[2])
+			} else {
 				continue
 			}
 			id := f.next.Add(1)
+			ev["id"] = id
 			ch := make(chan wireResult, 1)
 			f.mu.Lock()
 			f.pending[id] = ch
 			f.mu.Unlock()
-			b, _ := json.Marshal(map[string]any{"type": "call", "id": id, "tool_id": tid, "params": map[string]any{"n": id}})
+			b, _ := json.Marshal(ev)
 			_, _ = w.Write(append(b, '\n'))
 			fl.Flush()
 			res := <-ch
@@ -73,7 +83,12 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out, _ := json.Marshal(strings.Join(got, ","))
-		b, _ := json.Marshal(map[string]any{"type": "done", "ok": true, "result": json.RawMessage(out), "logs": []string{"hi"}})
+		done := map[string]any{"type": "done", "ok": true, "result": json.RawMessage(out), "logs": []string{"hi"}, "features": []string{FeatureFile}}
+		if f.oldRunner {
+			done["ok"], done["error"] = false, "TypeError: Cannot read property 'read' of undefined"
+			delete(done, "features")
+		}
+		b, _ := json.Marshal(done)
 		_, _ = w.Write(append(b, '\n'))
 	}
 }

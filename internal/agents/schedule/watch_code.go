@@ -50,6 +50,10 @@ type CodeRun struct {
 	Code    string
 	Input   json.RawMessage
 	Timeout time.Duration
+	// Dir is the watch's folder, whose codemode/ subfolder wick.file uses
+	// (codemode.Request.Dir); NoDir says why there is none.
+	Dir   string
+	NoDir string
 }
 
 // CodeOutcome is what a code run returned (a subset of codemode.Result).
@@ -180,7 +184,8 @@ func runCodeStep(ctx context.Context, m entity.ScheduledMessage, s Step, i int, 
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout+codeQueueSlack)
 	defer cancel()
-	res, err := x.code(cctx, m, CodeRun{Lang: s.Lang, Code: src, Input: in, Timeout: timeout})
+	res, err := x.code(cctx, m, CodeRun{Lang: s.Lang, Code: src, Input: in, Timeout: timeout,
+		Dir: x.codeDir, NoDir: "the watch's project folder could not be resolved"})
 	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
 			return r, fmt.Errorf("timed out after %s", timeout+codeQueueSlack)
@@ -211,11 +216,11 @@ func runCodeStep(ctx context.Context, m entity.ScheduledMessage, s Step, i int, 
 
 func snapshotKey(i int) string { return strconv.Itoa(i) }
 
-// watchCodeDir is where script_path is read from: the same confined folder
-// bash steps run in.
+// watchCodeDir is where script_path is read from and whose codemode/
+// subfolder wick.file uses: the same confined folder bash steps run in.
 func (r *Runner) watchCodeDir(m entity.ScheduledMessage, steps []Step) string {
 	for _, s := range steps {
-		if s.Kind == StepKindCode && strings.TrimSpace(s.ScriptPath) != "" {
+		if s.Kind == StepKindCode {
 			if dir, err := watchExecDir(r.layout, m); err == nil {
 				return dir
 			}

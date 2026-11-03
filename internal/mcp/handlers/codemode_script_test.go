@@ -50,6 +50,10 @@ func scriptFixture(t *testing.T, src string) (layout agentconfig.Layout, sid, ba
 
 func TestRunCodeSource(t *testing.T) {
 	layout, sid, bare := scriptFixture(t, "return 1")
+	runCodeSource := func(layout agentconfig.Layout, sid string, args map[string]any) (string, error) {
+		dir, noDir := sessionProjectDir(layout, sid)
+		return runCodeSource(dir, noDir, args)
+	}
 
 	if got, err := runCodeSource(layout, sid, map[string]any{"code": "return 2"}); err != nil || got != "return 2" {
 		t.Fatalf("inline: %q %v", got, err)
@@ -68,7 +72,7 @@ func TestRunCodeSource(t *testing.T) {
 		{"escape", sid, map[string]any{"script_path": "../x.ts"}, "no .."},
 		{"absolute", sid, map[string]any{"script_path": "/etc/hosts"}, "relative"},
 		{"missing", sid, map[string]any{"script_path": "scripts/gone.ts"}, "not found"},
-		{"no session", "", map[string]any{"script_path": "scripts/rows.ts"}, "needs a session"},
+		{"no session", "", map[string]any{"script_path": "scripts/rows.ts"}, "no session"},
 		{"no project", bare, map[string]any{"script_path": "scripts/rows.ts"}, "no project folder"},
 	}
 	for _, c := range cases {
@@ -115,5 +119,17 @@ func TestWickRunCodeScriptPath(t *testing.T) {
 	call(map[string]any{"script_path": "../rows.ts", "session_id": sid})
 	if !got.IsError || !strings.Contains(got.Content[0].Text, "no ..") {
 		t.Fatalf("escape must be refused: %+v", got)
+	}
+}
+
+// wick.file uses the calling session's project folder, like script_path.
+func TestSessionProjectDir(t *testing.T) {
+	layout, sid, bare := scriptFixture(t, "return 1")
+	want, _ := project.ResolvePath(layout, "proj-1")
+	if dir, why := sessionProjectDir(layout, sid); dir != want || why != "" {
+		t.Fatalf("dir=%q why=%q", dir, why)
+	}
+	if dir, why := sessionProjectDir(layout, bare); dir != "" || !strings.Contains(why, "no project folder") {
+		t.Fatalf("bare: dir=%q why=%q", dir, why)
 	}
 }

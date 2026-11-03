@@ -21,22 +21,31 @@ type runRequest struct {
 	Code      string          `json:"code"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	TimeoutMS int64           `json:"timeout_ms,omitempty"`
+	// Features wick speaks; "file" = it answers file events (wick.file).
+	Features []string `json:"features,omitempty"`
 }
 
 // event is one NDJSON line of a /run response.
 type event struct {
-	Type string `json:"type"` // "call" | "done"
+	Type string `json:"type"` // "call" | "file" | "done"
 
-	// call
+	// call (and file: ID)
 	ID     int64           `json:"id,omitempty"`
 	ToolID string          `json:"tool_id,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
+
+	// file: wick does the IO inside the project's codemode/ folder
+	Op   string `json:"op,omitempty"` // "read" | "write" | "list" | "exists"
+	Path string `json:"path,omitempty"`
+	Data string `json:"data,omitempty"`
 
 	// done
 	OK     bool            `json:"ok,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
 	Logs   []string        `json:"logs,omitempty"`
+	// Features this runner speaks, so wick can name an outdated runner.
+	Features []string `json:"features,omitempty"`
 }
 
 type callResult struct {
@@ -66,6 +75,9 @@ const (
 )
 
 var langs = []string{"ts", "js"}
+
+// featureFile is the wick.file support both sides announce.
+const featureFile = "file"
 
 type runner struct {
 	budgetMB func() int

@@ -30,7 +30,7 @@ import (
 // with headroom (~330 bytes per skill: name + capped description + absolute
 // path) — when a new skill trips TestBuiltinCatalogNamesEverySkillWithPath,
 // raising this is the intended fix.
-const builtinCatalogMaxBytes = 8 * 1024
+const builtinCatalogMaxBytes = 9 * 1024
 
 // builtinDescMaxRunes caps each description. Trimmed PER SKILL rather than by
 // dropping skills off the end: a skill the model cannot see is unusable, while

@@ -7,10 +7,11 @@
 //
 // Wire (all under /_wick/codemode/, unreachable from outside wick):
 //
-//	POST /run     {run_id, lang, code, input, timeout_ms}
+//	POST /run     {run_id, lang, code, input, timeout_ms, features}
 //	              → 429 + status while the runner is over its memory share
-//	              → 200 NDJSON: {"type":"call",id,tool_id,params}… {"type":"done",ok,result,error,logs}
-//	POST /result  {run_id, id, ok, result|error}   (one per call event)
+//	              → 200 NDJSON: {"type":"call",id,tool_id,params}… {"type":"file",id,op,path,data}…
+//	                {"type":"done",ok,result,error,logs,features}
+//	POST /result  {run_id, id, ok, result|error}   (one per call or file event)
 //	GET  /status  {heap_mb, budget_mb, running, busy, langs, engine}
 package codemode
 
@@ -24,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -64,6 +66,10 @@ type Request struct {
 	Code    string
 	Input   json.RawMessage
 	Timeout time.Duration
+	// Dir is the project folder whose codemode/ subfolder wick.file uses
+	// (FileOp). Empty = no wick.file; NoDir then says why.
+	Dir   string
+	NoDir string
 }
 
 // Call is one connector call recorded during a run.
@@ -183,6 +189,14 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 	if len(req.Input) > 0 && !json.Valid(req.Input) {
 		return nil, errors.New("input must be JSON")
 	}
+	usesFile := strings.Contains(req.Code, "wick.file")
+	if usesFile && req.Dir == "" {
+		msg := "not run, the script uses wick.file but this run has no project folder"
+		if req.NoDir != "" {
+			msg += ": " + req.NoDir
+		}
+		return &Result{OK: false, Calls: []Call{}, Error: msg}, nil
+	}
 
 	// Pre-flight: a wrong or forbidden tool_id stops the run before any call
 	// (a write half-done by a script that dies on its 3rd call is worse).
@@ -208,6 +222,7 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 	body, _ := json.Marshal(map[string]any{
 		"run_id": runID, "lang": req.Lang, "code": req.Code,
 		"input": rawOrNil(req.Input), "timeout_ms": req.Timeout.Milliseconds(),
+		"features": []string{FeatureFile},
 	})
 
 	// Queue: the runner answers 429 while its heap is over its share; wait
@@ -306,10 +321,37 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 				mu.Unlock()
 				post(ctx, rt, out)
 			}(ev)
+		case "file":
+			mu.Lock()
+			count++
+			over := count > MaxCalls
+			mu.Unlock()
+			wg.Add(1)
+			go func(ev wireEvent) {
+				defer wg.Done()
+				c := Call{ToolID: "file:" + ev.Op + " " + strings.TrimSuffix(FilesDir+"/"+ev.Path, "/")}
+				t0 := time.Now()
+				out := wireResult{RunID: runID, ID: ev.ID}
+				if over {
+					out.Error = fmt.Sprintf("too many calls in one run (max %d)", MaxCalls)
+				} else if r, err := FileOp(req.Dir, ev.Op, ev.Path, ev.Data); err != nil {
+					out.Error = err.Error()
+				} else {
+					out.OK, out.Result = true, r
+				}
+				c.OK, c.Error, c.MS = out.OK, firstLine(out.Error), time.Since(t0).Milliseconds()
+				mu.Lock()
+				res.Calls = append(res.Calls, c)
+				mu.Unlock()
+				post(ctx, rt, out)
+			}(ev)
 		case "done":
 			done = true
 			res.OK, res.Error, res.Logs = ev.OK, ev.Error, ev.Logs
 			res.Result, res.Truncated = capResult(ev.Result)
+			if usesFile && !res.OK && !slices.Contains(ev.Features, FeatureFile) {
+				res.Error = "runner too old, update codemode_goja (0.2.0 or later has wick.file): " + res.Error
+			}
 		}
 		if done {
 			break
@@ -331,10 +373,16 @@ type wireEvent struct {
 	ID     int64           `json:"id"`
 	ToolID string          `json:"tool_id"`
 	Params json.RawMessage `json:"params"`
-	OK     bool            `json:"ok"`
-	Result json.RawMessage `json:"result"`
-	Error  string          `json:"error"`
-	Logs   []string        `json:"logs"`
+	// file
+	Op   string `json:"op"`
+	Path string `json:"path"`
+	Data string `json:"data"`
+	// done
+	OK       bool            `json:"ok"`
+	Result   json.RawMessage `json:"result"`
+	Error    string          `json:"error"`
+	Logs     []string        `json:"logs"`
+	Features []string        `json:"features"`
 }
 
 type wireResult struct {

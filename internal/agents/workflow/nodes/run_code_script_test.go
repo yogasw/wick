@@ -71,3 +71,22 @@ func TestRunCode_ScriptPath(t *testing.T) {
 		t.Fatalf("unwired: %v", err)
 	}
 }
+
+// workspace hands its project folder to the run for wick.file, inline code
+// included; without one the run has no folder and says how to get one.
+func TestRunCode_WorkspaceDirForFiles(t *testing.T) {
+	dir := t.TempDir()
+	f := &fakeRun{res: &codemode.Result{OK: true, Result: json.RawMessage(`1`)}}
+	ex := NewRunCodeExecutor(runCodeRegistry(), f.fn)
+	ex.ProjectDir = func(id string) (string, error) { return dir, nil }
+	rc := runCodeRC("owner-7")
+
+	n := workflow.Node{ID: "rc", Type: workflow.NodeRunCode, Code: "return wick.file.read('a.json')", Workspace: "proj-1"}
+	if _, err := ex.Execute(context.Background(), n, rc); err != nil || f.req.Dir != dir {
+		t.Fatalf("err=%v dir=%q", err, f.req.Dir)
+	}
+	n.Workspace = ""
+	if _, err := ex.Execute(context.Background(), n, rc); err != nil || f.req.Dir != "" || !strings.Contains(f.req.NoDir, "set workspace") {
+		t.Fatalf("err=%v dir=%q nodir=%q", err, f.req.Dir, f.req.NoDir)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -109,12 +110,23 @@ func (rn *run) call(ctx context.Context, toolID string, params any) callResult {
 	if string(raw) == "null" {
 		raw = []byte("{}")
 	}
+	return rn.ask(ctx, event{Type: "call", ToolID: toolID, Params: raw}, toolID)
+}
+
+// file asks wick for one wick.file op; wick does the IO, never the runner.
+func (rn *run) file(ctx context.Context, op, path, data string) callResult {
+	return rn.ask(ctx, event{Type: "file", Op: op, Path: path, Data: data}, "wick.file."+op)
+}
+
+// ask sends ev with a fresh id and waits for wick's answer to it.
+func (rn *run) ask(ctx context.Context, ev event, what string) callResult {
 	id := rn.r.nextCall.Add(1)
+	ev.ID = id
 	ch := make(chan callResult, 1)
 	rn.mu.Lock()
 	rn.pending[id] = ch
 	rn.mu.Unlock()
-	if err := rn.send(event{Type: "call", ID: id, ToolID: toolID, Params: raw}); err != nil {
+	if err := rn.send(ev); err != nil {
 		rn.mu.Lock()
 		delete(rn.pending, id)
 		rn.mu.Unlock()
@@ -127,7 +139,7 @@ func (rn *run) call(ctx context.Context, toolID string, params any) callResult {
 		rn.mu.Lock()
 		delete(rn.pending, id)
 		rn.mu.Unlock()
-		return callResult{Error: "run stopped while waiting for " + toolID}
+		return callResult{Error: "run stopped while waiting for " + what}
 	}
 }
 
@@ -170,6 +182,7 @@ const guard = `(() => {
 
 func (rn *run) exec(ctx context.Context, in runRequest) (out event) {
 	out.Type = "done"
+	out.Features = []string{featureFile}
 	defer func() {
 		if p := recover(); p != nil {
 			out.OK, out.Result = false, nil
@@ -207,7 +220,7 @@ func (rn *run) exec(ctx context.Context, in runRequest) (out event) {
 		out.Error = "setup: " + err.Error()
 		return out
 	}
-	if err := rn.bind(ctx, vm, in.Input); err != nil {
+	if err := rn.bind(ctx, vm, in.Input, slices.Contains(in.Features, featureFile)); err != nil {
 		out.Error = "setup: " + err.Error()
 		return out
 	}
@@ -271,8 +284,9 @@ func rejection(v goja.Value) string {
 }
 
 // bind installs the only globals a script gets beyond the language itself:
-// wick (call, callMany, tool), console and input.
-func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage) error {
+// wick (call, callMany, tool, file), console and input. files reports
+// whether wick answers file events.
+func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage, files bool) error {
 	throw := func(msg string) { panic(vm.NewGoError(fmt.Errorf("%s", msg))) }
 
 	call := func(toolID string, params any) any {
@@ -318,6 +332,7 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 		wg.Wait()
 		return out
 	})
+	_ = w.Set("file", rn.fileAPI(ctx, vm, throw, files))
 	if err := vm.Set("wick", w); err != nil {
 		return err
 	}
@@ -355,4 +370,56 @@ func decode(raw json.RawMessage) any {
 		return string(raw)
 	}
 	return v
+}
+
+// fileAPI is wick.file: read/write text or JSON, list and exists, all
+// relative to the project's codemode/ folder. Every op is a file event that
+// wick checks and performs; nothing here opens a file.
+func (rn *run) fileAPI(ctx context.Context, vm *goja.Runtime, throw func(string), files bool) *goja.Object {
+	do := func(op, path, data string) any {
+		if !files {
+			throw("wick.file." + op + ": this wick does not support wick.file yet (update wick)")
+		}
+		res := rn.file(ctx, op, path, data)
+		if !res.OK {
+			throw("wick.file." + op + " " + path + ": " + res.Error)
+		}
+		return decode(res.Result)
+	}
+	text := func(op string, v goja.Value) string {
+		if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+			throw("wick.file." + op + ": text is required")
+		}
+		return v.String()
+	}
+	f := vm.NewObject()
+	_ = f.Set("read", func(path string) any { return do("read", path, "") })
+	_ = f.Set("write", func(path string, data goja.Value) any { return do("write", path, text("write", data)) })
+	_ = f.Set("readJSON", func(path string) any {
+		s, _ := do("read", path, "").(string)
+		var v any
+		if err := json.Unmarshal([]byte(s), &v); err != nil {
+			throw("wick.file.readJSON " + path + ": not JSON: " + err.Error())
+		}
+		return v
+	})
+	_ = f.Set("writeJSON", func(path string, v goja.Value) any {
+		if v == nil || goja.IsUndefined(v) {
+			throw("wick.file.writeJSON: value is required")
+		}
+		b, err := json.MarshalIndent(v.Export(), "", "  ")
+		if err != nil {
+			throw("wick.file.writeJSON " + path + ": value is not JSON-serialisable: " + err.Error())
+		}
+		return do("write", path, string(b)+"\n")
+	})
+	_ = f.Set("list", func(dir goja.Value) any {
+		d := ""
+		if dir != nil && !goja.IsUndefined(dir) && !goja.IsNull(dir) {
+			d = dir.String()
+		}
+		return do("list", d, "")
+	})
+	_ = f.Set("exists", func(path string) any { return do("exists", path, "") })
+	return f
 }

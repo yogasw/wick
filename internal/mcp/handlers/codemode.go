@@ -44,7 +44,8 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 	}
 	timeout := time.Duration(intArg(args, "timeout_ms")) * time.Millisecond
 	sessionID := CallSession(r, args)
-	code, err := runCodeSource(layout, sessionID, args)
+	dir, noDir := sessionProjectDir(layout, sessionID)
+	code, err := runCodeSource(dir, noDir, args)
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), "")
 		return
@@ -61,7 +62,7 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		},
 		Describe: func(toolID string) (string, bool) { return describeTool(r.Context(), svc, toolID) },
 	}
-	res, err := host.Run(r.Context(), codemode.Request{Lang: lang, Code: code, Input: input, Timeout: timeout})
+	res, err := host.Run(r.Context(), codemode.Request{Lang: lang, Code: code, Input: input, Timeout: timeout, Dir: dir, NoDir: noDir})
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), "")
 		return
@@ -86,8 +87,9 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 
 // runCodeSource is the script wick_run_code runs: code inline, or
 // script_path read fresh on every run from the calling session's project
-// folder, with the watch code step's rules (scriptpath.Read).
-func runCodeSource(layout agentconfig.Layout, sessionID string, args map[string]any) (string, error) {
+// folder dir, with the watch code step's rules (scriptpath.Read). noDir
+// says why dir is empty.
+func runCodeSource(dir, noDir string, args map[string]any) (string, error) {
 	code, _ := args["code"].(string)
 	rel, _ := args["script_path"].(string)
 	rel = strings.TrimSpace(rel)
@@ -97,21 +99,30 @@ func runCodeSource(layout agentconfig.Layout, sessionID string, args map[string]
 	if rel == "" {
 		return code, nil
 	}
+	if dir == "" {
+		return "", errors.New("script_path: " + noDir + "; pass code instead")
+	}
+	return scriptpath.Read(dir, rel)
+}
+
+// sessionProjectDir is the calling session's project folder, used by
+// script_path and wick.file; the second value says why there is none.
+func sessionProjectDir(layout agentconfig.Layout, sessionID string) (string, string) {
 	if sessionID == "" {
-		return "", errors.New("script_path needs a session: it is read from the session's project folder; pass code instead")
+		return "", "no session, and the project folder comes from the session"
 	}
 	sess, err := session.Load(layout, sessionID)
 	if err != nil {
-		return "", fmt.Errorf("script_path: session %s: %w", sessionID, err)
+		return "", fmt.Sprintf("session %s: %v", sessionID, err)
 	}
 	if sess.Meta.ProjectID == "" || !project.Exists(layout, sess.Meta.ProjectID) {
-		return "", errors.New("script_path: this session has no project folder; pass code instead")
+		return "", "this session has no project folder"
 	}
 	dir, err := project.ResolvePath(layout, sess.Meta.ProjectID)
 	if err != nil {
-		return "", fmt.Errorf("script_path: project folder: %w", err)
+		return "", fmt.Sprintf("project folder: %v", err)
 	}
-	return scriptpath.Read(dir, rel)
+	return dir, ""
 }
 
 // RunCodeAs runs a script for a caller that has no HTTP request — a watch

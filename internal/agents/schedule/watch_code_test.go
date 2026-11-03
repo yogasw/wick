@@ -161,6 +161,9 @@ func TestExecuteWatch_CodeScriptPath(t *testing.T) {
 	if rec.Result != entity.WatchResultPending || f.runs[0].Code != src || rec.Steps[0].ScriptPath != "watches/rows.ts" {
 		t.Fatalf("rec=%+v code=%q", rec, f.runs[0].Code)
 	}
+	if f.runs[0].Dir != dir {
+		t.Fatalf("wick.file folder = %q, want %q", f.runs[0].Dir, dir)
+	}
 	if rec.Steps[0].CodeHash != hashText(src)[:16] {
 		t.Fatalf("hash: %s", rec.Steps[0].CodeHash)
 	}

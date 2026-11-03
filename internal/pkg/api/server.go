@@ -3709,7 +3709,7 @@ func NewServer() *Server {
 		},
 		func(ctx context.Context, run schedule.CodeRun, sessionID string, u *entity.User, tagIDs []string) (*schedule.CodeOutcome, error) {
 			ctx = mcp.WithAgentScope(ctx, sessionID)
-			res, err := mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, codemode.Request{Lang: run.Lang, Code: run.Code, Input: run.Input, Timeout: run.Timeout}, sessionID, u, tagIDs)
+			res, err := mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, codemode.Request{Lang: run.Lang, Code: run.Code, Input: run.Input, Timeout: run.Timeout, Dir: run.Dir, NoDir: run.NoDir}, sessionID, u, tagIDs)
 			if err != nil {
 				return nil, err
 			}

@@ -49,3 +49,14 @@ func TestValidate_RunCodeScriptPath(t *testing.T) {
 		}
 	}
 }
+
+// Inline code using wick.file needs the project whose codemode/ it uses.
+func TestValidate_RunCodeFileNeedsWorkspace(t *testing.T) {
+	code := `return wick.file.readJSON("items.json")`
+	if bad := errorPaths(Validate(wfWithNode(workflow.Node{Type: workflow.NodeRunCode, Code: code}))); !bad["graph.nodes[start].workspace"] {
+		t.Fatalf("missing workspace error; got %v", bad)
+	}
+	if ok := Validate(wfWithNode(workflow.Node{Type: workflow.NodeRunCode, Code: code, Workspace: "proj-1"})); len(ok.Errors) != 0 {
+		t.Fatalf("valid run_code rejected: %v", ok.Errors)
+	}
+}

@@ -235,7 +235,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"IN THE SCRIPT: `await wick.call(toolId, params)` returns the parsed result or throws; " +
 				"`wick.callMany([{toolId, params}, …])` runs calls in parallel and returns [{ok, toolId, result|error}]; " +
 				"`wick.tool(toolId)` gives a callable. `input` holds the input argument; console.log/warn/error go to logs. " +
-				"Top-level await and return are allowed. No fetch, timers, filesystem, require or process: connectors are the only way out. " +
+				"Top-level await and return are allowed. No fetch, timers, require or process: connectors are the only way out. " +
+				"FILES: wick.file.read/write(path[, text]), readJSON/writeJSON(path[, value]), list(dir?), exists(path) work ONLY inside codemode/ of this session's project folder (paths relative to it, 1 MB per file) — the way to hand a script big input or keep big output out of the reply. " +
 				"tool_ids and params are exactly the ones wick_search/wick_get give (same as wick_execute, account suffix @… included); " +
 				"wick_get at op level also returns `ts`, the ready-made call line with typed params. " +
 				"every tool_id written in the script is checked before the run starts. Calls run as this session, with its access.\n\n" +
@@ -914,7 +915,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"{kind:check, rules:[{path, op, value}], fail_rules:[…], match:all|any, extract:{name:path}} — tests the previous step's JSON, no code; " +
 				"{kind:bash, script, timeout_sec≤120} — bash -c in the project folder, input on stdin and $PREV, needs Bash allowed for your agent; " +
 				"{kind:code, code:\"<ts>\" | script_path:\"<relative to the project folder>\", lang:\"ts\"(default)|\"js\", params:{…}, timeout_sec≤120} — a Code Mode script (as in wick_run_code: wick.call/callMany as the watch's run-as user) for \"tell me what is NEW\": " +
-				"it gets input.snapshot (the snapshot it returned last fire, null on the first), input.prev (previous step's output) and input.params, and must return {changed:[…], snapshot, done?}; " +
+				"it gets input.snapshot (the snapshot it returned last fire, null on the first), input.prev (previous step's output) and input.params, and must return {changed:[…], snapshot, done?}; wick.file works in codemode/ of the watch's project folder; " +
 				"empty changed = pending (no LLM), non-empty = ok and you are woken with changed as the result, done:true ends the watch; the snapshot is kept by wick between fires (only after a run without error), every run records the script hash. " +
 				"Any step may add on_ok:\"next\"(default)|\"done\" and on_fail:\"done\"|\"pending\" (see ERRORS). " +
 				"CONTRACT — EVERY step, at any position, ends one of 3 ways: OK → next step (on the last step, or with on_ok=done: finish, outcome success, you get that step's output); " +
