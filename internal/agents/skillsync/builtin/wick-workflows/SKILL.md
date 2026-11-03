@@ -57,7 +57,7 @@ Node types include `classify`, `agent`, `connector`, `run_code`, `http`, `shell`
 logic between them in one node. Give `code` inline OR `script_path` (a file relative to the `workspace` project's
 folder, read fresh every run); `workspace` (project id) is also required when the script uses `wick.file`, which
 reads/writes only that project's `codemode/` folder. `input` is rendered as a template and must be JSON;
-`timeout_sec` (default 120, max 300). Output: `ok`, `result`, `logs`, `calls`, `error`. See the `wick-code-mode` skill.
+`timeout_sec` (default 120, max 300, unless the admin changed them in the agents settings). Output: `ok`, `result`, `logs`, `calls`, `error`. See the `wick-code-mode` skill.
 
 ## Triggers
 

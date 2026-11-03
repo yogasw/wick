@@ -234,7 +234,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Use wick_execute for a single small call or for one write you want to see on its own.\n\n" +
 				"IN THE SCRIPT: `await wick.call(toolId, params)` returns the parsed result or throws; " +
 				"`wick.callMany([{toolId, params}, …])` runs calls in parallel and returns [{ok, toolId, result|error}]; " +
-				"`wick.tool(toolId)` gives a callable. Each call has its own deadline (default 60s, never past the run's end): " +
+				"`wick.tool(toolId)` gives a callable. Each call has its own deadline (default 60s unless the admin changed it in the agents settings, never past the run's end): " +
 				"a call past it throws \"timed out after 60s\" like any failed call, so catch and retry; override with a third arg " +
 				"`wick.call(id, params, { timeout_ms })` (callMany items take `timeout_ms` too). `input` holds the input argument; console.log/warn/error go to logs. " +
 				"Top-level await and return are allowed. atob/btoa and TextEncoder/TextDecoder (utf-8) exist. No fetch, timers, require or process: connectors are the only way out. " +
@@ -271,7 +271,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"timeout_ms": map[string]any{
 						"type":        "integer",
-						"description": "Script time limit in ms. Default 120000 (2 min), max 300000 (5 min). Connector calls count toward it; on timeout the error names the call in flight.",
+						"description": "Script time limit in ms. Default 120000 (2 min), max 300000 (5 min), unless the admin changed them in the agents settings. Connector calls count toward it; on timeout the error names the call in flight.",
 					},
 				},
 			},
@@ -916,7 +916,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"STEP SCHEMA: {kind:connector, tool_id:\"conn:<connector_id>/<op>[@<account_id>]\", params:{…}} — same as wick_execute (get the op schema with wick_get first); " +
 				"{kind:check, rules:[{path, op, value}], fail_rules:[…], match:all|any, extract:{name:path}} — tests the previous step's JSON, no code; " +
 				"{kind:bash, script, timeout_sec≤120} — bash -c in the project folder, input on stdin and $PREV, needs Bash allowed for your agent; " +
-				"{kind:code, code:\"<ts>\" | script_path:\"<relative to the project folder>\", lang:\"ts\"(default)|\"js\", params:{…}, timeout_sec≤300 (default 120)} — a Code Mode script (as in wick_run_code: wick.call/callMany as the watch's run-as user) for \"tell me what is NEW\": " +
+				"{kind:code, code:\"<ts>\" | script_path:\"<relative to the project folder>\", lang:\"ts\"(default)|\"js\", params:{…}, timeout_sec≤300 (default 120, unless the admin changed them in the agents settings)} — a Code Mode script (as in wick_run_code: wick.call/callMany as the watch's run-as user) for \"tell me what is NEW\": " +
 				"it gets input.snapshot (the snapshot it returned last fire, null on the first), input.prev (previous step's output) and input.params, and must return {changed:[…], snapshot, done?}; wick.file works in codemode/ of the watch's project folder; " +
 				"empty changed = pending (no LLM), non-empty = ok and you are woken with changed as the result, done:true ends the watch; the snapshot is kept by wick between fires (only after a run without error), every run records the script hash. " +
 				"Any step may add on_ok:\"next\"(default)|\"done\" and on_fail:\"done\"|\"pending\" (see ERRORS). " +

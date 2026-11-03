@@ -28,6 +28,8 @@ type run struct {
 	id   string
 	r    *runner
 	send func(event) error
+	// callDefault is a call's deadline when the script gives none.
+	callDefault time.Duration
 
 	vmMu sync.Mutex
 	vm   *goja.Runtime
@@ -40,7 +42,7 @@ type run struct {
 }
 
 func newRun(id string, r *runner, send func(event) error) *run {
-	return &run{id: id, r: r, send: send, pending: map[int64]chan callResult{}}
+	return &run{id: id, r: r, send: send, callDefault: callTimeout, pending: map[int64]chan callResult{}}
 }
 
 func (rn *run) interrupt(reason string) {
@@ -117,7 +119,7 @@ func (rn *run) call(ctx context.Context, toolID string, params any, timeoutMS in
 	if dl, ok := ctx.Deadline(); ok {
 		remaining = time.Until(dl)
 	}
-	d := callDeadline(timeoutMS, remaining)
+	d := callDeadline(timeoutMS, rn.callDefault, remaining)
 	// Wick ends the call at d; past d+callGrace with no answer the runner
 	// stops waiting itself.
 	cctx, cancel := context.WithTimeoutCause(ctx, d+callGrace, fmt.Errorf("timed out after %s", seconds(d)))
@@ -126,11 +128,11 @@ func (rn *run) call(ctx context.Context, toolID string, params any, timeoutMS in
 }
 
 // callDeadline is one call's deadline: ms when the script asked for one,
-// else callTimeout, never past what the run has left (a second is kept back
-// on the default so the script can still handle the failure). Same rule as
-// wick's codemode.callTimeout.
-func callDeadline(ms int64, remaining time.Duration) time.Duration {
-	t := min(callTimeout, remaining-time.Second)
+// else def (wick's call_timeout_ms), never past what the run has left (a
+// second is kept back on the default so the script can still handle the
+// failure). Same rule as wick's codemode.callTimeout.
+func callDeadline(ms int64, def, remaining time.Duration) time.Duration {
+	t := min(def, remaining-time.Second)
 	if ms > 0 {
 		t = time.Duration(ms) * time.Millisecond
 	}

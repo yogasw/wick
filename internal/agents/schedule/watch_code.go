@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/codemode"
 	"github.com/yogasw/wick/internal/codemode/scriptpath"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -36,11 +37,8 @@ import (
 const StepKindCode = "code"
 
 const (
-	codeMaxBytes   = 64 << 10 // inline code
-	codeMaxTimeout = 300
-	// codeDefaultTimeout matches wick_run_code's default (codemode.DefaultTimeout).
-	codeDefaultTimeout = 120 * time.Second
-	codeDefaultLang    = "ts"
+	codeMaxBytes    = 64 << 10 // inline code
+	codeDefaultLang = "ts"
 	// codeQueueSlack is how long a code step may wait for a busy runner on
 	// top of its own timeout.
 	codeQueueSlack = 2 * time.Minute
@@ -114,8 +112,9 @@ func validateCode(s *Step, at string) error {
 	if s.Lang == "" {
 		s.Lang = codeDefaultLang
 	}
-	if s.TimeoutSec < 0 || s.TimeoutSec > codeMaxTimeout {
-		return fmt.Errorf("%s.timeout_sec: %d out of range; use 1-%d (default 120)", at, s.TimeoutSec, codeMaxTimeout)
+	// Same limits as wick_run_code, as the agents settings set them now.
+	if l := codemode.CurrentLimits(); s.TimeoutSec < 0 || time.Duration(s.TimeoutSec)*time.Second > l.Max {
+		return fmt.Errorf("%s.timeout_sec: %d out of range; use 1-%d (default %d)", at, s.TimeoutSec, int(l.Max/time.Second), int(l.Default/time.Second))
 	}
 	if s.ToolID != "" || s.Script != "" || len(s.Rules)+len(s.FailRules) > 0 {
 		return fmt.Errorf("%s: a code step takes code or script_path (+ lang, params, timeout_sec) only", at)
@@ -180,10 +179,7 @@ func runCodeStep(ctx context.Context, m entity.ScheduledMessage, s Step, i int, 
 	if err != nil {
 		return r, fmt.Errorf("input: %w", err)
 	}
-	timeout := codeDefaultTimeout
-	if s.TimeoutSec > 0 {
-		timeout = time.Duration(s.TimeoutSec) * time.Second
-	}
+	timeout := codemode.CurrentLimits().Clamp(time.Duration(s.TimeoutSec) * time.Second)
 	cctx, cancel := context.WithTimeout(ctx, timeout+codeQueueSlack)
 	defer cancel()
 	res, err := x.code(cctx, m, CodeRun{Lang: s.Lang, Code: src, Input: in, Timeout: timeout,

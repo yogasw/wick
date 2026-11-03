@@ -19,7 +19,7 @@ func TestCallDeadline(t *testing.T) {
 		{90000, 30 * time.Second, 30 * time.Second},
 		{0, -time.Second, minCallTimeout},
 	} {
-		if got := callDeadline(tc.ms, tc.remaining); got != tc.want {
+		if got := callDeadline(tc.ms, callTimeout, tc.remaining); got != tc.want {
 			t.Errorf("callDeadline(%d, %s) = %s, want %s", tc.ms, tc.remaining, got, tc.want)
 		}
 	}
@@ -83,5 +83,37 @@ func TestRunTimeoutIsFlagged(t *testing.T) {
 	ev, _ = f.run("js", `throw new Error("boom")`, nil, time.Second)
 	if ev.OK || ev.TimedOut {
 		t.Fatalf("got %+v", ev)
+	}
+}
+
+// A call with no timeout_ms of its own gets wick's call_timeout_ms (the
+// admin's setting), else the built-in default.
+func TestDefaultCallDeadlineFollowsWick(t *testing.T) {
+	for _, tc := range []struct {
+		sent int64
+		want int64
+	}{{0, callTimeout.Milliseconds()}, {90000, 90000}, {5000, 5000}} {
+		f := newFake(t, 0)
+		f.callTimeoutMS = tc.sent
+		ev, _ := f.run("ts", `return (await wick.call("conn:x/ok", {})).tool`, nil, 200*time.Second)
+		if !ev.OK {
+			t.Fatalf("run failed: %s", ev.Error)
+		}
+		if ms, _ := f.timeouts.Load("conn:x/ok"); ms != tc.want {
+			t.Errorf("call_timeout_ms %d: call timeout_ms = %v, want %d", tc.sent, ms, tc.want)
+		}
+	}
+}
+
+// wick decides the run's max: a run past the old 300s cap keeps its time, so
+// a call may ask for more than 300s.
+func TestRunTimeoutAboveOldCapIsKept(t *testing.T) {
+	f := newFake(t, 0)
+	ev, _ := f.run("ts", `return (await wick.call("conn:x/ok", {}, { timeout_ms: 350000 })).tool`, nil, 400*time.Second)
+	if !ev.OK {
+		t.Fatalf("run failed: %s", ev.Error)
+	}
+	if ms, _ := f.timeouts.Load("conn:x/ok"); ms != int64(350000) {
+		t.Fatalf("timeout_ms = %v, want 350000", ms)
 	}
 }

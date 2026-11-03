@@ -7,7 +7,7 @@
 //
 // Wire (all under /_wick/codemode/, unreachable from outside wick):
 //
-//	POST /run     {run_id, lang, code, input, timeout_ms, features}
+//	POST /run     {run_id, lang, code, input, timeout_ms, call_timeout_ms, features}
 //	              → 429 + status while the runner is over its memory share
 //	              → 200 NDJSON: {"type":"call",id,tool_id,params,timeout_ms}… {"type":"file",id,op,path,data}…
 //	                {"type":"done",ok,result,error,logs,features,timed_out}
@@ -39,6 +39,8 @@ import (
 const RunnerPrefix = "codemode_"
 
 const (
+	// DefaultTimeout, MaxTimeout and CallTimeout are the built-in limits;
+	// the agents settings override them (Limits, CurrentLimits).
 	DefaultTimeout = 120 * time.Second
 	MaxTimeout     = 300 * time.Second
 	// CallTimeout is one connector call's default deadline (shorter when the
@@ -188,12 +190,9 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 		req.Lang = "ts"
 	}
 	req.Lang = strings.ToLower(req.Lang)
-	if req.Timeout <= 0 {
-		req.Timeout = DefaultTimeout
-	}
-	if req.Timeout > MaxTimeout {
-		req.Timeout = MaxTimeout
-	}
+	// Read per run: a settings change applies to the next run.
+	limits := CurrentLimits()
+	req.Timeout = limits.Clamp(req.Timeout)
 	if len(req.Input) > 0 && !json.Valid(req.Input) {
 		return nil, errors.New("input must be JSON")
 	}
@@ -230,7 +229,8 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 	body, _ := json.Marshal(map[string]any{
 		"run_id": runID, "lang": req.Lang, "code": req.Code,
 		"input": rawOrNil(req.Input), "timeout_ms": req.Timeout.Milliseconds(),
-		"features": []string{FeatureFile},
+		"call_timeout_ms": limits.Call.Milliseconds(),
+		"features":        []string{FeatureFile},
 	})
 
 	// Queue: the runner answers 429 while its heap is over its share; wait
@@ -326,7 +326,7 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 					mu.Lock()
 					inflight[ev.ID], started[ev.ID] = c, t0
 					mu.Unlock()
-					txt, err := h.execCall(runCtx, callTimeout(ev.TimeoutMS, time.Until(deadline)), ev.ToolID, params)
+					txt, err := h.execCall(runCtx, callTimeout(ev.TimeoutMS, limits.Call, time.Until(deadline)), ev.ToolID, params)
 					if err != nil {
 						out.Error = err.Error()
 					} else {
@@ -426,10 +426,10 @@ type wireResult struct {
 }
 
 // callTimeout is one call's deadline: ms when the script asked for one,
-// else CallTimeout, never past what the run has left (a second is kept back
-// on the default so the script can still handle the failure).
-func callTimeout(ms int64, remaining time.Duration) time.Duration {
-	t := min(CallTimeout, remaining-time.Second)
+// else def (Limits.Call), never past what the run has left (a second is kept
+// back on the default so the script can still handle the failure).
+func callTimeout(ms int64, def, remaining time.Duration) time.Duration {
+	t := min(def, remaining-time.Second)
 	if ms > 0 {
 		t = time.Duration(ms) * time.Millisecond
 	}

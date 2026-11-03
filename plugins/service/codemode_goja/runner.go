@@ -21,6 +21,9 @@ type runRequest struct {
 	Code      string          `json:"code"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	TimeoutMS int64           `json:"timeout_ms,omitempty"`
+	// CallTimeoutMS is a call's default deadline, from wick's settings
+	// (0 = callTimeout, an older wick).
+	CallTimeoutMS int64 `json:"call_timeout_ms,omitempty"`
 	// Features wick speaks; "file" = it answers file events (wick.file).
 	Features []string `json:"features,omitempty"`
 }
@@ -71,7 +74,9 @@ type status struct {
 
 const (
 	defaultTimeout = 120 * time.Second
-	maxTimeout     = 300 * time.Second
+	// maxTimeout only bounds a nonsense timeout_ms: wick caps runs at the
+	// max its admin set (codemode.HardMaxTimeout at most).
+	maxTimeout = time.Hour
 	// callTimeout is one call's default deadline, as in wick. callGrace is
 	// how much longer the runner waits for wick's own timeout answer before
 	// giving up on the call itself (a wick that never answers).
@@ -212,6 +217,9 @@ func (r *runner) handleRun(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithTimeout(req.Context(), timeout)
 	defer cancel()
 	rn := newRun(in.RunID, r, send)
+	if in.CallTimeoutMS > 0 {
+		rn.callDefault = time.Duration(in.CallTimeoutMS) * time.Millisecond
+	}
 	r.mu.Lock()
 	if _, dup := r.runs[in.RunID]; dup {
 		r.mu.Unlock()

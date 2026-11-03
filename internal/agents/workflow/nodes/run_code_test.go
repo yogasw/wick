@@ -160,6 +160,24 @@ func TestRunCode_TimeoutClamped(t *testing.T) {
 	}
 }
 
+func TestRunCode_TimeoutFollowsSettings(t *testing.T) {
+	codemode.SetLimitsSource(func() codemode.Limits {
+		return codemode.Limits{Default: 30 * time.Second, Max: 600 * time.Second}
+	})
+	t.Cleanup(func() { codemode.SetLimitsSource(nil) })
+	cases := map[int]time.Duration{0: 30 * time.Second, 500: 500 * time.Second, 900: 600 * time.Second}
+	for sec, want := range cases {
+		f := &fakeRun{res: &codemode.Result{OK: true}}
+		n := workflow.Node{ID: "rc", Type: workflow.NodeRunCode, Code: "return 1", TimeoutSec: sec}
+		if _, err := NewRunCodeExecutor(runCodeRegistry(), f.fn).Execute(context.Background(), n, runCodeRC("owner-7")); err != nil {
+			t.Fatalf("timeout %d: %v", sec, err)
+		}
+		if f.req.Timeout != want {
+			t.Errorf("timeout_sec %d → %s, want %s", sec, f.req.Timeout, want)
+		}
+	}
+}
+
 func TestRunCode_NoRunnerNamesPlugin(t *testing.T) {
 	f := &fakeRun{err: codemode.ErrNoRunner}
 	n := workflow.Node{ID: "rc", Type: workflow.NodeRunCode, Code: "return 1"}

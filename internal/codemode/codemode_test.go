@@ -25,8 +25,10 @@ type fakeRunner struct {
 	crash   bool
 	// oldRunner leaves "file" out of done's features (a pre-0.2.0 runner).
 	oldRunner bool
-	// gotTimeout is the timeout_ms of the last run.
-	gotTimeout atomic.Int64
+	// gotTimeout / gotCallTimeout are the timeout_ms and call_timeout_ms
+	// of the last run.
+	gotTimeout     atomic.Int64
+	gotCallTimeout atomic.Int64
 }
 
 func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,11 +51,13 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			Code      string
-			TimeoutMS int64 `json:"timeout_ms"`
+			Code          string
+			TimeoutMS     int64 `json:"timeout_ms"`
+			CallTimeoutMS int64 `json:"call_timeout_ms"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		f.gotTimeout.Store(in.TimeoutMS)
+		f.gotCallTimeout.Store(in.CallTimeoutMS)
 		end := time.Now().Add(time.Duration(in.TimeoutMS) * time.Millisecond)
 		fl := w.(http.Flusher)
 		w.WriteHeader(http.StatusOK)
@@ -286,7 +290,7 @@ func TestCallTimeout(t *testing.T) {
 		{90000, 30 * time.Second, 30 * time.Second},
 		{0, 0, minCallTimeout},
 	} {
-		if got := callTimeout(tc.ms, tc.remaining); got != tc.want {
+		if got := callTimeout(tc.ms, CallTimeout, tc.remaining); got != tc.want {
 			t.Errorf("callTimeout(%d, %s) = %s, want %s", tc.ms, tc.remaining, got, tc.want)
 		}
 	}

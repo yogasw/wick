@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/yogasw/wick/internal/codemode"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -242,5 +244,25 @@ func TestRunner_CodeStepKeepsSnapshotAndEndsOnDone(t *testing.T) {
 	st := loadWatchState(watchStatePath(layout, *m))
 	if string(st.Snapshots["0"]) != `{"n":3}` {
 		t.Fatalf("stored snapshot: %s", st.Snapshots["0"])
+	}
+}
+
+// The code step follows the Code Mode limits in the agents settings: its
+// timeout_sec range and its default.
+func TestCodeStepFollowsCodemodeLimits(t *testing.T) {
+	codemode.SetLimitsSource(func() codemode.Limits {
+		return codemode.Limits{Default: 30 * time.Second, Max: 600 * time.Second}
+	})
+	t.Cleanup(func() { codemode.SetLimitsSource(nil) })
+	if err := ValidateSteps([]Step{{Kind: "code", Code: "return 1", TimeoutSec: 500}}); err != nil {
+		t.Fatalf("500s is within a raised max: %v", err)
+	}
+	if err := ValidateSteps([]Step{{Kind: "code", Code: "return 1", TimeoutSec: 601}}); err == nil {
+		t.Fatal("601s is past the max")
+	}
+	f := returns(`{"changed":[]}`)
+	runCode(t, watchExec{code: f.exec}, Step{Kind: "code", Code: "…"})
+	if f.runs[0].Timeout != 30*time.Second {
+		t.Fatalf("default timeout = %s, want 30s", f.runs[0].Timeout)
 	}
 }

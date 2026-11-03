@@ -25,7 +25,7 @@ type RunCodeSchema struct {
 	Workspace  string `wick:"key=workspace;desc=Project (workspace id) whose folder script_path is read from and whose codemode/ subfolder wick.file reads and writes. Required with script_path or wick.file."`
 	Lang       string `wick:"key=lang;dropdown=ts|js;desc=Script language (default ts)."`
 	Input      string `wick:"key=input;textarea;desc=Optional JSON handed to the script as input. Rendered as a template first, so {{.Node.<id>.<field>}} works, and must be valid JSON after rendering."`
-	Timeout    string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 120, max 300)."`
+	Timeout    string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 120, max 300, unless an admin changed them in the agents settings)."`
 }
 
 // RunCodeFn runs one Code Mode request with every wick.call executed as
@@ -180,16 +180,9 @@ func (e *RunCodeExecutor) source(n workflow.Node) (code, dir string, err error) 
 	return src, dir, nil
 }
 
-// runCodeTimeout clamps timeout_sec to Code Mode's limits.
+// runCodeTimeout clamps timeout_sec to Code Mode's limits in force.
 func runCodeTimeout(sec int) time.Duration {
-	if sec <= 0 {
-		return codemode.DefaultTimeout
-	}
-	d := time.Duration(sec) * time.Second
-	if d > codemode.MaxTimeout {
-		return codemode.MaxTimeout
-	}
-	return d
+	return codemode.CurrentLimits().Clamp(time.Duration(max(sec, 0)) * time.Second)
 }
 
 // runCodeOutput maps a Code Mode result into node fields. Calls become

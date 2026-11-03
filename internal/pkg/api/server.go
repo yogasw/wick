@@ -3534,6 +3534,11 @@ func NewServer() *Server {
 			}
 		},
 	}
+	// Code Mode limits come from the agents settings, read on every run so a
+	// change applies to the next one.
+	codemode.SetLimitsSource(func() codemode.Limits {
+		return codemode.ParseLimits(func(key string) string { return configsSvc.GetOwned("agents", key) })
+	})
 	// Code Mode: a run that finds no runner installs codemode_goja from the
 	// official catalog through the verified source path and loads it live
 	// (OnInstalled above), once for all concurrent runs.

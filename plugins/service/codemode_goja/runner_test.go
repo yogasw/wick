@@ -30,6 +30,9 @@ type fakeWick struct {
 	// wick); timeouts records each call's timeout_ms.
 	hang     map[string]bool
 	timeouts sync.Map
+	// callTimeoutMS is the call_timeout_ms wick sends (0 = none, an older
+	// wick).
+	callTimeoutMS int64
 }
 
 func newFake(t *testing.T, budget int) *fakeWick {
@@ -49,7 +52,7 @@ func newFake(t *testing.T, budget int) *fakeWick {
 func (f *fakeWick) run(lang, code string, input any, timeout time.Duration) (event, int) {
 	f.t.Helper()
 	in, _ := json.Marshal(input)
-	rr := runRequest{RunID: fmt.Sprintf("r%d", time.Now().UnixNano()), Lang: lang, Code: code, Input: in, TimeoutMS: timeout.Milliseconds()}
+	rr := runRequest{RunID: fmt.Sprintf("r%d", time.Now().UnixNano()), Lang: lang, Code: code, Input: in, TimeoutMS: timeout.Milliseconds(), CallTimeoutMS: f.callTimeoutMS}
 	if !f.noFiles {
 		rr.Features = []string{featureFile}
 	}
