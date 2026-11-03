@@ -15,6 +15,7 @@ import (
 	jobplugin "github.com/yogasw/wick/internal/jobs/plugin"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
+	sessionconnectorsexpiry "github.com/yogasw/wick/internal/jobs/session-connectors-expiry"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -40,6 +41,7 @@ func NewServer() *Server {
 	// the row in /admin/jobs.
 	connectorrunspurge.Register(db)
 	connectorrunsreaper.Register(db)
+	sessionconnectorsexpiry.Register()
 	syncMgr := providersync.New(db)
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)

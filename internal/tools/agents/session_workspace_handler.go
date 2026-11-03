@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"time"
+
 	"net/http"
 	"sort"
 	"strings"
@@ -49,6 +51,9 @@ type wsInstanceVM struct {
 	Label   string      `json:"label"`
 	Status  string      `json:"status"` // ready | needs_setup
 	Fields  []wsFieldVM `json:"fields"`
+	// ExpiresAt is the user-set expiry (RFC3339); empty = deleted when the
+	// session goes idle.
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 // wsTombstoneVM is the trace of a session instance that was auto-deleted for
@@ -177,7 +182,7 @@ func wsBaseAllowed(c *tool.Ctx, key string) bool {
 }
 
 func wsInstanceToVM(in sessionworkspace.Instance) wsInstanceVM {
-	vm := wsInstanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup"}
+	vm := wsInstanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt}
 	mod, ok := globalConnectors.Module(in.BaseKey)
 	if !ok {
 		return vm
@@ -404,6 +409,7 @@ func sessionWorkspaceDuplicateUI(c *tool.Ctx) {
 		Label:     inst.Label + " (copy)",
 		Config:    cfg,
 		CreatedBy: "user",
+		ExpiresAt: inst.ExpiresAt,
 	})
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
@@ -448,6 +454,34 @@ func sessionWorkspaceRenameUI(c *tool.Ctx) {
 		return
 	}
 	if err := sessionworkspace.SetLabel(globalLayout, sid, cid, body.Label); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	inst, _, _ := sessionworkspace.Get(globalLayout, sid, cid)
+	c.JSON(http.StatusOK, wsInstanceToVM(inst))
+}
+
+// sessionWorkspaceExpiryUI sets (expires_in, e.g. "4h") or clears
+// (expires_in "none") a session instance's expiry.
+func sessionWorkspaceExpiryUI(c *tool.Ctx) {
+	sid := c.PathValue("id")
+	cid := c.PathValue("cid")
+	if _, _, ok := wsResolve(c, sid, cid); !ok {
+		return
+	}
+	var body struct {
+		ExpiresIn string `json:"expires_in"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.Error(http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	ttl, err := sessionworkspace.ParseExpiresIn(body.ExpiresIn)
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := sessionworkspace.SetExpiry(globalLayout, sid, cid, sessionworkspace.ExpiryStamp(time.Now(), ttl)); err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}

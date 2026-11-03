@@ -555,7 +555,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Name: "wick_session_workspace",
 			Description: "Spin up throwaway connector instances scoped to the CURRENT SESSION — a private clone of a base connector " +
 				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
-				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while — action=list then reports them under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
+				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while, unless an expiry is set (expires_in): then they survive idleness and are deleted when it passes — action=list reports either kind under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
 				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
 				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +
@@ -565,6 +565,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
 				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
 				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
+				"'set_expiry' sets (expires_in, e.g. 4h) or clears (expires_in=none) an instance's expiry — set one when the user wants a connector kept longer than the idle window. " +
 				"'remove' deletes a session instance (use it to clean up an instance you no longer need). " +
 				"After adding+configuring, the instance's id shows in wick_list (pass the same session_id) and you wick_execute it like any connector.",
 			InputSchema: map[string]any{
@@ -572,8 +573,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"action": map[string]any{
 						"type":        "string",
-						"enum":        []string{"list", "add", "duplicate", "configure", "set_config", "test", "remove"},
-						"description": "list | add | duplicate | configure | set_config | test | remove.",
+						"enum":        []string{"list", "add", "duplicate", "configure", "set_config", "set_expiry", "test", "remove"},
+						"description": "list | add | duplicate | configure | set_config | set_expiry | test | remove.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
@@ -585,7 +586,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"connector_id": map[string]any{
 						"type":        "string",
-						"description": "The session instance id (sw_…) for duplicate/configure/set_config/test/remove.",
+						"description": "The session instance id (sw_…) for duplicate/configure/set_config/set_expiry/test/remove.",
 					},
 					"values": map[string]any{
 						"type":        "object",
@@ -594,6 +595,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"label": map[string]any{
 						"type":        "string",
 						"description": "action=add/duplicate: optional human label for the new instance.",
+					},
+					"expires_in": map[string]any{
+						"type":        "string",
+						"description": "action=add/set_expiry: keep the instance for this long (e.g. 90m, 4h, 2d; max 7d) even while the session is idle, then delete it. Omit (or none) for the default: deleted once the session sits idle.",
 					},
 					"prompt": map[string]any{
 						"type":        "boolean",

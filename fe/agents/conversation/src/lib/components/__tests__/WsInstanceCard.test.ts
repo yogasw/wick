@@ -310,4 +310,29 @@ describe("WsInstanceCard", () => {
     await fireEvent.click(saveBtn);
     expect(onSave).toHaveBeenCalledWith("cid-lock", { mode: "write" });
   });
+
+  test("no expiry picker without onExpiry", () => {
+    render(WsInstanceCard, { props: makeProps() });
+    expect(screen.queryByTestId("expiry-picker")).toBeNull();
+  });
+
+  test("expiry picker calls onExpiry with the chosen lifetime", async () => {
+    const onExpiry = vi.fn();
+    render(WsInstanceCard, { props: makeProps({ onExpiry }) });
+    const sel = screen.getByTestId("expiry-picker") as HTMLSelectElement;
+    await fireEvent.change(sel, { target: { value: "4h" } });
+    expect(onExpiry).toHaveBeenCalledWith("cid-1", "4h");
+  });
+
+  test("shows time left badge for a pinned instance", () => {
+    const inst: WsInstance = { ...INSTANCE_READY, expires_at: new Date(Date.now() + 3 * 3600_000 + 60_000).toISOString() };
+    render(WsInstanceCard, { props: makeProps({ instance: inst }) });
+    expect(screen.getByTestId("expiry-badge").textContent).toContain("3h");
+  });
+
+  test("no badge once the expiry passed", () => {
+    const inst: WsInstance = { ...INSTANCE_READY, expires_at: new Date(Date.now() - 60_000).toISOString() };
+    render(WsInstanceCard, { props: makeProps({ instance: inst }) });
+    expect(screen.queryByTestId("expiry-badge")).toBeNull();
+  });
 });

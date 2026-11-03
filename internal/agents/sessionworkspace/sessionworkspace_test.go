@@ -1,6 +1,7 @@
 package sessionworkspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -320,5 +321,128 @@ func TestOnChangeFiresForEveryMutation(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("failed mutation notified: %v", got)
+	}
+}
+
+func TestParseExpiresIn(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+		err  bool
+	}{
+		{"", 0, false},
+		{"none", 0, false},
+		{"90m", 90 * time.Minute, false},
+		{"4h", 4 * time.Hour, false},
+		{"2d", 48 * time.Hour, false},
+		{"7d", MaxExpiry, false},
+		{"8d", 0, true},
+		{"30s", 0, true},
+		{"soon", 0, true},
+	}
+	for _, c := range cases {
+		got, err := ParseExpiresIn(c.in)
+		if (err != nil) != c.err || got != c.want {
+			t.Errorf("ParseExpiresIn(%q) = %v, %v; want %v, err=%v", c.in, got, err, c.want, c.err)
+		}
+	}
+}
+
+func TestIdleSweepSparesPinnedInstance(t *testing.T) {
+	layout, _ := newLayout(t)
+	now := time.Now()
+	writeMeta(t, layout, "idle-old", session.StatusIdle, now.Add(-IdleGrace-time.Minute))
+	if _, err := Add(layout, "idle-old", Instance{BaseKey: "httprest", Label: "plain"}); err != nil {
+		t.Fatalf("add plain: %v", err)
+	}
+	if _, err := Add(layout, "idle-old", Instance{BaseKey: "httprest", Label: "pinned", ExpiresAt: ExpiryStamp(now, time.Hour)}); err != nil {
+		t.Fatalf("add pinned: %v", err)
+	}
+
+	remaining, err := sweepOnce(layout, now)
+	if err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	// The pinned one is the expiry job's, so the sweeper has nothing left.
+	if remaining != 0 {
+		t.Fatalf("expected 0 unpinned remaining, got %d", remaining)
+	}
+	got, _ := List(layout, "idle-old")
+	if len(got) != 1 || got[0].Label != "pinned" {
+		t.Fatalf("only the pinned instance should survive, got %+v", got)
+	}
+}
+
+func TestReapExpiredDeletesOnlyPastExpiry(t *testing.T) {
+	layout, _ := newLayout(t)
+	now := time.Now()
+	writeMeta(t, layout, "s1", session.StatusRunning, now)
+	past, err := Add(layout, "s1", Instance{BaseKey: "httprest", Label: "past", ExpiresAt: ExpiryStamp(now, time.Minute)})
+	if err != nil {
+		t.Fatalf("add past: %v", err)
+	}
+	if _, err := Add(layout, "s1", Instance{BaseKey: "httprest", Label: "future", ExpiresAt: ExpiryStamp(now, 3*time.Hour)}); err != nil {
+		t.Fatalf("add future: %v", err)
+	}
+	if _, err := Add(layout, "s1", Instance{BaseKey: "httprest", Label: "plain"}); err != nil {
+		t.Fatalf("add plain: %v", err)
+	}
+
+	var notified []Tombstone
+	SetReapNotify(func(_ string, tombs []Tombstone) { notified = tombs })
+	t.Cleanup(func() { SetReapNotify(nil) })
+
+	later := now.Add(2 * time.Hour)
+	n, err := ReapExpired(layout, later)
+	if err != nil || n != 1 {
+		t.Fatalf("ReapExpired: n=%d err=%v", n, err)
+	}
+	ws, _ := Load(layout, "s1")
+	if len(ws.Instances) != 2 {
+		t.Fatalf("future + plain should stay, got %+v", ws.Instances)
+	}
+	if len(notified) != 1 || notified[0].Label != "past" || notified[0].Reason != ReasonExpired {
+		t.Fatalf("notify should name only the expired one, got %+v", notified)
+	}
+	if _, ok, _ := Get(layout, "s1", past.ID); ok {
+		t.Error("expired instance should be gone")
+	}
+}
+
+func TestExpiredInstanceHiddenBeforeReap(t *testing.T) {
+	layout, sid := newLayout(t)
+	in, err := Add(layout, sid, Instance{BaseKey: "httprest", ExpiresAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if got, _ := List(layout, sid); len(got) != 0 {
+		t.Errorf("expired instance must not be listed, got %+v", got)
+	}
+	if _, ok, _ := Get(layout, sid, in.ID); ok {
+		t.Error("expired instance must not be gettable")
+	}
+}
+
+func TestSetExpiryPinsAndUnpins(t *testing.T) {
+	layout, sid := newLayout(t)
+	in, err := Add(layout, sid, Instance{BaseKey: "httprest"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	stamp := ExpiryStamp(time.Now(), 4*time.Hour)
+	if err := SetExpiry(layout, sid, in.ID, stamp); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if got, _, _ := Get(layout, sid, in.ID); got.ExpiresAt != stamp || !got.Pinned() {
+		t.Fatalf("pin not stored: %+v", got)
+	}
+	if err := SetExpiry(layout, sid, in.ID, ""); err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	if got, _, _ := Get(layout, sid, in.ID); got.Pinned() {
+		t.Fatalf("unpin not stored: %+v", got)
+	}
+	if err := SetExpiry(layout, sid, "sw_missing", stamp); !os.IsNotExist(errors.Unwrap(err)) {
+		t.Errorf("missing instance: want ErrNotExist, got %v", err)
 	}
 }

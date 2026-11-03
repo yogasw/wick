@@ -631,6 +631,7 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/workspace/{cid}", sessionWorkspaceSetUI)
 	r.POST("/sessions/{id}/workspace/{cid}/duplicate", sessionWorkspaceDuplicateUI)
 	r.POST("/sessions/{id}/workspace/{cid}/rename", sessionWorkspaceRenameUI)
+	r.POST("/sessions/{id}/workspace/{cid}/expiry", sessionWorkspaceExpiryUI)
 	r.POST("/sessions/{id}/workspace/{cid}/test", sessionWorkspaceTestUI)
 	r.DELETE("/sessions/{id}/workspace/{cid}", sessionWorkspaceRemoveUI)
 

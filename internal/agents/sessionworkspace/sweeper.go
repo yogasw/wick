@@ -95,10 +95,11 @@ func runSweeper(layout agentconfig.Layout) {
 	l.Debug().Msg("stopped (no instances left)")
 }
 
-// sweepOnce scans every session workspace once, reaping the instances of any
-// session that has gone idle past IdleGrace, and returns how many LIVE
-// instances remain across all sessions (in still-active sessions). The reaper
-// uses that count to decide whether to keep ticking.
+// sweepOnce scans every session workspace once, reaping the unpinned
+// instances of any session that has gone idle past IdleGrace, and returns how
+// many unpinned instances remain across all sessions (in still-active
+// sessions). The reaper uses that count to decide whether to keep ticking;
+// pinned instances are the expiry job's (ReapExpired), not this loop's.
 func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
 	// ListAll walks into the nested sub-agent sessions too. A sub-agent
 	// spins up its own connector instances, so scanning only the top level
@@ -116,24 +117,75 @@ func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
 		if err != nil || len(ws.Instances) == 0 {
 			continue // unreadable, or nothing live to reap (tombstones-only is fine)
 		}
+		unpinned := 0
+		for _, in := range ws.Instances {
+			if !in.Pinned() {
+				unpinned++
+			}
+		}
+		if unpinned == 0 {
+			continue
+		}
 		if sessionIdle(layout, sid, now) {
 			if n, rerr := reapAll(layout, sid, "session idle", now); rerr != nil {
 				log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace sweeper: reap failed")
 			} else if n > 0 {
 				log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: reaped idle session's connectors")
-				// Tell the agent its connectors are gone (silent turn). Fetch
-				// the tombstones just written so the message can name them.
-				if reapNotify != nil {
-					if tombs, terr := Tombstones(layout, sid); terr == nil && len(tombs) > 0 {
-						reapNotify(sid, tombs)
-					}
-				}
+				notifyReaped(layout, sid, n)
 			}
 			continue
 		}
-		remaining += len(ws.Instances)
+		remaining += unpinned
 	}
 	return remaining, nil
+}
+
+// ReapExpired deletes, across every session, the pinned instances whose
+// expiry passed, and returns how many it deleted. Run on a schedule by the
+// session-connectors-expiry job; a session's activity does not matter here —
+// the user chose the lifetime.
+func ReapExpired(layout agentconfig.Layout, now time.Time) (int, error) {
+	sessionIDs, err := session.ListAll(layout)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	total := 0
+	for _, sid := range sessionIDs {
+		ws, err := Load(layout, sid)
+		if err != nil || len(ws.Instances) == 0 {
+			continue
+		}
+		n, rerr := reapExpired(layout, sid, now)
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("session_id", sid).Msg("session workspace: expiry reap failed")
+			continue
+		}
+		if n > 0 {
+			log.Info().Str("session_id", sid).Int("reaped", n).Msg("session workspace: deleted expired connectors")
+			notifyReaped(layout, sid, n)
+			total += n
+		}
+	}
+	return total, nil
+}
+
+// notifyReaped tells the agent which connectors just went (silent turn): the
+// last n tombstones are the ones this reap wrote.
+func notifyReaped(layout agentconfig.Layout, sessionID string, n int) {
+	if reapNotify == nil {
+		return
+	}
+	tombs, err := Tombstones(layout, sessionID)
+	if err != nil || len(tombs) == 0 {
+		return
+	}
+	if n < len(tombs) {
+		tombs = tombs[len(tombs)-n:]
+	}
+	reapNotify(sessionID, tombs)
 }
 
 // sessionIdle reports whether a session is quiet enough to reap: it must not

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/askuser"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	"github.com/yogasw/wick/internal/connectors"
@@ -37,12 +37,12 @@ const sessionWorkspaceToolName = "wick_session_workspace"
 // Actions:
 //   - list:      session instances + the base connectors available to add
 //   - add:       create an instance from a base connector key, filled from
-//                values, or by the user in the fill modal when prompt:true
+//     values, or by the user in the fill modal when prompt:true
 //   - duplicate: copy an existing session instance (config and all)
 //   - configure:  open the fill modal so the user edits an instance's config
 //   - set_config: write config values directly (no modal) — for transports
-//                 with no UI (e.g. Slack) and automations. Secrets should be
-//                 passed as enc tokens so the plaintext never reaches the agent.
+//     with no UI (e.g. Slack) and automations. Secrets should be
+//     passed as enc tokens so the plaintext never reaches the agent.
 //   - test:       verify setup — base HealthCheck, or run a named operation
 //   - remove:     delete a session instance
 //
@@ -92,10 +92,12 @@ func WickSessionWorkspace(
 		sessionWorkspaceSetConfig(w, req, rsp, svc, layout, sessionID, args)
 	case "test":
 		sessionWorkspaceTest(w, r, req, rsp, svc, layout, sessionID, args, user)
+	case "set_expiry":
+		sessionWorkspaceSetExpiry(w, req, rsp, svc, layout, sessionID, args)
 	case "remove":
 		sessionWorkspaceRemove(w, req, rsp, layout, sessionID, args)
 	default:
-		rsp.ToolError(w, req.ID, "action must be one of: list, add, duplicate, configure, set_config, test, remove", sessionWorkspaceToolName)
+		rsp.ToolError(w, req.ID, "action must be one of: list, add, duplicate, configure, set_config, set_expiry, test, remove", sessionWorkspaceToolName)
 	}
 }
 
@@ -138,10 +140,13 @@ type instanceVM struct {
 	// tab): set_config / add values refuse them, so the agent knows up
 	// front.
 	Locked []string `json:"locked_keys,omitempty"`
+	// ExpiresAt is the user-set expiry (RFC3339); empty = deleted when the
+	// session goes idle.
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 func sessionWorkspaceVM(svc *connectors.Service, in sessionworkspace.Instance) instanceVM {
-	vm := instanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup"}
+	vm := instanceVM{ID: in.ID, BaseKey: in.BaseKey, Label: in.Label, Status: "needs_setup", ExpiresAt: in.ExpiresAt}
 	mod, ok := svc.Module(in.BaseKey)
 	if !ok {
 		return vm
@@ -219,10 +224,16 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 	if label == "" {
 		label = mod.Meta.Name + " (session)"
 	}
+	ttl, err := sessionworkspace.ParseExpiresIn(argString(args, "expires_in"))
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+		return
+	}
 	inst, err := sessionworkspace.Add(layout, sessionID, sessionworkspace.Instance{
 		BaseKey:   baseKey,
 		Label:     label,
 		CreatedBy: "ai",
+		ExpiresAt: sessionworkspace.ExpiryStamp(time.Now(), ttl),
 	})
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
@@ -253,10 +264,10 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 	}
 	reloaded, _, _ := sessionworkspace.Get(layout, sessionID, inst.ID)
 	writeWorkspaceResult(w, req, rsp, map[string]any{
-		"session_id":  sessionID,
-		"instance":    sessionWorkspaceVM(svc, reloaded),
-		"applied":     applied,
-		"note":        "Session instance created. It now appears in wick_list (pass this session_id). If config is still missing, write it with action=set_config when you hold the values, or call action=configure to let the user fill it in a modal.",
+		"session_id": sessionID,
+		"instance":   sessionWorkspaceVM(svc, reloaded),
+		"applied":    applied,
+		"note":       "Session instance created. It now appears in wick_list (pass this session_id). If config is still missing, write it with action=set_config when you hold the values, or call action=configure to let the user fill it in a modal.",
 	})
 }
 
@@ -288,6 +299,7 @@ func sessionWorkspaceDuplicate(w http.ResponseWriter, req RPCRequest, rsp Respon
 		Label:     label,
 		Config:    cfg,
 		CreatedBy: "ai",
+		ExpiresAt: orig.ExpiresAt,
 	})
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
@@ -473,6 +485,28 @@ func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest
 	}
 	writeWorkspaceResult(w, req, rsp, map[string]any{
 		"session_id": sessionID, "connector_id": cid, "ok": allOK, "report": report,
+	})
+}
+
+func sessionWorkspaceSetExpiry(w http.ResponseWriter, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, sessionID string, args map[string]any) {
+	cid := strings.TrimSpace(argString(args, "connector_id"))
+	if cid == "" {
+		rsp.ToolError(w, req.ID, "connector_id is required (the session instance to set the expiry on)", sessionWorkspaceToolName)
+		return
+	}
+	ttl, err := sessionworkspace.ParseExpiresIn(argString(args, "expires_in"))
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+		return
+	}
+	if err := sessionworkspace.SetExpiry(layout, sessionID, cid, sessionworkspace.ExpiryStamp(time.Now(), ttl)); err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+		return
+	}
+	inst, _, _ := sessionworkspace.Get(layout, sessionID, cid)
+	writeWorkspaceResult(w, req, rsp, map[string]any{
+		"session_id": sessionID,
+		"instance":   sessionWorkspaceVM(svc, inst),
 	})
 }
 

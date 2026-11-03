@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,68 @@ type Instance struct {
 	// Config tab) — drives the "agent added this, please fill it" notice.
 	CreatedBy string `json:"created_by,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+	// ExpiresAt (RFC3339) pins the instance to a fixed lifetime the user
+	// chose: it survives the session going idle and is deleted by the
+	// session-connectors-expiry job once this time passes. Empty = the
+	// default lifetime, reaped when the session sits idle past IdleGrace.
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// MaxExpiry caps how far ahead an instance may be pinned. The config holds
+// secrets, so even a pinned clone must not outlive a week of neglect.
+const MaxExpiry = 7 * 24 * time.Hour
+
+// Pinned reports whether the instance carries its own expiry, which exempts
+// it from the idle reap.
+func (in Instance) Pinned() bool { return in.ExpiresAt != "" }
+
+// Expired reports whether a pinned instance's expiry has passed. An
+// unparseable stamp counts as expired: a corrupt pin must not keep secrets
+// alive forever.
+func (in Instance) Expired(now time.Time) bool {
+	if in.ExpiresAt == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, in.ExpiresAt)
+	return err != nil || !now.Before(t)
+}
+
+// ParseExpiresIn turns a user-supplied lifetime ("90m", "4h", "2d") into a
+// duration. "", "0", "none" and "idle" mean "no pin" (zero). Anything above
+// MaxExpiry or below one minute is refused rather than silently clamped, so
+// the caller learns the real limit.
+func ParseExpiresIn(s string) (time.Duration, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "", "0", "none", "idle":
+		return 0, nil
+	}
+	var d time.Duration
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil {
+			return 0, fmt.Errorf("expires_in %q: want e.g. 90m, 4h or 2d", s)
+		}
+		d = time.Duration(n) * 24 * time.Hour
+	} else {
+		var err error
+		if d, err = time.ParseDuration(s); err != nil {
+			return 0, fmt.Errorf("expires_in %q: want e.g. 90m, 4h or 2d", s)
+		}
+	}
+	if d < time.Minute || d > MaxExpiry {
+		return 0, fmt.Errorf("expires_in %q: must be between 1m and %s", s, "7d")
+	}
+	return d, nil
+}
+
+// ExpiryStamp returns the ExpiresAt value for a lifetime starting now; zero
+// yields "" (unpinned).
+func ExpiryStamp(now time.Time, d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return now.Add(d).UTC().Format(time.RFC3339)
 }
 
 // Tombstone is the trace left behind when an instance is auto-reaped for
@@ -119,7 +182,14 @@ func List(layout agentconfig.Layout, sessionID string) ([]Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ws.Instances, nil
+	now := time.Now()
+	out := ws.Instances[:0]
+	for _, in := range ws.Instances {
+		if !in.Expired(now) {
+			out = append(out, in)
+		}
+	}
+	return out, nil
 }
 
 // Tombstones returns the traces of instances auto-reaped for inactivity in a
@@ -140,6 +210,9 @@ func Get(layout agentconfig.Layout, sessionID, instanceID string) (Instance, boo
 	}
 	for _, in := range ws.Instances {
 		if in.ID == instanceID {
+			if in.Expired(time.Now()) {
+				return Instance{}, false, nil
+			}
 			return in, true, nil
 		}
 	}
@@ -189,37 +262,76 @@ func Add(layout agentconfig.Layout, sessionID string, in Instance) (Instance, er
 	return in, nil
 }
 
-// reapAll removes EVERY instance in a session and records a tombstone for
-// each (config dropped), returning how many were reaped. Used by the sweeper
-// when a session has gone idle past the grace window — the instances existed
-// only for the duration of active work on that session. Tombstones accumulate
-// so the "deleted — re-create" notice survives across reloads; a later Add of
-// the same label clears its matching tombstone.
+// reapAll removes every UNPINNED instance in a session and records a
+// tombstone for each (config dropped), returning how many were reaped. Used by
+// the sweeper when a session has gone idle past the grace window — those
+// instances existed only for the duration of active work on that session.
+// Pinned instances (ExpiresAt set) are left for the expiry job. Tombstones
+// accumulate so the "deleted — re-create" notice survives across reloads; a
+// later Add of the same label clears its matching tombstone.
 func reapAll(layout agentconfig.Layout, sessionID, reason string, now time.Time) (int, error) {
+	return reapWhere(layout, sessionID, reason, now, func(in Instance) bool { return !in.Pinned() })
+}
+
+// reapExpired removes the pinned instances of a session whose expiry passed.
+func reapExpired(layout agentconfig.Layout, sessionID string, now time.Time) (int, error) {
+	return reapWhere(layout, sessionID, ReasonExpired, now, func(in Instance) bool { return in.Expired(now) })
+}
+
+// ReasonExpired is the tombstone reason of an instance deleted because the
+// expiry its user set passed.
+const ReasonExpired = "expired"
+
+func reapWhere(layout agentconfig.Layout, sessionID, reason string, now time.Time, drop func(Instance) bool) (int, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	ws, err := Load(layout, sessionID)
 	if err != nil {
 		return 0, err
 	}
-	if len(ws.Instances) == 0 {
-		return 0, nil
-	}
 	stamp := now.UTC().Format(time.RFC3339)
+	kept := make([]Instance, 0, len(ws.Instances))
+	n := 0
 	for _, in := range ws.Instances {
+		if !drop(in) {
+			kept = append(kept, in)
+			continue
+		}
 		ws.Tombstones = append(ws.Tombstones, Tombstone{
 			Label:     in.Label,
 			BaseKey:   in.BaseKey,
 			DeletedAt: stamp,
 			Reason:    reason,
 		})
+		n++
 	}
-	n := len(ws.Instances)
-	ws.Instances = nil
+	if n == 0 {
+		return 0, nil
+	}
+	ws.Instances = kept
 	if err := save(layout, sessionID, ws); err != nil {
 		return 0, err
 	}
 	return n, nil
+}
+
+// SetExpiry pins an instance to expiresAt (RFC3339), or unpins it with "" so
+// it goes back to the idle reap. Returns an os.ErrNotExist-wrapped error when
+// the instance is gone.
+func SetExpiry(layout agentconfig.Layout, sessionID, instanceID, expiresAt string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	ws, err := Load(layout, sessionID)
+	if err != nil {
+		return err
+	}
+	for i := range ws.Instances {
+		if ws.Instances[i].ID == instanceID {
+			ws.Instances[i].ExpiresAt = expiresAt
+			return save(layout, sessionID, ws)
+		}
+	}
+	return fmt.Errorf("session instance %q not found: %w", instanceID, os.ErrNotExist)
 }
 
 // SetConfig merges config values into an instance and persists. Keys

@@ -11,9 +11,42 @@
     onRename: (cid: string, label: string) => void;
     onDuplicate: (cid: string) => void;
     onDelete: (cid: string) => void;
+    /** Sets ("4h") or clears ("none") the expiry; omitted = no picker. */
+    onExpiry?: (cid: string, expiresIn: string) => void;
   };
 
-  let { instance, open = false, onSave, onTest, onRename, onDuplicate, onDelete }: Props = $props();
+  let { instance, open = false, onSave, onTest, onRename, onDuplicate, onDelete, onExpiry }: Props = $props();
+
+  /* Lifetimes the picker offers; the server caps at 7d. */
+  const EXPIRY_OPTIONS: { value: string; label: string }[] = [
+    { value: "none", label: "Until the session goes idle" },
+    { value: "1h", label: "Keep 1 hour" },
+    { value: "4h", label: "Keep 4 hours" },
+    { value: "1d", label: "Keep 1 day" },
+    { value: "3d", label: "Keep 3 days" },
+    { value: "7d", label: "Keep 7 days" },
+  ];
+
+  /* "3h 20m" / "2d 4h" until expires_at; "" when unpinned or already past. */
+  function timeLeft(expiresAt?: string): string {
+    if (!expiresAt) return "";
+    const ms = new Date(expiresAt).getTime() - Date.now();
+    if (!(ms > 0)) return "";
+    const mins = Math.ceil(ms / 60000);
+    const d = Math.floor(mins / 1440);
+    const h = Math.floor((mins % 1440) / 60);
+    const m = mins % 60;
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  }
+
+  function handleExpiryChange(e: Event) {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const v = sel.value;
+    sel.value = "";
+    if (v && onExpiry) onExpiry(instance.id, v);
+  }
 
   let isOpen = $state(false);
   let renaming = $state(false);
@@ -169,6 +202,14 @@
       {/if}
     </span>
 
+    {#if timeLeft(instance.expires_at)}
+      <span
+        class="shrink-0 rounded-full bg-white-300 dark:bg-navy-700 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-white-200"
+        title={`Deleted at ${new Date(instance.expires_at ?? "").toLocaleString()}`}
+        data-testid="expiry-badge"
+      >⏳ {timeLeft(instance.expires_at)}</span>
+    {/if}
+
     <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium " + statusBadgeCls(instance.status)}>
       {instance.status === "ready" ? "ready" : "needs setup"}
     </span>
@@ -239,6 +280,17 @@
 
       {#if saveError}
         <p class="text-xs font-medium text-neg-400" data-testid="save-error">{saveError}</p>
+      {/if}
+
+      {#if onExpiry}
+        <div class="space-y-1">
+          <select class={INPUT_CLASS} onchange={handleExpiryChange} data-testid="expiry-picker">
+            <option value="">{instance.expires_at ? `Expires ${new Date(instance.expires_at).toLocaleString()} — change…` : "Deleted when the session goes idle — keep longer…"}</option>
+            {#each EXPIRY_OPTIONS as o (o.value)}
+              <option value={o.value}>{o.label}</option>
+            {/each}
+          </select>
+        </div>
       {/if}
 
       <!-- Actions -->

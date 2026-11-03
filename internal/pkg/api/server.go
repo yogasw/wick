@@ -108,6 +108,7 @@ import (
 	jobplugin "github.com/yogasw/wick/internal/jobs/plugin"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
+	sessionconnectorsexpiry "github.com/yogasw/wick/internal/jobs/session-connectors-expiry"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
@@ -240,6 +241,7 @@ func NewServer() *Server {
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
 	connectorrunsreaper.Register(db)
+	sessionconnectorsexpiry.Register()
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -1326,14 +1328,18 @@ func NewServer() *Server {
 	// channel bubble.
 	sessionworkspace.SetReapNotify(func(sessionID string, tombs []sessionworkspace.Tombstone) {
 		names := make([]string, 0, len(tombs))
+		why := "this session went idle"
 		for _, t := range tombs {
 			label := t.Label
 			if strings.TrimSpace(label) == "" {
 				label = t.BaseKey
 			}
 			names = append(names, label)
+			if t.Reason == sessionworkspace.ReasonExpired {
+				why = "the expiry set on them passed"
+			}
 		}
-		msg := "[system] Your session connector(s) were auto-deleted because this session went idle: " +
+		msg := "[system] Your session connector(s) were auto-deleted because " + why + ": " +
 			strings.Join(names, ", ") + ". Their config (including secrets) is gone. " +
 			"This is context only — do not act on it now; if you need them again, re-create them."
 		if err := agentsPool.Send(context.Background(), sessionID, "", "reap", "system", msg); err != nil {
