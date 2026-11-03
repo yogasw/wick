@@ -94,3 +94,32 @@ describe("ToolCard hands the chip the file the call named", () => {
     await vi.waitFor(() => expect(load).toHaveBeenCalledWith("shots/a.png"));
   });
 });
+
+describe("ToolCard code mode header", () => {
+  const run = JSON.stringify({
+    ok: true, result: { n: 1 }, duration_ms: 1572, run_id: "r1",
+    calls: [{ tool_id: "conn:acme-1/a", ok: true, ms: 1 }, { tool_id: "conn:acme-1/b", ok: true, ms: 1 }, { tool_id: "conn:acme-1/a", ok: true, ms: 1 }],
+  });
+
+  it("counts the calls the run made, not the tool_ids the script names", () => {
+    const { container } = render(ToolCard, {
+      block: {
+        ...base,
+        toolName: "mcp__wick__wick_run_code",
+        toolInput: JSON.stringify({ script_path: "scripts/report.ts", input: { day: "x" } }),
+        // A display stored before the fix: it claimed 0 tools.
+        inputDisplay: { kind: "mcp", connector: "code mode", op: "ts", summary: "code mode · ts · 0 tools" },
+        result: JSON.stringify([{ type: "text", text: run }]),
+      },
+    });
+    expect(container.querySelector("[data-tool-description]")?.textContent).toBe("code mode · ts · report.ts · 3 calls");
+    expect(container.textContent).toContain("ok · 3 calls · 1572 ms");
+  });
+
+  it("before the result: no count at all", () => {
+    const { container } = render(ToolCard, {
+      block: { ...base, toolName: "mcp__wick__wick_run_code", toolInput: JSON.stringify({ code: "return 1" }), hasResult: false },
+    });
+    expect(container.querySelector("[data-tool-description]")?.textContent).toBe("code mode · ts · inline");
+  });
+});

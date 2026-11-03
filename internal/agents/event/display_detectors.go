@@ -284,10 +284,6 @@ func detectMCPCall(in DetectInput) (Display, bool) {
 	return d, true
 }
 
-// toolIDLiteral matches the tool_ids a wick_run_code script names (the
-// same shape internal/codemode pre-checks).
-var toolIDLiteral = regexp.MustCompile("conn:[A-Za-z0-9_.:-]+/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?")
-
 // codeModeCall shows a wick_run_code call as its script: the inline code
 // highlighted, or for script_path only the path (the card reads the file
 // through the session file endpoints, under the viewer's own access). The
@@ -307,15 +303,16 @@ func codeModeCall(d *Display, text string) {
 		d.Lang = "javascript"
 	}
 	d.Connector, d.Op = "code mode", lang
+	if t, ok := m["timeout_ms"].(float64); ok && t > 0 {
+		d.Timeout = int(t)
+	}
+	// No tool count here: the tool_ids a script names say nothing about the
+	// calls it makes (a script_path call names none, a loop calls one many
+	// times). The result card counts the calls the run actually made.
+	d.Summary = "code mode · " + lang + " · inline"
 	if p := str(m, "script_path"); p != "" && code == "" {
 		d.Path = p
 		d.Summary = "code mode · " + lang + " · " + path.Base(p)
-	} else {
-		seen := map[string]bool{}
-		for _, id := range toolIDLiteral.FindAllString(code, -1) {
-			seen[id] = true
-		}
-		d.Summary = fmt.Sprintf("code mode · %s · %d tool%s", lang, len(seen), plural(len(seen)))
 	}
 	if v, ok := m["input"]; ok && v != nil {
 		if b, err := json.MarshalIndent(v, "", "  "); err == nil {

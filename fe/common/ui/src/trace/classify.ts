@@ -451,9 +451,6 @@ registerTraceDetector(80, (in_) => {
   return d;
 });
 
-// Same shape internal/codemode pre-checks: the tool_ids a script names.
-const TOOL_ID_LITERAL = /conn:[A-Za-z0-9_.:-]+\/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?/g;
-
 /** A wick_run_code call shows its script: the inline code highlighted, or
     for script_path only the path (the card reads the file through the
     session file endpoints, under the viewer's own access). The input, when
@@ -469,13 +466,15 @@ function codeModeCall(d: TraceDisplay, text: string): void {
   d.lang = lang === "js" ? "javascript" : "typescript";
   d.connector = "code mode";
   d.op = lang;
+  if (typeof m.timeout_ms === "number" && m.timeout_ms > 0) d.timeout = Math.trunc(m.timeout_ms);
+  // No tool count here: the tool_ids a script names say nothing about the
+  // calls it makes (a script_path call names none, a loop calls one many
+  // times). The result card counts the calls the run actually made.
+  d.summary = `code mode · ${lang} · inline`;
   const p = str(m, "script_path");
   if (p && !code) {
     d.path = p;
     d.summary = `code mode · ${lang} · ${p.split("/").pop()}`;
-  } else {
-    const n = new Set(code.match(TOOL_ID_LITERAL) ?? []).size;
-    d.summary = `code mode · ${lang} · ${n} tool${n === 1 ? "" : "s"}`;
   }
   if (m.input !== undefined && m.input !== null) {
     d.parts = [{ kind: "json", lang: "json", title: "input", body: JSON.stringify(m.input, null, 2) }];

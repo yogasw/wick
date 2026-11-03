@@ -164,10 +164,10 @@ func TestCodeModeCallShowsScript(t *testing.T) {
 	if d.Kind != KindCodeMode || d.Lang != "typescript" || !strings.HasPrefix(d.Body, `const a = "conn:x-1/list"`) {
 		t.Fatalf("display = %+v", d)
 	}
-	if d.Summary != "code mode · ts · 2 tools" {
+	if d.Summary != "code mode · ts · inline" {
 		t.Fatalf("summary = %q", d.Summary)
 	}
-	if d := ClassifyCall("wick_run_code", `{"code":"return 1","lang":"js"}`); d.Lang != "javascript" || d.Summary != "code mode · js · 0 tools" {
+	if d := ClassifyCall("wick_run_code", `{"code":"return 1","lang":"js"}`); d.Lang != "javascript" || d.Summary != "code mode · js · inline" {
 		t.Fatalf("js display = %+v", d)
 	}
 }

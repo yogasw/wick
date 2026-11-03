@@ -9,7 +9,7 @@ afterEach(() => cleanup());
 const TOOL = "mcp__wick__wick_run_code";
 const CALLED = Date.parse("2026-01-02T03:04:05Z");
 const SCRIPT = 'const r = await wick.call("conn:acme-1/list_rows", {});\nreturn r.length;';
-const CALL = JSON.stringify({ script_path: "scripts/report.ts", input: { day: "2026-01-02" } });
+const CALL = JSON.stringify({ script_path: "scripts/report.ts", timeout_ms: 120000, input: { day: "2026-01-02" } });
 
 function ctx(st: TraceFileStat, over: Partial<TraceContext> = {}): TraceContext {
   return {
@@ -33,9 +33,13 @@ describe("code mode call card", () => {
     expect(c.statPath).toHaveBeenCalledWith("scripts/report.ts");
     expect(c.loadPath).toHaveBeenCalledWith("scripts/report.ts");
     expect(container.querySelector("[data-path]")?.textContent).toBe("scripts/report.ts");
-    expect(container.querySelector("[data-file-state]")).toBeNull();
-    // The input follows as its own titled part.
-    expect(container.querySelector("[data-trace-part-title]")?.textContent).toBe("input");
+    expect(container.querySelector("[data-file-state]")?.textContent).toBe("✓ same as run");
+    expect(container.querySelector("[data-script-title]")?.textContent).toBe("script · typescript · 2 lines");
+    expect(container.querySelector("[data-gutter]")?.textContent).toBe("1\n2");
+    // The input comes first, as its own titled part, then the script.
+    const title = container.querySelector("[data-trace-part-title]")!;
+    expect(title.textContent).toBe("input");
+    expect(title.compareDocumentPosition(container.querySelector("[data-trace-kind=codemode]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(container.textContent).toContain("2026-01-02");
   });
 
@@ -51,6 +55,7 @@ describe("code mode call card", () => {
     await waitFor(() => expect(container.querySelector("[data-script-note]")?.textContent).toContain("Can't open this file"));
     expect(c.loadPath).not.toHaveBeenCalled();
     expect(container.querySelector("[data-trace-kind=code]")).toBeNull();
+    expect(container.querySelector("[data-timeout]")?.textContent).toBe("timeout 2m");
   });
 
   it("deleted: says what ran can't be shown", async () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
-  import { TraceBody, isBinaryKind, type TraceDisplay, type TraceMedia } from "@wick-fe/common-ui";
+  import { TraceBody, classifyCall, classifyResult, isBinaryKind, type TraceDisplay, type TraceMedia } from "@wick-fe/common-ui";
   import type { TraceFiles } from "../api/files.js";
   import MediaLightbox from "./MediaLightbox.svelte";
 
@@ -212,9 +212,19 @@
   // The payload's display carries the body a Large index row lacks.
   const inputDisplay = $derived(loadedInputDisplay ?? block.inputDisplay);
   const resultDisplay = $derived(loadedResultDisplay ?? block.resultDisplay);
+  // A code mode run says what it did: "ok · 3 calls · 1572 ms", counted from
+  // the calls the run made — the script's text cannot tell (a script_path
+  // call carries none of it).
+  const isCodeMode = $derived(block.toolName.endsWith("wick_run_code"));
+  const codeModeRun = $derived.by(() => {
+    if (!isCodeMode || !displayResult) return "";
+    const s = classifyResult(block.toolName, displayResult).summary ?? "";
+    return /^(ok|failed) · \d+ calls? · /.test(s) ? s : "";
+  });
   // Collapsed result line: a binary reads as its chip text, never base64.
   const resultPreview = $derived(
-    resultDisplay && isBinaryKind(resultDisplay.kind)
+    codeModeRun ? codeModeRun
+    : resultDisplay && isBinaryKind(resultDisplay.kind)
       ? [resultDisplay.name, resultDisplay.summary].filter(Boolean).join(" · ")
       : displayResult !== undefined
         ? displayResult.slice(0, 80).replace(/\n/g, " ") + (displayResult.length > 80 ? "…" : "")
@@ -259,6 +269,13 @@
   // so the collapsed card says WHY the tool ran, not just which tool.
   const inputDescription = $derived.by(() => {
     if (!displayInput) return "";
+    // Code mode: re-read the call (a stored display may predate the file
+    // name in the summary) and add the calls the run made.
+    if (isCodeMode) {
+      const base = classifyCall(block.toolName, displayInput).summary ?? inputDisplay?.summary ?? "";
+      const calls = codeModeRun.split(" · ")[1];
+      return calls ? `${base} · ${calls}` : base;
+    }
     try {
       const d = (JSON.parse(displayInput) as { description?: unknown }).description;
       return typeof d === "string" ? d.trim() : (inputDisplay?.summary ?? "");

@@ -79,6 +79,14 @@
 
 </script>
 
+{#snippet parts()}
+  {#each d.parts ?? [] as p, i (i)}
+    {@const Part = getTraceRenderer(p.kind)}
+    {#if p.title}<p data-trace-part-title class="px-3 pt-2 text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">{p.title}</p>{/if}
+    <Part display={p} {ctx} />
+  {/each}
+{/snippet}
+
 <div data-trace-body data-kind={d.kind} class="text-xs">
   <div class="flex items-center gap-1 px-2 pt-1">
     <span class="mr-auto text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">{d.kind}{d.lang && d.lang !== d.kind ? ` · ${d.lang}` : ""}</span>
@@ -96,6 +104,8 @@
       <pre data-trace-raw-text class="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-black-800 dark:text-black-600">{rawPreview(rawText, binary || !!d.parts?.length)}</pre>
     </ScrollBox>
   {:else}
+    <!-- A code mode call reads input first, then the script it fed. -->
+    {#if d.kind === "codemode"}{@render parts()}{/if}
     {#if binary}
       <Renderer display={d} {ctx} />
     {:else}
@@ -103,11 +113,7 @@
         <Renderer display={d} {ctx} />
       </ScrollBox>
     {/if}
-    {#each d.parts ?? [] as p, i (i)}
-      {@const Part = getTraceRenderer(p.kind)}
-      {#if p.title}<p data-trace-part-title class="px-3 pt-2 text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">{p.title}</p>{/if}
-      <Part display={p} {ctx} />
-    {/each}
+    {#if d.kind !== "codemode"}{@render parts()}{/if}
   {/if}
   {#if banner}
     <p data-trace-truncated class="px-3 py-1.5 text-[10px] italic text-amber-700 dark:text-amber-300">{banner}</p>

@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { TraceContext, TraceDisplay } from "../types.js";
   import { getTraceHighlighter } from "../highlight.js";
-  type Props = { display: TraceDisplay; ctx?: TraceContext; code?: string; lang?: string };
-  let { display, code, lang }: Props = $props();
+  type Props = { display: TraceDisplay; ctx?: TraceContext; code?: string; lang?: string; wrap?: boolean };
+  // wrap=false keeps one source line per row, so a line-number gutter lines up.
+  let { display, code, lang, wrap = true }: Props = $props();
 
   const src = $derived(code ?? display.body ?? "");
   const language = $derived(lang ?? display.lang ?? "");
@@ -20,4 +21,4 @@
   });
 </script>
 
-<pre data-trace-kind="code" data-lang={language} class="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-black-900 dark:text-white-100"><code class={language ? `hljs language-${language}` : ""}>{#if highlighted !== null}{@html highlighted}{:else}{src}{/if}</code></pre>
+<pre data-trace-kind="code" data-lang={language} class="px-3 py-2 font-mono text-[11px] leading-relaxed {wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'} text-black-900 dark:text-white-100"><code class={language ? `hljs language-${language}` : ""}>{#if highlighted !== null}{@html highlighted}{:else}{src}{/if}</code></pre>

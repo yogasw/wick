@@ -44,34 +44,51 @@
 
   const fs = $derived(stat ? traceFileState(stat, undefined, ctx?.calledAt) : null);
   const tooLarge = $derived(stat?.status === "present" && (stat.size ?? 0) > MAX_SCRIPT_BYTES);
+  const src = $derived(display.path ? code : (display.body ?? ""));
+  const lineCount = $derived(src ? src.replace(/\n$/, "").split("\n").length : 0);
+  const gutter = $derived(Array.from({ length: lineCount }, (_, i) => i + 1).join("\n"));
+  const timeout = $derived(
+    display.timeout ? (display.timeout >= 60_000 && display.timeout % 60_000 === 0 ? `${display.timeout / 60_000}m` : `${Math.round(display.timeout / 1000)}s`) : "",
+  );
+  const langLabel = $derived(display.lang === "javascript" ? "javascript" : "typescript");
+  const chip = "shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px]";
 </script>
 
 <div data-trace-kind="codemode">
-  {#if display.path}
-    <div class="flex items-center gap-2 px-3 pt-2">
-      <span data-path class="min-w-0 flex-1 break-all font-mono text-[11px] text-black-800 dark:text-black-600">{display.path}</span>
-      {#if fs && fs.state !== "same"}
-        <span data-file-state={fs.state} title={fs.title} class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] {fs.state === 'changed' ? 'border-amber-500 text-amber-700 dark:text-amber-300' : 'border-red-400 text-red-600 dark:text-red-300'}">{fs.state === "unknown" ? "can't open" : fs.label}</span>
+  <div class="flex flex-wrap items-center gap-1.5 px-3 pt-2">
+    {#if display.path}
+      <span data-path class="{chip} border-white-300 dark:border-navy-600 break-all text-black-800 dark:text-black-600">{display.path}</span>
+      {#if fs}
+        <span
+          data-file-state={fs.state}
+          title={fs.title}
+          class="{chip} {fs.state === 'same' ? 'border-green-500 text-green-700 dark:text-green-300' : fs.state === 'changed' ? 'border-amber-500 text-amber-700 dark:text-amber-300' : 'border-red-400 text-red-600 dark:text-red-300'}"
+        >{fs.state === "same" ? "✓ same as run" : fs.state === "changed" ? "⚠ changed since run" : fs.state === "missing" ? "deleted" : "can't open"}</span>
       {/if}
-      <CopyButton text={display.path} label="Copy path" />
+    {:else}
+      <span data-inline class="{chip} border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600">inline</span>
+    {/if}
+    {#if timeout}<span data-timeout class="{chip} border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600">timeout {timeout}</span>{/if}
+    {#if display.path}<span class="ml-auto"><CopyButton text={display.path} label="Copy path" /></span>{/if}
+  </div>
+  {#if fs?.state === "changed"}
+    <p data-script-note class="px-3 pt-1 text-[10px] italic text-amber-700 dark:text-amber-300">Changed after this run: showing the file as it is now, not the script that ran.</p>
+  {:else if fs?.state === "missing"}
+    <p data-script-note class="px-3 py-1.5 text-[11px] text-black-600 dark:text-black-500">The script file was deleted; what ran can't be shown.</p>
+  {:else if fs?.state === "unknown"}
+    <p data-script-note class="px-3 py-1.5 text-[11px] text-black-600 dark:text-black-500">Can't open this file: no access to the session folder, or it is outside it.</p>
+  {:else if tooLarge}
+    <p data-script-note class="px-3 py-1.5 text-[11px] text-black-600 dark:text-black-500">The script file is larger than code mode runs (256 KB).</p>
+  {/if}
+  {#if failed}
+    <p data-script-note class="px-3 py-1.5 text-[11px] text-red-600 dark:text-red-300">{failed}</p>
+  {:else if src}
+    <p data-script-title class="px-3 pt-2 text-[10px] uppercase tracking-wide text-black-500 dark:text-black-600">script · {langLabel} · {lineCount} line{lineCount === 1 ? "" : "s"}{fs?.state === "changed" ? " · current version" : ""}</p>
+    <div class="flex">
+      <pre data-gutter aria-hidden="true" class="select-none py-2 pl-3 text-right font-mono text-[11px] leading-relaxed text-black-500 dark:text-black-600 opacity-60">{gutter}</pre>
+      <div class="min-w-0 flex-1 overflow-x-auto"><CodeBlock {display} code={src} wrap={false} /></div>
     </div>
-    {#if fs?.state === "changed"}
-      <p data-script-note class="px-3 pt-1 text-[10px] italic text-amber-700 dark:text-amber-300">Changed after this run: showing the file as it is now, not the script that ran.</p>
-    {:else if fs?.state === "missing"}
-      <p data-script-note class="px-3 py-1.5 text-[11px] text-black-600 dark:text-black-500">The script file was deleted; what ran can't be shown.</p>
-    {:else if fs?.state === "unknown"}
-      <p data-script-note class="px-3 py-1.5 text-[11px] text-black-600 dark:text-black-500">Can't open this file: no access to the session folder, or it is outside it.</p>
-    {:else if tooLarge}
-      <p data-script-note class="px-3 py-1.5 text-[11px] text-black-600 dark:text-black-500">The script file is larger than code mode runs (256 KB).</p>
-    {/if}
-    {#if failed}
-      <p data-script-note class="px-3 py-1.5 text-[11px] text-red-600 dark:text-red-300">{failed}</p>
-    {:else if code !== null}
-      <CodeBlock {display} {code} />
-    {:else if !stat}
-      <p class="px-3 py-1.5 text-[11px] text-black-500 dark:text-black-600">Loading script…</p>
-    {/if}
-  {:else}
-    <CodeBlock {display} />
+  {:else if display.path && !stat}
+    <p class="px-3 py-1.5 text-[11px] text-black-500 dark:text-black-600">Loading script…</p>
   {/if}
 </div>

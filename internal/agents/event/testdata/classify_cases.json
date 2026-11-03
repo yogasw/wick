@@ -273,7 +273,7 @@
   "lang": "typescript",
   "connector": "code mode",
   "op": "ts",
-  "summary": "code mode · ts · 2 tools"
+  "summary": "code mode · ts · inline"
  },
  {
   "name": "call: wick_run_code script_path with input",
