@@ -623,7 +623,7 @@
 
     {#each visible as s (s.id)}
       <div
-        class="rounded-xl border border-white-300 dark:border-navy-600 p-3 space-y-1.5"
+        class="rounded-xl border border-white-300 dark:border-navy-600 p-3 space-y-1.5 [content-visibility:auto] [contain-intrinsic-size:auto_9rem]"
         data-sid={s.id}
       >
         <!-- The summary opens the detail/edit modal. A real button so keyboard
@@ -684,7 +684,9 @@
           {/if}
         </div>
 
-        <p class="text-xs text-black-800 dark:text-white-200 whitespace-pre-wrap break-words">{s.message}</p>
+        <!-- Clamped: long prompts made the list heavy to scroll; the full
+             text is in the detail modal the row opens. -->
+        <p class="text-xs text-black-800 dark:text-white-200 whitespace-pre-wrap break-words line-clamp-3" data-testid="row-message">{s.message}</p>
 
         <!-- Meta line: next / last / count for recurring -->
         {#if s.kind === "recurring"}
