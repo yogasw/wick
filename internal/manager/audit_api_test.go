@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -114,5 +116,55 @@ func TestAPIAuditRunsPagination(t *testing.T) {
 	}
 	if len(got.Runs) != 3 {
 		t.Errorf("page 2 runs = %d, want 3 (remainder)", len(got.Runs))
+	}
+}
+
+func TestManagerRunsRedirectsToAdminAudit(t *testing.T) {
+	rec := httptest.NewRecorder()
+	redirectToAdminAudit(rec, httptest.NewRequest(http.MethodGet, "/manager/runs?source=code_mode&page=2", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/admin/audit?") || !strings.Contains(loc, "tab=calls") || !strings.Contains(loc, "source=code_mode") || !strings.Contains(loc, "page=2") {
+		t.Fatalf("location %q", loc)
+	}
+}
+
+type fakePlaces struct{}
+
+func (fakePlaces) SessionProject(sessionID string) string { return "p-" + sessionID }
+func (fakePlaces) ProjectName(projectID string) string    { return "Project " + projectID }
+
+func TestAPICodeRuns(t *testing.T) {
+	h, svc := newHistoryHandler(t)
+	h.places = fakePlaces{}
+	now := time.Now()
+	for _, run := range []entity.CodeModeRun{
+		{ID: "a", ProjectID: "p1", Via: entity.CodeModeViaMCP, Script: "inline", Status: entity.CodeModeRunOK, StartedAt: now},
+		{ID: "b", ProjectID: "p1", Via: entity.CodeModeViaWatch, Script: "watches/x.ts", Status: entity.CodeModeRunTimeout, ErrorMsg: "script timeout after 2s", StartedAt: now.Add(-time.Second)},
+	} {
+		if err := svc.RecordCodeRun(t.Context(), &run); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.apiCodeRuns(rec, adminReq(t, http.MethodGet, "/manager/api/codemode-runs?status=failed", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var got codeRunsJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Total != 1 || len(got.Runs) != 1 || got.Runs[0].ID != "b" || got.Runs[0].ProjectName != "Project p1" {
+		t.Fatalf("runs: %+v", got.Runs)
+	}
+	if got.Summary.Failed != 1 || got.Summary.ByStatus["timeout"] != 1 {
+		t.Fatalf("summary: %+v", got.Summary)
+	}
+	if len(got.Summary.TopProjects) != 1 || got.Summary.TopProjects[0].Label != "Project p1" {
+		t.Fatalf("top projects: %+v", got.Summary.TopProjects)
 	}
 }

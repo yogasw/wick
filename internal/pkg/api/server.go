@@ -2998,6 +2998,7 @@ func NewServer() *Server {
 		WithWebhookRoutes(tr.WebhookRoutes())
 	managerHandler.SetWebhookRoutesSource(pluginTools.WebhookRoutes)
 	managerHandler.SetCustomConnectors(customConnSvc)
+	managerHandler.SetAuditPlaces(auditPlaces{layout: agentsLayout})
 	if pluginMgr != nil {
 		managerHandler.SetPluginResolver(pluginMgr)
 	}
@@ -3720,6 +3721,7 @@ func NewServer() *Server {
 		},
 		func(ctx context.Context, run schedule.CodeRun, sessionID string, u *entity.User, tagIDs []string) (*schedule.CodeOutcome, error) {
 			ctx = mcp.WithAgentScope(ctx, sessionID)
+			ctx = mcphandlers.WithCodeRunOrigin(ctx, entity.CodeModeViaWatch, run.ScriptPath)
 			res, err := mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, codemode.Request{Lang: run.Lang, Code: run.Code, Input: run.Input, Timeout: run.Timeout, Dir: run.Dir, NoDir: run.NoDir}, sessionID, u, tagIDs)
 			if err != nil {
 				return nil, err

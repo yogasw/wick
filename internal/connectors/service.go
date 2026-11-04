@@ -2794,6 +2794,31 @@ func (s *Service) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary,
 	return s.repo.SummariseRuns(ctx, f)
 }
 
+// DistinctRunUsers lists the user ids with connector runs matching f.
+func (s *Service) DistinctRunUsers(ctx context.Context, f AuditFilter, limit int) ([]string, error) {
+	return s.repo.DistinctRunUsers(ctx, f, limit)
+}
+
+// RecordCodeRun stores one Code Mode script run for the audit.
+func (s *Service) RecordCodeRun(ctx context.Context, run *entity.CodeModeRun) error {
+	return s.repo.RecordCodeRun(ctx, run)
+}
+
+// ListCodeRuns pages the Code Mode run audit, newest first.
+func (s *Service) ListCodeRuns(ctx context.Context, f CodeRunFilter, limit, offset int) ([]entity.CodeModeRun, error) {
+	return s.repo.ListCodeRuns(ctx, f, limit, offset)
+}
+
+// CountCodeRuns counts the Code Mode runs matching f.
+func (s *Service) CountCodeRuns(ctx context.Context, f CodeRunFilter) (int64, error) {
+	return s.repo.CountCodeRuns(ctx, f)
+}
+
+// SummariseCodeRuns aggregates the Code Mode runs matching f.
+func (s *Service) SummariseCodeRuns(ctx context.Context, f CodeRunFilter) (CodeRunSummary, error) {
+	return s.repo.SummariseCodeRuns(ctx, f)
+}
+
 // PurgeOldRuns deletes ConnectorRun rows older than retentionDays.
 // Returns the number of rows removed. Called by the cleanup job on a
 // daily cadence (set up in a later phase).

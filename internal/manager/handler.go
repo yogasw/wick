@@ -42,6 +42,9 @@ type Handler struct {
 	// custom is the custom-connector service (nil until SetCustomConnectors
 	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
 	custom *customconn.Service
+	// places resolves a run's session to its project and a project to its
+	// name for the audit pages (SetAuditPlaces). nil = raw ids.
+	places AuditPlaces
 	// configDecorators: per-tool key → function that can mutate config rows
 	// before they are rendered (e.g. to inject dynamic dropdown options).
 	configDecorators map[string]func([]entity.Config) []entity.Config
@@ -172,14 +175,16 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// OAuth — public routes for connector user OAuth flows (no auth middleware).
 	h.oauthRoutes(mux)
 
-	// Audit log — cross-connector run history (admin only). The page route
-	// renders the SPA shell (client route "/audit"); the JSON twin stays.
-	mux.Handle("GET /manager/runs", adminOnly(http.HandlerFunc(h.serveSPAShell)))
+	// Audit log — cross-connector run history (admin only). The page moved
+	// into the admin chrome (Admin → Audit); old links keep their filters.
+	// The JSON twins stay here.
+	mux.Handle("GET /manager/runs", adminOnly(http.HandlerFunc(redirectToAdminAudit)))
 	mux.Handle("GET /api/runs", adminOnly(h.apiRuns))
 	mux.Handle("GET /api/runs/summary", adminOnly(h.apiRunsSummary))
 	// Audit log — resolved JSON twin for the manager SPA (connector + user
 	// names + summary in one call; coexists with the raw /api/runs above).
 	mux.Handle("GET /manager/api/runs", adminOnly(h.apiAuditRuns))
+	mux.Handle("GET /manager/api/codemode-runs", adminOnly(h.apiCodeRuns))
 }
 
 // ── Jobs ──────────────────────────────────────────────────────
@@ -367,3 +372,11 @@ func containsJSON(s string) bool {
 
 // ensure context import used
 var _ = context.Background
+
+// redirectToAdminAudit sends /manager/runs (and its filters) to the
+// connector-calls tab of /admin/audit.
+func redirectToAdminAudit(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("tab", "calls")
+	http.Redirect(w, r, "/admin/audit?"+q.Encode(), http.StatusFound)
+}

@@ -21,6 +21,9 @@ type auditRunJSON struct {
 	Status        string `json:"status"`
 	UserID        string `json:"user_id"`
 	UserName      string `json:"user_name"`
+	SessionID     string `json:"session_id"`
+	ProjectID     string `json:"project_id"`
+	ProjectName   string `json:"project_name"`
 	LatencyMs     int    `json:"latency_ms"`
 	StartedAt     string `json:"started_at"`
 }
@@ -40,11 +43,22 @@ type auditJSON struct {
 	Total      int                   `json:"total"`
 	PageSize   int                   `json:"page_size"`
 	Summary    connectors.RunSummary `json:"summary"`
+	// Users are the people with runs in the window (whatever the user
+	// filter), for the page's User dropdown.
+	Users []auditUserJSON `json:"users"`
+}
+
+type auditUserJSON struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // auditPageSize matches the legacy audit_log.templ page size so shared
 // links land on equivalent pages across both surfaces.
 const auditPageSize = 25
+
+// auditUserLimit caps the User dropdown of the audit page.
+const auditUserLimit = 200
 
 // apiAuditRuns serves GET /manager/api/runs: the cross-connector audit log
 // as resolved JSON for the manager SPA. Admin-only (gated by the route).
@@ -91,6 +105,20 @@ func (h *Handler) apiAuditRuns(w http.ResponseWriter, r *http.Request) {
 		PageSize:   auditPageSize,
 		Summary:    summary,
 	}
+	uf := f
+	uf.UserID = ""
+	if ids, err := h.connectors.DistinctRunUsers(ctx, uf, auditUserLimit); err == nil {
+		out.Users = make([]auditUserJSON, 0, len(ids))
+		for _, id := range ids {
+			name := usersByID[id]
+			if name == "" {
+				name = h.userLabel(ctx, id)
+			}
+			out.Users = append(out.Users, auditUserJSON{ID: id, Name: name})
+		}
+	}
+	sessionProject := map[string]string{}
+	projectName := map[string]string{}
 	for _, run := range runs {
 		row := auditRunJSON{
 			ID:           run.ID,
@@ -102,6 +130,20 @@ func (h *Handler) apiAuditRuns(w http.ResponseWriter, r *http.Request) {
 			UserName:     usersByID[run.UserID],
 			LatencyMs:    run.LatencyMs,
 			StartedAt:    run.StartedAt.Format(timeRFC3339),
+			SessionID:    run.SessionID,
+		}
+		if h.places != nil && run.SessionID != "" {
+			pid, ok := sessionProject[run.SessionID]
+			if !ok {
+				pid = h.places.SessionProject(run.SessionID)
+				sessionProject[run.SessionID] = pid
+			}
+			if pid != "" {
+				if _, ok := projectName[pid]; !ok {
+					projectName[pid] = h.places.ProjectName(pid)
+				}
+				row.ProjectID, row.ProjectName = pid, projectName[pid]
+			}
 		}
 		if c, ok := connectorsByID[run.ConnectorID]; ok {
 			row.ConnectorKey = c.Key

@@ -11,10 +11,21 @@
   import { getAuditRuns } from "$lib/api.js";
   import type { AuditResult, AuditFilter, AuditRun } from "$lib/types.js";
 
+  /* embedded: mounted inside the admin Audit page, where there is no SPA
+     router, so links leave the page instead of pushing a route. */
+  let { embedded = false }: { embedded?: boolean } = $props();
+
+  /* Every entity.ConnectorRunSource value. */
   const sourceOptions = [
     { label: "All sources", value: "" },
-    { label: "MCP", value: "mcp" },
+    { label: "MCP (agents)", value: "mcp" },
+    { label: "Code mode", value: "code_mode" },
+    { label: "Schedule / watch", value: "schedule" },
+    { label: "Workflow", value: "workflow" },
+    { label: "App", value: "app" },
+    { label: "Plugin", value: "plugin" },
     { label: "Test panel", value: "test" },
+    { label: "Plugin test", value: "plugin_test" },
     { label: "Retry", value: "retry" },
   ];
   const statusOptions = [
@@ -30,7 +41,11 @@
   let filter = $state<AuditFilter>(filterFromUrl());
 
   let runs = $derived(data?.runs ?? []);
-  let hasFilters = $derived(!!(filter.source || filter.status || filter.from || filter.to));
+  let hasFilters = $derived(!!(filter.source || filter.status || filter.user || filter.from || filter.to));
+  let userOptions = $derived([
+    { label: "All users", value: "" },
+    ...(data?.users ?? []).map((u) => ({ label: u.name || u.id, value: u.id })),
+  ]);
 
   function filterFromUrl(): AuditFilter {
     let q: URLSearchParams;
@@ -43,6 +58,7 @@
     return {
       source: q.get("source") ?? "",
       status: q.get("status") ?? "",
+      user: q.get("user") ?? "",
       from: q.get("from") ?? "",
       to: q.get("to") ?? "",
       page: Number.isFinite(page) && page > 0 ? page : 1,
@@ -51,8 +67,10 @@
 
   function syncFilterToUrl(f: AuditFilter): void {
     const params = new URLSearchParams();
+    if (embedded) params.set("tab", "calls");
     if (f.source) params.set("source", f.source);
     if (f.status) params.set("status", f.status);
+    if (f.user) params.set("user", f.user);
     if (f.from) params.set("from", f.from);
     if (f.to) params.set("to", f.to);
     if (f.page > 1) params.set("page", String(f.page));
@@ -70,7 +88,7 @@
   }
 
   function clearFilters(): void {
-    setFilter({ source: "", status: "", from: "", to: "" });
+    setFilter({ source: "", status: "", user: "", from: "", to: "" });
   }
 
   function gotoPage(page: number): void {
@@ -117,7 +135,9 @@
 
   function openConnector(run: AuditRun): void {
     if (run.connector_key && run.connector_id) {
-      push(`/connectors/${encodeURIComponent(run.connector_key)}/${encodeURIComponent(run.connector_id)}`);
+      const path = `/connectors/${encodeURIComponent(run.connector_key)}/${encodeURIComponent(run.connector_id)}`;
+      if (embedded) window.location.assign(`/manager${path}`);
+      else push(path);
     }
   }
 
@@ -132,12 +152,14 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Audit Log</h1>
-    <p class="mt-1 text-sm text-black-800 dark:text-black-600">Cross-connector run history — MCP calls, panel tests, and retries across every connector instance.</p>
+    {#if !embedded}
+      <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Audit Log</h1>
+    {/if}
+    <p class="mt-1 text-sm text-black-800 dark:text-black-600">Every connector call across every instance: agents, code mode, schedules, workflows, panel tests and retries.</p>
   </div>
 
   <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4">
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-4">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-5">
       <div>
         <label for="audit-source" class="block text-xs font-medium text-black-800 dark:text-black-600">Source</label>
         <div class="mt-1"><Select value={filter.source} options={sourceOptions} onChange={(v) => setFilter({ source: v })} /></div>
@@ -145,6 +167,10 @@
       <div>
         <label for="audit-status" class="block text-xs font-medium text-black-800 dark:text-black-600">Status</label>
         <div class="mt-1"><Select value={filter.status} options={statusOptions} onChange={(v) => setFilter({ status: v })} /></div>
+      </div>
+      <div>
+        <label for="audit-user" class="block text-xs font-medium text-black-800 dark:text-black-600">User</label>
+        <div class="mt-1"><Select value={filter.user ?? ""} options={userOptions} onChange={(v) => setFilter({ user: v })} /></div>
       </div>
       <div>
         <label for="audit-from" class="block text-xs font-medium text-black-800 dark:text-black-600">From</label>
@@ -189,6 +215,7 @@
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Source</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Status</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">User</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Project</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Latency</th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Time</th>
               </tr>
@@ -207,6 +234,7 @@
                   <td class="px-4 py-3 text-xs"><span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-medium text-black-700 dark:text-black-600">{run.source}</span></td>
                   <td class="px-4 py-3 text-xs"><span class="rounded-full px-2 py-0.5 font-medium {statusBadge[run.status] ?? statusBadge.running}">{run.status}</span></td>
                   <td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">{userLabel(run)}</td>
+                  <td class="px-4 py-3 text-xs text-black-800 dark:text-black-600" title={run.session_id || ""}>{run.project_name || run.project_id || "—"}</td>
                   <td class="px-4 py-3 text-right font-mono text-xs text-black-800 dark:text-black-600">{run.latency_ms > 0 ? `${run.latency_ms} ms` : "—"}</td>
                   <td class="px-4 py-3 text-xs text-black-800 dark:text-black-600"><span title={run.started_at}>{relativeTime(run.started_at)}</span></td>
                 </tr>

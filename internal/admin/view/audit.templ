@@ -1,0 +1,24 @@
+package view
+
+import "github.com/yogasw/wick/internal/entity"
+
+// AuditPage hosts the manager SPA's audit views (Code Mode runs and
+// connector calls) in the admin chrome. data-embed="audit" tells the
+// manager entry to mount only those views.
+templ AuditPage(vm PluginsSPAVM, user *entity.User) {
+	@AdminLayout("Admin · Audit", "audit", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="mb-4 text-lg font-semibold text-black-900 dark:text-white-100">Audit</h1>
+			if vm.AssetURL == "" {
+				<div class="text-sm text-neg-400">
+					Manager bundle not built yet. Run
+					<code class="font-mono">npm --workspace=@wick-fe/manager run build</code>
+					in <code class="font-mono">fe/</code> and refresh.
+				</div>
+			} else {
+				<div id="app" data-base={ vm.Base } data-embed="audit"></div>
+				<script type="module" src={ vm.AssetURL }></script>
+			}
+		</main>
+	}
+}

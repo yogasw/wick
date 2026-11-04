@@ -565,6 +565,11 @@ export interface AuditRun {
   status: string;
   user_id: string;
   user_name: string;
+  /* Agent session the call ran under and its project; empty for calls
+     without a session (PAT, panel test). */
+  session_id?: string;
+  project_id?: string;
+  project_name?: string;
   latency_ms: number;
   started_at: string;
 }
@@ -587,11 +592,76 @@ export interface AuditResult {
   total: number;
   page_size: number;
   summary: AuditSummary;
+  /* People with runs in the window, for the User filter. */
+  users?: { id: string; name: string }[] | null;
 }
 
 export interface AuditFilter {
   source: string;
   status: string;
+  user?: string;
+  from: string;
+  to: string;
+  page: number;
+}
+
+/* One Code Mode script run (agent tool call, CLI, watch step, workflow node). */
+export interface CodeRun {
+  id: string;
+  user_id: string;
+  user_name: string;
+  session_id: string;
+  project_id: string;
+  project_name: string;
+  via: string;
+  script: string;
+  lang: string;
+  runner: string;
+  status: string;
+  error: string;
+  calls: number;
+  call_errors: number;
+  duration_ms: number;
+  queued_ms: number;
+  started_at: string;
+}
+
+export interface CodeRunCount {
+  key: string;
+  label: string;
+  runs: number;
+  failed: number;
+}
+
+export interface CodeRunSummary {
+  total: number;
+  ok: number;
+  failed: number;
+  by_status: Record<string, number> | null;
+  avg_duration_ms: number;
+  calls: number;
+  call_errors: number;
+  top_users: CodeRunCount[] | null;
+  top_projects: CodeRunCount[] | null;
+  top_scripts: CodeRunCount[] | null;
+  top_errors: CodeRunCount[] | null;
+}
+
+export interface CodeRunResult {
+  runs: CodeRun[] | null;
+  page: number;
+  total_pages: number;
+  total: number;
+  page_size: number;
+  summary: CodeRunSummary;
+}
+
+export interface CodeRunFilter {
+  user: string;
+  project: string;
+  via: string;
+  status: string;
+  script: string;
   from: string;
   to: string;
   page: number;

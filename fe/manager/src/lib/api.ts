@@ -24,6 +24,8 @@ import type {
   ToolDetail,
   AuditResult,
   AuditFilter,
+  CodeRunResult,
+  CodeRunFilter,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager/api surface
@@ -462,12 +464,24 @@ export async function getAuditRuns(filter: AuditFilter): Promise<AuditResult> {
   const params = new URLSearchParams();
   if (filter.source) params.set("source", filter.source);
   if (filter.status) params.set("status", filter.status);
+  if (filter.user) params.set("user", filter.user);
   if (filter.from) params.set("from", filter.from);
   if (filter.to) params.set("to", filter.to);
   if (filter.page > 1) params.set("page", String(filter.page));
   const qs = params.toString();
   const path = qs ? `/manager/api/runs?${qs}` : "/manager/api/runs";
   const r = await apiGet<AuditResult>(path);
+  return { ...r, runs: r.runs ?? [] };
+}
+
+export async function getCodeRuns(filter: CodeRunFilter): Promise<CodeRunResult> {
+  const params = new URLSearchParams();
+  for (const k of ["user", "project", "via", "status", "script", "from", "to"] as const) {
+    if (filter[k]) params.set(k, filter[k]);
+  }
+  if (filter.page > 1) params.set("page", String(filter.page));
+  const qs = params.toString();
+  const r = await apiGet<CodeRunResult>(qs ? `/manager/api/codemode-runs?${qs}` : "/manager/api/codemode-runs");
   return { ...r, runs: r.runs ?? [] };
 }
 

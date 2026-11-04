@@ -749,6 +749,16 @@ func (r *Repo) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error)
 	return n, r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).Count(&n).Error
 }
 
+// DistinctRunUsers lists the user ids with runs matching f, busiest
+// first, for the audit page's User filter.
+func (r *Repo) DistinctRunUsers(ctx context.Context, f AuditFilter, limit int) ([]string, error) {
+	var ids []string
+	err := r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).
+		Where("user_id <> ''").Group("user_id").Order("COUNT(*) DESC").
+		Limit(limit).Pluck("user_id", &ids).Error
+	return ids, err
+}
+
 // RunSummary holds aggregated stats for a connector run query window.
 type RunSummary struct {
 	Total        int64   `json:"total"`
