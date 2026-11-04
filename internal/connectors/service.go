@@ -2794,6 +2794,16 @@ func (s *Service) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary,
 	return s.repo.SummariseRuns(ctx, f)
 }
 
+// AuditBreakdown groups the connector runs matching f for the audit summary.
+func (s *Service) AuditBreakdown(ctx context.Context, f AuditFilter) (AuditBreakdown, error) {
+	return s.repo.AuditBreakdown(ctx, f)
+}
+
+// AuditOptions lists instance/operation pairs with runs matching f.
+func (s *Service) AuditOptions(ctx context.Context, f AuditFilter, limit int) ([]AuditCount, error) {
+	return s.repo.AuditOptions(ctx, f, limit)
+}
+
 // DistinctRunUsers lists the user ids with connector runs matching f.
 func (s *Service) DistinctRunUsers(ctx context.Context, f AuditFilter, limit int) ([]string, error) {
 	return s.repo.DistinctRunUsers(ctx, f, limit)

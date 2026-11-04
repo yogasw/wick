@@ -1,19 +1,20 @@
 <script lang="ts">
   /* Root for /admin/audit: the audit views inside the admin chrome, with
      the toast host AppShell would otherwise supply. ?tab= picks the view
-     (codemode | calls) so a link lands on the right one. */
+     (calls | codemode) so a link lands on the right one; the audit is
+     about connectors, so connector calls come first. */
   import { ToastHost } from "@wick-fe/common-ui";
   import AuditLog from "./AuditLog.svelte";
   import CodeRuns from "./CodeRuns.svelte";
 
-  type Tab = "codemode" | "calls";
+  type Tab = "calls" | "codemode";
   const tabs: { key: Tab; label: string }[] = [
-    { key: "codemode", label: "Code mode runs" },
     { key: "calls", label: "Connector calls" },
+    { key: "codemode", label: "Code mode runs" },
   ];
 
   function tabFromUrl(): Tab {
-    return new URLSearchParams(window.location.search).get("tab") === "calls" ? "calls" : "codemode";
+    return new URLSearchParams(window.location.search).get("tab") === "codemode" ? "codemode" : "calls";
   }
 
   let tab = $state<Tab>(tabFromUrl());
@@ -37,9 +38,9 @@
   {/each}
 </nav>
 {#key tab}
-  {#if tab === "codemode"}
-    <CodeRuns />
-  {:else}
+  {#if tab === "calls"}
     <AuditLog embedded />
+  {:else}
+    <CodeRuns />
   {/if}
 {/key}

@@ -168,3 +168,67 @@ func TestAPICodeRuns(t *testing.T) {
 		t.Fatalf("top projects: %+v", got.Summary.TopProjects)
 	}
 }
+
+func (fakePlaces) SessionLabel(sessionID string) string { return "Chat " + sessionID }
+
+func TestAPIAuditRunsAdvancedFilterAndBreakdown(t *testing.T) {
+	h, svc := newHistoryHandler(t)
+	h.places = fakePlaces{}
+	row, _ := svc.Create(t.Context(), "slack", "Prod", map[string]string{}, "u-admin")
+	seedRun(t, svc, row.ID, entity.ConnectorRunSourceTest)
+	seedRun(t, svc, row.ID, entity.ConnectorRunSourceMCP)
+
+	get := func(q string) auditJSON {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.apiAuditRuns(rec, adminReq(t, http.MethodGet, "/manager/api/runs"+q, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d %s", q, rec.Code, rec.Body.String())
+		}
+		var got auditJSON
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+
+	if got := get("?connector=slack&op=send&source=mcp,test"); got.Total != 2 {
+		t.Fatalf("connector+op+source list: total %d", got.Total)
+	}
+	if got := get("?connector=github"); got.Total != 0 {
+		t.Fatalf("other connector type: total %d", got.Total)
+	}
+	if got := get("?instance=" + row.ID + "&source=mcp"); got.Total != 1 {
+		t.Fatalf("instance+source: total %d", got.Total)
+	}
+	from := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	if got := get("?from=" + from); got.Total != 2 {
+		t.Fatalf("from to the minute: total %d", got.Total)
+	}
+	if got := get("?to=" + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)); got.Total != 0 {
+		t.Fatalf("to an hour ago: total %d", got.Total)
+	}
+
+	got := get("?op=send")
+	if len(got.Breakdown.Instances) != 1 || got.Breakdown.Instances[0].Label != "Prod" || got.Breakdown.Instances[0].ConnectorKey != "slack" || got.Breakdown.Instances[0].Runs != 2 {
+		t.Fatalf("instances breakdown: %+v", got.Breakdown.Instances)
+	}
+	if len(got.Breakdown.Operations) != 1 || got.Breakdown.Operations[0].Op != "send" {
+		t.Fatalf("operations breakdown: %+v", got.Breakdown.Operations)
+	}
+	if len(got.Breakdown.Sources) != 2 {
+		t.Fatalf("sources breakdown: %+v", got.Breakdown.Sources)
+	}
+	// Options ignore the op filter so the pickers still list siblings.
+	if len(got.Options) != 1 || got.Options[0].Key != "slack" || len(got.Options[0].Instances) != 1 || got.Options[0].Instances[0].Ops[0] != "send" {
+		t.Fatalf("options: %+v", got.Options)
+	}
+
+	rec := httptest.NewRecorder()
+	req := adminReq(t, http.MethodGet, "/manager/api/runs/"+got.Runs[0].ID, nil)
+	req.SetPathValue("runID", got.Runs[0].ID)
+	h.apiAuditRun(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"connector_key":"slack"`) || !strings.Contains(rec.Body.String(), `"request"`) {
+		t.Fatalf("run detail: %d %s", rec.Code, rec.Body.String())
+	}
+}

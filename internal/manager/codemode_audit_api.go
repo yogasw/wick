@@ -16,6 +16,8 @@ import (
 type AuditPlaces interface {
 	SessionProject(sessionID string) string
 	ProjectName(projectID string) string
+	// SessionLabel is the session's title, "" when it has none or is gone.
+	SessionLabel(sessionID string) string
 }
 
 // SetAuditPlaces wires the session/project resolver the audit pages use.
@@ -202,14 +204,19 @@ func (h *Handler) userLabel(ctx context.Context, id string) string {
 	return id
 }
 
-// auditDateRange parses the from/to (YYYY-MM-DD) query values the audit
-// pages share; to covers its whole day. A bad value is ignored.
+// auditDateRange parses the from/to query values the audit pages share:
+// a date (YYYY-MM-DD, to covering its whole day) or an RFC3339 time, for
+// "who called this between 09:10 and 09:15". A bad value is ignored.
 func auditDateRange(fromStr, toStr string) (*time.Time, *time.Time) {
 	var from, to *time.Time
-	if t, err := time.Parse("2006-01-02", fromStr); err == nil {
+	if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
+		from = &t
+	} else if t, err := time.Parse("2006-01-02", fromStr); err == nil {
 		from = &t
 	}
-	if t, err := time.Parse("2006-01-02", toStr); err == nil {
+	if t, err := time.Parse(time.RFC3339, toStr); err == nil {
+		to = &t
+	} else if t, err := time.Parse("2006-01-02", toStr); err == nil {
 		eod := t.Add(24*time.Hour - time.Second)
 		to = &eod
 	}

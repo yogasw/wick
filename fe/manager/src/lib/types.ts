@@ -568,10 +568,52 @@ export interface AuditRun {
   /* Agent session the call ran under and its project; empty for calls
      without a session (PAT, panel test). */
   session_id?: string;
+  session_label?: string;
   project_id?: string;
   project_name?: string;
   latency_ms: number;
+  /* First line of the error, for the list. */
+  error?: string;
   started_at: string;
+}
+
+/* One connector call in full (GET /manager/api/runs/{id}). */
+export interface AuditRunDetail extends AuditRun {
+  account_id: string;
+  http_status: number;
+  ip_address: string;
+  user_agent: string;
+  parent_run_id: string;
+  ended_at: string;
+  error_full: string;
+  request: string;
+  response: string;
+}
+
+export interface AuditCount {
+  key: string;
+  label: string;
+  connector_key?: string;
+  op?: string;
+  project?: string;
+  runs: number;
+  failed: number;
+}
+
+export interface AuditBreakdown {
+  instances: AuditCount[] | null;
+  operations: AuditCount[] | null;
+  users: AuditCount[] | null;
+  sessions: AuditCount[] | null;
+  sources: AuditCount[] | null;
+  errors: AuditCount[] | null;
+}
+
+/* Connector type → its instances → each instance's operations. */
+export interface AuditConnectorOption {
+  key: string;
+  runs: number;
+  instances: { id: string; label: string; runs: number; ops: string[] | null }[] | null;
 }
 
 export interface AuditSummary {
@@ -594,12 +636,23 @@ export interface AuditResult {
   summary: AuditSummary;
   /* People with runs in the window, for the User filter. */
   users?: { id: string; name: string }[] | null;
+  breakdown?: AuditBreakdown;
+  options?: AuditConnectorOption[] | null;
 }
 
+/* Every audit filter. source/status/op/connector/instance/user take one
+   value or a comma list; from/to take YYYY-MM-DD or an ISO time. */
 export interface AuditFilter {
   source: string;
   status: string;
   user?: string;
+  connector?: string;
+  instance?: string;
+  op?: string;
+  session?: string;
+  error?: string;
+  min_ms?: string;
+  max_ms?: string;
   from: string;
   to: string;
   page: number;

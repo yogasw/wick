@@ -27,3 +27,11 @@ func (p auditPlaces) ProjectName(projectID string) string {
 	}
 	return pr.Meta.Name
 }
+
+func (p auditPlaces) SessionLabel(sessionID string) string {
+	sess, err := session.Load(p.layout, sessionID)
+	if err != nil {
+		return ""
+	}
+	return sess.Meta.Label
+}

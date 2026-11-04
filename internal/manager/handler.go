@@ -184,6 +184,7 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// Audit log — resolved JSON twin for the manager SPA (connector + user
 	// names + summary in one call; coexists with the raw /api/runs above).
 	mux.Handle("GET /manager/api/runs", adminOnly(h.apiAuditRuns))
+	mux.Handle("GET /manager/api/runs/{runID}", adminOnly(h.apiAuditRun))
 	mux.Handle("GET /manager/api/codemode-runs", adminOnly(h.apiCodeRuns))
 }
 

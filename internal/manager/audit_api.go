@@ -22,9 +22,11 @@ type auditRunJSON struct {
 	UserID        string `json:"user_id"`
 	UserName      string `json:"user_name"`
 	SessionID     string `json:"session_id"`
+	SessionLabel  string `json:"session_label"`
 	ProjectID     string `json:"project_id"`
 	ProjectName   string `json:"project_name"`
 	LatencyMs     int    `json:"latency_ms"`
+	Error         string `json:"error,omitempty"`
 	StartedAt     string `json:"started_at"`
 }
 
@@ -46,7 +48,50 @@ type auditJSON struct {
 	// Users are the people with runs in the window (whatever the user
 	// filter), for the page's User dropdown.
 	Users []auditUserJSON `json:"users"`
+	// Breakdown is where the matching runs went (per instance, operation,
+	// user, session, source, error); Options feed the connector → instance
+	// → operation pickers and ignore those three filters.
+	Breakdown auditBreakdownJSON   `json:"breakdown"`
+	Options   []auditConnectorJSON `json:"options"`
 }
+
+// auditCountJSON is one breakdown row with its key resolved for display.
+type auditCountJSON struct {
+	Key          string `json:"key"`
+	Label        string `json:"label"`
+	ConnectorKey string `json:"connector_key,omitempty"`
+	Op           string `json:"op,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Runs         int64  `json:"runs"`
+	Failed       int64  `json:"failed"`
+}
+
+type auditBreakdownJSON struct {
+	Instances  []auditCountJSON `json:"instances"`
+	Operations []auditCountJSON `json:"operations"`
+	Users      []auditCountJSON `json:"users"`
+	Sessions   []auditCountJSON `json:"sessions"`
+	Sources    []auditCountJSON `json:"sources"`
+	Errors     []auditCountJSON `json:"errors"`
+}
+
+// auditConnectorJSON is one connector type in the pickers, with its
+// instances and each instance's operations.
+type auditConnectorJSON struct {
+	Key       string              `json:"key"`
+	Runs      int64               `json:"runs"`
+	Instances []auditInstanceJSON `json:"instances"`
+}
+
+type auditInstanceJSON struct {
+	ID    string   `json:"id"`
+	Label string   `json:"label"`
+	Runs  int64    `json:"runs"`
+	Ops   []string `json:"ops"`
+}
+
+// auditOptionsLimit caps the instance/operation pairs behind the pickers.
+const auditOptionsLimit = 500
 
 type auditUserJSON struct {
 	ID   string `json:"id"`
@@ -117,6 +162,9 @@ func (h *Handler) apiAuditRuns(w http.ResponseWriter, r *http.Request) {
 			out.Users = append(out.Users, auditUserJSON{ID: id, Name: name})
 		}
 	}
+	names := h.newAuditNames(ctx)
+	out.Breakdown = h.auditBreakdown(ctx, f, names)
+	out.Options = h.auditOptions(ctx, f, names)
 	sessionProject := map[string]string{}
 	projectName := map[string]string{}
 	for _, run := range runs {
@@ -131,6 +179,10 @@ func (h *Handler) apiAuditRuns(w http.ResponseWriter, r *http.Request) {
 			LatencyMs:    run.LatencyMs,
 			StartedAt:    run.StartedAt.Format(timeRFC3339),
 			SessionID:    run.SessionID,
+			Error:        firstErrorLine(run.ErrorMsg),
+		}
+		if run.SessionID != "" {
+			row.SessionLabel = names.session(run.SessionID)
 		}
 		if h.places != nil && run.SessionID != "" {
 			pid, ok := sessionProject[run.SessionID]

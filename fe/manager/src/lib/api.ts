@@ -24,6 +24,7 @@ import type {
   ToolDetail,
   AuditResult,
   AuditFilter,
+  AuditRunDetail,
   CodeRunResult,
   CodeRunFilter,
 } from "./types.js";
@@ -460,18 +461,27 @@ export async function setToolConfig(key: string, configKey: string, value: strin
   await apiPost(`/manager/api/tools/${encodeURIComponent(key)}/configs/${encodeURIComponent(configKey)}`, { value });
 }
 
+/* AUDIT_FILTER_KEYS are the AuditFilter fields sent as query params, in
+   the order the URL shows them. */
+export const AUDIT_FILTER_KEYS = [
+  "connector", "instance", "op", "source", "status", "user", "session", "error", "min_ms", "max_ms", "from", "to",
+] as const;
+
 export async function getAuditRuns(filter: AuditFilter): Promise<AuditResult> {
   const params = new URLSearchParams();
-  if (filter.source) params.set("source", filter.source);
-  if (filter.status) params.set("status", filter.status);
-  if (filter.user) params.set("user", filter.user);
-  if (filter.from) params.set("from", filter.from);
-  if (filter.to) params.set("to", filter.to);
+  for (const k of AUDIT_FILTER_KEYS) {
+    const v = filter[k];
+    if (v) params.set(k, v);
+  }
   if (filter.page > 1) params.set("page", String(filter.page));
   const qs = params.toString();
   const path = qs ? `/manager/api/runs?${qs}` : "/manager/api/runs";
   const r = await apiGet<AuditResult>(path);
   return { ...r, runs: r.runs ?? [] };
+}
+
+export async function getAuditRun(id: string): Promise<AuditRunDetail> {
+  return apiGet<AuditRunDetail>(`/manager/api/runs/${encodeURIComponent(id)}`);
 }
 
 export async function getCodeRuns(filter: CodeRunFilter): Promise<CodeRunResult> {
