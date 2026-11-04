@@ -279,7 +279,9 @@ describe("Team tasks (team_message / @mention)", () => {
     expect(rosterStatus(row({ working_sessions: [{ id: "s1", label: "x", trigger: "Captain", action: "Bash" }] })).typing).toBe("for Captain · running Bash…");
     const own = rosterStatus(row({ working_sessions: ws("you") }));
     expect(own.work).toBe("replying");
-    expect(own.typing).toBe("for you · thinking…");
+    // The person's own chat: just what it does, no "for you".
+    expect(own.typing).toBe("thinking…");
+    expect(rosterStatus(row({ working_sessions: [{ id: "s1", label: "x", trigger: "you", action: "Bash" }] })).typing).toBe("running Bash…");
     expect(own.presence).toBe("working");
     // The main chat's own turn and Team waits keep their line.
     expect(rosterStatus(row({ status: "running", working_sessions: ws("you") })).work).toBe("thinking");
