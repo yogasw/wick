@@ -351,8 +351,9 @@ func (s *Channel) heardText(text string) string {
 	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(out)
 }
 
-// markWorking puts ⏳ on the replies a turn is about to work on; the turn's
-// end takes it off (clearWorking).
+// markWorking puts ⏳ on the reply a turn is working on, taking it off the
+// one it sat on before: a thread shows one marker, on its latest reply.
+// The turn's end takes it off (clearWorking).
 func (s *Channel) markWorking(sessionID, channelID string, ts []string) {
 	if len(ts) == 0 {
 		return
@@ -361,15 +362,30 @@ func (s *Channel) markWorking(sessionID, channelID string, ts []string) {
 	if s.working == nil {
 		s.working = map[string]workingMark{}
 	}
-	prev := s.working[sessionID]
-	if prev.channel == channelID {
-		ts = append(prev.ts, ts...)
-	}
+	prev, had := s.working[sessionID]
 	s.working[sessionID] = workingMark{channel: channelID, ts: ts}
 	s.mu.Unlock()
+	if had {
+		for _, t := range prev.ts {
+			s.reaction(reactionWorking, prev.channel, t, false)
+		}
+	}
 	for _, t := range ts {
 		s.reaction(reactionWorking, channelID, t, true)
 	}
+}
+
+// joinsRunningTurn reports whether a reply in sessionID's thread should go
+// to the agent now: a turn is running there and no reply is held, so it is
+// read inside that turn, like a message typed mid-turn in the web chat.
+func (s *Channel) joinsRunningTurn(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listenWaits[sessionID] != nil {
+		return false
+	}
+	t := s.turns[sessionID]
+	return t != nil && t.running
 }
 
 // clearWorking takes ⏳ off once sessionID's turn ended, answered or not.

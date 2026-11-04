@@ -229,6 +229,29 @@ func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
 	}
 }
 
+// A reply while the agent works in the thread goes to it at once, not
+// after the turn and a quiet thread.
+func TestListenReplyJoinsRunningTurn(t *testing.T) {
+	ch, _, got := listenChannel(t, "---\ndelay: 5\n---\n")
+	ch.turns["S"] = &turn{channelID: "C1", threadTS: "100.1", running: true}
+	ch.queueListenMessage(t.Context(), "S", listenMsg("UASKER", "sekalian yang EN ya"), nil)
+	select {
+	case r := <-got:
+		if r[0] != "sekalian yang EN ya" || r[1].(time.Duration) != 0 {
+			t.Fatalf("dispatched %v", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reply waited although a turn was running")
+	}
+	ch.mu.Lock()
+	held := ch.listenWaits["S"]
+	m := ch.working["S"]
+	ch.mu.Unlock()
+	if held != nil || len(m.ts) != 1 || m.ts[0] != "100.2" {
+		t.Fatalf("held=%v working=%+v", held, m)
+	}
+}
+
 // A heard reply is shown without Slack's markup: names, links, channels.
 func TestHeardTextDropsSlackMarkup(t *testing.T) {
 	ch := New(agentconfig.SlackChannelConfig{})
@@ -253,7 +276,7 @@ func TestListenWaitOneMarkerOnLatest(t *testing.T) {
 	}
 }
 
-// ⏳ sits on the replies a turn works on until the turn ends.
+// ⏳ sits on the latest reply a turn works on until the turn ends.
 func TestWorkingMarkClearedAtTurnEnd(t *testing.T) {
 	ch := New(agentconfig.SlackChannelConfig{})
 	ch.markWorking("S", "C1", []string{"100.2"})
@@ -261,7 +284,7 @@ func TestWorkingMarkClearedAtTurnEnd(t *testing.T) {
 	ch.mu.Lock()
 	m := ch.working["S"]
 	ch.mu.Unlock()
-	if m.channel != "C1" || len(m.ts) != 2 {
+	if m.channel != "C1" || len(m.ts) != 1 || m.ts[0] != "100.3" {
 		t.Fatalf("working = %+v", m)
 	}
 	ch.clearWorking("S")

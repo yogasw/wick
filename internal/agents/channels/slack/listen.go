@@ -477,6 +477,15 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 		s.dispatchListen(sessionID, ev, files, st, 0, false, auto)
 		return
 	}
+	// The agent is working in this thread right now: the reply joins that
+	// turn at once, as a message sent mid-turn in the web chat does, rather
+	// than waiting for the turn to end and then for the thread to go quiet.
+	// ⏳ moves onto it, so the thread shows one marker, on the latest reply.
+	if s.joinsRunningTurn(sessionID) {
+		s.markWorking(sessionID, ev.Channel, []string{ev.TimeStamp})
+		s.dispatchListen(sessionID, ev, files, st, 0, false, auto)
+		return
+	}
 	var (
 		report     *listenWait
 		reportWhat string
