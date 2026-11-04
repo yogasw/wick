@@ -449,9 +449,11 @@ type listenWait struct {
 	delay time.Duration
 	// holdID ties the hold's listen_held turns into one row in the web UI.
 	holdID string
-	// eyesTS is the reply carrying the bot's 👀, "" for none.
-	eyesTS  string
+	// eyes are the replies carrying the bot's 👀: every one the hold heard.
+	eyes    []string
 	channel string
+	// deadline is when the timer fires, for the web UI's countdown.
+	deadline time.Time
 }
 
 // queueListenMessage takes a plain reply in a listening thread: it goes to
@@ -475,7 +477,6 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	var (
 		report     *listenWait
 		reportWhat string
-		moveFrom   string
 	)
 	s.mu.Lock()
 	if s.listenWaits == nil {
@@ -486,7 +487,8 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	case w == nil:
 		w = &listenWait{ev: ev, files: files, author: ev.User, st: st, started: time.Now(),
 			auto: auto, delay: delay, channel: ev.Channel,
-			holdID: sessionID + "/" + ev.TimeStamp, eyesTS: ev.TimeStamp}
+			holdID: sessionID + "/" + ev.TimeStamp, eyes: []string{ev.TimeStamp},
+			deadline: time.Now().Add(delay)}
 		w.timer = time.AfterFunc(delay, func() { s.fireListenWait(sessionID, w) })
 		s.listenWaits[sessionID] = w
 		report, reportWhat = w, heldStateHeld
@@ -504,19 +506,28 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 			}
 		}
 		w.timer.Reset(wait)
-		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
+		w.deadline = time.Now().Add(wait)
+		w.eyes = append(w.eyes, ev.TimeStamp)
 		report, reportWhat = w, heldStateHeld
 	default:
 		if s.noteOtherLocked(sessionID, w) {
 			report, reportWhat = w, heldStateSkipped
+			break
 		}
+		// Someone else joined in: the agent reads once the thread goes
+		// quiet, so their reply waits with the asker's. The asker's
+		// message stays the one the turn answers.
+		w.timer.Reset(w.delay)
+		w.deadline = time.Now().Add(w.delay)
+		w.eyes = append(w.eyes, ev.TimeStamp)
+		report, reportWhat = w, heldStateHeld
 	}
 	s.mu.Unlock()
+	// Every reply is part of the conversation: it is in the session the
+	// moment it arrives, whether or not the agent ever answers it.
+	s.reportHeard(sessionID, report, ev, files)
 	switch reportWhat {
 	case heldStateHeld:
-		if moveFrom != "" && moveFrom != ev.TimeStamp {
-			s.heldReaction(ev.Channel, moveFrom, false)
-		}
 		s.heldReaction(ev.Channel, ev.TimeStamp, true)
 		s.reportHeld(sessionID, report, heldStateHeld, "")
 	case heldStateSkipped:
@@ -525,9 +536,15 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	_ = ctx
 }
 
-// heldReaction puts the bot's 👀 on a held reply, or takes it off. Quiet
-// when the API is not up (tests) or the reaction is already in that state.
+// heldReaction puts the bot's 👀 on a held reply, or takes it off.
 func (s *Channel) heldReaction(channelID, ts string, on bool) {
+	s.reaction(reactionHeld, channelID, ts, on)
+}
+
+// reaction puts one of the bot's listen markers on a reply, or takes it
+// off. Quiet when the API is not up (tests) or the reaction is already in
+// that state.
+func (s *Channel) reaction(name, channelID, ts string, on bool) {
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
@@ -537,13 +554,13 @@ func (s *Channel) heldReaction(channelID, ts string, on bool) {
 	ref := slackgo.ItemRef{Channel: channelID, Timestamp: ts}
 	var err error
 	if on {
-		err = api.AddReaction(reactionHeld, ref)
+		err = api.AddReaction(name, ref)
 	} else {
-		err = api.RemoveReaction(reactionHeld, ref)
+		err = api.RemoveReaction(name, ref)
 	}
 	if err != nil && !strings.Contains(err.Error(), "already_reacted") && !strings.Contains(err.Error(), "no_reaction") {
-		log.Debug().Str("channel", "slack").Str("slack_channel", channelID).Str("ts", ts).Bool("on", on).
-			Err(err).Msg("listen: held marker reaction failed")
+		log.Debug().Str("channel", "slack").Str("slack_channel", channelID).Str("ts", ts).Str("reaction", name).Bool("on", on).
+			Err(err).Msg("listen: marker reaction failed")
 	}
 }
 
@@ -553,8 +570,15 @@ func (s *Channel) releaseHeld(sessionID string, w *listenWait, state, why string
 	if w == nil {
 		return
 	}
-	s.heldReaction(w.channel, w.eyesTS, false)
+	s.clearHeldReactions(w)
 	s.reportHeld(sessionID, w, state, why)
+}
+
+// clearHeldReactions takes the bot's 👀 off every reply w heard.
+func (s *Channel) clearHeldReactions(w *listenWait) {
+	for _, ts := range w.eyes {
+		s.heldReaction(w.channel, ts, false)
+	}
 }
 
 // noteListenOther records that someone other than the asker (a person or
@@ -630,7 +654,8 @@ func (s *Channel) fireListenWait(sessionID string, w *listenWait) {
 		s.releaseHeld(sessionID, w, heldStateSkipped, "someone else answered meanwhile")
 		return
 	}
-	s.heldReaction(w.channel, w.eyesTS, false)
+	s.clearHeldReactions(w)
+	s.markWorking(sessionID, w.channel, w.eyes)
 	s.reportHeld(sessionID, w, heldStateSent, "")
 	s.dispatchListen(sessionID, w.ev, w.files, w.st, time.Since(w.started), others, w.auto)
 }

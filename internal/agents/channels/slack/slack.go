@@ -389,6 +389,10 @@ type Channel struct {
 	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
 	// heldFn records where a held reply stands for the web UI (SetHeldFn).
 	heldFn HeldFn
+	// heardFn records each reply a listening thread hears (SetHeardFn).
+	heardFn HeldFn
+	// working is where each session's ⏳ sits while its turn runs.
+	working map[string]workingMark
 
 	// userTokenCache maps Slack user ID → resolved xoxp token.
 	// Avoids repeated connectorToken lookups on every send call.
@@ -3745,6 +3749,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		}
 		s.stopStatusAnimation(t)
 		s.stopEditTicker(t)
+		defer s.clearWorking(sessionKey)
 		text = t.buf.String()
 		if !liveStreamText {
 			text = t.replyText()
@@ -3790,6 +3795,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.startBackgroundBanner(sessionKey)
 
 	case event.Error:
+		defer s.clearWorking(sessionKey)
 		s.mu.Lock()
 		t := s.turns[sessionKey]
 		held := false

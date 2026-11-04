@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	slackgo "github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
@@ -36,6 +37,9 @@ const (
 	// reactionHeld marks a reply wick is holding, from the moment it
 	// arrives until it goes to the agent or is dropped.
 	reactionHeld = "eyes" // 👀
+	// reactionWorking marks the replies a held turn is working on, from
+	// the moment they go to the agent until its turn ends.
+	reactionWorking = "hourglass_flowing_sand" // ⏳
 )
 
 // replyRule is one row of ChannelReplyRules.
@@ -158,6 +162,88 @@ func (s *Channel) SetHeldFn(fn HeldFn) {
 	s.mu.Unlock()
 }
 
+// SetHeardFn wires the recorder of the replies a listening thread hears:
+// each one lands in its session the moment it arrives, as the conversation
+// it is, before (and whether or not) the agent reads it. extras carry
+// hold_id, msg_ts, user and name; the text is the reply itself.
+func (s *Channel) SetHeardFn(fn HeldFn) {
+	s.mu.Lock()
+	s.heardFn = fn
+	s.mu.Unlock()
+}
+
+// reportHeard records one reply a listening thread heard. Best effort, like
+// reportHeld: no recorder means nothing is shown, never a lost reply.
+func (s *Channel) reportHeard(sessionID string, w *listenWait, ev *slackevents.MessageEvent, files []slackgo.File) {
+	s.mu.Lock()
+	fn := s.heardFn
+	s.mu.Unlock()
+	if fn == nil || ev == nil {
+		return
+	}
+	who := ev.User
+	if who == "" {
+		who = ev.BotID
+	}
+	extras := map[string]string{
+		"msg_ts": ev.TimeStamp,
+		"user":   who,
+		"name":   s.catchUpName(slackgo.Message{Msg: slackgo.Msg{User: ev.User, Username: ev.Username, BotID: ev.BotID}}),
+	}
+	if w != nil {
+		extras["hold_id"] = w.holdID
+	}
+	if len(files) > 0 {
+		names := make([]string, 0, len(files))
+		for _, f := range files {
+			names = append(names, f.Name)
+		}
+		extras["files"] = strings.Join(names, "\n")
+	}
+	fn(sessionID, ev.Text, extras)
+}
+
+// markWorking puts ⏳ on the replies a turn is about to work on; the turn's
+// end takes it off (clearWorking).
+func (s *Channel) markWorking(sessionID, channelID string, ts []string) {
+	if len(ts) == 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.working == nil {
+		s.working = map[string]workingMark{}
+	}
+	prev := s.working[sessionID]
+	if prev.channel == channelID {
+		ts = append(prev.ts, ts...)
+	}
+	s.working[sessionID] = workingMark{channel: channelID, ts: ts}
+	s.mu.Unlock()
+	for _, t := range ts {
+		s.reaction(reactionWorking, channelID, t, true)
+	}
+}
+
+// clearWorking takes ⏳ off once sessionID's turn ended, answered or not.
+func (s *Channel) clearWorking(sessionID string) {
+	s.mu.Lock()
+	m, ok := s.working[sessionID]
+	delete(s.working, sessionID)
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	for _, t := range m.ts {
+		s.reaction(reactionWorking, m.channel, t, false)
+	}
+}
+
+// workingMark is where a session's ⏳ sits.
+type workingMark struct {
+	channel string
+	ts      []string
+}
+
 // reportHeld records w's state for the web UI. Best effort: no recorder
 // wired means nothing is shown, never that the reply is lost.
 func (s *Channel) reportHeld(sessionID string, w *listenWait, state, why string) {
@@ -193,13 +279,15 @@ func (s *Channel) reportHeld(sessionID string, w *listenWait, state, why string)
 		mode = replyModeAuto
 	}
 	fn(sessionID, text, map[string]string{
-		"hold_id":    w.holdID,
-		"state":      state,
-		"mode":       mode,
-		"delay_sec":  fmt.Sprintf("%d", int(w.delay/time.Second)),
-		"started_ms": fmt.Sprintf("%d", w.started.UnixMilli()),
-		"user":       who,
-		"msg_ts":     w.ev.TimeStamp,
+		"hold_id":     w.holdID,
+		"state":       state,
+		"mode":        mode,
+		"delay_sec":   fmt.Sprintf("%d", int(w.delay/time.Second)),
+		"started_ms":  fmt.Sprintf("%d", w.started.UnixMilli()),
+		"deadline_ms": fmt.Sprintf("%d", w.deadline.UnixMilli()),
+		"heard":       fmt.Sprintf("%d", len(w.eyes)),
+		"user":        who,
+		"msg_ts":      w.ev.TimeStamp,
 	})
 }
 

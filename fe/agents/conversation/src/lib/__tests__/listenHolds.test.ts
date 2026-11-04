@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { linkListenHolds, permalinkTs, isProblemHold } from "../listenHolds.js";
+import { linkListenHolds, permalinkTs, isProblemHold, heardStatusOf } from "../listenHolds.js";
 
 type T = { turn_id: string; role: string; kind?: string; text: string; extras?: Record<string, string>; sender?: { permalink?: string } };
 const hold = (id: string, state: string, msg_ts = "", text = "Auto-reply · passed to the agent after 3s"): T =>
@@ -38,5 +38,17 @@ describe("linkListenHolds", () => {
     const out = linkListenHolds([hold("h1", "merged", "", "Listen · answered together with the mention"), user("u1")]);
     expect(out.turns.map((t) => t.turn_id)).toEqual(["u1"]);
     expect(isProblemHold("merged")).toBe(false);
+  });
+
+  test("a waiting hold is the thread's countdown, last, and heard replies know their hold's state", () => {
+    const heard = (id: string, hold_id: string): T => ({ turn_id: id, role: "system", kind: "thread_heard", text: "msg", extras: { hold_id } });
+    const waiting = hold("h1", "held");
+    const out = linkListenHolds([waiting, heard("m1", "S/h1"), heard("m2", "S/h1")]);
+    expect(out.turns.map((t) => t.turn_id)).toEqual(["m1", "m2", "h1"]);
+    expect(out.heard["S/h1"]).toBe("unread");
+    const sent = linkListenHolds([{ ...hold("h1", "sent"), extras: { ...hold("h1", "sent").extras, heard: "2", deadline_ms: "5000" } }, heard("m1", "S/h1"), user("u1")]);
+    expect(sent.heard["S/h1"]).toBe("read");
+    expect(sent.holds.u1).toMatchObject({ heard: 2, deadlineMs: 5000 });
+    expect(heardStatusOf("skipped")).toBe("dropped");
   });
 });

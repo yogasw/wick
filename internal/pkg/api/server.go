@@ -2346,6 +2346,10 @@ func NewServer() *Server {
 			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
 			})
+			// Each reply a listening thread hears lands in its session at once.
+			slackCh.SetHeardFn(func(sessionID, text string, extras map[string]string) {
+				agentstool.EmitSystemEvent(sessionID, store.KindThreadHeard, text, extras)
+			})
 
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {

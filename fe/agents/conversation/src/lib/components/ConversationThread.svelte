@@ -365,7 +365,7 @@
           <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
         </div>
       {:else}
-      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} reactions={reactionsAt[i]} />
+      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} heardStatus={turn.kind === "thread_heard" && turn.extras?.hold_id ? linkedHolds.heard[turn.extras.hold_id] : undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} reactions={reactionsAt[i]} />
       {/if}
     </div>
   {/each}

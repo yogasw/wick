@@ -179,6 +179,71 @@ func TestListenWaitOthersReplied(t *testing.T) {
 	}
 }
 
+// Every reply a listening thread hears lands in the session at once, and
+// someone else joining in restarts the wait like the asker does.
+func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
+	ch, _, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	var mu sync.Mutex
+	var heard []map[string]string
+	ch.SetHeardFn(func(sessionID, text string, extras map[string]string) {
+		mu.Lock()
+		defer mu.Unlock()
+		e := map[string]string{"text": text}
+		for k, v := range extras {
+			e[k] = v
+		}
+		heard = append(heard, e)
+	})
+	first := listenMsg("UASKER", "kenapa form-nya kosong?")
+	ch.queueListenMessage(t.Context(), "S", first, nil)
+	time.Sleep(600 * time.Millisecond)
+	other := listenMsg("UOTHER", "aku juga lihat begitu")
+	other.TimeStamp = "100.3"
+	ch.queueListenMessage(t.Context(), "S", other, []slackgo.File{{Name: "shot.png"}})
+	select {
+	case r := <-got:
+		if r[0] != "kenapa form-nya kosong?" || r[2] != true {
+			t.Fatalf("dispatched %v", r)
+		}
+		if r[1].(time.Duration) < 1500*time.Millisecond {
+			t.Fatalf("another reply did not restart the wait: waited %v", r[1])
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("held reply never went through")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != 2 {
+		t.Fatalf("heard %d replies, want 2: %v", len(heard), heard)
+	}
+	if heard[0]["text"] != "kenapa form-nya kosong?" || heard[0]["msg_ts"] != "100.2" || heard[0]["user"] != "UASKER" {
+		t.Fatalf("first heard = %v", heard[0])
+	}
+	if heard[1]["user"] != "UOTHER" || heard[1]["files"] != "shot.png" || heard[1]["hold_id"] != heard[0]["hold_id"] || heard[0]["hold_id"] == "" {
+		t.Fatalf("second heard = %v", heard[1])
+	}
+}
+
+// ⏳ sits on the replies a turn works on until the turn ends.
+func TestWorkingMarkClearedAtTurnEnd(t *testing.T) {
+	ch := New(agentconfig.SlackChannelConfig{})
+	ch.markWorking("S", "C1", []string{"100.2"})
+	ch.markWorking("S", "C1", []string{"100.3"})
+	ch.mu.Lock()
+	m := ch.working["S"]
+	ch.mu.Unlock()
+	if m.channel != "C1" || len(m.ts) != 2 {
+		t.Fatalf("working = %+v", m)
+	}
+	ch.clearWorking("S")
+	ch.mu.Lock()
+	_, left := ch.working["S"]
+	ch.mu.Unlock()
+	if left {
+		t.Fatal("working mark survived the turn")
+	}
+}
+
 // Stopping drops a held reply and records the stop, which beats a scope.
 func TestListenOffCancelsWait(t *testing.T) {
 	ch, fake, got := listenChannel(t, "---\ndelay: 1\n---\n")
