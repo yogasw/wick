@@ -1392,6 +1392,14 @@ func (s *Service) ProbeInstance(ctx context.Context, instanceID string, caller *
 			return ProbeResult{OK: false, Error: "no connected account — use Connect to sign in"}, nil
 		}
 		srv.AccessToken = tok
+		res := s.mcp(nil).Probe(ctx, srv, caller)
+		switch {
+		case res.OK:
+			s.recordInstanceAuth(ctx, instanceID, "")
+		case res.NeedsLogin:
+			s.recordInstanceAuth(ctx, instanceID, res.Error)
+		}
+		return res, nil
 	}
 	return s.mcp(nil).Probe(ctx, srv, caller), nil
 }

@@ -702,6 +702,17 @@ describe("ConnectorList custom MCP connector", () => {
     expect(screen.queryByText("yoga@abc.com")).toBeNull();
   });
 
+  it("keeps a stored auth failure flagged after a reload", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(
+      customData({ rows: [rowWithAuth({ auth_error: "refresh oauth token: invalid_grant" })] } as Partial<ConnectorListType>),
+    );
+    render(ConnectorList, { connectorKey: "n8n_new" });
+    await screen.findByText("Prod");
+
+    expect(screen.getByText(/Auth failed/)).toBeTruthy();
+    expect(screen.queryByText("yoga@abc.com")).toBeNull();
+  });
+
   it("does not flag a token that still has a refresh path", async () => {
     vi.mocked(api.getConnector).mockResolvedValue(
       customData({ rows: [rowWithAuth({ expired: false })] } as Partial<ConnectorListType>),

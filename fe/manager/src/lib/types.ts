@@ -58,6 +58,9 @@ export interface ConnectorMCPAuth {
   /* Token past its expiry with no refresh left — looks connected but every
      call will 401. Rendered as a red flag, not a reassuring account chip. */
   expired?: boolean;
+  /* Last auth refusal stored on the instance (failed refresh, refused
+     probe), so the red flag survives a reload until a token works again. */
+  auth_error?: string;
   /* Per-instance auth probe endpoint; empty when the caller can't configure. */
   test_url?: string;
   /* Per-user (SSO) instance: holds no credential itself, each user connects

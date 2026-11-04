@@ -116,3 +116,29 @@ func (f *flipOnSecondRead) GetOwned(owner, key string) string {
 	}
 	return f.fakeKeyStore.GetOwned(owner, key)
 }
+
+// A refused refresh is stored on the instance so the row stays flagged
+// after a reload; the next working token clears it.
+func TestInstanceAuthFailureIsRecorded(t *testing.T) {
+	svc, instanceID, _ := newProbeFixture(t)
+	tokenURL, _ := rotatingTokenServer(t)
+	meta := &oauthClientMeta{TokenEndpoint: tokenURL, ClientID: "cid"}
+	owner := "connector:" + instanceID
+	past := time.Now().Add(-time.Hour).Format(time.RFC3339)
+
+	setInstanceToken(svc, instanceID, "at-old", "rt-dead", past)
+	if _, err := svc.instanceAccessToken(context.Background(), meta, instanceID); err == nil {
+		t.Fatal("a dead refresh token must fail")
+	}
+	if got := svc.keys.GetOwned(owner, cfgOAuthError); got == "" {
+		t.Fatal("auth failure was not recorded on the instance")
+	}
+
+	setInstanceToken(svc, instanceID, "at-old", "rt-0", past)
+	if _, err := svc.instanceAccessToken(context.Background(), meta, instanceID); err != nil {
+		t.Fatalf("refresh with a live token: %v", err)
+	}
+	if got := svc.keys.GetOwned(owner, cfgOAuthError); got != "" {
+		t.Errorf("auth failure %q not cleared after a working refresh", got)
+	}
+}

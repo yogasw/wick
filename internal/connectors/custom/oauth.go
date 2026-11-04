@@ -71,6 +71,10 @@ const (
 	// save/connect path sets it — Enable SSO alone never diverts a legacy
 	// instance away from its own stored token.
 	cfgOAuthPerUser = "oauth_per_user"
+	// cfgOAuthError holds the last auth refusal (a failed refresh or a
+	// probe the server refused) so the row stays flagged across reloads;
+	// cleared by the next token that works or a fresh login.
+	cfgOAuthError = "oauth_auth_error"
 )
 
 // oauthLogin is one in-flight browser login, created by StartOAuthLogin
@@ -694,6 +698,7 @@ func oauthInstanceConfigs() []DefField {
 		{Key: cfgOAuthRefresh, Secret: true, Widget: "secret", Hidden: true, Desc: "OAuth refresh token (managed automatically)."},
 		{Key: cfgOAuthExpiry, Hidden: true, Desc: "Access token expiry (RFC3339, managed automatically)."},
 		{Key: cfgOAuthPerUser, Hidden: true, Desc: "Per-user (SSO) mode marker (managed automatically)."},
+		{Key: cfgOAuthError, Hidden: true, Desc: "Last auth failure for this instance (managed automatically)."},
 	}
 }
 
@@ -715,6 +720,7 @@ func (s *Service) persistInstanceTokens(ctx context.Context, instanceID string, 
 		cfgOAuthAccess:  t.AccessToken,
 		cfgOAuthRefresh: t.RefreshToken,
 		cfgOAuthExpiry:  expiry,
+		cfgOAuthError:   "",
 	}
 	if account != "" {
 		values[cfgOAuthAccount] = account
@@ -1062,7 +1068,9 @@ func (s *Service) instanceAccessToken(ctx context.Context, meta *oauthClientMeta
 		}
 	}
 	if err != nil {
-		return "", fmt.Errorf("refresh oauth token: %w", err)
+		err = fmt.Errorf("refresh oauth token: %w", err)
+		s.recordInstanceAuth(ctx, instanceID, err.Error())
+		return "", err
 	}
 	// Refresh keeps the stored account label — "" skips that key.
 	if err := s.persistInstanceTokens(ctx, instanceID, fresh, ""); err != nil {
@@ -1100,4 +1108,17 @@ func (s *Service) lockRefresh(key string) func() {
 	mu := m.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// recordInstanceAuth stores (msg != "") or clears the instance's last auth
+// failure. Best-effort: the verdict is display state, never a call error.
+func (s *Service) recordInstanceAuth(ctx context.Context, instanceID, msg string) {
+	owner := "connector:" + instanceID
+	if s.keys.GetOwned(owner, cfgOAuthError) == msg {
+		return
+	}
+	if err := s.keys.EnsureOwned(ctx, owner, FieldsToConfigs(oauthInstanceConfigs())...); err != nil {
+		return
+	}
+	_ = s.keys.SetOwned(ctx, owner, cfgOAuthError, msg)
 }

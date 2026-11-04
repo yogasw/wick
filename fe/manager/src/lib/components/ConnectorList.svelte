@@ -296,16 +296,18 @@
   }
 
   /* A row is flagged when the stored token is known-dead (expired, no
-     refresh) or the last probe refused it. */
+     refresh), the server recorded an auth failure, or the last probe in
+     this page refused it. */
   function authBroken(row: ConnectorRow): boolean {
     const v = authVerdicts[row.id];
     if (v) return !v.ok;
-    return row.mcp_auth?.expired === true;
+    return row.mcp_auth?.expired === true || !!row.mcp_auth?.auth_error;
   }
 
   function authBrokenReason(row: ConnectorRow): string {
     const v = authVerdicts[row.id];
     if (v && !v.ok) return v.error || "The server refused these credentials.";
+    if (row.mcp_auth?.auth_error) return `${row.mcp_auth.auth_error} — Re-connect this instance.`;
     return "The stored token has expired and cannot be refreshed. Re-connect this instance.";
   }
 
