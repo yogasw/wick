@@ -1,8 +1,10 @@
 package slack
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -185,10 +187,25 @@ func (s *Channel) reportHeard(sessionID string, w *listenWait, ev *slackevents.M
 	if who == "" {
 		who = ev.BotID
 	}
+	name := ev.Username
+	if ev.User != "" {
+		name = s.heardName(ev.User)
+	}
+	if name == "" {
+		name = who
+	}
 	extras := map[string]string{
 		"msg_ts": ev.TimeStamp,
 		"user":   who,
-		"name":   s.catchUpName(slackgo.Message{Msg: slackgo.Msg{User: ev.User, Username: ev.Username, BotID: ev.BotID}}),
+		"name":   name,
+	}
+	// Whose wick account wrote it, when wick already knows, so the web UI
+	// can put the reader's own replies on their side of the thread.
+	if wick := s.heardWickUser(ev.User); wick != "" {
+		extras["wick_user_id"] = wick
+	}
+	if ev.BotID != "" {
+		extras["bot"] = "1"
 	}
 	if w != nil {
 		extras["hold_id"] = w.holdID
@@ -200,7 +217,138 @@ func (s *Channel) reportHeard(sessionID string, w *listenWait, ev *slackevents.M
 		}
 		extras["files"] = strings.Join(names, "\n")
 	}
-	fn(sessionID, ev.Text, extras)
+	fn(sessionID, s.heardText(ev.Text), extras)
+}
+
+// heardName is a Slack user's display name for a heard reply: the sender
+// cache when the user already started a turn, else one users.info call,
+// cached on its own. It never maps the user to a wick account — a
+// passer-by in a thread must not get one — so it stays out of
+// userDisplayCache, whose entries carry that mapping. "" when Slack will
+// not say.
+func (s *Channel) heardName(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	s.userDisplayMu.RLock()
+	sn := s.userDisplayCache[userID]
+	name, cached := s.heardNames[userID]
+	s.userDisplayMu.RUnlock()
+	if sn != nil && sn.Name != "" {
+		return sn.Name
+	}
+	if cached {
+		return name
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return ""
+	}
+	if u, err := api.GetUserInfo(userID); err == nil && u != nil {
+		name = u.RealName
+		if name == "" {
+			name = u.Profile.DisplayName
+		}
+		if name == "" {
+			name = u.Name
+		}
+	}
+	s.userDisplayMu.Lock()
+	if s.heardNames == nil {
+		s.heardNames = map[string]string{}
+	}
+	s.heardNames[userID] = name
+	s.userDisplayMu.Unlock()
+	return name
+}
+
+// heardWickUser is the wick account a heard reply's author maps to, "" when
+// wick does not know one. Read-only: the sender cache (a user who started a
+// turn) or a Slack account connected to wick; it never registers anyone.
+// Cached per user, found or not, so a busy thread costs one lookup each.
+func (s *Channel) heardWickUser(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	s.userDisplayMu.RLock()
+	sn := s.userDisplayCache[userID]
+	wick, cached := s.heardWick[userID]
+	s.userDisplayMu.RUnlock()
+	if sn != nil && sn.WickUserID != "" {
+		return sn.WickUserID
+	}
+	if cached {
+		return wick
+	}
+	s.cfgMu.Lock()
+	byOAuth := s.wickUserIDFn
+	s.cfgMu.Unlock()
+	if byOAuth != nil {
+		if id, ok := byOAuth(context.Background(), userID); ok {
+			wick = id
+		}
+	}
+	s.userDisplayMu.Lock()
+	if s.heardWick == nil {
+		s.heardWick = map[string]string{}
+	}
+	s.heardWick[userID] = wick
+	s.userDisplayMu.Unlock()
+	return wick
+}
+
+// slackMarkup matches one <…> token of Slack's message markup.
+var slackMarkup = regexp.MustCompile(`<([^<>]+)>`)
+
+// heardText turns a reply's Slack markup into what the web UI renders:
+// <@U…> becomes @Name, <url|label> the link (with its label when that
+// says more than the link), <#C…|name> #name,
+// <!here> @here, and Slack's &lt; &gt; &amp; plain characters again.
+func (s *Channel) heardText(text string) string {
+	out := slackMarkup.ReplaceAllStringFunc(text, func(m string) string {
+		target, label, _ := strings.Cut(m[1:len(m)-1], "|")
+		switch {
+		case strings.HasPrefix(target, "@"):
+			if label != "" {
+				return "@" + label
+			}
+			if n := s.heardName(target[1:]); n != "" {
+				return "@" + n
+			}
+			return "@" + target[1:]
+		case strings.HasPrefix(target, "#"):
+			if label != "" {
+				return "#" + label
+			}
+			return "#channel"
+		case strings.HasPrefix(target, "!subteam^"):
+			if label != "" {
+				return label
+			}
+			return "@group"
+		case strings.HasPrefix(target, "!"):
+			if label != "" {
+				return label
+			}
+			return "@" + strings.TrimPrefix(target, "!")
+		case strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:"):
+			// A label that is only the link written shorter adds nothing:
+			// the link alone, which the web UI makes clickable.
+			bare := label
+			if _, after, ok := strings.Cut(bare, "://"); ok {
+				bare = after
+			}
+			bare = strings.TrimRight(bare, "….")
+			if label == "" || strings.Contains(target, bare) {
+				return target
+			}
+			return label + " (" + target + ")"
+		}
+		return m
+	})
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(out)
 }
 
 // markWorking puts ⏳ on the replies a turn is about to work on; the turn's
@@ -285,7 +433,7 @@ func (s *Channel) reportHeld(sessionID string, w *listenWait, state, why string)
 		"delay_sec":   fmt.Sprintf("%d", int(w.delay/time.Second)),
 		"started_ms":  fmt.Sprintf("%d", w.started.UnixMilli()),
 		"deadline_ms": fmt.Sprintf("%d", w.deadline.UnixMilli()),
-		"heard":       fmt.Sprintf("%d", len(w.eyes)),
+		"heard":       fmt.Sprintf("%d", w.heard),
 		"user":        who,
 		"msg_ts":      w.ev.TimeStamp,
 	})

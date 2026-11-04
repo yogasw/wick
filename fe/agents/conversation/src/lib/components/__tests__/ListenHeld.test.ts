@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ThreadMessage from "../ThreadMessage.svelte";
+import { setViewerId } from "../../viewer.js";
 import type { ConversationTurn } from "../../types/agents.js";
 
 const turn = (o: Partial<ConversationTurn> = {}): ConversationTurn => ({
@@ -85,8 +86,41 @@ describe("listening thread", () => {
         agent: { name: "Helper" },
       },
     });
-    expect(screen.getByTestId("listen-read-line").textContent).toContain("Helper read 4 replies · held 2m0s");
+    expect(screen.getByTestId("listen-read-line").textContent).toContain("✓ Helper read 4 replies · held 2m0s");
     await fireEvent.click(screen.getByText("Show prompt"));
     expect(screen.queryByTestId("listen-read-line")).toBeNull();
+  });
+
+  test("the reader's own heard reply sits on the right, without a name", () => {
+    setViewerId("wick-user-1");
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ role: "system", kind: "thread_heard", text: "cek https://example.com/x", extras: { hold_id: "S/1", user: "U01TEST", name: "Dev Example", wick_user_id: "wick-user-1" } }),
+        heardStatus: "read",
+        heardRun: { first: true, last: true },
+      },
+    });
+    const row = screen.getByTestId("heard-message");
+    expect(row.dataset.mine).toBe("1");
+    expect(row.textContent).not.toContain("Dev Example");
+    expect(row.querySelector("a")?.getAttribute("href")).toBe("https://example.com/x");
+    setViewerId("");
+  });
+
+  test("a run by one author shows the name once and the read state once", () => {
+    const heard = (o: { first: boolean; last: boolean }) =>
+      render(ThreadMessage, {
+        props: {
+          turn: turn({ role: "system", kind: "thread_heard", text: "satu", extras: { hold_id: "S/1", user: "U02TEST", name: "Other Example" } }),
+          heardStatus: "unread",
+          heardRun: o,
+        },
+      }).container.textContent ?? "";
+    const top = heard({ first: true, last: false });
+    expect(top).toContain("Other Example");
+    expect(top).not.toContain("not read yet");
+    const bottom = heard({ first: false, last: true });
+    expect(bottom).not.toContain("Other Example");
+    expect(bottom).toContain("not read yet");
   });
 });

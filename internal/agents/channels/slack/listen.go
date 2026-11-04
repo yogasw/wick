@@ -449,9 +449,12 @@ type listenWait struct {
 	delay time.Duration
 	// holdID ties the hold's listen_held turns into one row in the web UI.
 	holdID string
-	// eyes are the replies carrying the bot's 👀: every one the hold heard.
-	eyes    []string
+	// eyesTS is the reply carrying the bot's 👀: the latest one heard, so
+	// the thread shows one marker, not one per message.
+	eyesTS  string
 	channel string
+	// heard counts the replies this hold heard.
+	heard int
 	// deadline is when the timer fires, for the web UI's countdown.
 	deadline time.Time
 }
@@ -477,6 +480,7 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	var (
 		report     *listenWait
 		reportWhat string
+		moveFrom   string
 	)
 	s.mu.Lock()
 	if s.listenWaits == nil {
@@ -487,7 +491,7 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	case w == nil:
 		w = &listenWait{ev: ev, files: files, author: ev.User, st: st, started: time.Now(),
 			auto: auto, delay: delay, channel: ev.Channel,
-			holdID: sessionID + "/" + ev.TimeStamp, eyes: []string{ev.TimeStamp},
+			holdID: sessionID + "/" + ev.TimeStamp, eyesTS: ev.TimeStamp, heard: 1,
 			deadline: time.Now().Add(delay)}
 		w.timer = time.AfterFunc(delay, func() { s.fireListenWait(sessionID, w) })
 		s.listenWaits[sessionID] = w
@@ -507,7 +511,8 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 		}
 		w.timer.Reset(wait)
 		w.deadline = time.Now().Add(wait)
-		w.eyes = append(w.eyes, ev.TimeStamp)
+		w.heard++
+		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
 		report, reportWhat = w, heldStateHeld
 	default:
 		if s.noteOtherLocked(sessionID, w) {
@@ -519,7 +524,8 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 		// message stays the one the turn answers.
 		w.timer.Reset(w.delay)
 		w.deadline = time.Now().Add(w.delay)
-		w.eyes = append(w.eyes, ev.TimeStamp)
+		w.heard++
+		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
 		report, reportWhat = w, heldStateHeld
 	}
 	s.mu.Unlock()
@@ -528,6 +534,9 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	s.reportHeard(sessionID, report, ev, files)
 	switch reportWhat {
 	case heldStateHeld:
+		if moveFrom != "" && moveFrom != ev.TimeStamp {
+			s.heldReaction(ev.Channel, moveFrom, false)
+		}
 		s.heldReaction(ev.Channel, ev.TimeStamp, true)
 		s.reportHeld(sessionID, report, heldStateHeld, "")
 	case heldStateSkipped:
@@ -574,11 +583,9 @@ func (s *Channel) releaseHeld(sessionID string, w *listenWait, state, why string
 	s.reportHeld(sessionID, w, state, why)
 }
 
-// clearHeldReactions takes the bot's 👀 off every reply w heard.
+// clearHeldReactions takes the bot's 👀 off the reply carrying it.
 func (s *Channel) clearHeldReactions(w *listenWait) {
-	for _, ts := range w.eyes {
-		s.heldReaction(w.channel, ts, false)
-	}
+	s.heldReaction(w.channel, w.eyesTS, false)
 }
 
 // noteListenOther records that someone other than the asker (a person or
@@ -655,7 +662,7 @@ func (s *Channel) fireListenWait(sessionID string, w *listenWait) {
 		return
 	}
 	s.clearHeldReactions(w)
-	s.markWorking(sessionID, w.channel, w.eyes)
+	s.markWorking(sessionID, w.channel, []string{w.eyesTS})
 	s.reportHeld(sessionID, w, heldStateSent, "")
 	s.dispatchListen(sessionID, w.ev, w.files, w.st, time.Since(w.started), others, w.auto)
 }

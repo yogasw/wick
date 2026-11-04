@@ -189,6 +189,19 @@
     ),
   ));
   const shownTurns = $derived(foldTeamResults(withRemoteLinks(linkedHolds.turns), blockTaskIds, teamNames));
+  /* Heard Slack replies in a row by one author read as one group: the
+     name on the first, the time and read state on the last. */
+  const heardRun = $derived.by(() => {
+    const author = (i: number) => {
+      const t = shownTurns[i];
+      return t && t.kind === "thread_heard" ? (t.extras?.user ?? "") : null;
+    };
+    return shownTurns.map((t, i) => {
+      if (t.kind !== "thread_heard") return null;
+      const me = author(i);
+      return { first: author(i - 1) !== me, last: author(i + 1) !== me };
+    });
+  });
 
   /* P60 S2 guard 2: whether a later answer of the chat's agent follows
      each turn. A turn that only delegated keeps its in-between text in its
@@ -365,7 +378,7 @@
           <span aria-hidden="true" class="text-green-600 dark:text-green-400">↻</span><span>{turn.team_update}</span>
         </div>
       {:else}
-      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} heardStatus={turn.kind === "thread_heard" && turn.extras?.hold_id ? linkedHolds.heard[turn.extras.hold_id] : undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} reactions={reactionsAt[i]} />
+      <ThreadMessage {turn} listenHold={turn.turn_id ? linkedHolds.holds[turn.turn_id] : undefined} heardStatus={turn.kind === "thread_heard" && turn.extras?.hold_id ? linkedHolds.heard[turn.extras.hold_id] : undefined} heardRun={heardRun[i] ?? undefined} {teammatesHidden} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} laterAnswer={laterAnswerAt[i]} reactions={reactionsAt[i]} />
       {/if}
     </div>
   {/each}

@@ -391,6 +391,11 @@ type Channel struct {
 	heldFn HeldFn
 	// heardFn records each reply a listening thread hears (SetHeardFn).
 	heardFn HeldFn
+	// heardNames caches the display names heardName looked up (guarded by
+	// userDisplayMu), apart from userDisplayCache: no wick mapping here.
+	heardNames map[string]string
+	// heardWick caches heardWickUser's answers, same guard.
+	heardWick map[string]string
 	// working is where each session's ⏳ sits while its turn runs.
 	working map[string]workingMark
 

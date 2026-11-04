@@ -194,6 +194,8 @@ func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
 		}
 		heard = append(heard, e)
 	})
+	// Names known up front: a users.info lookup would reach the network.
+	ch.heardNames = map[string]string{"UASKER": "Asker Example", "UOTHER": "Other Example"}
 	first := listenMsg("UASKER", "kenapa form-nya kosong?")
 	ch.queueListenMessage(t.Context(), "S", first, nil)
 	time.Sleep(600 * time.Millisecond)
@@ -219,8 +221,35 @@ func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
 	if heard[0]["text"] != "kenapa form-nya kosong?" || heard[0]["msg_ts"] != "100.2" || heard[0]["user"] != "UASKER" {
 		t.Fatalf("first heard = %v", heard[0])
 	}
+	if heard[0]["name"] != "Asker Example" {
+		t.Fatalf("first heard name = %q", heard[0]["name"])
+	}
 	if heard[1]["user"] != "UOTHER" || heard[1]["files"] != "shot.png" || heard[1]["hold_id"] != heard[0]["hold_id"] || heard[0]["hold_id"] == "" {
 		t.Fatalf("second heard = %v", heard[1])
+	}
+}
+
+// A heard reply is shown without Slack's markup: names, links, channels.
+func TestHeardTextDropsSlackMarkup(t *testing.T) {
+	ch := New(agentconfig.SlackChannelConfig{})
+	ch.heardNames = map[string]string{"U01TEST": "Dev Example"}
+	got := ch.heardText("mbk <@U01TEST> cek <https://example.com/a?b=1|example.com/a…> di <#C01TESTCHAN|general> <!here> &lt;ok&gt; <https://example.com/x> <https://example.com/doc|the doc> <@U02NONAME>")
+	want := "mbk @Dev Example cek https://example.com/a?b=1 di #general @here <ok> https://example.com/x the doc (https://example.com/doc) @U02NONAME"
+	if got != want {
+		t.Fatalf("heardText =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// The thread carries one 👀, on the latest reply heard, and counts them all.
+func TestListenWaitOneMarkerOnLatest(t *testing.T) {
+	ch, _, _ := listenChannel(t, "---\ndelay: 5\n---\n")
+	ch.queueListenMessage(t.Context(), "S", listenMsg("UASKER", "satu"), nil)
+	second := listenMsg("UASKER", "dua")
+	second.TimeStamp = "100.3"
+	ch.queueListenMessage(t.Context(), "S", second, nil)
+	w := ch.takeListenWait("S")
+	if w == nil || w.eyesTS != "100.3" || w.heard != 2 {
+		t.Fatalf("wait = %+v", w)
 	}
 }
 

@@ -98,13 +98,15 @@
     listenHold?: ListenHold;
     /** A heard Slack reply (thread_heard): whether the agent read it yet. */
     heardStatus?: HeardStatus;
+    /** Where a heard reply sits in a run by one author. */
+    heardRun?: { first: boolean; last: boolean };
     /** A group thread: the speaker row carries the clock and this (the
         "open in …'s chat" link) instead of each taking a line of its own. */
     speakerAside?: Snippet;
     /** Emoji a later reply's [react :x:] marker put on this user turn. */
     reactions?: string[];
   };
-  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, heardStatus, speakerAside, reactions = [] }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, heardStatus, heardRun, speakerAside, reactions = [] }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -624,7 +626,7 @@
 </script>
 
 {#if turn.kind === "thread_heard"}
-  <HeardMessage {turn} status={heardStatus} />
+  <HeardMessage {turn} status={heardStatus} first={heardRun?.first ?? true} last={heardRun?.last ?? true} />
 {:else if turn.kind === "listen_held" && turn.extras?.state === "held"}
   <ListenCountdown {turn} agentName={agent?.name ?? ""} />
 {:else if isSystem}
@@ -800,7 +802,7 @@
 {:else if readLine && !showListenPrompt}
   <div data-testid="listen-read-line" class="flex items-center gap-2 py-1 text-[11px] text-black-600 dark:text-black-500">
     <span class="h-px flex-1 bg-white-300 dark:bg-navy-600"></span>
-    <span class="min-w-0 truncate">{agent?.name || "The agent"} read {listenHold?.heard === 1 ? "1 reply" : `${listenHold?.heard} replies`}{listenHold?.heldFor ? ` · held ${listenHold.heldFor}` : ""}</span>
+    <span class="min-w-0 truncate">✓ {agent?.name || "The agent"} read {listenHold?.heard === 1 ? "1 reply" : `${listenHold?.heard} replies`}{listenHold?.heldFor ? ` · held ${listenHold.heldFor}` : ""}</span>
     <button type="button" class="shrink-0 underline hover:no-underline" onclick={() => (showListenPrompt = true)}>Show prompt</button>
     <span class="h-px flex-1 bg-white-300 dark:bg-navy-600"></span>
   </div>
