@@ -28,21 +28,24 @@ var (
 // process is still finishing keeps its stream until that turn ends. A
 // stream for no session (sidebar, global) moves as soon as draining starts.
 func streamHandoff(ctx context.Context, sessions ...string) <-chan struct{} {
+	// Read the knobs once, here: the watcher may outlive a test that swaps
+	// them back, and reading them inside the goroutine would race that swap.
+	every, draining, turnHere := streamHandoffEvery, streamDraining, streamTurnHere
 	done := make(chan struct{})
 	go func() {
-		t := time.NewTicker(streamHandoffEvery)
+		t := time.NewTicker(every)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if !streamDraining() {
+				if !draining() {
 					continue
 				}
 				busy := false
 				for _, id := range sessions {
-					if streamTurnHere(id) {
+					if turnHere(id) {
 						busy = true
 						break
 					}
