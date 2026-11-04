@@ -396,6 +396,9 @@ type Channel struct {
 	heardNames map[string]string
 	// heardWick caches heardWickUser's answers, same guard.
 	heardWick map[string]string
+	// listenBotRuns counts, per session, the listening turns in a row that
+	// only bot replies started (listenBotStreak), guarded by mu.
+	listenBotRuns map[string]int
 	// working is where each session's ⏳ sits while its turn runs.
 	working map[string]workingMark
 
@@ -1835,14 +1838,20 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 					s.handleMessage(ctx, ev, nil)
 					return
 				}
-				// Another bot answering in a listening thread is read, never
-				// answered: it only tells a held reply that someone spoke.
+				// Another bot replying in a listening thread goes through
+				// listen like a person's reply: it is often part of the
+				// information (a form, a status) or an answer meant for this
+				// agent without a mention, so the agent hears it and decides.
+				// queueListenMessage caps turns that only bots start.
 				if ev.ThreadTimeStamp != "" && ev.ThreadTimeStamp != ev.TimeStamp {
-					author := ev.BotID
-					if author == "" {
-						author = ev.User
+					sid := s.sessionKey(ev.ThreadTimeStamp)
+					if s.listening(sid, ev.Channel) {
+						var files []slackgo.File
+						if ev.Message != nil {
+							files = ev.Message.Files
+						}
+						s.queueListenMessage(ctx, sid, ev, files)
 					}
-					s.noteListenOther(s.sessionKey(ev.ThreadTimeStamp), author)
 				}
 				return
 			}

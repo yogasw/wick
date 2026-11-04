@@ -10,15 +10,17 @@
 
   interface Props {
     turn: { text: string; ts?: string; extras?: Record<string, string> };
+    /** Unset for a reply no hold waits on (a bot's): no read state shown. */
     status?: HeardStatus;
     /** First of a run of replies by the same author: name + avatar. */
     first?: boolean;
     /** Last of the run: time and read state. */
     last?: boolean;
   }
-  let { turn, status = "unread", first = true, last = true }: Props = $props();
+  let { turn, status, first = true, last = true }: Props = $props();
 
   const mine = $derived(isViewer(turn.extras?.wick_user_id));
+  const bot = $derived(turn.extras?.bot === "1");
   const name = $derived.by(() => {
     const n = turn.extras?.name ?? "";
     return !n || n.startsWith("<@") || /^[UWB][A-Z0-9]{6,}$/.test(n) ? "Slack user" : n.replace(/\s*\(@[^)]*\)$/, "");
@@ -36,7 +38,7 @@
   const state = $derived(status === "unread" ? "not read yet" : status === "dropped" ? "not read" : "");
 </script>
 
-<div class={"flex min-w-0 max-w-full gap-2 " + (mine ? "justify-end" : "")} data-testid="heard-message" data-status={status} data-mine={mine ? "1" : "0"}>
+<div class={"flex min-w-0 max-w-full gap-2 " + (mine ? "justify-end" : "")} data-testid="heard-message" data-status={status ?? ""} data-mine={mine ? "1" : "0"}>
   {#if !mine}
     {#if first}
       <div class="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white-100" style={`background: hsl(${hue} 55% 45%)`} aria-hidden="true">{initial}</div>
@@ -46,7 +48,10 @@
   {/if}
   <div class={"flex min-w-0 max-w-[90%] flex-col gap-0.5 sm:max-w-[80%] lg:max-w-[44rem] " + (mine ? "items-end" : "items-start")}>
     {#if first && !mine}
-      <div class="px-1 text-xs font-semibold text-black-900 dark:text-white-100">{name}</div>
+      <div class="flex items-center gap-1 px-1 text-xs font-semibold text-black-900 dark:text-white-100">
+        {name}
+        {#if bot}<span class="rounded bg-white-300 px-1 text-[10px] font-medium text-black-700 dark:bg-navy-600 dark:text-black-500">bot</span>{/if}
+      </div>
     {/if}
     {#if turn.text}
       <div

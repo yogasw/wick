@@ -123,4 +123,16 @@ describe("listening thread", () => {
     expect(bottom).not.toContain("Other Example");
     expect(bottom).toContain("not read yet");
   });
+
+  test("a bot's heard reply is labelled and carries no read state of its own", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ role: "system", kind: "thread_heard", text: "form baru masuk", extras: { user: "B01TEST", name: "intake-bot", bot: "1" } }),
+      },
+    });
+    const row = screen.getByTestId("heard-message");
+    expect(row.textContent).toContain("intake-bot");
+    expect(row.textContent).toContain("bot");
+    expect(row.textContent).not.toContain("not read");
+  });
 });

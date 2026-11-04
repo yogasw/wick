@@ -188,7 +188,10 @@ func (s *Channel) reportHeard(sessionID string, w *listenWait, ev *slackevents.M
 		who = ev.BotID
 	}
 	name := ev.Username
-	if ev.User != "" {
+	if name == "" && ev.Message != nil && ev.Message.BotProfile != nil {
+		name = ev.Message.BotProfile.Name
+	}
+	if ev.User != "" && ev.BotID == "" {
 		name = s.heardName(ev.User)
 	}
 	if name == "" {
@@ -218,6 +221,25 @@ func (s *Channel) reportHeard(sessionID string, w *listenWait, ev *slackevents.M
 		extras["files"] = strings.Join(names, "\n")
 	}
 	fn(sessionID, s.heardText(ev.Text), extras)
+}
+
+// listenBotStreak is how many turns in a row bot replies alone may start in a
+// listening thread before a person has to speak again (botTurnLimit in
+// bots.go is the separate per-window budget for every bot turn).
+const listenBotStreak = 2
+
+// botTurnsInARow is how many turns in a row only bots started in sessionID.
+func (s *Channel) botTurnsInARow(sessionID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listenBotRuns[sessionID]
+}
+
+// resetBotTurns starts the bot count over: a person spoke.
+func (s *Channel) resetBotTurns(sessionID string) {
+	s.mu.Lock()
+	delete(s.listenBotRuns, sessionID)
+	s.mu.Unlock()
 }
 
 // heardName is a Slack user's display name for a heard reply: the sender

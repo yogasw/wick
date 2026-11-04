@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -249,6 +250,62 @@ func TestListenReplyJoinsRunningTurn(t *testing.T) {
 	ch.mu.Unlock()
 	if held != nil || len(m.ts) != 1 || m.ts[0] != "100.2" {
 		t.Fatalf("held=%v working=%+v", held, m)
+	}
+}
+
+// Another bot's reply is heard under the bot's own name, marked as a bot.
+func TestHeardBotReplyNamedAndMarked(t *testing.T) {
+	ch := New(agentconfig.SlackChannelConfig{})
+	var got map[string]string
+	ch.SetHeardFn(func(_, text string, extras map[string]string) {
+		got = map[string]string{"text": text}
+		for k, v := range extras {
+			got[k] = v
+		}
+	})
+	ev := &slackevents.MessageEvent{BotID: "B01TEST", Username: "intake-bot", Text: "form baru masuk", Channel: "C1", ThreadTimeStamp: "100.1", TimeStamp: "100.4"}
+	ch.reportHeard("S", nil, ev, nil)
+	if got["name"] != "intake-bot" || got["bot"] != "1" || got["user"] != "B01TEST" || got["hold_id"] != "" || got["text"] != "form baru masuk" {
+		t.Fatalf("heard = %v", got)
+	}
+}
+
+// A bot's reply goes through listen like a person's; after listenBotStreak
+// bot-only turns in a row it is heard but starts nothing until a person
+// speaks.
+func TestListenBotRepliesCapped(t *testing.T) {
+	ch, _, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	heard := 0
+	ch.SetHeardFn(func(string, string, map[string]string) { heard++ })
+	bot := func(ts string) *slackevents.MessageEvent {
+		return &slackevents.MessageEvent{BotID: "B01TEST", Username: "other-bot", Text: "status ok", Channel: "C1", ThreadTimeStamp: "100.1", TimeStamp: ts}
+	}
+	for i := 0; i < listenBotStreak; i++ {
+		ch.queueListenMessage(t.Context(), "S", bot(fmt.Sprintf("100.%d", 2+i)), nil)
+		select {
+		case <-got:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("bot reply %d never went to the agent", i+1)
+		}
+	}
+	ch.queueListenMessage(t.Context(), "S", bot("100.9"), nil)
+	select {
+	case r := <-got:
+		t.Fatalf("bot-only turn past the limit: %v", r)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if heard != listenBotStreak+1 {
+		t.Fatalf("heard %d bot replies, want %d", heard, listenBotStreak+1)
+	}
+	ch.heardNames = map[string]string{"UASKER": "Asker Example"}
+	ch.queueListenMessage(t.Context(), "S", listenMsg("UASKER", "lanjut"), nil)
+	if n := ch.botTurnsInARow("S"); n != 0 {
+		t.Fatalf("a person speaking left the bot count at %d", n)
+	}
+	select {
+	case <-got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a person's reply did not go through")
 	}
 }
 

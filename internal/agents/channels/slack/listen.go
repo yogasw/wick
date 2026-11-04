@@ -455,6 +455,9 @@ type listenWait struct {
 	channel string
 	// heard counts the replies this hold heard.
 	heard int
+	// human: a person (not a bot) wrote one of them. A hold of bot
+	// replies only counts toward listenBotStreak.
+	human bool
 	// deadline is when the timer fires, for the web UI's countdown.
 	deadline time.Time
 }
@@ -472,6 +475,25 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	} else {
 		st = s.listenSettingsIn(sessionID, ev.Channel)
 		delay = st.Delay
+	}
+	// A reply's author: a person's user id, or a bot's id when the app
+	// posts with none, so two bots never count as one author.
+	author := ev.User
+	if author == "" {
+		author = ev.BotID
+	}
+	// Bots answering each other could keep the agent busy forever: after
+	// listenBotStreak turns in a row that only bots started, a bot's reply is
+	// heard but starts nothing until a person speaks again.
+	if ev.BotID != "" && s.botTurnsInARow(sessionID) >= listenBotStreak {
+		s.mu.Lock()
+		w := s.listenWaits[sessionID]
+		s.mu.Unlock()
+		s.reportHeard(sessionID, w, ev, files)
+		return
+	}
+	if ev.BotID == "" {
+		s.resetBotTurns(sessionID)
 	}
 	if delay <= 0 {
 		s.dispatchListen(sessionID, ev, files, st, 0, false, auto)
@@ -498,19 +520,19 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	w := s.listenWaits[sessionID]
 	switch {
 	case w == nil:
-		w = &listenWait{ev: ev, files: files, author: ev.User, st: st, started: time.Now(),
+		w = &listenWait{ev: ev, files: files, author: author, st: st, started: time.Now(), human: ev.BotID == "",
 			auto: auto, delay: delay, channel: ev.Channel,
 			holdID: sessionID + "/" + ev.TimeStamp, eyesTS: ev.TimeStamp, heard: 1,
 			deadline: time.Now().Add(delay)}
 		w.timer = time.AfterFunc(delay, func() { s.fireListenWait(sessionID, w) })
 		s.listenWaits[sessionID] = w
 		report, reportWhat = w, heldStateHeld
-	case w.author == ev.User || w.auto:
+	case w.author == author || w.auto:
 		// The asker is still typing it out (or, in auto-reply, the thread
 		// is still talking): wait for all of it. An auto-reply merge never
 		// runs past autoReplyMaxHold from its first reply.
 		w.ev = ev
-		w.author = ev.User
+		w.author = author
 		w.files = append(w.files, files...)
 		wait := w.delay
 		if w.auto {
@@ -521,6 +543,7 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 		w.timer.Reset(wait)
 		w.deadline = time.Now().Add(wait)
 		w.heard++
+		w.human = w.human || ev.BotID == ""
 		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
 		report, reportWhat = w, heldStateHeld
 	default:
@@ -534,6 +557,7 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 		w.timer.Reset(w.delay)
 		w.deadline = time.Now().Add(w.delay)
 		w.heard++
+		w.human = w.human || ev.BotID == ""
 		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
 		report, reportWhat = w, heldStateHeld
 	}
@@ -665,6 +689,14 @@ func (s *Channel) fireListenWait(sessionID string, w *listenWait) {
 	}
 	delete(s.listenWaits, sessionID)
 	others := w.othersReplied
+	if w.human {
+		delete(s.listenBotRuns, sessionID)
+	} else {
+		if s.listenBotRuns == nil {
+			s.listenBotRuns = map[string]int{}
+		}
+		s.listenBotRuns[sessionID]++
+	}
 	s.mu.Unlock()
 	if others && w.st.OnTeamReply == listenReplySkip {
 		s.releaseHeld(sessionID, w, heldStateSkipped, "someone else answered meanwhile")
