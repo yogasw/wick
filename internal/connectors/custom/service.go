@@ -71,6 +71,7 @@ type Service struct {
 	keyToID  map[string]string    // def key → def ID
 
 	markerLoaded sync.Map // instance ID → per-user marker row declared
+	refreshMu    sync.Map // credential key → *sync.Mutex, see lockRefresh
 }
 
 func New(d Deps) *Service {
