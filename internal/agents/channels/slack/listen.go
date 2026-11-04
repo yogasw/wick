@@ -721,6 +721,9 @@ type listenTurn struct {
 	// with, so docInstructions go along in the note.
 	docsChanged     bool
 	docInstructions string
+	// pendingMention names who sent a mention the running turn has not
+	// answered yet; this reply joins that turn.
+	pendingMention string
 }
 
 type listenTurnKey struct{}
@@ -751,7 +754,7 @@ func (s *Channel) dispatchListen(sessionID string, ev *slackevents.MessageEvent,
 
 // listenRules is what every listening agent is told once, in its system
 // prompt (ListenPrompt); a listening turn itself only carries listenNote.
-const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message that opens with "[auto-reply]" comes from a thread set to auto-reply: answer it as you would a mention, never [silent]. A message without either marker (a mention, a DM) is answered as usual.`
+const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message that opens with "[auto-reply]" comes from a thread set to auto-reply: answer it as you would a mention, never [silent]. A message without either marker (a mention, a DM) is answered as usual, even when a [listen mode] reply arrives in the same turn.`
 
 // ListenPrompt is the "Slack listen mode" section of sessionID's system
 // prompt: the rules and its LISTEN.md instructions. The instructions are
@@ -820,6 +823,9 @@ func listenNote(lt listenTurn) string {
 		b.WriteString(" · someone else replied meanwhile")
 	}
 	b.WriteString("] Not a mention: answer only if it is meant for you, else [silent]; a thank-you gets [react :pray:].")
+	if lt.pendingMention != "" {
+		fmt.Fprintf(&b, "\nThis joins a turn that also holds a mention from %s you have not answered yet: still do what that mention asks. [silent] and [react] apply only to this reply, never to the mention.", lt.pendingMention)
+	}
 	if lt.threadPrompt != "" {
 		b.WriteString("\nFor this thread: ")
 		b.WriteString(lt.threadPrompt)

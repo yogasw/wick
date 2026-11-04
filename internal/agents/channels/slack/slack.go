@@ -148,6 +148,11 @@ type turn struct {
 	// HasLiveTurn reads this: relaying a sub-agent's progress onto a thread
 	// whose turn finished long ago would paint a banner nobody is waiting on.
 	running bool
+	// mentionFrom names who sent the mention this turn is still answering.
+	// A listen reply that joins the turn before the answer lands carries
+	// it in its note, so the agent does not read the whole turn as one
+	// that only needs [silent] or a reaction.
+	mentionFrom string
 	// queueTimer fires after queueReactionDelay if the pool hasn't accepted
 	// the message yet. Cancelled (and set to nil) on successful dispatch
 	// so a fast-path send never flashes the ⏳ reaction.
@@ -2626,14 +2631,24 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		persona, routedText = s.routePersona(ev.Channel, sessionID, ev.Text, s.sessionOnDisk(sessionID))
 	}
 
+	mentionFrom := ""
+	if !isListen {
+		if mentionFrom = s.heardName(ev.User); mentionFrom == "" {
+			mentionFrom = "someone"
+		}
+	}
 	s.mu.Lock()
 	old := s.turns[sessionID]
 	t := &turn{
 		channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp,
-		running: true, lastActivity: time.Now(),
+		running: true, lastActivity: time.Now(), mentionFrom: mentionFrom,
 	}
 	if old != nil {
 		t.carryOver(old)
+		if mentionFrom == "" && old.running {
+			t.mentionFrom = old.mentionFrom
+		}
+		listenT.pendingMention = t.mentionFrom
 		// A new turn supersedes the old one: stop its status heartbeat so the
 		// goroutine doesn't outlive the turn it was refreshing.
 		s.stopStatusAnimation(old)
