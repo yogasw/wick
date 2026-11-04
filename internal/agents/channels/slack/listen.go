@@ -721,8 +721,8 @@ type listenTurn struct {
 	// with, so docInstructions go along in the note.
 	docsChanged     bool
 	docInstructions string
-	// pendingMention names who sent a mention the running turn has not
-	// answered yet; this reply joins that turn.
+	// pendingMention names who sent a mention or workflow brief the running
+	// turn has not answered yet; this reply joins that turn.
 	pendingMention string
 }
 
@@ -824,7 +824,7 @@ func listenNote(lt listenTurn) string {
 	}
 	b.WriteString("] Not a mention: answer only if it is meant for you, else [silent]; a thank-you gets [react :pray:].")
 	if lt.pendingMention != "" {
-		fmt.Fprintf(&b, "\nThis joins a turn that also holds a mention from %s you have not answered yet: still do what that mention asks. [silent] and [react] apply only to this reply, never to the mention.", lt.pendingMention)
+		fmt.Fprintf(&b, "\nThis joins a turn that also holds a message from %s you have not answered yet: still do what that message asks. [silent] and [react] apply only to this reply, never to that message.", lt.pendingMention)
 	}
 	if lt.threadPrompt != "" {
 		b.WriteString("\nFor this thread: ")

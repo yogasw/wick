@@ -119,3 +119,20 @@ func TestSendToThreadSessionDefaultStartsMissing(t *testing.T) {
 		t.Fatalf("user message not sent, got %v", *sent)
 	}
 }
+
+// A workflow brief is a request the turn still owes: a listen reply that
+// joins it before the answer must not read the turn as [silent]-only.
+func TestSendToThreadSessionMarksBriefPending(t *testing.T) {
+	c, _, _, _ := newSendToSessionChannel(t, false)
+
+	sid, _, err := c.SendToThreadSession(context.Background(), "C1", "1789014375.645429", "brief", false, false)
+	if err != nil {
+		t.Fatalf("SendToThreadSession: %v", err)
+	}
+	c.mu.Lock()
+	tr := c.turns[sid]
+	c.mu.Unlock()
+	if tr == nil || tr.mentionFrom == "" {
+		t.Fatalf("workflow turn must carry a pending sender, got %+v", tr)
+	}
+}

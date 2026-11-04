@@ -148,10 +148,10 @@ type turn struct {
 	// HasLiveTurn reads this: relaying a sub-agent's progress onto a thread
 	// whose turn finished long ago would paint a banner nobody is waiting on.
 	running bool
-	// mentionFrom names who sent the mention this turn is still answering.
-	// A listen reply that joins the turn before the answer lands carries
-	// it in its note, so the agent does not read the whole turn as one
-	// that only needs [silent] or a reaction.
+	// mentionFrom names who sent the mention (or workflow brief) this turn
+	// is still answering. A listen reply that joins the turn before the
+	// answer lands carries it in its note, so the agent does not read the
+	// whole turn as one that only needs [silent] or a reaction.
 	mentionFrom string
 	// queueTimer fires after queueReactionDelay if the pool hasn't accepted
 	// the message yet. Cancelled (and set to nil) on successful dispatch
@@ -2216,6 +2216,9 @@ func (s *Channel) reactionThreadParent(channelID, itemTS string) (parentTS strin
 // greets the user instead of reacting to an empty turn.
 const pingFallbackText = "(The user greeted you with no message — greet them briefly and ask how you can help.)"
 
+// listenEmptyText stands in for a heard reply that carries no text.
+const listenEmptyText = "(No text: only a bot card or attachments.)"
+
 // normalizeUserText returns a usable prompt: the user's text, or the
 // ping fallback when they sent nothing but a bare mention.
 func normalizeUserText(text string) string {
@@ -2714,6 +2717,11 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	})
 
 	userText := normalizeUserText(routedText)
+	if isListen && strings.TrimSpace(routedText) == "" {
+		// A heard reply with no text (a bot card, a bare file) is not a
+		// greeting to answer.
+		userText = listenEmptyText
+	}
 	// Who spoke — essential in multi-user threads and for matching the sender
 	// to a connector (bot vs the user's SSO-connected account) when replying.
 	// Travels on the send context rather than inside userText: the pool turns
@@ -4028,9 +4036,11 @@ func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, 
 
 	s.mu.Lock()
 	old := s.turns[sessionID]
+	// A listen reply heard before this brief is answered joins the turn;
+	// mentionFrom makes its note say the brief still has to be done.
 	t := &turn{
 		channelID: channelID, threadTS: threadTS, msgTS: threadTS,
-		running: true, lastActivity: time.Now(),
+		running: true, lastActivity: time.Now(), mentionFrom: "a workflow",
 	}
 	if old != nil {
 		t.carryOver(old)

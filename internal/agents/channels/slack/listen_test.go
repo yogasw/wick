@@ -398,13 +398,13 @@ func TestListenNote(t *testing.T) {
 	if !strings.HasSuffix(n, "New rule.") {
 		t.Fatalf("changed docs must ride along: %s", n)
 	}
-	if strings.Contains(n, "mention from") {
+	if strings.Contains(n, "message from") {
 		t.Fatalf("no pending mention, no mention line: %s", n)
 	}
 	// A reply that joins a turn still answering a mention says so, or the
 	// agent reads the whole turn as one that only needs [silent].
 	n = listenNote(listenTurn{pendingMention: "Alice"})
-	if !strings.Contains(n, "mention from Alice you have not answered yet") {
+	if !strings.Contains(n, "message from Alice you have not answered yet") {
 		t.Fatalf("pending mention missing: %s", n)
 	}
 }
