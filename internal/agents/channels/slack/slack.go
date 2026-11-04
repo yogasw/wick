@@ -2583,13 +2583,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// the listen path itself (a mention) answers now, so a reply held for
 	// the delay would only repeat it.
 	listenT, isListen := listenTurnFrom(ctx)
+	// listeningThread: a mention in a thread the agent listens to. Such a
+	// turn always reads the thread back (threadCatchUpOn), so the replies
+	// it heard but never answered — a held one included — are not lost.
+	listeningThread := false
 	if !dmMain && ev.ChannelType != "im" && ev.ChannelType != "mpim" && ev.TimeStamp != threadTS {
-		if isStopCommand(ev.Text) && s.listening(sessionID, ev.Channel) {
+		listening := s.listening(sessionID, ev.Channel)
+		if isStopCommand(ev.Text) && listening {
 			s.ListenOff(sessionID, ev.Channel, threadTS, "stop word from "+ev.User, false)
 			s.postReply(ev.Channel, threadTS, "Oke, aku berhenti mendengarkan thread ini. Pasang 🤖 lagi atau minta aku listen kalau perlu.")
 			return
 		}
 		if !isListen {
+			listeningThread = listening
 			s.mergeListenWait(sessionID)
 		}
 	}
@@ -2761,7 +2767,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 			userText = block + "\n\n" + userText
 		}
 		s.persistThreadBindingSeen(sessionID, ev.Channel, threadTS, now)
-	} else if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS && cfg.ThreadCatchUpEnabled {
+	} else if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS && threadCatchUpOn(cfg.ThreadCatchUpEnabled, listeningThread) {
 		// An existing thread session only wakes on a mention or the 🤖
 		// switch: open the turn with what people said in between. A new
 		// session gets buildSessionContext instead (thread metadata, not

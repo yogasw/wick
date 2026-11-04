@@ -255,6 +255,24 @@ func TestThreadCatchUpDefaultOff(t *testing.T) {
 	}
 }
 
+func TestThreadCatchUpOnInListeningThread(t *testing.T) {
+	cases := []struct {
+		enabled, listening, want bool
+	}{
+		{false, false, false},
+		{true, false, true},
+		// A mention in a listening thread reads the replies it heard, a held
+		// one included, even with the bot's catch-up switched off.
+		{false, true, true},
+		{true, true, true},
+	}
+	for _, c := range cases {
+		if got := threadCatchUpOn(c.enabled, c.listening); got != c.want {
+			t.Errorf("threadCatchUpOn(%v, %v) = %v, want %v", c.enabled, c.listening, got, c.want)
+		}
+	}
+}
+
 func TestTSAfter(t *testing.T) {
 	cases := []struct {
 		a, b string
