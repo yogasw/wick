@@ -216,7 +216,10 @@ func (h *Hub) kickOrphansLocked() {
 // (written by another wick process) and adopts the unfinished ones, so
 // settleOrphans sees them.
 func (h *Hub) adoptForeign() {
-	ids, ok := taskFiles(h.dir)
+	h.mu.Lock()
+	dir := h.dir
+	h.mu.Unlock()
+	ids, ok := taskFiles(dir)
 	if !ok {
 		return
 	}
@@ -227,7 +230,7 @@ func (h *Hub) adoptForeign() {
 		if _, known := h.fileSession[id]; known || h.tasks[id] != nil {
 			continue
 		}
-		path, ok := taskPath(h.dir, string(id))
+		path, ok := taskPath(dir, string(id))
 		if !ok {
 			continue
 		}

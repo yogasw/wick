@@ -112,6 +112,32 @@ func newTestHub(reply func(Peer, string) string) (*Hub, *fakeTurns, *fakeNotify)
 	return h, turns, note
 }
 
+// persistTest is h.Persist(dir) for a test whose dir is a t.TempDir: at
+// cleanup, before the dir is removed, h stops writing to it. A settle, a
+// delivery or a batch save still running in the background would
+// otherwise create a file while the dir is being removed, failing the
+// test with "TempDir RemoveAll cleanup: directory not empty".
+func persistTest(t *testing.T, h *Hub, dir string) error {
+	t.Helper()
+	if err := h.Persist(dir); err != nil {
+		return err
+	}
+	// Registered after t.TempDir, so it runs first.
+	t.Cleanup(func() {
+		// Task files are written under saveMu, reading h.dir after it.
+		h.saveMu.Lock()
+		h.mu.Lock()
+		h.dir = ""
+		h.mu.Unlock()
+		h.saveMu.Unlock()
+		// A batch or outbox save that read the dir before it was cleared
+		// finishes under batchSave; wait for it.
+		h.batchSave.Lock()
+		h.batchSave.Unlock()
+	})
+	return nil
+}
+
 func TestSendSyncCaptainToAnton(t *testing.T) {
 	h, turns, note := newTestHub(func(p Peer, _ string) string { return "no 401s since 09:00" })
 	res, err := h.Send(context.Background(), SendInput{

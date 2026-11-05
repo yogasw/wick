@@ -211,7 +211,7 @@ func TestProgressClearedWhenTaskEnds(t *testing.T) {
 	h.Turns = locatingTurns{turns}
 	h.progressGo = func(f func()) { f() }
 	dir := t.TempDir()
-	if err := h.Persist(dir); err != nil {
+	if err := persistTest(t, h, dir); err != nil {
 		t.Fatal(err)
 	}
 	ev := &taskEvents{}

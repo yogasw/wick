@@ -17,7 +17,7 @@ func TestTaskWrittenByPredecessorAfterStartIsSettled(t *testing.T) {
 	var draining atomic.Bool
 	draining.Store(true)
 	h2.PredecessorBusy = func(string) bool { return draining.Load() }
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	id, _ := sendWorking(t, dir) // the predecessor takes a task now
@@ -41,7 +41,7 @@ func TestDrainingProcessSettlesNoOrphan(t *testing.T) {
 	h2, _, _ := newTestHub(func(Peer, string) string { return "" })
 	h2.orphanPoll = 5 * time.Millisecond
 	h2.SelfDraining = func() bool { return true }
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(40 * time.Millisecond)

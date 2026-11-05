@@ -250,7 +250,7 @@ func TestTasksPersistAcrossHubs(t *testing.T) {
 		}
 		return "no 401s"
 	})
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -264,7 +264,7 @@ func TestTasksPersistAcrossHubs(t *testing.T) {
 	}
 
 	h2, _, note := newTestHub(func(Peer, string) string { return "deployed to prod" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	got, err := h2.GetTask(ctx, "a-cap", done.TaskID)
@@ -290,7 +290,7 @@ func TestTasksPersistAcrossHubs(t *testing.T) {
 	// Files older than TaskKeep are dropped on load.
 	h3, _, _ := newTestHub(func(Peer, string) string { return "" })
 	h3.now = func() time.Time { return time.Now().Add(TaskKeep + time.Hour) }
-	if err := h3.Persist(dir); err != nil {
+	if err := persistTest(t, h3, dir); err != nil {
 		t.Fatal(err)
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "*.json")); len(left) != 0 {
