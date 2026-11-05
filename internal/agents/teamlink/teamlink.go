@@ -183,6 +183,9 @@ type Peer struct {
 	MentionFrom  string
 	MentionAllow []string
 	MaxHops      int
+	// ReachAllow lists the agents that may message any top-level session
+	// of this agent with chat= (see entity.AgentPersona.ReachAllow).
+	ReachAllow []string
 	// Remote marks a remote agent (A2A, Slack, plugin): its turn goes out
 	// of wick, so it gets only the mention text, without the framing that
 	// names the sender. RemoteOwnerOnly refuses every agent's turn — the

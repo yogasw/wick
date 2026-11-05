@@ -105,6 +105,50 @@ func TestPoolTurnsCanTarget(t *testing.T) {
 	}
 }
 
+// An agent on the target's ReachAllow list reaches any of its sessions,
+// a Slack thread of a ticket run as another person included; any other
+// agent still gets the default refusal.
+func TestPoolTurnsCanTargetReachAllow(t *testing.T) {
+	withTeamWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	seedTeamProject(t, "p2", "u1")
+	seedTeamProject(t, "p3", "u1")
+	franky := seedTeamAgent(t, "u1", "franky", "p1")
+	checker := seedTeamAgent(t, "u1", "checker", "p2")
+	seedTeamAgent(t, "u1", "other", "p3")
+	newSlackSession(t, "slack-main", "p1", "u1", "")
+	newSlackSession(t, "slack-card", "p1", "u2", "")
+	newSlackSession(t, "checker-chat", "p2", "u1", "")
+	newSlackSession(t, "other-chat", "p3", "u1", "")
+	tk, err := ticket.Create(globalLayout, ticket.CreateOptions{ProjectID: "p1", Title: "inquiry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []string{"slack-main", "slack-card"} {
+		if err := ticket.AttachSession(globalLayout, "p1", tk.ID, sid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setTicketOwner(t, "p1", tk.ID, "slack-main")
+	ctx := context.Background()
+	turns := poolTurns{}
+	peer := teamlink.Peer{ID: franky.ID, OwnerID: "u1", Handle: "franky"}
+
+	if _, err := turns.CanTarget(ctx, peer, "checker-chat", "slack-card"); !errors.Is(err, teamlink.ErrUnknownChat) {
+		t.Fatalf("not on the list: %v", err)
+	}
+	peer.ReachAllow = []string{checker.ID}
+	if same, err := turns.CanTarget(ctx, peer, "checker-chat", "slack-card"); err != nil || same {
+		t.Fatalf("on the list: ticket %v, err %v", same, err)
+	}
+	if _, err := turns.CanTarget(ctx, peer, "other-chat", "slack-card"); !errors.Is(err, teamlink.ErrUnknownChat) {
+		t.Fatalf("another agent, not on the list: %v", err)
+	}
+	if _, err := turns.CanTarget(ctx, peer, "checker-chat", "missing-1"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing session on the list: %v", err)
+	}
+}
+
 // setTicketOwner records sid as the ticket's owner_session, as the
 // first-check workflow does.
 func setTicketOwner(t *testing.T, pid, ticketID, sid string) {

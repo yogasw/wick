@@ -361,7 +361,7 @@ func sharedTeamAgentItem(p entity.AgentPersona, sh entity.AgentShare, viewer str
 	it.SystemPrompt, it.Preset = "", ""
 	it.AllowedConnectors, it.IncludeNewConnectors, it.AccessMode = []team.ConnectorGrant{}, false, team.AccessChoose
 	it.AllowedNativeTools, it.BashRules, it.DisabledSkills = []string{}, []team.BashRule{}, []string{}
-	it.MentionFrom, it.MentionAllow = "", []string{}
+	it.MentionFrom, it.MentionAllow, it.ReachAllow = "", []string{}, []string{}
 	it.Remote, it.SlackRemote = nil, nil
 	it.ManageAgents, it.CaptainCan = false, team.CaptainCan{}
 	it.CaptainPolicy = team.CaptainPolicy{AutoApprove: team.AutoApproveOff}
