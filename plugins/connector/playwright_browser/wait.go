@@ -212,12 +212,9 @@ func countMatches(norm, want string, re *regexp.Regexp) (int, string) {
 // "run_start", or "call_start" = when this step begins. A fresh wait counts
 // over the whole frame, since the baseline is taken over the whole frame.
 func waitForText(page playwright.Page, env mouseEnv, a action) (any, error) {
-	f, err := waitFrame(page, a)
-	if err != nil {
-		return nil, err
-	}
 	var re *regexp.Regexp
 	if a.Pattern != "" {
+		var err error
 		if re, err = regexp.Compile(a.Pattern); err != nil {
 			return nil, fmt.Errorf("pattern: %w", err)
 		}
@@ -228,40 +225,72 @@ func waitForText(page playwright.Page, env mouseEnv, a action) (any, error) {
 	if a.Fresh {
 		sel, values = "", true // compare like for like with the snapshot
 	}
-	read := func() (string, error) {
-		txt, err := scopeText(f, sel, values)
-		return normSpace(txt), err
-	}
-	base := 0
 	baseline := "none"
 	if a.Fresh {
 		baseline = a.Baseline
 		if baseline == "" {
 			baseline = "trigger"
 		}
-		var snap map[string]string
-		switch {
-		case baseline == "call_start" || env.run == nil:
+		if env.run == nil {
 			baseline = "call_start"
-			txt, _ := read()
-			snap = map[string]string{f.URL(): txt}
-		case baseline == "run_start":
+		}
+	}
+	// baseFor is the count to beat in frame f. A frame that was not on the
+	// page when the baseline was taken (a Flow iframe the trigger opened)
+	// has nothing old in it: every occurrence counts.
+	baseFor := func(f playwright.Frame, now string) int {
+		var snap map[string]string
+		switch baseline {
+		case "none":
+			return 0
+		case "call_start":
+			n, _ := countMatches(now, want, re)
+			return n
+		case "run_start":
 			snap = env.run.start
 		default:
 			snap = env.run.beforeTrigger
 		}
-		base, _ = countMatches(snap[f.URL()], want, re)
+		n, _ := countMatches(snap[f.URL()], want, re)
+		return n
 	}
 	start := time.Now()
 	deadline := start.Add(waitTimeout(a.TimeoutMS))
+	// The frame is resolved again on every poll: it may not exist yet when
+	// the wait starts (the trigger is still opening it), and an iframe that
+	// reloads hands back a new frame object.
+	var (
+		lastURL  string
+		lastErr  error
+		base     = -1
+		baseURL  string
+		frameHit bool
+	)
 	for {
-		if txt, err := read(); err == nil {
-			if n, hit := countMatches(txt, want, re); n > base {
-				return map[string]any{"matched": true, "line": hit, "baseline": baseline, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
+		f, ferr := waitFrame(page, a)
+		if ferr != nil {
+			lastErr = ferr
+		} else {
+			frameHit = true
+			lastURL = f.URL()
+			txt, err := scopeText(f, sel, values)
+			if err != nil {
+				lastErr = err
+			} else {
+				now := normSpace(txt)
+				if base < 0 || baseURL != lastURL {
+					base, baseURL = baseFor(f, now), lastURL
+				}
+				if n, hit := countMatches(now, want, re); n > base {
+					return map[string]any{"matched": true, "line": hit, "baseline": baseline, "frame_url": lastURL, "waited_ms": time.Since(start).Milliseconds()}, nil
+				}
 			}
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("text not seen within %dms (baseline %s, %d earlier occurrence(s) ignored)", time.Since(start).Milliseconds(), baseline, base)
+			if !frameHit {
+				return nil, fmt.Errorf("frame never appeared within %dms: %v", time.Since(start).Milliseconds(), lastErr)
+			}
+			return nil, fmt.Errorf("text not seen within %dms in %s (baseline %s, %d earlier occurrence(s) ignored)", time.Since(start).Milliseconds(), lastURL, baseline, max(base, 0))
 		}
 		time.Sleep(pollEvery)
 	}
