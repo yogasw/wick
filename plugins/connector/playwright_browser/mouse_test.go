@@ -122,3 +122,28 @@ func TestProfileDelete_RefusesLockedProfile(t *testing.T) {
 		t.Fatalf("locked profile was removed: %v", err)
 	}
 }
+
+func TestLineDiff(t *testing.T) {
+	added, removed := lineDiff([]string{"a", "b", "b"}, []string{"b", "c", "b", "b"})
+	if len(added) != 2 || added[0] != "c" || added[1] != "b" {
+		t.Fatalf("added = %v", added)
+	}
+	if len(removed) != 1 || removed[0] != "a" {
+		t.Fatalf("removed = %v", removed)
+	}
+}
+
+func TestValidateWaitActions(t *testing.T) {
+	if err := validateActionArgs(0, action{Action: "wait_for_text"}); err == nil {
+		t.Fatal("wait_for_text without text/pattern accepted")
+	}
+	if err := validateActionArgs(0, action{Action: "wait_for_text", Pattern: "("}); err == nil {
+		t.Fatal("bad regex accepted")
+	}
+	if err := validateActionArgs(0, action{Action: "observe", TimeoutMS: maxWaitMS + 1}); err == nil {
+		t.Fatal("timeout over max accepted")
+	}
+	if err := validateActionArgs(0, action{Action: "wait_for_change", TimeoutMS: 5000}); err != nil {
+		t.Fatalf("valid wait_for_change rejected: %v", err)
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/playwright-community/playwright-go"
@@ -189,6 +190,10 @@ type action struct {
 	FrameURLContains string `json:"frame_url_contains,omitempty"`
 	FrameIndex       *int   `json:"frame_index,omitempty"`
 	Text             string `json:"text,omitempty"` // frame_click by visible text
+	// wait_for_text / wait_for_change / observe.
+	Pattern       string `json:"pattern,omitempty"` // regex (wait_for_text)
+	TimeoutMS     int    `json:"timeout_ms,omitempty"`
+	UntilStableMS int    `json:"until_stable_ms,omitempty"` // observe
 	// set_viewport.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
@@ -215,7 +220,8 @@ var knownActions = map[string]bool{
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
 	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
 	"frame_eval": true, "frame_text": true, "frame_click": true,
-	"set_viewport": true,
+	"set_viewport":  true,
+	"wait_for_text": true, "wait_for_change": true, "observe": true,
 	// wait
 	"wait_for": true, "wait": true,
 	// read / extract
@@ -298,6 +304,21 @@ func validateActionArgs(i int, a action) error {
 			return err
 		}
 		return need("target", a.Target)
+	case "wait_for_text", "wait_for_change", "observe":
+		if a.Action == "wait_for_text" && a.Text == "" && a.Pattern == "" {
+			return fmt.Errorf("action[%d] wait_for_text: text or pattern is required", i)
+		}
+		if a.Pattern != "" {
+			if _, err := regexp.Compile(a.Pattern); err != nil {
+				return fmt.Errorf("action[%d] %s: pattern: %w", i, a.Action, err)
+			}
+		}
+		if a.TimeoutMS < 0 || a.TimeoutMS > maxWaitMS {
+			return fmt.Errorf("action[%d] %s: timeout_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
+		if a.UntilStableMS < 0 || a.UntilStableMS > maxWaitMS {
+			return fmt.Errorf("action[%d] %s: until_stable_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
 	case "set_viewport":
 		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {
 			return fmt.Errorf("action[%d] set_viewport: width and height must be between 200 and 7680x4320", i)

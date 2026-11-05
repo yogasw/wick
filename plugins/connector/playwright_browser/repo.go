@@ -692,6 +692,12 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		return humanClick(page, env, a)
 	case "mouse_wheel":
 		return humanWheel(page, env, a.DeltaX, a.DeltaY, a.Steps)
+	case "wait_for_text":
+		return waitForText(page, a)
+	case "wait_for_change":
+		return waitForChange(page, a)
+	case "observe":
+		return observe(page, env, a)
 	case "frame_eval":
 		return frameEval(page, a)
 	case "frame_text":
