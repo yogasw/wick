@@ -10,6 +10,110 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.18.1](https://github.com/yogasw/wick/compare/v1.18.0...v1.18.1) — Platform Enhancements
+
+_Released on 2026-11-05_
+
+### Added
+*   **Code Mode**:
+    *   Run JS/TS scripts against connectors using `wick_run_code`.
+    *   CLI command `codemode run` for executing Code Mode scripts from a shell.
+    *   Scripts can use `wick.file`, confined to the project's `codemode/` folder.
+    *   `script_path` support for `wick_run_code` and the `run_code` node.
+    *   Admin-set run, max, and per-call timeouts in agent settings (2 min default, 5 min cap, 60s per call).
+    *   Per-call deadlines and named run timeouts.
+    *   Download the Code Mode runner from the plugin catalog on first use.
+    *   Accept and show code steps in the session Schedule watch UI.
+    *   Agents are informed when to reach for Code Mode.
+*   **Connectors & Custom MCP**:
+    *   Per-user OAuth accounts and a shared instance credential policy.
+    *   Flag an OAuth account that needs a reconnect.
+    *   Core support to refresh and persist OAuth access tokens.
+    *   Offer session bases directly from custom connector definitions.
+    *   Custom MCP supports filling bearer/header credentials per user or per instance.
+    *   Google Workspace: Cache refreshed access tokens in-process.
+*   **Playwright / Browser Automation**:
+    *   Arrow cursor overlay and pointer position that survives restarts.
+    *   Natural clicks on the main page by text, nth match, with clamped waits.
+    *   Typing into iframe fields, keeping the viewport per session, and leaner frame reads.
+    *   Waiting on screen changes instead of fixed sleeps.
+    *   Frame actions, clipped JPEG screenshots, and smoother mouse movements.
+    *   Real-mouse run actions and locked profiles.
+*   **Team & Access**:
+    *   Updated Access tab UI to follow the agreed mockup.
+    *   Lend single connectors from an agent's owner.
+    *   "All" access follows the session's identity, with a "Turned off" list.
+    *   Per-agent reach list for chatting into any of its sessions.
+    *   Hand a person's mention replies to the chat's agent.
+*   **Slack Integration**:
+    *   A listening thread hears other bots' replies too.
+    *   A reply while the agent works joins its running turn.
+    *   A listening thread's replies land in the session as they arrive.
+    *   `arm_only` on `send_to_session` readies a thread without a turn.
+*   **Session & Schedule**:
+    *   Per-connector idle window (`idle_after`) in session workspace.
+    *   Expiry picker in session workspace supports any amount or an end time.
+    *   User-set expiry for session connectors.
+    *   Type filter and step lines in the session Schedule panel.
+*   **Audit & Analytics**:
+    *   Admin Audit page with connector calls, breakdown, pickers, advanced filter, and call detail.
+    *   Admin Audit page includes Code Mode run audit.
+    *   Analytics usage per conversation, as MCP operations and a sortable list.
+*   **UI & Markdown**:
+    *   Copy button on Markdown block quotes.
+    *   Workflow UI shows and allows picking the bot on a locked channel action.
+*   **Trace & Conversation**:
+    *   Readable Code Mode cards for `script_path`, input, and output in traces.
+    *   Show tool call count on the conversation trace toggle.
+
+### Fixed
+*   **Connectors & Custom MCP**:
+    *   Instance credential stays the default; per-user is opt-in.
+    *   Custom MCP keeps per-user mode on the definition and ensures per-user token servers persist after restart.
+    *   Custom MCP keeps an instance's authentication failure across reloads.
+    *   Serialize OAuth refreshes in Custom MCP to prevent rotated tokens from being spent twice.
+    *   Google Workspace: Refreshes expired tokens in health checks and upfront when no access token is stored.
+*   **Workflow**:
+    *   Drop the unused scaffold start node after canvas edits.
+    *   `update_node` can pin a channel node's bot (`channel_instance`) in Workflow MCP.
+    *   Cap bot-triggered runs per thread to prevent workflow loops.
+*   **Slack Integration**:
+    *   Keep the working banner while hidden sub-agents run.
+    *   Post the answer when a turn closes on a lone `[silent]` line.
+    *   A listen reply joining a workflow brief keeps the brief.
+    *   A listen reply joining a mention's turn keeps the mention.
+    *   Heard replies are displayed like a group chat, with one 👀 per thread.
+    *   A mention in a listening thread correctly reads the replies it heard.
+    *   A mention taking over a held reply is not dropped.
+*   **Playwright / Browser Automation**:
+    *   Fresh waits now detect new elements, not only more occurrences.
+    *   `wait_for_text` correctly waits for a frame that does not yet exist.
+    *   Fresh waits measure from before the triggering action, use whitespace-blind matching, and support icon controls by title.
+    *   Corrected clicking labels inside wrappers, waiting only for new text, and reading field values.
+    *   Reach iframes on reconnected live sessions, stable viewport, and screenshots to file.
+    *   Watching a live session in the browser panel no longer changes the agent's browser.
+*   **Session & Schedule Panel**:
+    *   Dropped arbitrary `content-visibility` classes from panel rows.
+    *   Clamped long messages in the session Schedule panel.
+    *   An agent may always schedule into its own session.
+*   **Team**:
+    *   Access tab no longer crashes on null grant lists.
+    *   The person's own chat reads only its activity in the roster.
+*   **Streaming**:
+    *   A draining process hands its Server-Sent Events (SSE) viewers to the successor.
+    *   Handoff watcher reads its knobs before the goroutine starts.
+*   **Admin / Analytics**:
+    *   Sends empty lists, not null, when an analytics filter matches nothing.
+*   **Config**:
+    *   Keep the hidden sub-agent status description as one tag value.
+*   **Pool**:
+    *   Ensures the running turn finishes before a caller-change recycle.
+*   **Trace**:
+    *   Code Mode header counts real calls; card reads input first.
+
+---
+
+
 ## [v1.18.0](https://github.com/yogasw/wick/compare/v1.17.1...v1.18.0) — GitLab & Platform
 
 _Released on 2026-11-01_
