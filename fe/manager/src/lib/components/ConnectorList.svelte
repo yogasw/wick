@@ -19,6 +19,7 @@
     deleteCustomDef,
     renameCustomDef,
     testInstanceAuth,
+    saveMyToken,
   } from "$lib/api.js";
   import type { PluginProgress } from "$lib/api.js";
   import PluginUpdateProgress from "$lib/components/plugins/PluginUpdateProgress.svelte";
@@ -167,6 +168,41 @@
       });
   }
 
+  /* Per-user token instance (bearer / custom header MCP): "Connect my
+     account" is a form, not a login popup — the user types their own token,
+     the server checks it against the MCP server before storing it. */
+  let tokenRow = $state<ConnectorRow | null>(null);
+  let tokenValues = $state<Record<string, string>>({});
+  let tokenSaving = $state(false);
+  let tokenError = $state("");
+
+  function openTokenForm(row: ConnectorRow): void {
+    tokenRow = row;
+    tokenValues = {};
+    tokenError = "";
+  }
+
+  const tokenFilled = $derived(
+    (tokenRow?.mcp_auth?.token_fields ?? []).every((f) => (tokenValues[f.key] ?? "").trim() !== ""),
+  );
+
+  async function submitToken(): Promise<void> {
+    const url = tokenRow?.mcp_auth?.connect_token_url;
+    if (!url || tokenSaving || !tokenFilled) return;
+    tokenSaving = true;
+    tokenError = "";
+    try {
+      const res = await saveMyToken(url, $state.snapshot(tokenValues));
+      tokenRow = null;
+      toastOk(res.account ? `Connected as ${res.account}` : "Token saved");
+      await load(true);
+    } catch (e) {
+      tokenError = e instanceof Error ? e.message : String(e);
+    } finally {
+      tokenSaving = false;
+    }
+  }
+
   /* Per-account actions, same pair the detail page offers: re-consent without
      destroying the grant first, or disconnect. Disconnect used to be a bare
      red link on the row — one stray click from deleting a token, and no
@@ -174,11 +210,14 @@
      disconnected just to re-connect. */
   function accountMenuItems(row: ConnectorRow, acc: ConnectorAccount) {
     return [
-      {
-        label: connectingId === row.id ? "Re-connecting…" : "Re-connect",
-        onclick: () => connect(row),
-        disabled: !canConnect(row) || connectingId !== "",
-      },
+      row.mcp_auth?.connect_token_url
+        ? /* Per-user token instance: re-connecting = typing a new token. */
+          { label: "Update my token", onclick: () => openTokenForm(row), disabled: false }
+        : {
+            label: connectingId === row.id ? "Re-connecting…" : "Re-connect",
+            onclick: () => connect(row),
+            disabled: !canConnect(row) || connectingId !== "",
+          },
       { label: "Disconnect", onclick: () => (confirmAcc = { row, acc }), danger: true },
     ];
   }
@@ -257,16 +296,18 @@
   }
 
   /* A row is flagged when the stored token is known-dead (expired, no
-     refresh) or the last probe refused it. */
+     refresh), the server recorded an auth failure, or the last probe in
+     this page refused it. */
   function authBroken(row: ConnectorRow): boolean {
     const v = authVerdicts[row.id];
     if (v) return !v.ok;
-    return row.mcp_auth?.expired === true;
+    return row.mcp_auth?.expired === true || !!row.mcp_auth?.auth_error;
   }
 
   function authBrokenReason(row: ConnectorRow): string {
     const v = authVerdicts[row.id];
     if (v && !v.ok) return v.error || "The server refused these credentials.";
+    if (row.mcp_auth?.auth_error) return `${row.mcp_auth.auth_error} — Re-connect this instance.`;
     return "The stored token has expired and cannot be refreshed. Re-connect this instance.";
   }
 
@@ -751,6 +792,13 @@
                     {/each}
                   {/if}
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
+                  <!-- No shared credential and no account of the viewer's own:
+                       every call they make is refused until they connect, so
+                       say so next to the Connect button. Same red as
+                       "Reconnect needed". -->
+                  {#if row.oauth?.needs_connect}
+                    <span class="flex-shrink-0 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400" title="This instance does not share a credential: calls without your own account are refused" data-needs-connect>Connect your account to use this connector</span>
+                  {/if}
                   {#if row.mcp_auth?.per_user}
                     <!-- Per-user (SSO) MCP instance: it holds no credential of
                          its own, so it is never "not connected". Neutral count
@@ -764,6 +812,11 @@
                         <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
                         You: connected
                       </span>
+                      {#if row.mcp_auth.connect_token_url}
+                        <Button variant="secondary" size="sm" onclick={() => openTokenForm(row)}>Update my token</Button>
+                      {/if}
+                    {:else if row.mcp_auth.connect_token_url}
+                      <Button variant="primary" size="sm" onclick={() => openTokenForm(row)} data-connect-token>Connect my account</Button>
                     {:else if canConnect(row)}
                       <!-- Same look as the instance Connect button: secondary
                            reads as bare text on the dark theme. -->
@@ -846,6 +899,9 @@
                       <span class="pointer-events-none relative flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
                         <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                         <span class="truncate font-medium group-hover/acc:text-green-600">@{acc.display_name}</span>
+                        {#if acc.auth_error}
+                          <span class="flex-shrink-0 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400" title={acc.auth_error}>Reconnect needed</span>
+                        {/if}
                       </span>
                       {#if acc.can_manage}
                         <div class="pointer-events-auto relative z-10 flex-shrink-0">
@@ -876,6 +932,40 @@
     onConfirm={confirmDelete}
     onCancel={() => (confirmRow = null)}
   />
+
+  <!-- Per-user token form: the caller's own bearer token / header values. -->
+  <Modal open={tokenRow !== null} title="Connect my account" size="sm" onClose={() => (tokenRow = null)}>
+    <div class="space-y-3">
+      <p class="text-xs text-black-700 dark:text-black-600">
+        Enter your own token for <strong class="text-black-900 dark:text-white-100">{tokenRow?.label}</strong>. Calls you make through this connector run with it. It is checked against the server, then stored encrypted and only used for you.
+      </p>
+      {#each tokenRow?.mcp_auth?.token_fields ?? [] as f (f.key)}
+        <div>
+          <label for="my-token-{f.key}" class="block text-sm font-medium text-black-900 dark:text-white-100">{f.label}</label>
+          <div class="mt-1">
+            <TextInput
+              id="my-token-{f.key}"
+              type="password"
+              value={tokenValues[f.key] ?? ""}
+              onChange={(v) => (tokenValues = { ...tokenValues, [f.key]: v })}
+              ariaLabel={f.label}
+            />
+          </div>
+        </div>
+      {/each}
+      {#if tokenError}
+        <p class="rounded-lg border border-neg-400 bg-neg-100 px-3 py-2 font-mono text-[11px] text-black-800" data-token-error>{tokenError}</p>
+      {/if}
+    </div>
+    {#snippet footer()}
+      <div class="flex justify-end gap-2">
+        <Button variant="secondary" size="lg" onclick={() => (tokenRow = null)}>Cancel</Button>
+        <Button variant="primary" size="lg" disabled={tokenSaving || !tokenFilled} onclick={submitToken}>
+          {tokenSaving ? "Checking…" : "Save"}
+        </Button>
+      </div>
+    {/snippet}
+  </Modal>
 
   <!-- Rename: display name only. The key stays fixed server-side, so
        instances, access tags, and MCP tool ids are untouched. -->

@@ -3,7 +3,7 @@
     "key": "bitbucket",
     "name": "Bitbucket",
     "description": "Search repositories, inspect commits and pull requests, and create branch/commit/PR changes in Bitbucket Cloud.",
-    "version": "0.2.11",
+    "version": "0.2.12",
     "default_tags": [
       {
         "Name": "Connector",
@@ -23,8 +23,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.11/bitbucket-0.2.11-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.11/bitbucket-0.2.11-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.12/bitbucket-0.2.12-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.12/bitbucket-0.2.12-linux-arm64.zip"
     }
   },
   {
@@ -61,7 +61,7 @@
     "key": "git",
     "name": "Git CLI",
     "description": "Run git against local repositories, with a policy that can refuse a branch name, a commit message, a push to a protected branch, or a force push. Rules DIFFER PER REPOSITORY. Call policy_show for the repository first and comply with what it returns — every other operation reports a refusal only after the fact, one rule at a time. Wraps the git binary, so it works with any host.",
-    "version": "0.3.5",
+    "version": "0.3.6",
     "default_tags": [
       {
         "Name": "Connector",
@@ -81,15 +81,15 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.3.5/git-0.3.5-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.3.5/git-0.3.5-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.3.6/git-0.3.6-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.3.6/git-0.3.6-linux-arm64.zip"
     }
   },
   {
     "key": "github",
     "name": "GitHub",
     "description": "Comprehensive GitHub REST API connector: repos, issues, PRs (incl. diff/merge), releases, tags, forks, stars, file contents/edits, the authenticated user, read-only repository settings (rulesets, environments) with a release-setup validator, and a token health check.",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "default_tags": [
       {
         "Name": "Connector",
@@ -109,8 +109,46 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/github/v0.2.2/github-0.2.2-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/github/v0.2.2/github-0.2.2-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/github/v0.2.3/github-0.2.3-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/github/v0.2.3/github-0.2.3-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "gitlab",
+    "name": "GitLab",
+    "description": "GitLab REST API v4 (gitlab.com or self-managed): projects, branches, commits, files, merge requests (diff, notes, approve, merge), pipelines and job logs, and issues. Pair get_merge_request / get_pipeline with a schedule watch to be told when an MR merges or a pipeline ends.",
+    "version": "0.1.10",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Development",
+        "Description": "Source hosts and developer platforms.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 52
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/gitlab/v0.1.10/gitlab-0.1.10-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/gitlab/v0.1.10/gitlab-0.1.10-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "gitlab_webhook",
+    "name": "GitLab Webhook",
+    "description": "Receives GitLab webhooks and wakes the schedule watches subscribed to that project (wake_on gitlab_webhook:\u003cgroup/repo\u003e).",
+    "version": "0.1.0",
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/gitlab_webhook/v0.1.0/gitlab_webhook-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/gitlab_webhook/v0.1.0/gitlab_webhook-0.1.0-linux-arm64.zip"
     }
   },
   {

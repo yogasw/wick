@@ -33,8 +33,11 @@ type watchState struct {
 	Notified int `json:"notified"`
 	// ErrorHash is the hash of the repeated-error text last notified; cleared
 	// when a run gets past the error again.
-	ErrorHash string    `json:"error_hash,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ErrorHash string `json:"error_hash,omitempty"`
+	// Snapshots are the code steps' snapshots (step index → what the script
+	// returned as snapshot), handed back as input.snapshot next fire.
+	Snapshots map[string]json.RawMessage `json:"snapshots,omitempty"`
+	UpdatedAt time.Time                  `json:"updated_at"`
 }
 
 // watchStatePath is the state file of m, "" for an id wick did not mint.

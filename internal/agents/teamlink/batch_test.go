@@ -365,7 +365,7 @@ func TestBatchSoftTimeout(t *testing.T) {
 func TestDeliverErrorIsRetriedAndPersisted(t *testing.T) {
 	h, turns, note := newFanHub(t, true)
 	dir := t.TempDir()
-	if err := h.Persist(dir); err != nil {
+	if err := persistTest(t, h, dir); err != nil {
 		t.Fatal(err)
 	}
 	h.retryBase = 40 * time.Millisecond
@@ -388,7 +388,7 @@ func TestDeliverErrorIsRetriedAndPersisted(t *testing.T) {
 func TestRestartRedeliversOutboxAndHeldReplies(t *testing.T) {
 	dir := t.TempDir()
 	h1, turns1, note1 := newFanHub(t, true)
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	h1.retryBase = time.Hour // the first process never retries
@@ -405,7 +405,7 @@ func TestRestartRedeliversOutboxAndHeldReplies(t *testing.T) {
 
 	// Restart: vera's turn ran in the process that is gone.
 	h2, _, note2 := newFanHub(t, true)
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "two deliveries", func() bool { return len(note2.delivered()) == 2 })
@@ -740,7 +740,7 @@ func TestDeliveryDropsThePersonMark(t *testing.T) {
 func TestFaninFilePermissions(t *testing.T) {
 	h, turns, note := newFanHub(t, true)
 	dir := t.TempDir()
-	if err := h.Persist(dir); err != nil {
+	if err := persistTest(t, h, dir); err != nil {
 		t.Fatal(err)
 	}
 	h.retryBase = time.Hour
@@ -807,7 +807,7 @@ func TestRestartSealsAnUnsealedBatch(t *testing.T) {
 	dir := t.TempDir()
 	h1, turns1, note1 := newFanHub(t, true)
 	h1.TurnSeals = true
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	a := fanSend(t, h1, "anton", nil)
@@ -820,7 +820,7 @@ func TestRestartSealsAnUnsealedBatch(t *testing.T) {
 
 	h2, _, note2 := newFanHub(t, true)
 	h2.TurnSeals = true
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if got := quiet(t, note2, 1)[0]; !strings.Contains(got, "2 of 2 replied") || !strings.Contains(got, "anton: a") {

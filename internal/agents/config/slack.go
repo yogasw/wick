@@ -44,7 +44,7 @@ type SlackChannelConfig struct {
 
 	// HideSubAgentStatus is phrased as an opt-out so the zero value — every
 	// channel row saved before the field existed — keeps the behaviour on.
-	HideSubAgentStatus bool `wick:"bool;hidden;key=hide_subagent_status;group=Agent Behaviour;desc=Stay quiet about background sub-agents. Off (default): the thread gets one short message when a sub-agent is started in the background, and the assistant banner keeps showing which sub-agents are still working after the agent's own turn ends. On: neither."`
+	HideSubAgentStatus bool `wick:"bool;hidden;key=hide_subagent_status;group=Agent Behaviour;desc=Stay quiet about background sub-agents. Off (default): the thread gets one short message when a sub-agent is started in the background, and the assistant banner keeps showing which sub-agents are still working after the agent's own turn ends. On: no message and no names, but the banner still shows a plain working state while they run."`
 	// ThreadCatchUpEnabled is opt-in: off for every bot until turned on.
 	ThreadCatchUpEnabled bool `wick:"bool;hidden;key=thread_catchup_enabled;group=Agent Behaviour;desc=Catch the agent up on the thread. Off (default): a mention or the 🤖 switch wakes an existing thread session with only the message that woke it. On: that message is preceded by the replies posted in the thread since the previous waking message (anyone's, the bot's own excluded, up to 30 messages / 8000 bytes, oldest dropped first), marked as data from the thread, not instructions. Costs one conversations.replies call per such turn."`
 

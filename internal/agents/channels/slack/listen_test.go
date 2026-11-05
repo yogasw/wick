@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -179,6 +180,179 @@ func TestListenWaitOthersReplied(t *testing.T) {
 	}
 }
 
+// Every reply a listening thread hears lands in the session at once, and
+// someone else joining in restarts the wait like the asker does.
+func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
+	ch, _, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	var mu sync.Mutex
+	var heard []map[string]string
+	ch.SetHeardFn(func(sessionID, text string, extras map[string]string) {
+		mu.Lock()
+		defer mu.Unlock()
+		e := map[string]string{"text": text}
+		for k, v := range extras {
+			e[k] = v
+		}
+		heard = append(heard, e)
+	})
+	// Names known up front: a users.info lookup would reach the network.
+	ch.heardNames = map[string]string{"UASKER": "Asker Example", "UOTHER": "Other Example"}
+	first := listenMsg("UASKER", "kenapa form-nya kosong?")
+	ch.queueListenMessage(t.Context(), "S", first, nil)
+	time.Sleep(600 * time.Millisecond)
+	other := listenMsg("UOTHER", "aku juga lihat begitu")
+	other.TimeStamp = "100.3"
+	ch.queueListenMessage(t.Context(), "S", other, []slackgo.File{{Name: "shot.png"}})
+	select {
+	case r := <-got:
+		if r[0] != "kenapa form-nya kosong?" || r[2] != true {
+			t.Fatalf("dispatched %v", r)
+		}
+		if r[1].(time.Duration) < 1500*time.Millisecond {
+			t.Fatalf("another reply did not restart the wait: waited %v", r[1])
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("held reply never went through")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != 2 {
+		t.Fatalf("heard %d replies, want 2: %v", len(heard), heard)
+	}
+	if heard[0]["text"] != "kenapa form-nya kosong?" || heard[0]["msg_ts"] != "100.2" || heard[0]["user"] != "UASKER" {
+		t.Fatalf("first heard = %v", heard[0])
+	}
+	if heard[0]["name"] != "Asker Example" {
+		t.Fatalf("first heard name = %q", heard[0]["name"])
+	}
+	if heard[1]["user"] != "UOTHER" || heard[1]["files"] != "shot.png" || heard[1]["hold_id"] != heard[0]["hold_id"] || heard[0]["hold_id"] == "" {
+		t.Fatalf("second heard = %v", heard[1])
+	}
+}
+
+// A reply while the agent works in the thread goes to it at once, not
+// after the turn and a quiet thread.
+func TestListenReplyJoinsRunningTurn(t *testing.T) {
+	ch, _, got := listenChannel(t, "---\ndelay: 5\n---\n")
+	ch.turns["S"] = &turn{channelID: "C1", threadTS: "100.1", running: true}
+	ch.queueListenMessage(t.Context(), "S", listenMsg("UASKER", "sekalian yang EN ya"), nil)
+	select {
+	case r := <-got:
+		if r[0] != "sekalian yang EN ya" || r[1].(time.Duration) != 0 {
+			t.Fatalf("dispatched %v", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reply waited although a turn was running")
+	}
+	ch.mu.Lock()
+	held := ch.listenWaits["S"]
+	m := ch.working["S"]
+	ch.mu.Unlock()
+	if held != nil || len(m.ts) != 1 || m.ts[0] != "100.2" {
+		t.Fatalf("held=%v working=%+v", held, m)
+	}
+}
+
+// Another bot's reply is heard under the bot's own name, marked as a bot.
+func TestHeardBotReplyNamedAndMarked(t *testing.T) {
+	ch := New(agentconfig.SlackChannelConfig{})
+	var got map[string]string
+	ch.SetHeardFn(func(_, text string, extras map[string]string) {
+		got = map[string]string{"text": text}
+		for k, v := range extras {
+			got[k] = v
+		}
+	})
+	ev := &slackevents.MessageEvent{BotID: "B01TEST", Username: "intake-bot", Text: "form baru masuk", Channel: "C1", ThreadTimeStamp: "100.1", TimeStamp: "100.4"}
+	ch.reportHeard("S", nil, ev, nil)
+	if got["name"] != "intake-bot" || got["bot"] != "1" || got["user"] != "B01TEST" || got["hold_id"] != "" || got["text"] != "form baru masuk" {
+		t.Fatalf("heard = %v", got)
+	}
+}
+
+// A bot's reply goes through listen like a person's; after listenBotStreak
+// bot-only turns in a row it is heard but starts nothing until a person
+// speaks.
+func TestListenBotRepliesCapped(t *testing.T) {
+	ch, _, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	heard := 0
+	ch.SetHeardFn(func(string, string, map[string]string) { heard++ })
+	bot := func(ts string) *slackevents.MessageEvent {
+		return &slackevents.MessageEvent{BotID: "B01TEST", Username: "other-bot", Text: "status ok", Channel: "C1", ThreadTimeStamp: "100.1", TimeStamp: ts}
+	}
+	for i := 0; i < listenBotStreak; i++ {
+		ch.queueListenMessage(t.Context(), "S", bot(fmt.Sprintf("100.%d", 2+i)), nil)
+		select {
+		case <-got:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("bot reply %d never went to the agent", i+1)
+		}
+	}
+	ch.queueListenMessage(t.Context(), "S", bot("100.9"), nil)
+	select {
+	case r := <-got:
+		t.Fatalf("bot-only turn past the limit: %v", r)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if heard != listenBotStreak+1 {
+		t.Fatalf("heard %d bot replies, want %d", heard, listenBotStreak+1)
+	}
+	ch.heardNames = map[string]string{"UASKER": "Asker Example"}
+	ch.queueListenMessage(t.Context(), "S", listenMsg("UASKER", "lanjut"), nil)
+	if n := ch.botTurnsInARow("S"); n != 0 {
+		t.Fatalf("a person speaking left the bot count at %d", n)
+	}
+	select {
+	case <-got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a person's reply did not go through")
+	}
+}
+
+// A heard reply is shown without Slack's markup: names, links, channels.
+func TestHeardTextDropsSlackMarkup(t *testing.T) {
+	ch := New(agentconfig.SlackChannelConfig{})
+	ch.heardNames = map[string]string{"U01TEST": "Dev Example"}
+	got := ch.heardText("mbk <@U01TEST> cek <https://example.com/a?b=1|example.com/a…> di <#C01TESTCHAN|general> <!here> &lt;ok&gt; <https://example.com/x> <https://example.com/doc|the doc> <@U02NONAME>")
+	want := "mbk @Dev Example cek https://example.com/a?b=1 di #general @here <ok> https://example.com/x the doc (https://example.com/doc) @U02NONAME"
+	if got != want {
+		t.Fatalf("heardText =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// The thread carries one 👀, on the latest reply heard, and counts them all.
+func TestListenWaitOneMarkerOnLatest(t *testing.T) {
+	ch, _, _ := listenChannel(t, "---\ndelay: 5\n---\n")
+	ch.queueListenMessage(t.Context(), "S", listenMsg("UASKER", "satu"), nil)
+	second := listenMsg("UASKER", "dua")
+	second.TimeStamp = "100.3"
+	ch.queueListenMessage(t.Context(), "S", second, nil)
+	w := ch.takeListenWait("S")
+	if w == nil || w.eyesTS != "100.3" || w.heard != 2 {
+		t.Fatalf("wait = %+v", w)
+	}
+}
+
+// ⏳ sits on the latest reply a turn works on until the turn ends.
+func TestWorkingMarkClearedAtTurnEnd(t *testing.T) {
+	ch := New(agentconfig.SlackChannelConfig{})
+	ch.markWorking("S", "C1", []string{"100.2"})
+	ch.markWorking("S", "C1", []string{"100.3"})
+	ch.mu.Lock()
+	m := ch.working["S"]
+	ch.mu.Unlock()
+	if m.channel != "C1" || len(m.ts) != 1 || m.ts[0] != "100.3" {
+		t.Fatalf("working = %+v", m)
+	}
+	ch.clearWorking("S")
+	ch.mu.Lock()
+	_, left := ch.working["S"]
+	ch.mu.Unlock()
+	if left {
+		t.Fatal("working mark survived the turn")
+	}
+}
+
 // Stopping drops a held reply and records the stop, which beats a scope.
 func TestListenOffCancelsWait(t *testing.T) {
 	ch, fake, got := listenChannel(t, "---\ndelay: 1\n---\n")
@@ -223,6 +397,15 @@ func TestListenNote(t *testing.T) {
 	n = listenNote(listenTurn{docsChanged: true, docInstructions: "New rule."})
 	if !strings.HasSuffix(n, "New rule.") {
 		t.Fatalf("changed docs must ride along: %s", n)
+	}
+	if strings.Contains(n, "message from") {
+		t.Fatalf("no pending mention, no mention line: %s", n)
+	}
+	// A reply that joins a turn still answering a mention says so, or the
+	// agent reads the whole turn as one that only needs [silent].
+	n = listenNote(listenTurn{pendingMention: "Alice"})
+	if !strings.Contains(n, "message from Alice you have not answered yet") {
+		t.Fatalf("pending mention missing: %s", n)
 	}
 }
 

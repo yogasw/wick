@@ -77,29 +77,16 @@ func sessionConfigStatus(specs []entity.Config, cfg map[string]string) string {
 }
 
 // sessionConfigBases lists the connectors the caller may clone into a
-// session workspace: module declares AllowSessionConfig AND a visible
-// instance has the per-instance toggle on. Deduped by connector key.
-// Surfaced in wick_list so the agent knows the option exists.
+// session workspace (see connectors.Service.SessionBases). Surfaced in
+// wick_list so the agent knows the option exists.
 func sessionConfigBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []sessionBaseHint {
-	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
-	if err != nil {
+	mods := svc.SessionBases(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
+	if len(mods) == 0 {
 		return nil
 	}
-	seen := map[string]bool{}
-	out := make([]sessionBaseHint, 0)
-	for _, row := range rows {
-		if seen[row.Key] {
-			continue
-		}
-		mod, ok := svc.Module(row.Key)
-		if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
-			continue
-		}
-		seen[row.Key] = true
-		out = append(out, sessionBaseHint{BaseKey: row.Key, Label: mod.Meta.Name})
-	}
-	if len(out) == 0 {
-		return nil
+	out := make([]sessionBaseHint, 0, len(mods))
+	for _, mod := range mods {
+		out = append(out, sessionBaseHint{BaseKey: mod.Meta.Key, Label: mod.Meta.Name})
 	}
 	return out
 }

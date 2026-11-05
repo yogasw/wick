@@ -83,6 +83,10 @@ type ConnectorGrant struct {
 	Level string `json:"level"`
 	// Ops is the allow-list used when Level is LevelPick.
 	Ops []string `json:"ops"`
+	// Lend runs the connector as the agent's owner for a person chatting
+	// who cannot reach it on their own (connectors.LendingScope). Whoever
+	// can keeps their own identity. Level and Accounts still apply.
+	Lend bool `json:"lend,omitempty"`
 }
 
 // Features switches the conversation rail panels an agent's chat shows.
@@ -305,7 +309,21 @@ func DecodeGrants(raw string) []ConnectorGrant {
 	if err := json.Unmarshal([]byte(raw), &out); err != nil || out == nil {
 		return []ConnectorGrant{}
 	}
-	return out
+	return withEmptyLists(out)
+}
+
+// withEmptyLists turns nil Accounts / Ops into empty lists, so the JSON the
+// UI reads always carries arrays, never null.
+func withEmptyLists(g []ConnectorGrant) []ConnectorGrant {
+	for i := range g {
+		if g[i].Accounts == nil {
+			g[i].Accounts = []string{}
+		}
+		if g[i].Ops == nil {
+			g[i].Ops = []string{}
+		}
+	}
+	return g
 }
 
 // EncodeGrants is the inverse of DecodeGrants; nil encodes as "[]".
@@ -313,7 +331,7 @@ func EncodeGrants(g []ConnectorGrant) string {
 	if len(g) == 0 {
 		return "[]"
 	}
-	b, err := json.Marshal(g)
+	b, err := json.Marshal(withEmptyLists(append([]ConnectorGrant(nil), g...)))
 	if err != nil {
 		return "[]"
 	}

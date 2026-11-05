@@ -71,13 +71,14 @@ func (r *Repo) WithSessionAccess(fn func(userID, sessionID string) bool) *Repo {
 // in a project its author cannot see. An agent or session_init node carries a
 // `workspace` (project id); the session it creates then works inside that
 // project with the workflow owner's identity, so anyone who could edit the
-// workflow could otherwise reach any project by typing its id.
+// workflow could otherwise reach any project by typing its id. A run_code
+// node's workspace is where its script_path is read from: same gate.
 func (r *Repo) WithProjectAccess(fn func(userID, projectID string) bool) *Repo {
 	r.ProjectAccess = fn
 	return r
 }
 
-// checkProjects refuses a draft whose agent / session_init nodes name a project
+// checkProjects refuses a draft whose agent / session_init / run_code nodes name a project
 // the author may not access. Enforced at SAVE, like checkPinnedSessions, so the
 // failure lands on the person typing the id.
 func (r *Repo) checkProjects(w wf.Workflow, createdBy string) error {
@@ -85,7 +86,7 @@ func (r *Repo) checkProjects(w wf.Workflow, createdBy string) error {
 		return nil
 	}
 	for _, n := range w.Graph.Nodes {
-		if n.Workspace == "" || (n.Type != wf.NodeAgent && n.Type != wf.NodeSessionInit) {
+		if n.Workspace == "" || (n.Type != wf.NodeAgent && n.Type != wf.NodeSessionInit && n.Type != wf.NodeRunCode) {
 			continue
 		}
 		if !r.ProjectAccess(createdBy, n.Workspace) {

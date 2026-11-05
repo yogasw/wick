@@ -226,6 +226,56 @@ func (h *Handler) apiTestInstanceAuth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// apiSaveMyToken serves POST /manager/api/connectors/{key}/{id}/my-token:
+// the caller saves their own values for a per-user token instance (bearer
+// / custom header MCP server). Same gates as the oauth Connect my account
+// route — Enable SSO on and the caller allowed to connect via SSO. The
+// values are checked against the server before they are stored.
+func (h *Handler) apiSaveMyToken(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if h.custom == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "custom connectors unavailable"})
+		return
+	}
+	user := login.GetUser(ctx)
+	if user == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "log in to connect an account"})
+		return
+	}
+	key := r.PathValue("key")
+	row, err := h.connectors.Get(ctx, r.PathValue("id"))
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "instance not found"})
+		return
+	}
+	if !row.EnableSSO || !h.canConnectSSO(user, row) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "connecting your own account is not allowed on this instance"})
+		return
+	}
+	var body struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	label := user.Name
+	if label == "" {
+		label = user.Email
+	}
+	if err := h.custom.SaveUserToken(ctx, row.ID, user.ID, label, body.Values); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	// The first account is what populates the shared op list.
+	if defID, ok := h.custom.DefIDForKey(key); ok {
+		if err := h.custom.ReloadFor(ctx, defID, row.ID); err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("re-sync after per-user token connect")
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account": label})
+}
+
 // apiCustomRename serves POST /manager/api/connectors/custom/{defID}/rename.
 // Display-name only: the connector key is immutable, so existing instances,
 // tags, and MCP tool ids keep working. Reloads so the new name serves at

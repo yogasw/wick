@@ -67,8 +67,10 @@ type accountDetailJSON struct {
 	CanManage bool `json:"can_manage"`
 	// ReconnectURL is the OAuth start target, empty when the caller may not
 	// re-consent (same gate as the instance's Connect button).
-	ReconnectURL string          `json:"reconnect_url"`
-	Ops          []accountOpJSON `json:"ops"`
+	ReconnectURL string `json:"reconnect_url"`
+	// AuthError: the last call failed on auth, so a reconnect is needed.
+	AuthError string          `json:"auth_error,omitempty"`
+	Ops       []accountOpJSON `json:"ops"`
 }
 
 func (h *Handler) apiAccountDetail(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +118,7 @@ func (h *Handler) apiAccountDetail(w http.ResponseWriter, r *http.Request) {
 		AccountID:     acc.ID,
 		DisplayName:   acc.DisplayName,
 		CanManage:     h.canManageAccount(user, row, acc),
+		AuthError:     acc.AuthError,
 		Ops:           make([]accountOpJSON, 0, len(all)),
 	}
 	if mod.OAuth != nil {

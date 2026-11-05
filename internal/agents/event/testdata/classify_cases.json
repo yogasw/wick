@@ -265,6 +265,39 @@
   "op": "send_message"
  },
  {
+  "name": "call: wick_run_code",
+  "tool": "mcp__wick__wick_run_code",
+  "call": true,
+  "input": "{\"code\":\"const a = \\\"conn:acme-1/list_rows\\\"; // Acme\\nconst b = \\\"conn:acme-1/get_row@acc-1\\\";\\nreturn (await wick.call(a, {})).length;\",\"lang\":\"ts\"}",
+  "kind": "codemode",
+  "lang": "typescript",
+  "connector": "code mode",
+  "op": "ts",
+  "summary": "code mode · ts · inline"
+ },
+ {
+  "name": "call: wick_run_code script_path with input",
+  "tool": "mcp__wick__wick_run_code",
+  "call": true,
+  "input": "{\"script_path\":\"scripts/report.ts\",\"timeout_ms\":120000,\"input\":{\"day\":\"2026-01-02\",\"ids\":[\"1\"]}}",
+  "kind": "codemode",
+  "lang": "typescript",
+  "path": "scripts/report.ts",
+  "connector": "code mode",
+  "op": "ts",
+  "summary": "code mode · ts · report.ts",
+  "parts": ["json"]
+ },
+ {
+  "name": "result: wick_run_code",
+  "tool": "mcp__wick__wick_run_code",
+  "input": "{\"ok\":false,\"result\":{\"n\":2},\"error\":\"boom\",\"logs\":[\"start\"],\"calls\":[{\"tool_id\":\"conn:acme-1/list_rows\",\"ok\":true,\"ms\":12}],\"duration_ms\":40,\"run_id\":\"r1\"}",
+  "is_error": true,
+  "kind": "json",
+  "summary": "failed · 1 call · 40 ms",
+  "parts": ["error", "text", "terminal"]
+ },
+ {
   "name": "call: generic tool args",
   "tool": "TodoWrite",
   "call": true,

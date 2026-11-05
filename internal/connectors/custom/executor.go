@@ -74,9 +74,22 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 	// "+ New row" seeds them and the Connect flow's SetOwned writes are
 	// accepted. Hidden — managed by the flow, not typed by hand.
 	oauthScheme := false
-	if srvRow := s.serverRowForDef(ctx, def); srvRow != nil && srvRow.AuthScheme == "oauth" {
-		cfgFields = append(cfgFields, oauthInstanceConfigs()...)
-		oauthScheme = true
+	if srvRow := s.serverRowForDef(ctx, def); srvRow != nil {
+		switch {
+		case srvRow.AuthScheme == "oauth":
+			cfgFields = append(cfgFields, oauthInstanceConfigs()...)
+			oauthScheme = true
+		case isTokenScheme(srvRow.AuthScheme) && s.OAuthPerUser(ctx, def.Key):
+			// Per-user token server: rides the same SSO account machinery
+			// as oauth (each user's ConnectorAccount); the account is made
+			// by typing a token, not a login. The marker row is declared so
+			// the flag survives module re-seeds.
+			cfgFields = append(cfgFields, DefField{Key: cfgOAuthPerUser, Hidden: true, Desc: "Per-user (SSO) mode marker (managed automatically)."})
+			oauthScheme = true
+		default:
+			// "Config" header rows: each instance fills its own value.
+			cfgFields = append(cfgFields, configHeaderFields(srvRow)...)
+		}
 	}
 
 	// Build each category's ops in order — grouping is explicit in the
@@ -158,6 +171,9 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 		// Author opt-in: lets users override this def's config per agent
 		// session (still gated by the per-instance admin toggle).
 		AllowSessionConfig: def.AllowSessionConfig,
+		// The def toggle alone is enough: a session clone fills its own
+		// config, so a saved instance as parent adds nothing.
+		SessionBaseFromDefinition: def.AllowSessionConfig,
 	}, nil
 }
 
@@ -265,6 +281,27 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 	var claims *SSOClaims
 	if row.AuthScheme == "sso" {
 		claims = systemSSOClaims()
+	}
+	if isTokenScheme(row.AuthScheme) && s.OAuthPerUser(ctx, def.Key) {
+		// Per-user token server: the row holds no credential, so the
+		// shared op list syncs under a user's own token — the caller's,
+		// else the most recently saved. None yet → zero ops until the
+		// first user connects.
+		var callerID string
+		if u := login.GetUser(parent); u != nil {
+			callerID = u.ID
+		}
+		if !s.borrowUserToken(ctx, def.Key, preferInstance, callerID, &srv) {
+			l.Warn().Msg("per-user token mcp def has no connected account; exposing zero operations")
+			return nil, false
+		}
+	} else if len(configHeaderFields(row)) > 0 {
+		// Per-instance Config headers: sync under an instance that has
+		// its values filled in — the preferred one first.
+		if !s.borrowInstanceConfig(ctx, def.Key, preferInstance, &srv) {
+			l.Warn().Msg("mcp def has no instance with its config headers filled; exposing zero operations")
+			return nil, false
+		}
 	}
 	if row.AuthScheme == "oauth" {
 		// tools/list needs a token — borrow the first instance with a
@@ -626,6 +663,28 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 			Groups:  login.GetUserTagIDs(c.Context()),
 		}
 	}
+	if isTokenScheme(row.AuthScheme) {
+		inst, ierr := s.conns.Get(c.Context(), c.InstanceID())
+		if ierr == nil && s.InstancePerUser(*inst) {
+			// Per-user token instance: the caller's own token, never a
+			// fallback to someone else's.
+			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
+			if err != nil {
+				return nil, perUserAccountError(err, *inst, c.AccountID(), "token")
+			}
+			if err := s.applyUserToken(&srv, acc); err != nil {
+				return nil, err
+			}
+		} else if missing := applyConfigHeaders(&srv, c.Cfg); len(missing) > 0 {
+			// Per-instance Config headers: c.Cfg is the instance's value
+			// (or the session override), already decrypted.
+			where := "the instance settings"
+			if ierr == nil {
+				where = "/manager/connectors/" + inst.Key + "/" + inst.ID
+			}
+			return nil, fmt.Errorf("this instance has no value for %s yet — fill it on %s, then retry", strings.Join(missing, ", "), where)
+		}
+	}
 	if row.AuthScheme == "oauth" {
 		meta := parseOAuthMeta(row.AuthExtra)
 		if inst, err := s.conns.Get(c.Context(), c.InstanceID()); err == nil && s.InstancePerUser(*inst) {
@@ -634,15 +693,7 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 			// account — never a fallback to someone else's.
 			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
 			if err != nil {
-				switch err {
-				case ErrNoOAuthAccount:
-					return nil, fmt.Errorf("you have not connected your own %s account yet — open /manager/connectors/%s/%s and click Connect to link it, then retry", inst.Label, inst.Key, inst.ID)
-				case ErrOAuthAccountNotYours:
-					return nil, fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at /manager/connectors/%s/%s", c.AccountID(), inst.Label, inst.Key, inst.ID)
-				case ErrOAuthAccountGone:
-					return nil, fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at /manager/connectors/%s/%s", c.AccountID(), inst.Label, inst.Key, inst.ID)
-				}
-				return nil, err
+				return nil, perUserAccountError(err, *inst, c.AccountID(), "account")
 			}
 			tok, err := s.accountAccessToken(c.Context(), &meta, acc)
 			if err != nil {
@@ -728,4 +779,40 @@ func coerceArgs(fields []DefField, c *connector.Ctx) map[string]any {
 		out[name] = raw
 	}
 	return out
+}
+
+// perUserAccountError turns a callerAccount miss into the message the
+// agent relays: where the user connects their own account. what names
+// the credential ("account" for oauth, "token" for the token schemes).
+func perUserAccountError(err error, inst entity.Connector, accountID, what string) error {
+	page := "/manager/connectors/" + inst.Key + "/" + inst.ID
+	switch err {
+	case ErrNoOAuthAccount:
+		if what == "token" {
+			return fmt.Errorf("you have not added your own %s token yet — open %s, click Connect my account and enter your token, then retry", inst.Label, page)
+		}
+		return fmt.Errorf("you have not connected your own %s account yet — open %s and click Connect to link it, then retry", inst.Label, page)
+	case ErrOAuthAccountNotYours:
+		return fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at %s", accountID, inst.Label, page)
+	case ErrOAuthAccountGone:
+		return fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at %s", accountID, inst.Label, page)
+	}
+	return err
+}
+
+// borrowUserToken authenticates srv for a tools/list sync with a
+// per-user token account: the preferred instance first, the caller's own
+// account before the most recently saved one. false = nobody connected.
+func (s *Service) borrowUserToken(ctx context.Context, key, preferInstance, callerID string, srv *serverConfig) bool {
+	rows, _ := s.conns.ListByKey(ctx, key)
+	for _, r := range preferFirst(rows, preferInstance) {
+		if r.Disabled || !s.InstancePerUser(r) {
+			continue
+		}
+		accs, _ := s.conns.ListAccounts(ctx, r.ID)
+		if acc := syncAccount(accs, callerID); acc != nil && s.applyUserToken(srv, acc) == nil {
+			return true
+		}
+	}
+	return false
 }

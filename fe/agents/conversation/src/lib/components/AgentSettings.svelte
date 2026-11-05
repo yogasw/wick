@@ -23,7 +23,7 @@
   import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { normalizeAccessMode, type AccessMode } from "../accessList.js";
-  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
+  import { HANDLE_RE, splitPick, joinPick, grantsOf, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { navigate, type SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, PERSONA_UPDATE_FIELDS, improveInput, type PersonaDraft, type PersonaUpdateField } from "../personaGen.js";
@@ -62,7 +62,7 @@
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; force_default_provider: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; stop_after_team_task: boolean; use_global_prompt: boolean; show_in_projects: boolean;
-    mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
+    mention_from: MentionFrom; mention_allow: string[]; max_hops: number; reach_allow: string[];
     manage_agents: boolean; captain_can: CaptainCan; captain_policy: CaptainPolicy;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
     suggested_prompts: SuggestedPrompt[];
@@ -72,11 +72,11 @@
       handle: a.handle, name: a.name, tagline: a.tagline ?? "", description: a.description,
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
-      grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
+      grants: grantsOf($state.snapshot(a.allowed_connectors) as ConnectorGrant[] | null),
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, force_default_provider: !!a.force_default_provider, channel_show_teammates: a.channel_show_teammates !== false, channel_hide_interim: a.channel_hide_interim !== false, stop_after_team_task: a.stop_after_team_task !== false, use_global_prompt: !!a.use_global_prompt,
       show_in_projects: a.show_in_projects ?? !a.own_project,
-      mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
+      mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops), reach_allow: [...(a.reach_allow ?? [])],
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can), captain_policy: captainPolicyOf(a.captain_policy),
       native_tools: nativeToolsOf(a.allowed_native_tools), bash_rules: (a.bash_rules ?? []).map((r) => ({ ...r })),
       disabled_skills: [...(a.disabled_skills ?? [])],
@@ -316,7 +316,7 @@
       const av = avatarToSave(d.avatar);
       if (!sameValue(av, avatarCmp(saved.avatar))) p.avatar = av;
     }
-    if (!sameValue(d.grants, saved.allowed_connectors ?? [])) {
+    if (!sameValue(d.grants, grantsOf(saved.allowed_connectors))) {
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
     if (d.include_new_connectors !== saved.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
@@ -332,6 +332,7 @@
     if (d.show_in_projects !== (saved.show_in_projects ?? !saved.own_project)) p.show_in_projects = d.show_in_projects;
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
     if (!sameValue(d.mention_allow, saved.mention_allow ?? [])) p.mention_allow = [...d.mention_allow];
+    if (!sameValue(d.reach_allow, saved.reach_allow ?? [])) p.reach_allow = [...d.reach_allow];
     if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
     if (d.manage_agents !== (saved.manage_agents ?? saved.is_captain)) p.manage_agents = d.manage_agents;
     if (!sameValue(d.captain_can, captainCanOf(saved.captain_can))) p.captain_can = { ...d.captain_can };
@@ -667,8 +668,8 @@
     {/if}
   {:else if view === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      Connectors are off until you add them. Platform tools are on for every agent; System
-      tools are for the Captain. An agent never gets more than your own access.
+      What people can use when they chat with this agent. Each person works with their own
+      access; lend single connectors of yours below.
     </p>
     {#if pruned > 0}
       <p class="text-xs text-black-800 dark:text-black-600">
@@ -899,6 +900,27 @@
         {/each}
       </div>
     {/if}
+    <div data-testid="reach-allow">
+      <span class={label}>Agents that can message any session of @{agent.handle}</span>
+      <p class="mb-1 text-xs text-black-800 dark:text-black-600">Lets a checker agent send a correction straight into @{agent.handle}'s Slack thread sessions, even ones started by someone else. Leave empty to keep the usual rules.</p>
+      {#each agents.filter((a) => a.id !== agent.id) as a (a.id)}
+        <label class="flex items-center gap-2 py-1 text-sm text-black-900 dark:text-white-100">
+          <input
+            type="checkbox"
+            checked={draft.reach_allow.includes(a.id)}
+            onchange={(e) => {
+              const on = (e.currentTarget as HTMLInputElement).checked;
+              draft.reach_allow = on ? [...draft.reach_allow, a.id] : draft.reach_allow.filter((id) => id !== a.id);
+            }}
+          />
+          <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={20} />
+          <span>{a.name}</span>
+          <span class="text-xs text-black-800 dark:text-black-600">@{a.handle}</span>
+        </label>
+      {:else}
+        <p class="text-xs text-black-800 dark:text-black-600">No other agents yet.</p>
+      {/each}
+    </div>
     <div>
       <label class={label} for="as-max-hops">Max agent-to-agent turns in a row</label>
       <input

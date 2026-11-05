@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"math/rand"
 	"net/http"
@@ -701,8 +702,19 @@ func atoiSafe(s string) int {
 //     Below the gate it would create outerWidth < innerWidth — an impossible
 //     window — so it must be omitted, exactly like the wrapper's
 //     binary_supports_maximized_window gate.
-func cloakArgs(c *connector.Ctx) []string {
+func cloakArgs(c *connector.Ctx) []string { return cloakArgsFor(c, "") }
+
+// cloakArgsFor is cloakArgs for a session on a named profile. The fingerprint
+// seed decides the emulated screen, and with it the maximized viewport, so a
+// random seed per launch moved every coordinate between sessions. A named
+// profile gets a seed derived from its name instead: the same "device" every
+// time it is opened, which is also what a returning logged-in user looks like.
+// Anonymous sessions keep a fresh random seed.
+func cloakArgsFor(c *connector.Ctx, profile string) []string {
 	seed := 10000 + rand.Intn(90000)
+	if profile != "" {
+		seed = profileSeed(profile)
+	}
 	args := []string{
 		"--no-sandbox",
 		fmt.Sprintf("--fingerprint=%d", seed),
@@ -718,4 +730,12 @@ func cloakArgs(c *connector.Ctx) []string {
 		args = append(args, "--start-maximized")
 	}
 	return args
+}
+
+// profileSeed maps a profile name to a stable fingerprint seed in the same
+// 10000–99999 range as the random one.
+func profileSeed(profile string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(profile))
+	return 10000 + int(h.Sum32()%90000)
 }

@@ -1,0 +1,232 @@
+package schedule
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/yogasw/wick/internal/codemode"
+	"github.com/yogasw/wick/internal/codemode/scriptpath"
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// A code step runs a script through Code Mode (a codemode_* runner plugin):
+// the script's wick.call goes back through the wick_execute path as the
+// schedule's run-as identity, so it can do what a connector step does, but
+// compare across calls and remember what it saw.
+//
+// Contract. The script reads input.snapshot (what it returned as snapshot on
+// the previous fire, null on the first), input.prev (the previous step's
+// output, JSON when it parses) and input.params (the step's params), and
+// returns {changed: [...], snapshot, done?}:
+//
+//	changed empty   → pending: nothing delivered, no LLM
+//	changed ≠ empty → ok: the session is woken with changed as the result
+//	done: true      → ok, and the watch ends here (on_match continue too)
+//
+// The snapshot is kept in watch-state.json per step, and only after a run
+// that did not error — a later step failing must not swallow the changes the
+// next fire would report again.
+
+// StepKindCode is a Code Mode step.
+const StepKindCode = "code"
+
+const (
+	codeMaxBytes    = 64 << 10 // inline code
+	codeDefaultLang = "ts"
+	// codeQueueSlack is how long a code step may wait for a busy runner on
+	// top of its own timeout.
+	codeQueueSlack = 2 * time.Minute
+)
+
+// CodeRun is one script run asked of the Code Mode host.
+type CodeRun struct {
+	Lang    string
+	Code    string
+	Input   json.RawMessage
+	Timeout time.Duration
+	// Dir is the watch's folder, whose codemode/ subfolder wick.file uses
+	// (codemode.Request.Dir); NoDir says why there is none.
+	Dir   string
+	NoDir string
+	// ScriptPath is the step's script_path, empty for inline code; the
+	// run audit names the script by it.
+	ScriptPath string
+}
+
+// CodeOutcome is what a code run returned (a subset of codemode.Result).
+type CodeOutcome struct {
+	OK     bool
+	Result json.RawMessage
+	Error  string
+	Logs   []string
+	Calls  int
+}
+
+// CodeExecutor runs a script as the schedule's run-as identity; every call
+// it makes goes through the same gated, audited path as a connector step.
+// An error means the run could not happen at all (no runner, no identity).
+type CodeExecutor func(ctx context.Context, m entity.ScheduledMessage, run CodeRun) (*CodeOutcome, error)
+
+// CodeCall runs one script as user (with tagIDs) for sessionID.
+type CodeCall func(ctx context.Context, run CodeRun, sessionID string, user *entity.User, tagIDs []string) (*CodeOutcome, error)
+
+// NewCodeExecutor builds the watch code executor, with the same identity
+// rules as NewConnectorExecutor.
+func NewCodeExecutor(lookup UserLookup, call CodeCall) CodeExecutor {
+	return func(ctx context.Context, m entity.ScheduledMessage, run CodeRun) (*CodeOutcome, error) {
+		u, tags, sessionID, err := resolveRunAs(ctx, lookup, m)
+		if err != nil {
+			return nil, err
+		}
+		return call(ctx, run, sessionID, u, tags)
+	}
+}
+
+// HasCode reports whether any step is a code step.
+func HasCode(steps []Step) bool {
+	for _, s := range steps {
+		if s.Kind == StepKindCode {
+			return true
+		}
+	}
+	return false
+}
+
+func validateCode(s *Step, at string) error {
+	hasCode, hasPath := strings.TrimSpace(s.Code) != "", strings.TrimSpace(s.ScriptPath) != ""
+	switch {
+	case hasCode == hasPath:
+		return fmt.Errorf(`%s: kind=code takes exactly one of code (inline) or script_path (relative to the project folder), e.g. "script_path":"watches/new_rows.ts"`, at)
+	case len(s.Code) > codeMaxBytes:
+		return fmt.Errorf("%s.code: too long (%d bytes, max %d) — put it in a file and use script_path", at, len(s.Code), codeMaxBytes)
+	}
+	if hasPath {
+		if err := scriptpath.Valid(s.ScriptPath); err != nil {
+			return fmt.Errorf("%s.script_path: %q %v", at, s.ScriptPath, err)
+		}
+	}
+	s.Lang = strings.ToLower(strings.TrimSpace(s.Lang))
+	if s.Lang == "" {
+		s.Lang = codeDefaultLang
+	}
+	// Same limits as wick_run_code, as the agents settings set them now.
+	if l := codemode.CurrentLimits(); s.TimeoutSec < 0 || time.Duration(s.TimeoutSec)*time.Second > l.Max {
+		return fmt.Errorf("%s.timeout_sec: %d out of range; use 1-%d (default %d)", at, s.TimeoutSec, int(l.Max/time.Second), int(l.Default/time.Second))
+	}
+	if s.ToolID != "" || s.Script != "" || len(s.Rules)+len(s.FailRules) > 0 {
+		return fmt.Errorf("%s: a code step takes code or script_path (+ lang, params, timeout_sec) only", at)
+	}
+	return nil
+}
+
+// readScript loads script_path from dir (scriptpath.Read); a path that
+// leads outside the folder is refused as denied, since it cannot heal by
+// itself.
+func readScript(dir, rel string) (string, error) {
+	src, err := scriptpath.Read(dir, rel)
+	if errors.Is(err, scriptpath.ErrDenied) {
+		return "", watchDenied(err.Error())
+	}
+	return src, err
+}
+
+// codeReturn is the shape a code step's script returns.
+type codeReturn struct {
+	Changed  []json.RawMessage `json:"changed"`
+	Snapshot json.RawMessage   `json:"snapshot"`
+	Done     bool              `json:"done"`
+}
+
+// codeStepResult is what runCodeStep hands back to executeWatch.
+type codeStepResult struct {
+	out      []byte // changed, as a JSON array
+	snapshot json.RawMessage
+	pending  bool
+	done     bool
+	hash     string
+	logs     string
+	calls    int
+}
+
+// runCodeStep runs step s (index i). snapshot is what the step returned last
+// time. An error is a failed step; pending means changed came back empty.
+func runCodeStep(ctx context.Context, m entity.ScheduledMessage, s Step, i int, x watchExec, prev []byte) (r codeStepResult, err error) {
+	src := s.Code
+	if strings.TrimSpace(s.ScriptPath) != "" {
+		if src, err = readScript(x.codeDir, s.ScriptPath); err != nil {
+			return r, err
+		}
+	}
+	r.hash = hashText(src)[:16]
+	if x.code == nil {
+		return r, errors.New("code steps are not available in this process")
+	}
+	input := map[string]any{"snapshot": nil, "params": s.Params, "schedule_id": m.ID}
+	if snap, ok := x.snapshots[snapshotKey(i)]; ok && len(snap) > 0 {
+		input["snapshot"] = snap
+	}
+	if len(prev) > 0 {
+		if json.Valid(prev) {
+			input["prev"] = json.RawMessage(prev)
+		} else {
+			input["prev"] = string(prev)
+		}
+	}
+	in, err := json.Marshal(input)
+	if err != nil {
+		return r, fmt.Errorf("input: %w", err)
+	}
+	timeout := codemode.CurrentLimits().Clamp(time.Duration(s.TimeoutSec) * time.Second)
+	cctx, cancel := context.WithTimeout(ctx, timeout+codeQueueSlack)
+	defer cancel()
+	res, err := x.code(cctx, m, CodeRun{Lang: s.Lang, Code: src, Input: in, Timeout: timeout,
+		Dir: x.codeDir, NoDir: "the watch's project folder could not be resolved", ScriptPath: strings.TrimSpace(s.ScriptPath)})
+	if err != nil {
+		if cctx.Err() == context.DeadlineExceeded {
+			return r, fmt.Errorf("timed out after %s", timeout+codeQueueSlack)
+		}
+		return r, err
+	}
+	r.calls = res.Calls
+	r.logs = strings.Join(res.Logs, "\n")
+	if !res.OK {
+		msg := strings.TrimSpace(res.Error)
+		if msg == "" {
+			msg = "script failed"
+		}
+		return r, errors.New(msg)
+	}
+	var ret codeReturn
+	if len(bytes.TrimSpace(res.Result)) == 0 || json.Unmarshal(res.Result, &ret) != nil {
+		return r, fmt.Errorf(`the script must return {changed: [...], snapshot, done?}; got %s`, clip(string(res.Result)))
+	}
+	r.snapshot, r.done = ret.Snapshot, ret.Done
+	if ret.Changed == nil {
+		ret.Changed = []json.RawMessage{}
+	}
+	r.out, _ = json.Marshal(ret.Changed)
+	r.pending = len(ret.Changed) == 0 && !ret.Done
+	return r, nil
+}
+
+func snapshotKey(i int) string { return strconv.Itoa(i) }
+
+// watchCodeDir is where script_path is read from and whose codemode/
+// subfolder wick.file uses: the same confined folder bash steps run in.
+func (r *Runner) watchCodeDir(m entity.ScheduledMessage, steps []Step) string {
+	for _, s := range steps {
+		if s.Kind == StepKindCode {
+			if dir, err := watchExecDir(r.layout, m); err == nil {
+				return dir
+			}
+			return ""
+		}
+	}
+	return ""
+}

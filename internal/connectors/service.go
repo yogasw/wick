@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,8 +119,16 @@ type Service struct {
 	// reading a module — see SetCatalogRefresh. Set once at boot.
 	catalogRefresh func(ctx context.Context, key, instanceID string)
 
+	// identity loads a user and their filter tags, for running a lent
+	// connector as its lender — see SetIdentityLookup. nil lends nothing.
+	identity IdentityLookup
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
+
+	// oauth serializes and remembers access-token refreshes for
+	// generic-OAuth connectors — see ensureOAuthToken.
+	oauth oauthRefreshState
 
 	// cfgs delegates per-instance configuration storage to the central
 	// configs table (owner = "connector:{id}"). nil means storage falls
@@ -344,6 +353,40 @@ func (s *Service) SetMetrics(rec metrics.Recorder) {
 		return
 	}
 	s.metrics = rec
+}
+
+// IdentityLookup returns a user and their filter tag ids.
+type IdentityLookup func(ctx context.Context, userID string) (*entity.User, []string, error)
+
+// SetIdentityLookup wires the user lookup lent connectors run through
+// (see LendingScope). Set once at boot.
+func (s *Service) SetIdentityLookup(f IdentityLookup) { s.identity = f }
+
+// lendIdentity is who a call on connectorID runs as when the agent scope
+// on ctx lends it and the caller cannot reach it on their own: the
+// lender, with their tags. false keeps the caller — nothing is lent, the
+// caller reaches it already (their own access comes first), or the
+// lender lost it.
+func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (*entity.User, []string, bool) {
+	ls, ok := AgentScopeFrom(ctx).(LendingScope)
+	if !ok || s.identity == nil {
+		return nil, nil, false
+	}
+	lenderID, ok := ls.LentBy(connectorID)
+	if !ok || lenderID == "" || lenderID == userID {
+		return nil, nil, false
+	}
+	if own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin); err != nil || own {
+		return nil, nil, false
+	}
+	lender, tags, err := s.identity(ctx, lenderID)
+	if err != nil || lender == nil {
+		return nil, nil, false
+	}
+	if vis, err := s.isVisibleDirect(ctx, connectorID, lender.ID, tags, lender.IsAdmin()); err != nil || !vis {
+		return nil, nil, false
+	}
+	return lender, tags, true
 }
 
 // NewServiceFromDB is a convenience constructor for the web server and
@@ -656,6 +699,36 @@ func (s *Service) Modules() []connector.Module {
 	return out
 }
 
+// SessionBases lists the connectors the caller may clone into a session
+// workspace: every module offered from its definition, plus capable
+// modules with a visible instance whose per-instance toggle is on.
+// Deduped by key; instance-backed first, the rest sorted by key.
+func (s *Service) SessionBases(ctx context.Context, userID string, tagIDs []string, isAdmin bool) []connector.Module {
+	seen := map[string]bool{}
+	out := make([]connector.Module, 0)
+	if rows, err := s.ListVisibleTo(ctx, userID, tagIDs, isAdmin); err == nil {
+		for _, row := range rows {
+			if seen[row.Key] {
+				continue
+			}
+			mod, ok := s.Module(row.Key)
+			if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
+				continue
+			}
+			seen[row.Key] = true
+			out = append(out, mod)
+		}
+	}
+	var defs []connector.Module
+	for _, mod := range s.Modules() {
+		if mod.SessionBaseFromDefinition && !seen[mod.Meta.Key] {
+			defs = append(defs, mod)
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Meta.Key < defs[j].Meta.Key })
+	return append(out, defs...)
+}
+
 // Module looks up a definition by Key. The second return is false when
 // no module is registered for the key (typical when a DB row outlives
 // its code definition after a deploy that drops the connector).
@@ -754,7 +827,26 @@ func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs [
 		return nil, err
 	}
 	// An agent session sees only its checklist, whatever its owner reaches.
-	return filterRowsByScope(ctx, rows), nil
+	rows = filterRowsByScope(ctx, rows)
+	// Plus what the agent's owner lends and the caller cannot reach.
+	if ls, ok := AgentScopeFrom(ctx).(LendingScope); ok {
+		have := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			have[r.ID] = true
+		}
+		for _, id := range ls.LentIDs() {
+			if have[id] {
+				continue
+			}
+			if _, _, lent := s.lendIdentity(ctx, id, userID, userTagIDs, isAdmin); !lent {
+				continue
+			}
+			if row, err := s.repo.Get(ctx, id); err == nil && !row.Disabled {
+				rows = append(rows, *row)
+			}
+		}
+	}
+	return rows, nil
 }
 
 func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
@@ -879,7 +971,21 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 //
 // Must agree with ListVisibleTo, ownership included: a row the caller can
 // see but not dispatch is a listing that lies.
+//
+// A connector the agent's owner lends counts as visible (see
+// LendingScope).
 func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	ok, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin)
+	if err != nil || ok {
+		return ok, err
+	}
+	_, _, lent := s.lendIdentity(ctx, connectorID, userID, userTagIDs, isAdmin)
+	return lent, nil
+}
+
+// isVisibleDirect is IsVisibleTo without lending: the caller's own reach,
+// narrowed by the agent scope.
+func (s *Service) isVisibleDirect(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
 	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
 		return false, nil
 	}
@@ -1989,6 +2095,11 @@ type ExecuteResult struct {
 // connector key a session-workspace instance clones. Grants name rows,
 // not keys, so the instance inherits the widest grant among them.
 func (s *Service) baseAllowsOp(ctx context.Context, scope AgentScope, key string, op *connector.Operation) (bool, error) {
+	// A base offered from its definition has no row to grant: any
+	// agent may run it with the config its session brought.
+	if mod, ok := s.Module(key); ok && mod.SessionBaseFromDefinition {
+		return true, nil
+	}
 	rows, err := s.repo.ListByKey(ctx, key)
 	if err != nil {
 		return false, fmt.Errorf("resolve base connector: %w", err)
@@ -2019,6 +2130,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	var c *entity.Connector
 	var mod connector.Module
 	virtual := p.SessionInstance != nil
+	// lent: the call runs as the lender (see lendIdentity), so the
+	// session's own human never picks the account below.
+	lent := false
 	if virtual {
 		// Session-workspace instance: clone the base module, no DB row.
 		m, ok := s.Module(p.SessionInstance.BaseKey)
@@ -2038,6 +2152,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		c = row
 		if c.Disabled {
 			return nil, fmt.Errorf("connector %q is disabled", c.ID)
+		}
+		// A connector the agent's owner lends, which the caller cannot
+		// reach, runs as the owner: their accounts, their audit row.
+		if lender, tags, ok := s.lendIdentity(ctx, c.ID, p.UserID, p.TagIDs, p.IsAdmin); ok {
+			p.UserID, p.IsAdmin, p.TagIDs = lender.ID, lender.IsAdmin(), tags
+			lent = true
 		}
 		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
 			return nil, err
@@ -2105,6 +2225,43 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
 			}
 			acct = acc
+		}
+	}
+
+	// No account named on a per-user (SSO) OAuth row whose shared instance
+	// credential is OFF: run as the caller's OWN connected account, exactly
+	// as if they had picked it. With the credential ON (the default) the
+	// call keeps running on the instance's configured credential. The caller is
+	// the human behind the agent session when there is one — agent spawns
+	// authenticate with a shared principal, so p.UserID alone is not them.
+	// Only the spawn's own session id counts here, never a session_id op
+	// input: that one is model-controlled and must not choose whose account
+	// runs. Same visibility check as an explicit pick.
+	if !virtual && acct == nil && p.AccountID == "" && mod.OAuth != nil && c.EnableSSO {
+		shared, err := s.SharedCredentialAllowed(ctx, *c)
+		if err != nil {
+			return nil, err
+		}
+		if !shared {
+			owner := p.UserID
+			if !lent && s.sessionOwnerUser != nil && p.SessionID != "" {
+				if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
+					owner = uid
+				}
+			}
+			acc, err := s.OwnAccount(ctx, c.ID, owner)
+			if err != nil {
+				return nil, fmt.Errorf("resolve your connected account: %w", err)
+			}
+			if acc != nil {
+				accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+				if tagErr != nil {
+					return nil, fmt.Errorf("resolve account tags: %w", tagErr)
+				}
+				if AccountVisibleTo(*c, *acc, accTags[acc.ID], s.AccountAccessFor(*c, owner, p.IsAdmin, p.TagIDs)) {
+					acct = acc
+				}
+			}
 		}
 	}
 
@@ -2188,6 +2345,19 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
 	} else {
 		configs = s.LoadConfigs(*c)
+	}
+
+	// No account resolved and the instance credential is off: fail here with
+	// a message that says what to do, instead of calling the provider with an
+	// empty (or somebody else's) token and relaying its confusing refusal.
+	if !virtual && acct == nil && mod.OAuth != nil {
+		allowed, err := s.SharedCredentialAllowed(ctx, *c)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, s.connectNeededError(mod, *c)
+		}
 	}
 
 	// VisibleWhen gates the op on the instance's own config (e.g. an op only
@@ -2275,12 +2445,28 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		masker.add(collectSensitiveValues(mod, op, configs, input))
 	}
 
+	// Renew an expired OAuth access token before the op sees it and keep
+	// the result, so a provider like Google is not asked for a new token on
+	// every call (the connector cannot write its config back itself).
+	if !virtual {
+		if minted := s.ensureOAuthToken(ctx, mod, *c, acct, configs); minted != "" {
+			masker.add([]string{minted})
+		}
+	}
+
 	// Resolve the session id up front (an explicit `session_id` op input wins
 	// over the per-spawn p.SessionID) so it can be stamped on the run record and
 	// used to register this op for session-scoped cancellation below.
 	sessionID := p.SessionID
 	if v := strings.TrimSpace(input["session_id"]); v != "" {
 		sessionID = v
+	}
+
+	// An auto-picked account is recorded like a named one, so the history
+	// shows who the call ran as.
+	runAccountID := p.AccountID
+	if acct != nil {
+		runAccountID = acct.ID
 	}
 
 	s.metrics.IncActive()
@@ -2290,7 +2476,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		OperationKey: op.Key,
 		UserID:       p.UserID,
 		SessionID:    sessionID,
-		AccountID:    p.AccountID,
+		AccountID:    runAccountID,
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,
@@ -2349,6 +2535,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if ferr := s.repo.FinishRun(ctx, run.ID, res.Status, res.ResponseJSON, res.ErrorMessage, latencyMs, 0); ferr != nil {
 			log.Warn().Err(ferr).Str("run_id", run.ID).Msg("connectors: finish run failed")
 		}
+		s.trackAccountAuth(ctx, acct, res)
 		s.metrics.DecActive()
 		s.metrics.RecordRun(c.Key, op.Key, string(res.Status), latencyMs)
 		// Terminal counterpart of the running notice — tells the UI to drop the
@@ -2605,6 +2792,41 @@ func (s *Service) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, err
 // for the given audit filter window.
 func (s *Service) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, error) {
 	return s.repo.SummariseRuns(ctx, f)
+}
+
+// AuditBreakdown groups the connector runs matching f for the audit summary.
+func (s *Service) AuditBreakdown(ctx context.Context, f AuditFilter) (AuditBreakdown, error) {
+	return s.repo.AuditBreakdown(ctx, f)
+}
+
+// AuditOptions lists instance/operation pairs with runs matching f.
+func (s *Service) AuditOptions(ctx context.Context, f AuditFilter, limit int) ([]AuditCount, error) {
+	return s.repo.AuditOptions(ctx, f, limit)
+}
+
+// DistinctRunUsers lists the user ids with connector runs matching f.
+func (s *Service) DistinctRunUsers(ctx context.Context, f AuditFilter, limit int) ([]string, error) {
+	return s.repo.DistinctRunUsers(ctx, f, limit)
+}
+
+// RecordCodeRun stores one Code Mode script run for the audit.
+func (s *Service) RecordCodeRun(ctx context.Context, run *entity.CodeModeRun) error {
+	return s.repo.RecordCodeRun(ctx, run)
+}
+
+// ListCodeRuns pages the Code Mode run audit, newest first.
+func (s *Service) ListCodeRuns(ctx context.Context, f CodeRunFilter, limit, offset int) ([]entity.CodeModeRun, error) {
+	return s.repo.ListCodeRuns(ctx, f, limit, offset)
+}
+
+// CountCodeRuns counts the Code Mode runs matching f.
+func (s *Service) CountCodeRuns(ctx context.Context, f CodeRunFilter) (int64, error) {
+	return s.repo.CountCodeRuns(ctx, f)
+}
+
+// SummariseCodeRuns aggregates the Code Mode runs matching f.
+func (s *Service) SummariseCodeRuns(ctx context.Context, f CodeRunFilter) (CodeRunSummary, error) {
+	return s.repo.SummariseCodeRuns(ctx, f)
 }
 
 // PurgeOldRuns deletes ConnectorRun rows older than retentionDays.

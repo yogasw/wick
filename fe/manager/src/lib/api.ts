@@ -24,6 +24,9 @@ import type {
   ToolDetail,
   AuditResult,
   AuditFilter,
+  AuditRunDetail,
+  CodeRunResult,
+  CodeRunFilter,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager/api surface
@@ -138,6 +141,13 @@ export async function runHealthCheck(key: string, id: string): Promise<HealthChe
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
 }
 
+/* Save the caller's own values for a per-user token instance (bearer /
+   custom header MCP). The server checks them against the MCP server first,
+   so a wrong token rejects with its reason. */
+export async function saveMyToken(url: string, values: Record<string, string>): Promise<{ ok: boolean; account: string }> {
+  return apiPost<{ ok: boolean; account: string }>(url, { values });
+}
+
 /* Probe ONE instance's stored credentials. Resolves with ok=false and a
    reason for a refused/expired token — that's a verdict about the account,
    not a transport failure, so it does not reject. */
@@ -200,6 +210,19 @@ export async function setConnectorSessionConfig(
     allow_session_config: allow,
   });
   return r.allow_session_config;
+}
+
+/* Saving false also clears the stored instance user_token / refresh_token,
+   so posting false again is how a leftover legacy value is removed. */
+export async function setConnectorSharedCredential(
+  key: string,
+  id: string,
+  allow: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ allow_shared_credential: boolean }>(`${rowBase(key, id)}/shared-credential`, {
+    allow_shared_credential: allow,
+  });
+  return r.allow_shared_credential;
 }
 
 export async function toggleConnectorOperation(
@@ -438,16 +461,37 @@ export async function setToolConfig(key: string, configKey: string, value: strin
   await apiPost(`/manager/api/tools/${encodeURIComponent(key)}/configs/${encodeURIComponent(configKey)}`, { value });
 }
 
+/* AUDIT_FILTER_KEYS are the AuditFilter fields sent as query params, in
+   the order the URL shows them. */
+export const AUDIT_FILTER_KEYS = [
+  "connector", "instance", "op", "source", "status", "user", "session", "error", "min_ms", "max_ms", "from", "to",
+] as const;
+
 export async function getAuditRuns(filter: AuditFilter): Promise<AuditResult> {
   const params = new URLSearchParams();
-  if (filter.source) params.set("source", filter.source);
-  if (filter.status) params.set("status", filter.status);
-  if (filter.from) params.set("from", filter.from);
-  if (filter.to) params.set("to", filter.to);
+  for (const k of AUDIT_FILTER_KEYS) {
+    const v = filter[k];
+    if (v) params.set(k, v);
+  }
   if (filter.page > 1) params.set("page", String(filter.page));
   const qs = params.toString();
   const path = qs ? `/manager/api/runs?${qs}` : "/manager/api/runs";
   const r = await apiGet<AuditResult>(path);
+  return { ...r, runs: r.runs ?? [] };
+}
+
+export async function getAuditRun(id: string): Promise<AuditRunDetail> {
+  return apiGet<AuditRunDetail>(`/manager/api/runs/${encodeURIComponent(id)}`);
+}
+
+export async function getCodeRuns(filter: CodeRunFilter): Promise<CodeRunResult> {
+  const params = new URLSearchParams();
+  for (const k of ["user", "project", "via", "status", "script", "from", "to"] as const) {
+    if (filter[k]) params.set(k, filter[k]);
+  }
+  if (filter.page > 1) params.set("page", String(filter.page));
+  const qs = params.toString();
+  const r = await apiGet<CodeRunResult>(qs ? `/manager/api/codemode-runs?${qs}` : "/manager/api/codemode-runs");
   return { ...r, runs: r.runs ?? [] };
 }
 

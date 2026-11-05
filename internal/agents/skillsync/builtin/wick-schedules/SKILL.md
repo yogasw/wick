@@ -62,6 +62,7 @@ calls for test / runs / delete. Each fire runs the steps in order:
 | `connector` | `tool_id` (`conn:<connector_id>/<op>[@<account_id>]`), `params` | the same op as `wick_execute`, through the same gate/audit, as the schedule's owner. Fetch the op schema with `wick_get` first. |
 | `check` | `rules`, `fail_rules`, `match`, `extract` | tests the previous step's JSON — no code, no Bash permission |
 | `bash` | `script`, `timeout_sec` (default 30, max 120) | `bash -c` in the project directory |
+| `code` | `code` or `script_path`, `lang` (`ts`/`js`), `params`, `timeout_sec` (default 120, max 300, unless the admin changed them in the agents settings) | a Code Mode script (as `wick_run_code`) that reports what is NEW — see below |
 
 Output flows forward: step N's output is step N+1's stdin AND `$PREV` (64KB, trailing newline trimmed); every
 earlier output is a file at `$STEP_<i>_OUT`.
@@ -79,8 +80,16 @@ earlier output is a file at `$STEP_<i>_OUT`.
 | `connector` | the op succeeds | — | the op errors / times out |
 | `bash` | exit 0 | exit 1 (always — `on_fail` does not apply) | any other exit, timeout |
 | `check` | `rules` hold | `rules` not met yet | any `fail_rules` holds (outcome **fail**), or input is not JSON |
+| `code` | `changed` not empty, or `done: true` | `changed: []` | throws, bad return, missing `script_path` |
 
 `on_ok`: `next` (default) | `done`. `on_fail`: `done` | `pending`. Anything else is rejected.
+
+**Code steps.** `script_path` is relative to the watch's project folder (no `..`, read fresh every fire) — prefer it
+over inline `code` for anything you will tune. The script gets `input.snapshot` (what it returned last fire, `null`
+first), `input.prev` (previous step's output) and `input.params`, and returns `{changed: [...], snapshot, done?}`.
+wick keeps the snapshot between fires (only after a run without error); `changed` becomes the result you are woken
+with. `wick.call` runs as the watch's owner; `wick.file` reads/writes only `codemode/` of the watch's project folder
+(e.g. a list of ids the agent keeps there). Details and limits: the `wick-code-mode` skill.
 
 **Errors (every/cron).** An error does not end the watch: the run is logged `result=error` and the next tick tries
 again. After **5 errors in a row** the session gets ONE notice ("watch error repeated …, watch still running") per

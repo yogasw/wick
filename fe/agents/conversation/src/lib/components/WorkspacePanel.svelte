@@ -15,6 +15,7 @@
     onRename: (cid: string, label: string) => void;
     onDuplicate: (cid: string) => void;
     onDelete: (cid: string) => void;
+    onExpiry?: (cid: string, lifetime: { expires_in?: string; idle_after?: string }) => void;
   };
 
   let {
@@ -28,6 +29,7 @@
     onRename,
     onDuplicate,
     onDelete,
+    onExpiry,
   }: Props = $props();
 
   const INPUT_CLASS =
@@ -69,6 +71,7 @@
         {onRename}
         {onDuplicate}
         {onDelete}
+        {onExpiry}
       />
     {/each}
   {/if}

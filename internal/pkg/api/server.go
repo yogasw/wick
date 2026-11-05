@@ -80,6 +80,7 @@ import (
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/channelidentity"
+	"github.com/yogasw/wick/internal/codemode"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
@@ -107,6 +108,7 @@ import (
 	jobplugin "github.com/yogasw/wick/internal/jobs/plugin"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
+	sessionconnectorsexpiry "github.com/yogasw/wick/internal/jobs/session-connectors-expiry"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
@@ -239,6 +241,7 @@ func NewServer() *Server {
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
 	connectorrunsreaper.Register(db)
+	sessionconnectorsexpiry.Register()
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -1325,14 +1328,18 @@ func NewServer() *Server {
 	// channel bubble.
 	sessionworkspace.SetReapNotify(func(sessionID string, tombs []sessionworkspace.Tombstone) {
 		names := make([]string, 0, len(tombs))
+		why := "this session went idle"
 		for _, t := range tombs {
 			label := t.Label
 			if strings.TrimSpace(label) == "" {
 				label = t.BaseKey
 			}
 			names = append(names, label)
+			if t.Reason == sessionworkspace.ReasonExpired {
+				why = "the expiry set on them passed"
+			}
 		}
-		msg := "[system] Your session connector(s) were auto-deleted because this session went idle: " +
+		msg := "[system] Your session connector(s) were auto-deleted because " + why + ": " +
 			strings.Join(names, ", ") + ". Their config (including secrets) is gone. " +
 			"This is context only — do not act on it now; if you need them again, re-create them."
 		if err := agentsPool.Send(context.Background(), sessionID, "", "reap", "system", msg); err != nil {
@@ -1887,6 +1894,31 @@ func NewServer() *Server {
 		}
 		return team.ReachOf(cat), nil
 	})
+	// A "Same as me" agent run by its caller follows the caller's own
+	// reach, which may hold connectors its owner never sees; their tiers
+	// come from here so tier defaults still apply to them.
+	// A connector an agent's owner lends runs as that owner for a person
+	// chatting who cannot reach it (see connectors.LendingScope).
+	connectorsSvc.SetIdentityLookup(func(ctx context.Context, userID string) (*entity.User, []string, error) {
+		u, err := authSvc.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return u, authSvc.GetUserFilterTagIDs(ctx, userID), nil
+	})
+	teamSvc.SetConnectorTiers(func(ctx context.Context) (map[string]string, error) {
+		rows, err := connectorsSvc.List(connectors.WithoutAgentScope(ctx))
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]string, len(rows))
+		for _, r := range rows {
+			if mod, ok := connectorsSvc.Module(r.Key); ok {
+				out[r.ID] = team.TierOf(mod.Meta.DefaultTags)
+			}
+		}
+		return out, nil
+	})
 
 	// Map an agent session to the Slack bot that owns it, so the Slack
 	// connector's "Sent using @bot" footer always names the session
@@ -1995,6 +2027,12 @@ func NewServer() *Server {
 	// runs have no cookie session to stamp login.GetUser. See connector
 	// node executor.
 	wfMgr.Connectors.SetUserResolver(wfsetup.UserResolverAdapter(authSvc))
+	// run_code nodes: Code Mode as the workflow owner, every wick.call
+	// through RunCodeAs. Workflows have no session, so no session
+	// connectors ("").
+	wfMgr.WithCodeRunner(func(ctx context.Context, req codemode.Request, u *entity.User, tagIDs []string) (*codemode.Result, error) {
+		return mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, req, "", u, tagIDs)
+	})
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to. (Earlier here than in
@@ -2045,7 +2083,11 @@ func NewServer() *Server {
 	// downstream connector uses. Register here, after all services
 	// the handlers need are constructed but before Bootstrap so the
 	// fixed instance gets seeded in the same pass as user connectors.
+	// The admin handler that serves People & usage is built further down;
+	// the usage_* ops read it through this variable once it exists.
+	var adminUsage wickmanager.UsageSource
 	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Usage:      func() wickmanager.UsageSource { return adminUsage },
 		Configs:    configsSvc,
 		Connectors: connectorsSvc,
 		Jobs:       jobsSvc,
@@ -2307,6 +2349,10 @@ func NewServer() *Server {
 			// Show a reply listen mode is holding the moment it arrives.
 			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
+			})
+			// Each reply a listening thread hears lands in its session at once.
+			slackCh.SetHeardFn(func(sessionID, text string, extras map[string]string) {
+				agentstool.EmitSystemEvent(sessionID, store.KindThreadHeard, text, extras)
 			})
 
 			// Background ticker: refresh every 5 minutes.
@@ -2960,6 +3006,7 @@ func NewServer() *Server {
 		WithWebhookRoutes(tr.WebhookRoutes())
 	managerHandler.SetWebhookRoutesSource(pluginTools.WebhookRoutes)
 	managerHandler.SetCustomConnectors(customConnSvc)
+	managerHandler.SetAuditPlaces(auditPlaces{layout: agentsLayout})
 	if pluginMgr != nil {
 		managerHandler.SetPluginResolver(pluginMgr)
 	}
@@ -3150,6 +3197,7 @@ func NewServer() *Server {
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
 	adminHandler.SetToolsSource(liveItems)
+	adminUsage = adminHandler
 	// The People & usage page reads the session store. Handed the SAME
 	// resolved layout the agents tool uses — resolving that path twice is how
 	// two parts of one binary end up reading two different directories.
@@ -3502,6 +3550,29 @@ func NewServer() *Server {
 			}
 		},
 	}
+	// Code Mode limits come from the agents settings, read on every run so a
+	// change applies to the next one.
+	codemode.SetLimitsSource(func() codemode.Limits {
+		return codemode.ParseLimits(func(key string) string { return configsSvc.GetOwned("agents", key) })
+	})
+	// Code Mode: a run that finds no runner installs codemode_goja from the
+	// official catalog through the verified source path and loads it live
+	// (OnInstalled above), once for all concurrent runs.
+	mcphandlers.CodeModeInstall = (&codemode.Installer{Install: func(ctx context.Context) error {
+		key := codemode.DefaultRunnerKey
+		if !jobPluginStore.Enabled(key) {
+			return fmt.Errorf("%s is turned off in Admin → Plugins", key)
+		}
+		if _, ok := servicePlugins.Get(key); !ok {
+			if _, err := pluginSources.InstallFromIndex(ctx, connplugin.DefaultRegistry().URL(), key, wickplugin.KindService, "codemode-auto-install"); err != nil {
+				return err
+			}
+		}
+		if _, ok := servicePlugins.Get(key); !ok {
+			return fmt.Errorf("%s was installed but did not load (see the plugin log)", key)
+		}
+		return nil
+	}}).Ensure
 	pluginSourcesHandler := &manager.PluginSourcesHandler{
 		Sources: pluginSources,
 		Health: manager.InstalledHealth(func(kind, key string) (bool, string) {
@@ -3648,7 +3719,26 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, resyncSessions: agentsMgr.Registry().ResyncFromDisk, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
+	// Watch code steps: the same identity, every wick.call through ExecuteAs.
+	scheduleCodeExec := schedule.NewCodeExecutor(
+		func(ctx context.Context, userID string) (*entity.User, []string, error) {
+			u, err := authSvc.GetUserByID(ctx, userID)
+			if err != nil || u == nil {
+				return nil, nil, err
+			}
+			return u, authSvc.GetUserFilterTagIDs(ctx, userID), nil
+		},
+		func(ctx context.Context, run schedule.CodeRun, sessionID string, u *entity.User, tagIDs []string) (*schedule.CodeOutcome, error) {
+			ctx = mcp.WithAgentScope(ctx, sessionID)
+			ctx = mcphandlers.WithCodeRunOrigin(ctx, entity.CodeModeViaWatch, run.ScriptPath)
+			res, err := mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, codemode.Request{Lang: run.Lang, Code: run.Code, Input: run.Input, Timeout: run.Timeout, Dir: run.Dir, NoDir: run.NoDir}, sessionID, u, tagIDs)
+			if err != nil {
+				return nil, err
+			}
+			return &schedule.CodeOutcome{OK: res.OK, Result: res.Result, Error: res.Error, Logs: res.Logs, Calls: len(res.Calls)}, nil
+		},
+	)
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, scheduleCodeExec: scheduleCodeExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, resyncSessions: agentsMgr.Registry().ResyncFromDisk, channelReg: channelReg, bgSets: bgSets, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, hostAPI: hostAPISvc, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub, customConn: customConnSvc}
 }
 
 type Server struct {
@@ -3690,6 +3780,8 @@ type Server struct {
 	runAsUsable func(ctx context.Context, userID string) bool
 	// scheduleConnExec runs watch schedules' connector steps.
 	scheduleConnExec schedule.ConnectorExecutor
+	// scheduleCodeExec runs watch schedules' code steps (Code Mode).
+	scheduleCodeExec schedule.CodeExecutor
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -4260,6 +4352,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			go schedule.NewRunner(s.scheduleStore, agentstool.RoomGuardScheduleSender(s.agentsPool, s.agentsLayout), s.agentsLayout).
 				WithRunAsCheck(s.runAsUsable).
 				WithConnectorExecutor(s.scheduleConnExec).
+				WithCodeExecutor(s.scheduleCodeExec).
 				Run(ctx)
 		}
 		close(s.intakeReady)

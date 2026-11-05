@@ -159,7 +159,7 @@ func TestThreadCap(t *testing.T) {
 func TestThreadPersists(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := newTestHub(func(Peer, string) string { return "all good" })
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -168,7 +168,7 @@ func TestThreadPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	h2, _, _ := newTestHub(func(Peer, string) string { return "" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if got := roles(threadOf(t, h2, res.TaskID)); got != "captain:status? | teammate:all good" {
@@ -216,7 +216,7 @@ func TestThreadOtherSession(t *testing.T) {
 func TestThreadCarriedToSupersedingTask(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := newTestHub(func(Peer, string) string { return InputRequiredToken + " which environment?" })
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -226,7 +226,7 @@ func TestThreadCarriedToSupersedingTask(t *testing.T) {
 	}
 	h2, _, _ := newTestHub(func(Peer, string) string { return "deployed to prod" })
 	h2.CallerBusy = func(string) bool { return false }
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	a, err := h2.AnswerFromUser(ctx, "sess-cap", q.TaskID, "prod")

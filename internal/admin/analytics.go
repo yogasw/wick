@@ -1054,6 +1054,11 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		UsersInWindow:       len(per),
 		LoginsRecordedSince: rfc3339(firstLogin),
 		KnownChannels:       sortedKeys(allChannels),
+		// Empty, never nil: a filter that matches nothing must still send
+		// [] — the page reads .length on these and a null crashes it.
+		Users:    []analyticsUser{},
+		Channels: []analyticsChannel{},
+		Projects: []analyticsProject{},
 	}
 	// A picked provider stays a chip even when the range has none of it,
 	// or the selection could not be undone from the page.

@@ -222,6 +222,21 @@ export function renderMarkdown(text: string): string {
   let inTable = false, tableHeader = false;
   /* Prose lines waiting to be joined into one paragraph. */
   let paraLines: string[] = [];
+  /* Consecutive quote lines, held so the run renders as one block with a
+     Copy button (the text without its ">" markers), like a code block. */
+  let quoteLines: { depth: number; text: string }[] = [];
+
+  function flushQuote() {
+    if (quoteLines.length === 0) return;
+    const open = `<blockquote class="border-l-2 border-green-400 dark:border-green-700 pl-3 my-1 text-black-700 dark:text-black-600 italic">`;
+    const body = quoteLines
+      .map((q) => open.repeat(q.depth) + inlineMarkdown(q.text) + "</blockquote>".repeat(q.depth))
+      .join("");
+    const raw = quoteLines.map((q) => q.text).join("\n").trim();
+    const copyBtn = `<button type="button" data-copy-code data-code="${esc(raw)}" class="absolute top-0 right-0 text-[10px] not-italic text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-opacity opacity-60 group-hover:opacity-100 focus:opacity-100 px-1.5 py-0.5 rounded bg-white-300 dark:bg-navy-600 hover:bg-white-400 dark:hover:bg-navy-500">Copy</button>`;
+    out.push(`<div class="wick-quote group relative pr-12">${body}${raw ? copyBtn : ""}</div>`);
+    quoteLines = [];
+  }
 
   function flushPara() {
     if (paraLines.length === 0) return;
@@ -396,6 +411,8 @@ export function renderMarkdown(text: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    /* A quote run ends at the first line that is not part of it. */
+    if (quoteLines.length && (inCode || !/^\s*>/.test(line))) flushQuote();
 
     /* Leading spaces allowed: a fence under a list item is indented, and
        anchoring to column 0 left it as literal backticks in a paragraph. The
@@ -483,9 +500,7 @@ export function renderMarkdown(text: string): string {
     const bq = line.match(/^\s*(>+)\s?(.*)$/);
     if (bq) {
       flushPara(); flushList();
-      const depth = Math.min(bq[1].length, 4);
-      const open = `<blockquote class="border-l-2 border-green-400 dark:border-green-700 pl-3 my-1 text-black-700 dark:text-black-600 italic">`;
-      out.push(open.repeat(depth) + inlineMarkdown(bq[2]) + "</blockquote>".repeat(depth));
+      quoteLines.push({ depth: Math.min(bq[1].length, 4), text: bq[2] });
       continue;
     }
 
@@ -611,6 +626,7 @@ export function renderMarkdown(text: string): string {
     paraLines.push(line);
   }
 
+  flushQuote();
   flushPara();
 
   flushTable();

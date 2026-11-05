@@ -38,6 +38,10 @@ type Service struct {
 	// their AgentCatalog — with each one's tier. nil (not wired) leaves
 	// explicit grants working and every default off.
 	ownerReach OwnerReachFunc
+	// connectorTiers maps every connector instance to its tier, whoever
+	// can see it (see Scope.tiers). nil keeps AccessOwner capped at the
+	// owner's catalog.
+	connectorTiers ConnectorTiersFunc
 	// ownerCatalog is the owner's full catalog (accounts and ops), what a
 	// Captain's access proposal is checked against.
 	ownerCatalog OwnerCatalogFunc
@@ -81,6 +85,41 @@ func (s *Service) SetOwnerReach(f OwnerReachFunc) {
 	s.mu.Lock()
 	s.ownerReach = f
 	s.mu.Unlock()
+}
+
+// ConnectorTiersFunc returns the tier of every connector instance, with no
+// visibility rule applied.
+type ConnectorTiersFunc func(ctx context.Context) (map[string]string, error)
+
+// SetConnectorTiers wires the every-connector tier lookup. Set at boot,
+// once the connectors service exists.
+func (s *Service) SetConnectorTiers(f ConnectorTiersFunc) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.connectorTiers = f
+	s.mu.Unlock()
+}
+
+// tiersOf is the every-connector tier map an AccessOwner agent resolves
+// through; nil for any other agent, or when the lookup fails (the agent
+// then stays capped at its owner's catalog).
+func (s *Service) tiersOf(ctx context.Context, p entity.AgentPersona) map[string]string {
+	if NormalizeAccessMode(p.AccessMode) != AccessOwner {
+		return nil
+	}
+	s.mu.Lock()
+	f := s.connectorTiers
+	s.mu.Unlock()
+	if f == nil {
+		return nil
+	}
+	tiers, err := f(ctx)
+	if err != nil {
+		return nil
+	}
+	return tiers
 }
 
 // reachOf is p's owner catalog. A failed lookup is nil: tier defaults and
@@ -151,7 +190,7 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	case err != nil:
 		return DenyAll()
 	default:
-		scope = ScopeOf(p, s.reachOf(ctx, p))
+		scope = ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p))
 	}
 	s.mu.Lock()
 	s.cache[agentID] = scopeEntry{scope: scope, expiry: now.Add(scopeCacheTTL)}

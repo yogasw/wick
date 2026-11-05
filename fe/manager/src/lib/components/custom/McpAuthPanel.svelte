@@ -48,6 +48,11 @@
     onChange();
   }
 
+  /* Per-user mode for the token schemes: the values typed here are only
+     the admin's own account; every user enters theirs on the instance. */
+  const tokenPerUserDesc =
+    "Each wick user enters their own token on the instance (Connect my account) and calls run with it. Enable SSO + Allow others to connect via SSO turn on. What you type here is only used to test and becomes your own account. Leave off to share one token.";
+
   function choiceClass(active: boolean): string {
     return active
       ? "border-green-500"
@@ -75,10 +80,26 @@
   <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Switching schemes preserves the extra header rows below.</p>
 </div>
 
+{#snippet perUserToggle(desc: string)}
+  <label class="mt-3 flex items-start gap-2 text-xs text-black-800 dark:text-black-600">
+    <input
+      type="checkbox"
+      class="mt-0.5 flex-shrink-0"
+      data-cc-oauth-per-user
+      checked={!!form.oauth_per_user}
+      onchange={(e) => { form.oauth_per_user = (e.target as HTMLInputElement).checked; onChange(); }}
+    />
+    <span class="min-w-0">
+      <span class="font-medium text-black-900 dark:text-white-100">Users connect their own account (SSO)</span>
+      <span class="block text-[11px] text-black-700 dark:text-black-600">{desc}</span>
+    </span>
+  </label>
+{/snippet}
+
 {#if form.auth_scheme === "bearer"}
   <div class="mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
     <label class="block text-xs font-medium text-black-800 dark:text-black-600" for="cc-srv-bearer">
-      Bearer token <span class="text-neg-400">*</span>
+      Bearer token {#if form.oauth_per_user}<span class="font-normal text-black-700 dark:text-black-600">(optional — yours, for Test)</span>{:else}<span class="text-neg-400">*</span>{/if}
     </label>
     <input
       id="cc-srv-bearer"
@@ -89,14 +110,16 @@
       oninput={(e) => { form.auth_secret = (e.target as HTMLInputElement).value; onChange(); }}
     />
     <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Stored encrypted, decrypted server-side per request. Leave untouched when editing to keep the stored secret.</p>
+    {@render perUserToggle(tokenPerUserDesc)}
   </div>
 {:else if form.auth_scheme === "custom_header"}
   <div class="mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
     <span class="block text-xs font-medium text-black-800 dark:text-black-600">Auth headers</span>
     <div class="mt-2">
-      <McpHeadersEditor rows={form.auth_headers} onChange={(rows) => { form.auth_headers = rows; onChange(); }} defaultSecret={true} />
+      <McpHeadersEditor rows={form.auth_headers} onChange={(rows) => { form.auth_headers = rows; onChange(); }} defaultSecret={true} configToggle={true} configHint={form.oauth_per_user ? "each user fills (yours: optional)" : "filled per instance (optional here)"} />
     </div>
-    <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Paired ID + secret headers, subscription keys. Rows marked secret encrypt at rest.</p>
+    <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Paired ID + secret headers, subscription keys. Rows marked secret encrypt at rest.{#if form.oauth_per_user} Tick <strong>Config</strong> on the rows each user fills with their own value (none ticked = the secret rows); the other rows stay shared.{:else} Tick <strong>Config</strong> to fill a row per instance instead: no value needed here, each instance enters its own on its settings page, so instances can use different accounts (and list different tools).{/if}</p>
+    {@render perUserToggle(tokenPerUserDesc)}
   </div>
 {:else if form.auth_scheme === "oauth"}
   <div class="mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
@@ -138,19 +161,7 @@
         />
       </div>
     </div>
-    <label class="mt-3 flex items-start gap-2 text-xs text-black-800 dark:text-black-600">
-      <input
-        type="checkbox"
-        class="mt-0.5 flex-shrink-0"
-        data-cc-oauth-per-user
-        checked={!!form.oauth_per_user}
-        onchange={(e) => { form.oauth_per_user = (e.target as HTMLInputElement).checked; onChange(); }}
-      />
-      <span class="min-w-0">
-        <span class="font-medium text-black-900 dark:text-white-100">Users connect their own account (SSO)</span>
-        <span class="block text-[11px] text-black-700 dark:text-black-600">Save without signing in. Each wick user connects their own account to this one instance (Enable SSO + Allow others to connect via SSO turn on). Leave off to connect one shared account to the instance.</span>
-      </span>
-    </label>
+    {@render perUserToggle("Save without signing in. Each wick user connects their own account to this one instance (Enable SSO + Allow others to connect via SSO turn on). Leave off to connect one shared account to the instance.")}
     {#if oauthConnected}
       <div class="mt-3 rounded-lg border border-pos-400 bg-pos-100 px-3 py-2" data-cc-oauth-status>
         {#if form.oauth_per_user}

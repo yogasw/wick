@@ -127,7 +127,13 @@ func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, i
 		}
 		e := CatalogEntry{Row: row, Module: mod, Status: status, Ops: ops}
 		if mod.OAuth != nil && aerr == nil {
-			caller := s.AccountAccessFor(row, userID, isAdmin, tagIDs)
+			// A lent row lists its lender's accounts: those are the ones
+			// it runs as (see LendingScope).
+			uid, admin, tags := userID, isAdmin, tagIDs
+			if lender, ltags, lent := s.lendIdentity(ctx, row.ID, userID, tagIDs, isAdmin); lent {
+				uid, admin, tags = lender.ID, lender.IsAdmin(), ltags
+			}
+			caller := s.AccountAccessFor(row, uid, admin, tags)
 			e.Accounts = filterAccountsByScope(ctx, row.ID, accRows[row.ID])
 			// Skip the tag lookup when the answer cannot depend on it.
 			if !caller.Privileged && !row.AllowOthersSeeAccounts && len(e.Accounts) > 0 {

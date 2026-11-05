@@ -341,6 +341,49 @@ func (m *Manager) InstallFromSource(ctx context.Context, id, key, actor string, 
 	return in, nil
 }
 
+// ErrNotInIndex means the plugins.json InstallFromIndex read does not offer
+// the key (or not as the wanted kind).
+var ErrNotInIndex = errors.New("plugin not offered by the catalog")
+
+// InstallFromIndex installs key straight from the plugins.json at indexURL
+// (the official catalog) without a saved source, through the same checks as
+// InstallFromSource: zip_sha256 and its signature when the index has them,
+// then the manifest kind, arch, binary sha256 and signature. wantKind, when
+// set, must match the plugin's kind. The install is recorded with the
+// official origin and OnInstalled runs.
+func (m *Manager) InstallFromIndex(ctx context.Context, indexURL, key, wantKind, actor string) (Installed, error) {
+	res, err := m.Client.Fetch(ctx, &entity.PluginSource{Type: TypeURL, URL: indexURL}, "")
+	if err != nil {
+		return Installed{}, err
+	}
+	var entry *Entry
+	for _, e := range res.Entries {
+		if e.Key == key {
+			e := e
+			entry = &e
+		}
+	}
+	if entry == nil || (wantKind != "" && entry.Kind != "" && wickplugin.NormalizeKind(entry.Kind) != wantKind) {
+		return Installed{}, fmt.Errorf("%w: %q", ErrNotInIndex, key)
+	}
+	if entry.Kind == "" {
+		// The official catalog predates "kind"; the manifest must match.
+		entry.Kind = wantKind
+	}
+	from := m.installedVersions()[key][1]
+	in, err := m.Client.InstallEntry(ctx, nil, *entry, m.Install)
+	if err != nil {
+		m.audit(entity.PluginAudit{Actor: actor, Action: "install.fail", Key: key, FromVersion: from, ToVersion: entry.Version, Detail: err.Error()})
+		return Installed{}, err
+	}
+	action := "install"
+	if from != "" {
+		action = "update"
+	}
+	m.record(ctx, in, "", connplugin.OriginOfficial, action, from, actor)
+	return in, nil
+}
+
 // Update reinstalls key from the source it came from.
 func (m *Manager) Update(ctx context.Context, key, actor string, pf connplugin.ProgressFunc) (Installed, error) {
 	var st entity.PluginState
@@ -363,9 +406,6 @@ func (m *Manager) Upload(ctx context.Context, zipPath, actor string) (Installed,
 }
 
 func (m *Manager) recordInstall(ctx context.Context, in Installed, sourceID, from, actor string) {
-	_ = connplugin.NewStateStore(m.DB).Record(in.Key, in.Kind, in.Version)
-	m.DB.Model(&entity.PluginState{}).Where("key = ?", in.Key).
-		Updates(map[string]any{"source_id": sourceID, "available_version": "", "origin": m.originOf(sourceID)})
 	action := "install"
 	if from != "" {
 		action = "update"
@@ -373,6 +413,13 @@ func (m *Manager) recordInstall(ctx context.Context, in Installed, sourceID, fro
 	if sourceID == "" {
 		action = "upload"
 	}
+	m.record(ctx, in, sourceID, m.originOf(sourceID), action, from, actor)
+}
+
+func (m *Manager) record(ctx context.Context, in Installed, sourceID, origin, action, from, actor string) {
+	_ = connplugin.NewStateStore(m.DB).Record(in.Key, in.Kind, in.Version)
+	m.DB.Model(&entity.PluginState{}).Where("key = ?", in.Key).
+		Updates(map[string]any{"source_id": sourceID, "available_version": "", "origin": origin})
 	m.audit(entity.PluginAudit{Actor: actor, Action: action, SourceID: sourceID, Key: in.Key, FromVersion: from, ToVersion: in.Version, ZipSHA256: in.ZipSHA256})
 	if m.OnInstalled != nil {
 		m.OnInstalled(ctx, in.Kind, in.Key)

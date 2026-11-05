@@ -342,6 +342,18 @@
       {/if}
     </div>
 
+    {#if inAccountMode && account?.auth_error}
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+        <div class="min-w-0">
+          <p class="font-medium">Reconnect needed — the last call was refused on auth.</p>
+          <p class="mt-0.5 break-words text-xs opacity-80">{account.auth_error}</p>
+        </div>
+        {#if account.can_manage && account.reconnect_url}
+          <Button variant="secondary" size="sm" disabled={connecting} onclick={reconnectAccount}>{connecting ? "Connecting…" : "Reconnect"}</Button>
+        {/if}
+      </div>
+    {/if}
+
     {#if inAccountMode && account && !account.can_manage}
       <p class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 text-sm text-black-700 dark:text-black-600">
         Read-only: you may see what applies to this account, but changing it needs the instance's owner or an admin.

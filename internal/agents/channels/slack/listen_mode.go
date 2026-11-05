@@ -1,14 +1,17 @@
 package slack
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	slackgo "github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
@@ -36,6 +39,9 @@ const (
 	// reactionHeld marks a reply wick is holding, from the moment it
 	// arrives until it goes to the agent or is dropped.
 	reactionHeld = "eyes" // 👀
+	// reactionWorking marks the replies a held turn is working on, from
+	// the moment they go to the agent until its turn ends.
+	reactionWorking = "hourglass_flowing_sand" // ⏳
 )
 
 // replyRule is one row of ChannelReplyRules.
@@ -139,6 +145,10 @@ const (
 	heldStateSent      = "sent"
 	heldStateSkipped   = "skipped"
 	heldStateCancelled = "cancelled"
+	// heldStateMerged: a mention answered the thread before the delay ran
+	// out, and that turn already reads the held message. Not a problem — the
+	// message did reach the agent, just through the mention.
+	heldStateMerged = "merged"
 )
 
 // HeldFn records where a held reply stands in its session's timeline, so
@@ -152,6 +162,272 @@ func (s *Channel) SetHeldFn(fn HeldFn) {
 	s.mu.Lock()
 	s.heldFn = fn
 	s.mu.Unlock()
+}
+
+// SetHeardFn wires the recorder of the replies a listening thread hears:
+// each one lands in its session the moment it arrives, as the conversation
+// it is, before (and whether or not) the agent reads it. extras carry
+// hold_id, msg_ts, user and name; the text is the reply itself.
+func (s *Channel) SetHeardFn(fn HeldFn) {
+	s.mu.Lock()
+	s.heardFn = fn
+	s.mu.Unlock()
+}
+
+// reportHeard records one reply a listening thread heard. Best effort, like
+// reportHeld: no recorder means nothing is shown, never a lost reply.
+func (s *Channel) reportHeard(sessionID string, w *listenWait, ev *slackevents.MessageEvent, files []slackgo.File) {
+	s.mu.Lock()
+	fn := s.heardFn
+	s.mu.Unlock()
+	if fn == nil || ev == nil {
+		return
+	}
+	who := ev.User
+	if who == "" {
+		who = ev.BotID
+	}
+	name := ev.Username
+	if name == "" && ev.Message != nil && ev.Message.BotProfile != nil {
+		name = ev.Message.BotProfile.Name
+	}
+	if ev.User != "" && ev.BotID == "" {
+		name = s.heardName(ev.User)
+	}
+	if name == "" {
+		name = who
+	}
+	extras := map[string]string{
+		"msg_ts": ev.TimeStamp,
+		"user":   who,
+		"name":   name,
+	}
+	// Whose wick account wrote it, when wick already knows, so the web UI
+	// can put the reader's own replies on their side of the thread.
+	if wick := s.heardWickUser(ev.User); wick != "" {
+		extras["wick_user_id"] = wick
+	}
+	if ev.BotID != "" {
+		extras["bot"] = "1"
+	}
+	if w != nil {
+		extras["hold_id"] = w.holdID
+	}
+	if len(files) > 0 {
+		names := make([]string, 0, len(files))
+		for _, f := range files {
+			names = append(names, f.Name)
+		}
+		extras["files"] = strings.Join(names, "\n")
+	}
+	fn(sessionID, s.heardText(ev.Text), extras)
+}
+
+// listenBotStreak is how many turns in a row bot replies alone may start in a
+// listening thread before a person has to speak again (botTurnLimit in
+// bots.go is the separate per-window budget for every bot turn).
+const listenBotStreak = 2
+
+// botTurnsInARow is how many turns in a row only bots started in sessionID.
+func (s *Channel) botTurnsInARow(sessionID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listenBotRuns[sessionID]
+}
+
+// resetBotTurns starts the bot count over: a person spoke.
+func (s *Channel) resetBotTurns(sessionID string) {
+	s.mu.Lock()
+	delete(s.listenBotRuns, sessionID)
+	s.mu.Unlock()
+}
+
+// heardName is a Slack user's display name for a heard reply: the sender
+// cache when the user already started a turn, else one users.info call,
+// cached on its own. It never maps the user to a wick account — a
+// passer-by in a thread must not get one — so it stays out of
+// userDisplayCache, whose entries carry that mapping. "" when Slack will
+// not say.
+func (s *Channel) heardName(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	s.userDisplayMu.RLock()
+	sn := s.userDisplayCache[userID]
+	name, cached := s.heardNames[userID]
+	s.userDisplayMu.RUnlock()
+	if sn != nil && sn.Name != "" {
+		return sn.Name
+	}
+	if cached {
+		return name
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return ""
+	}
+	if u, err := api.GetUserInfo(userID); err == nil && u != nil {
+		name = u.RealName
+		if name == "" {
+			name = u.Profile.DisplayName
+		}
+		if name == "" {
+			name = u.Name
+		}
+	}
+	s.userDisplayMu.Lock()
+	if s.heardNames == nil {
+		s.heardNames = map[string]string{}
+	}
+	s.heardNames[userID] = name
+	s.userDisplayMu.Unlock()
+	return name
+}
+
+// heardWickUser is the wick account a heard reply's author maps to, "" when
+// wick does not know one. Read-only: the sender cache (a user who started a
+// turn) or a Slack account connected to wick; it never registers anyone.
+// Cached per user, found or not, so a busy thread costs one lookup each.
+func (s *Channel) heardWickUser(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	s.userDisplayMu.RLock()
+	sn := s.userDisplayCache[userID]
+	wick, cached := s.heardWick[userID]
+	s.userDisplayMu.RUnlock()
+	if sn != nil && sn.WickUserID != "" {
+		return sn.WickUserID
+	}
+	if cached {
+		return wick
+	}
+	s.cfgMu.Lock()
+	byOAuth := s.wickUserIDFn
+	s.cfgMu.Unlock()
+	if byOAuth != nil {
+		if id, ok := byOAuth(context.Background(), userID); ok {
+			wick = id
+		}
+	}
+	s.userDisplayMu.Lock()
+	if s.heardWick == nil {
+		s.heardWick = map[string]string{}
+	}
+	s.heardWick[userID] = wick
+	s.userDisplayMu.Unlock()
+	return wick
+}
+
+// slackMarkup matches one <…> token of Slack's message markup.
+var slackMarkup = regexp.MustCompile(`<([^<>]+)>`)
+
+// heardText turns a reply's Slack markup into what the web UI renders:
+// <@U…> becomes @Name, <url|label> the link (with its label when that
+// says more than the link), <#C…|name> #name,
+// <!here> @here, and Slack's &lt; &gt; &amp; plain characters again.
+func (s *Channel) heardText(text string) string {
+	out := slackMarkup.ReplaceAllStringFunc(text, func(m string) string {
+		target, label, _ := strings.Cut(m[1:len(m)-1], "|")
+		switch {
+		case strings.HasPrefix(target, "@"):
+			if label != "" {
+				return "@" + label
+			}
+			if n := s.heardName(target[1:]); n != "" {
+				return "@" + n
+			}
+			return "@" + target[1:]
+		case strings.HasPrefix(target, "#"):
+			if label != "" {
+				return "#" + label
+			}
+			return "#channel"
+		case strings.HasPrefix(target, "!subteam^"):
+			if label != "" {
+				return label
+			}
+			return "@group"
+		case strings.HasPrefix(target, "!"):
+			if label != "" {
+				return label
+			}
+			return "@" + strings.TrimPrefix(target, "!")
+		case strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:"):
+			// A label that is only the link written shorter adds nothing:
+			// the link alone, which the web UI makes clickable.
+			bare := label
+			if _, after, ok := strings.Cut(bare, "://"); ok {
+				bare = after
+			}
+			bare = strings.TrimRight(bare, "….")
+			if label == "" || strings.Contains(target, bare) {
+				return target
+			}
+			return label + " (" + target + ")"
+		}
+		return m
+	})
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(out)
+}
+
+// markWorking puts ⏳ on the reply a turn is working on, taking it off the
+// one it sat on before: a thread shows one marker, on its latest reply.
+// The turn's end takes it off (clearWorking).
+func (s *Channel) markWorking(sessionID, channelID string, ts []string) {
+	if len(ts) == 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.working == nil {
+		s.working = map[string]workingMark{}
+	}
+	prev, had := s.working[sessionID]
+	s.working[sessionID] = workingMark{channel: channelID, ts: ts}
+	s.mu.Unlock()
+	if had {
+		for _, t := range prev.ts {
+			s.reaction(reactionWorking, prev.channel, t, false)
+		}
+	}
+	for _, t := range ts {
+		s.reaction(reactionWorking, channelID, t, true)
+	}
+}
+
+// joinsRunningTurn reports whether a reply in sessionID's thread should go
+// to the agent now: a turn is running there and no reply is held, so it is
+// read inside that turn, like a message typed mid-turn in the web chat.
+func (s *Channel) joinsRunningTurn(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listenWaits[sessionID] != nil {
+		return false
+	}
+	t := s.turns[sessionID]
+	return t != nil && t.running
+}
+
+// clearWorking takes ⏳ off once sessionID's turn ended, answered or not.
+func (s *Channel) clearWorking(sessionID string) {
+	s.mu.Lock()
+	m, ok := s.working[sessionID]
+	delete(s.working, sessionID)
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	for _, t := range m.ts {
+		s.reaction(reactionWorking, m.channel, t, false)
+	}
+}
+
+// workingMark is where a session's ⏳ sits.
+type workingMark struct {
+	channel string
+	ts      []string
 }
 
 // reportHeld records w's state for the web UI. Best effort: no recorder
@@ -179,6 +455,8 @@ func (s *Channel) reportHeld(sessionID string, w *listenWait, state, why string)
 		text = fmt.Sprintf("%s · passed to the agent after %s", modeLabel, time.Since(w.started).Round(time.Second))
 	case heldStateSkipped:
 		text = fmt.Sprintf("%s · not passed on: %s", modeLabel, why)
+	case heldStateMerged:
+		text = fmt.Sprintf("%s · answered together with the mention", modeLabel)
 	default:
 		text = fmt.Sprintf("%s · dropped: %s", modeLabel, why)
 	}
@@ -187,13 +465,15 @@ func (s *Channel) reportHeld(sessionID string, w *listenWait, state, why string)
 		mode = replyModeAuto
 	}
 	fn(sessionID, text, map[string]string{
-		"hold_id":    w.holdID,
-		"state":      state,
-		"mode":       mode,
-		"delay_sec":  fmt.Sprintf("%d", int(w.delay/time.Second)),
-		"started_ms": fmt.Sprintf("%d", w.started.UnixMilli()),
-		"user":       who,
-		"msg_ts":     w.ev.TimeStamp,
+		"hold_id":     w.holdID,
+		"state":       state,
+		"mode":        mode,
+		"delay_sec":   fmt.Sprintf("%d", int(w.delay/time.Second)),
+		"started_ms":  fmt.Sprintf("%d", w.started.UnixMilli()),
+		"deadline_ms": fmt.Sprintf("%d", w.deadline.UnixMilli()),
+		"heard":       fmt.Sprintf("%d", w.heard),
+		"user":        who,
+		"msg_ts":      w.ev.TimeStamp,
 	})
 }
 

@@ -38,7 +38,7 @@ func newSendToSessionChannel(t *testing.T, exists bool) (*Channel, *fixedSession
 	var mu sync.Mutex
 	var sent []sentMsg
 	c := &Channel{
-		api: api, turns: map[string]*turn{}, sessions: sess,
+		api: api, turns: map[string]*turn{}, autoReply: map[string]bool{}, sessions: sess,
 		sessionPrefix: "slack-owner-", ownerUserID: "owner",
 	}
 	c.sendFn = func(_ context.Context, sessionID, _, _, role, text string) error {
@@ -117,5 +117,44 @@ func TestSendToThreadSessionDefaultStartsMissing(t *testing.T) {
 	last := (*sent)[len(*sent)-1]
 	if last.role != "user" || last.text != "start" {
 		t.Fatalf("user message not sent, got %v", *sent)
+	}
+}
+
+// A workflow brief is a request the turn still owes: a listen reply that
+// joins it before the answer must not read the turn as [silent]-only.
+func TestSendToThreadSessionMarksBriefPending(t *testing.T) {
+	c, _, _, _ := newSendToSessionChannel(t, false)
+
+	sid, _, err := c.SendToThreadSession(context.Background(), "C1", "1789014375.645429", "brief", false, false)
+	if err != nil {
+		t.Fatalf("SendToThreadSession: %v", err)
+	}
+	c.mu.Lock()
+	tr := c.turns[sid]
+	c.mu.Unlock()
+	if tr == nil || tr.mentionFrom == "" {
+		t.Fatalf("workflow turn must carry a pending sender, got %+v", tr)
+	}
+}
+
+// arm_only keeps the brief as a note (no user turn, so nothing spawns)
+// and binds the thread.
+func TestArmThreadSessionRunsNoTurn(t *testing.T) {
+	c, sess, _, sent := newSendToSessionChannel(t, true)
+	sid, _, err := c.ArmThreadSession(context.Background(), "C1", "1789014375.645429", "mirror brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*sent) != 1 || (*sent)[0].role != "system" || !strings.Contains((*sent)[0].text, "mirror brief") || (*sent)[0].sessionID != sid {
+		t.Fatalf("sent = %+v", *sent)
+	}
+	if len(sess.wrote) == 0 {
+		t.Fatal("thread not bound")
+	}
+	c.mu.Lock()
+	_, turn := c.turns[sid]
+	c.mu.Unlock()
+	if turn {
+		t.Fatal("a turn was opened")
 	}
 }

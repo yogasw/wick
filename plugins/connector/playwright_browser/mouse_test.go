@@ -1,0 +1,235 @@
+package main
+
+import (
+	"context"
+	"math"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/yogasw/wick/pkg/connector"
+)
+
+func TestHumanPath_EndsExactlyOnTarget(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	from, to := point{10, 10}, point{410, 310}
+	pts := humanPath(from, to, 0, rng)
+	if len(pts) < 4 || len(pts) > maxMouseSteps {
+		t.Fatalf("derived step count out of range: %d", len(pts))
+	}
+	if pts[len(pts)-1] != to {
+		t.Fatalf("last point = %v, want %v", pts[len(pts)-1], to)
+	}
+	// No single hop should cover most of the distance (no teleport).
+	total := math.Hypot(to.X-from.X, to.Y-from.Y)
+	prev := from
+	for _, p := range pts {
+		if d := math.Hypot(p.X-prev.X, p.Y-prev.Y); d > total/2 {
+			t.Fatalf("hop of %.1fpx out of %.1fpx", d, total)
+		}
+		prev = p
+	}
+}
+
+func TestHumanPath_ExplicitStepsAndZeroDistance(t *testing.T) {
+	rng := rand.New(rand.NewSource(2))
+	if got := len(humanPath(point{0, 0}, point{100, 0}, 25, rng)); got != 25 {
+		t.Fatalf("steps=25 gave %d points", got)
+	}
+	pts := humanPath(point{5, 5}, point{5, 5}, 0, rng)
+	if len(pts) != 1 || pts[0] != (point{5, 5}) {
+		t.Fatalf("zero distance: %v", pts)
+	}
+}
+
+func TestHumanPath_LongMovesLandOnTarget(t *testing.T) {
+	for seed := int64(0); seed < 50; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		to := point{900, 700}
+		pts := humanPath(point{0, 0}, to, 0, rng)
+		if pts[len(pts)-1] != to {
+			t.Fatalf("seed %d: ends at %v", seed, pts[len(pts)-1])
+		}
+		for _, p := range pts {
+			if p.X > to.X*1.1 || p.Y > to.Y*1.1 {
+				t.Fatalf("seed %d: overshoot too far: %v", seed, p)
+			}
+		}
+	}
+}
+
+func TestWheelSlicesSumToTotal(t *testing.T) {
+	sl := wheelSlices(300, 20)
+	sum := 0.0
+	for _, v := range sl {
+		sum += v
+	}
+	if math.Abs(sum-300) > 1e-9 {
+		t.Fatalf("sum = %v", sum)
+	}
+	if sl[0] >= sl[10] {
+		t.Fatalf("not eased: first %v, middle %v", sl[0], sl[10])
+	}
+}
+
+func TestValidateMouseActions(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	cases := []struct {
+		a       action
+		wantErr string
+	}{
+		{action{Action: "mouse_click", X: f(10), Y: f(20)}, ""},
+		{action{Action: "mouse_move", X: f(0), Y: f(0), Steps: 30}, ""},
+		{action{Action: "mouse_click", X: f(10)}, "x and y are required"},
+		{action{Action: "mouse_click", X: f(-1), Y: f(2)}, ">= 0"},
+		{action{Action: "mouse_click", X: f(1), Y: f(2), Button: "side"}, "button must be"},
+		{action{Action: "mouse_click", X: f(1), Y: f(2), DelayMS: 999999}, "delay_ms"},
+		{action{Action: "mouse_move", X: f(1), Y: f(2), Steps: 999}, "steps"},
+		{action{Action: "mouse_click", X: f(1), Y: f(2), HoverDwellMS: -1}, "hover_dwell_ms"},
+		{action{Action: "mouse_wheel", DeltaY: 300}, ""},
+		{action{Action: "mouse_wheel"}, "must be non-zero"},
+		{action{Action: "frame_eval", FrameURLContains: "flow"}, "script is required"},
+		{action{Action: "frame_eval", Script: "document.title"}, ""},
+		{action{Action: "frame_text"}, ""},
+		{action{Action: "frame_click", FrameURLContains: "flow"}, "selector or text"},
+		{action{Action: "frame_click", Text: "Region"}, ""},
+	}
+	for _, tc := range cases {
+		err := validateActionArgs(0, tc.a)
+		if tc.wantErr == "" && err != nil {
+			t.Errorf("%+v: unexpected error %v", tc.a, err)
+		}
+		if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("%+v: error %v, want containing %q", tc.a, err, tc.wantErr)
+		}
+	}
+}
+
+func TestProfileDelete_RefusesLockedProfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, profilePrefix+"keep-me"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := map[string]string{"session_dir": dir, "locked_profiles": "other, Keep-Me"}
+	c := connector.NewCtx(context.Background(), "inst", cfg, map[string]string{"name": "keep-me"}, nil, nil, nil)
+	_, err := profileDelete(c)
+	if err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("want locked error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, profilePrefix+"keep-me")); err != nil {
+		t.Fatalf("locked profile was removed: %v", err)
+	}
+}
+
+func TestLineDiff(t *testing.T) {
+	added, removed := lineDiff([]string{"a", "b", "b"}, []string{"b", "c", "b", "b"})
+	if len(added) != 2 || added[0] != "c" || added[1] != "b" {
+		t.Fatalf("added = %v", added)
+	}
+	if len(removed) != 1 || removed[0] != "a" {
+		t.Fatalf("removed = %v", removed)
+	}
+}
+
+func TestValidateWaitActions(t *testing.T) {
+	if err := validateActionArgs(0, action{Action: "wait_for_text"}); err == nil {
+		t.Fatal("wait_for_text without text/pattern accepted")
+	}
+	if err := validateActionArgs(0, action{Action: "wait_for_text", Pattern: "("}); err == nil {
+		t.Fatal("bad regex accepted")
+	}
+	if err := validateActionArgs(0, action{Action: "wait_for_change", TimeoutMS: 5000}); err != nil {
+		t.Fatalf("valid wait_for_change rejected: %v", err)
+	}
+}
+
+func TestValidateWaitForTextFresh(t *testing.T) {
+	a := action{Action: "wait_for_text", Text: "Total", Fresh: true, IncludeValues: true}
+	if err := validateActionArgs(0, a); err != nil {
+		t.Fatalf("fresh/include_values rejected: %v", err)
+	}
+}
+
+func TestTextIsAsHasText(t *testing.T) {
+	sel, want, ok := textIsAsHasText("a:text-is('OK')")
+	if !ok || sel != "a:has-text('OK')" || want != "OK" {
+		t.Fatalf("got %q %q %v", sel, want, ok)
+	}
+	if _, _, ok := textIsAsHasText("button:has-text('Back')"); ok {
+		t.Fatal("has-text rewritten")
+	}
+}
+
+func TestCountMatchesNormalizesWhitespace(t *testing.T) {
+	norm := normSpace("Please fill\n  the   sample\n\nthen Please fill the sample")
+	n, hit := countMatches(norm, normSpace("Please fill the\nsample"), nil)
+	if n != 2 || !strings.Contains(hit, "Please fill the sample") {
+		t.Fatalf("n=%d hit=%q", n, hit)
+	}
+	n, hit = countMatches(norm, "", regexp.MustCompile(`the\s+sample`))
+	if n != 2 || hit != "the sample" {
+		t.Fatalf("regex n=%d hit=%q", n, hit)
+	}
+}
+
+func TestBaselineValidation(t *testing.T) {
+	ok := action{Action: "wait_for_text", Text: "x", Fresh: true, Baseline: "run_start"}
+	if err := validateActionArgs(0, ok); err != nil {
+		t.Fatal(err)
+	}
+	bad := action{Action: "wait_for_text", Text: "x", Fresh: true, Baseline: "yesterday"}
+	if err := validateActionArgs(0, bad); err == nil {
+		t.Fatal("bad baseline accepted")
+	}
+	if !needsBaseline([]action{{Action: "click"}, {Action: "wait_for_text", Fresh: true}}) || needsBaseline([]action{{Action: "wait_for_text"}}) {
+		t.Fatal("needsBaseline")
+	}
+}
+
+func TestClampWaitAndMainAlias(t *testing.T) {
+	a := action{Action: "wait_for_text", Text: "x", TimeoutMS: 90000}
+	clampWait(&a)
+	if a.TimeoutMS != maxWaitMS || a.Warning == "" {
+		t.Fatalf("not clamped: %+v", a)
+	}
+	if err := validateActionArgs(0, a); err != nil {
+		t.Fatalf("clamped action rejected: %v", err)
+	}
+	m := action{Frame: "main"}.withFrameAlias()
+	if m.FrameIndex == nil || *m.FrameIndex != 0 || m.FrameURLContains != "" {
+		t.Fatalf("main alias: %+v", m)
+	}
+	u := action{Frame: "example.com"}.withFrameAlias()
+	if u.FrameURLContains != "example.com" || u.FrameIndex != nil {
+		t.Fatalf("url alias: %+v", u)
+	}
+}
+
+func TestPointerPositionSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	env := mouseEnv{key: "sess-1", posFile: pointerPath(dir, "sess-1")}
+	rememberPos(env, point{321, 123})
+	lastPos.Delete("sess-1") // as after a plugin restart
+	p, ok := loadPos(env)
+	if !ok || p != (point{321, 123}) {
+		t.Fatalf("loaded %v %v", p, ok)
+	}
+	if strings.HasSuffix(env.posFile, ".json") {
+		t.Fatal("pointer file must not look like session metadata")
+	}
+}
+
+func TestRestingPointAndClamp(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		p := restingPoint(1366, 768)
+		if p.X < 1366*0.75 || p.X >= 1366 || p.Y < 768*0.7 || p.Y >= 768 {
+			t.Fatalf("resting point %v not in the lower right", p)
+		}
+	}
+	if c := clampPoint(point{2153, 929}, 1366, 768); c != (point{1365, 767}) {
+		t.Fatalf("clamp = %v", c)
+	}
+}

@@ -222,9 +222,9 @@ func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
 	case len(userTasks) == 0:
 		note += " Their results arrive in this thread on their own."
 	case len(userTasks) == len(tokens):
-		note += " It is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them."
+		note += " It is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them; the reply is handed to you with the user's next message."
 	default:
-		note += fmt.Sprintf(" Results of the others arrive in this thread on their own. %s is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them.", strings.Join(userTasks, ", "))
+		note += fmt.Sprintf(" Results of the others arrive in this thread on their own. %s is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them; the reply is handed to you with the user's next message.", strings.Join(userTasks, ", "))
 	}
 	return note
 }

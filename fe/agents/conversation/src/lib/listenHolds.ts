@@ -12,6 +12,10 @@ export type ListenHold = {
   /** "3s": how long it was held, from the server's "after 3s". */
   heldFor: string;
   msgTs: string;
+  /** When the agent reads the thread (epoch ms), 0 when unknown. */
+  deadlineMs?: number;
+  /** How many replies the hold heard (thread_heard rows). */
+  heard?: number;
 };
 
 type HoldTurn = {
@@ -44,7 +48,19 @@ export function holdOf(t: HoldTurn): ListenHold {
     startedMs: Number(e.started_ms) || 0,
     heldFor: /after (\S+)\s*$/.exec(t.text ?? "")?.[1] ?? "",
     msgTs: e.msg_ts ?? "",
+    deadlineMs: Number(e.deadline_ms) || 0,
+    heard: Number(e.heard) || 0,
   };
+}
+
+/** Where a heard reply stands, from its hold's latest state: "unread"
+    while the hold waits, "read" once the agent read it, "dropped" when the
+    hold never reached the agent. */
+export type HeardStatus = "unread" | "read" | "dropped";
+
+export function heardStatusOf(state: string | undefined): HeardStatus {
+  if (state === "held" || !state) return "unread";
+  return isProblemHold(state) ? "dropped" : "read";
 }
 
 /** linkListenHolds drops the listen_held rows that did not end badly and
@@ -55,20 +71,31 @@ export function holdOf(t: HoldTurn): ListenHold {
     turn it becomes exists, so the message is never the turn before it. The
     search stops at the next listen_held row, so a hold never claims a turn
     of a later one; a hold still waiting has no turn yet and links nothing. */
-export function linkListenHolds<T extends HoldTurn>(turns: T[]): { turns: T[]; holds: Record<string, ListenHold> } {
+export function linkListenHolds<T extends HoldTurn>(turns: T[]): { turns: T[]; holds: Record<string, ListenHold>; heard: Record<string, HeardStatus> } {
   const holds: Record<string, ListenHold> = {};
+  const heard: Record<string, HeardStatus> = {};
   const out: T[] = [];
+  // A hold still waiting is the thread's countdown: it sits last, under
+  // the replies it heard, not where its first reply was.
+  const waiting: T[] = [];
   const byTs = new Map<string, string>();
   for (const t of turns) {
     const ts = t.role === "user" ? permalinkTs(t.sender?.permalink) : "";
     if (ts && t.turn_id) byTs.set(ts, t.turn_id);
   }
   turns.forEach((t, i) => {
+    if (t.role === "system" && t.kind === "listen_held" && t.extras?.hold_id) {
+      heard[t.extras.hold_id] = heardStatusOf(t.extras.state);
+    }
     if (t.role !== "system" || t.kind !== "listen_held" || isProblemHold(t.extras?.state)) {
       out.push(t);
       return;
     }
     const h = holdOf(t);
+    if (h.state === "held") {
+      waiting.push(t);
+      return;
+    }
     let id = h.msgTs ? byTs.get(h.msgTs) : undefined;
     if (!id && h.state === "sent") {
       for (let j = i + 1; j < turns.length; j++) {
@@ -79,5 +106,5 @@ export function linkListenHolds<T extends HoldTurn>(turns: T[]): { turns: T[]; h
     }
     if (id && !holds[id]) holds[id] = h;
   });
-  return { turns: out, holds };
+  return { turns: [...out, ...waiting], holds, heard };
 }

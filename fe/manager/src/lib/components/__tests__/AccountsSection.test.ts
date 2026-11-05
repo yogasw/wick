@@ -103,3 +103,34 @@ describe("AccountsSection — opening an account", () => {
     expect(push).toHaveBeenCalledWith("/connectors/slack/row-a/accounts/acc-1");
   });
 });
+
+describe("AccountsSection — reconnect needed", () => {
+  it("flags an account whose last call failed on auth", () => {
+    render(AccountsSection, props({ accounts: [acc({ auth_error: "refresh error: invalid_grant" })] }));
+    const badge = screen.getByText("Reconnect needed");
+    expect(badge.getAttribute("title")).toBe("refresh error: invalid_grant");
+  });
+
+  it("shows no flag for a healthy account", () => {
+    render(AccountsSection, props());
+    expect(screen.queryByText("Reconnect needed")).toBeNull();
+  });
+});
+
+describe("AccountsSection — connect needed notice", () => {
+  it("asks the viewer to connect when the instance shares no credential", () => {
+    render(AccountsSection, props({ accounts: [], oauth: { display_name: "Slack", start_url: "/start", needs_connect: true } }));
+    expect(screen.getByText("Connect your account to use this connector")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Connect account" }).length).toBeGreaterThan(0);
+  });
+
+  it("tells the viewer to ask an admin when they may not connect", () => {
+    render(AccountsSection, props({ accounts: [], oauth: { display_name: "Slack", start_url: "", needs_connect: true } }));
+    expect(screen.getByText("Ask an admin to let you connect.")).toBeTruthy();
+  });
+
+  it("shows no notice when a connect is not needed", () => {
+    render(AccountsSection, props());
+    expect(screen.queryByText("Connect your account to use this connector")).toBeNull();
+  });
+});

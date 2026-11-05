@@ -16,6 +16,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/yogasw/wick/pkg/entity"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // Catalog discovers connector plugins that are AVAILABLE to install from a
@@ -49,6 +50,10 @@ type Available struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Version     string `json:"version"`
+	// Kind is the plugin kind ("" = connector, the only kind older catalogs
+	// carried). Catalog.List offers connectors only; other kinds (a Code
+	// Mode runner service) are installed through their own path.
+	Kind string `json:"kind,omitempty"`
 	// DefaultTags are the plugin's Meta.DefaultTags, carried verbatim from the
 	// released manifest — the SAME []entity.DefaultTag a built-in connector
 	// declares. The app derives the category from them with connectorCategory,
@@ -206,6 +211,9 @@ func parseCatalog(raw []byte) ([]Available, error) {
 		}
 		if a.Key == "" {
 			continue // neither → unusable
+		}
+		if wickplugin.NormalizeKind(a.Kind) != wickplugin.KindConnector {
+			continue // the connector marketplace never installs another kind
 		}
 		if a.Assets == nil {
 			a.Assets = map[string]string{}

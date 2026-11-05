@@ -15,7 +15,7 @@
     onCreate: () => void;
     onRemote: () => void;
     candidates?: Candidate[];
-    /** giveAccess: "Give it your access" — run as you, Same as me. */
+    /** giveAccess: "Give it your access" — run as you, All. */
     onMakeCaptain?: (c: Candidate, giveAccess: boolean) => void;
   };
   let { onCreate, onRemote, candidates = [], onMakeCaptain }: Props = $props();

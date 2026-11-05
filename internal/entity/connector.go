@@ -145,6 +145,9 @@ const (
 	// ConnectorRunSourceWorkflow marks runs a workflow connector node made,
 	// as the workflow's owner.
 	ConnectorRunSourceWorkflow ConnectorRunSource = "workflow"
+	// ConnectorRunSourceCodeMode marks runs a wick_run_code script made, as
+	// the session that ran the script.
+	ConnectorRunSourceCodeMode ConnectorRunSource = "code_mode"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.
@@ -276,8 +279,27 @@ type ConnectorAccount struct {
 	//
 	// Example: {"send_message":false,"get_channel_history":true}
 	OpOverrides string `gorm:"type:text;default:''"`
+	// AuthError is the last call's auth failure on this account (token
+	// revoked, refresh refused), so the UI can ask for a reconnect before
+	// the next call fails too. Cleared by a reconnect or a call that works.
+	AuthError   string `gorm:"type:text;default:''"`
+	AuthErrorAt *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// ConnectorCredentialPolicy is the per-instance answer to "may a call that
+// resolved no connected account run on the instance-level user_token /
+// refresh_token?". On an OAuth row those two configs are a legacy shared
+// credential: whoever filled them, everyone without an account of their own
+// acts as them. Kept in its own table, keyed by connector id, rather than as a
+// column on connectors — a new column on a live table has broken cached plans
+// behind the DB pooler before. No row means "the default for this instance"
+// (see connectors.SharedCredentialAllowed).
+type ConnectorCredentialPolicy struct {
+	ConnectorID           string `gorm:"type:varchar(36);primaryKey"`
+	AllowSharedCredential bool   `gorm:"not null;default:false"`
+	UpdatedAt             time.Time
 }
 
 func (a *ConnectorAccount) BeforeCreate(tx *gorm.DB) error {

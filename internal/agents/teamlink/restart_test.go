@@ -18,7 +18,7 @@ func sendWorking(t *testing.T, dir string) (string, chan struct{}) {
 	t.Helper()
 	h1, turns, _ := newTestHub(func(Peer, string) string { return "scan done" })
 	turns.gate = make(chan struct{})
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	res, err := h1.Send(context.Background(), SendInput{CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "long scan", Wait: -1})
@@ -46,7 +46,7 @@ func TestRestartSettlesAWorkingTaskAsInterrupted(t *testing.T) {
 
 	h2, _, note := newTestHub(func(Peer, string) string { return "scanned again" })
 	h2.orphanPoll = 5 * time.Millisecond
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -74,7 +74,7 @@ func TestRestartSettlesAWorkingTaskAsInterrupted(t *testing.T) {
 	// Settled for good: another restart reads it failed and tells nobody.
 	h3, _, note3 := newTestHub(func(Peer, string) string { return "" })
 	h3.orphanPoll = 5 * time.Millisecond
-	if err := h3.Persist(dir); err != nil {
+	if err := persistTest(t, h3, dir); err != nil {
 		t.Fatal(err)
 	}
 	if list := h3.SentFrom("sess-cap"); len(list) != 1 || list[0].State != "failed" || !list[0].Interrupted {
@@ -103,7 +103,7 @@ func TestRestartLeavesATaskTheDrainingProcessFinishes(t *testing.T) {
 	var draining atomic.Bool
 	draining.Store(true)
 	h2.PredecessorBusy = func(string) bool { return draining.Load() }
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -164,7 +164,7 @@ func TestAnsweredTaskIsNotAnOrphan(t *testing.T) {
 func TestUserAnswerToALostTaskSupersedesIt(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := newTestHub(func(Peer, string) string { return InputRequiredToken + " which environment?" })
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -174,7 +174,7 @@ func TestUserAnswerToALostTaskSupersedesIt(t *testing.T) {
 	}
 
 	h2, turns, _ := newTestHub(func(Peer, string) string { return "deployed to prod" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if list := h2.SentFrom("sess-cap"); len(list) != 1 || !list[0].NeedsYou {

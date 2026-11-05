@@ -867,6 +867,7 @@ func (c *Canvas) mutate(id string, fn func(*workflow.Workflow) error) (workflow.
 	if err := fn(&w); err != nil {
 		return workflow.Workflow{}, err
 	}
+	pruneUnusedScaffoldStart(&w)
 	if r := parse.Validate(w); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("post-edit validation failed: %s", r.Error())
 	}
@@ -889,12 +890,12 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 		"label": {}, "description": {}, "prompt": {},
 		"timeout_sec": {}, "on_failure": {}, "fallback": {}, "provider": {},
 		"model": {}, "preset": {}, "session": {}, "output_cases": {}, "expr": {},
-		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
+		"url": {}, "method": {}, "channel": {}, "channel_instance": {}, "op": {}, "module": {},
 		"row_id": {}, "args": {}, "command": {},
 		"expression": {}, "engine": {}, "result": {},
 		"max_turns": {}, "skills": {}, "tools": {},
-		// go_script body + sticky_note fields.
-		"code": {}, "content": {}, "color": {}, "width": {}, "height": {}, "texts": {},
+		// go_script / run_code body + sticky_note fields.
+		"code": {}, "lang": {}, "input": {}, "content": {}, "color": {}, "width": {}, "height": {}, "texts": {},
 	}
 	var unknown []string
 	for k := range patch {
@@ -960,6 +961,12 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	if v, ok := patch["channel"].(string); ok {
 		n.ChannelName = v
 	}
+	// channel_instance pins which bot of the channel the action runs as;
+	// without it an AI-built workflow could only post as whichever bot
+	// heard the trigger. Empty string unpins.
+	if v, ok := patch["channel_instance"].(string); ok {
+		n.ChannelInstance = v
+	}
 	if v, ok := patch["op"].(string); ok {
 		n.Op = v
 	}
@@ -980,6 +987,12 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["code"].(string); ok {
 		n.Code = v
+	}
+	if v, ok := patch["lang"].(string); ok {
+		n.Lang = v
+	}
+	if v, ok := patch["input"].(string); ok {
+		n.Input = v
 	}
 	if v, ok := patch["content"].(string); ok {
 		n.Content = v

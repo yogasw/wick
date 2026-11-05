@@ -78,9 +78,10 @@ export const closeTab = (connectorId: string, sessionId: string, index: number) 
   );
 
 /* WebSocket URL for the DevTools proxy. ws(s):// mirrors the page protocol so
- * it works behind TLS. */
-export const wsURL = (connectorId: string, sessionId: string, tab: number) => {
+ * it works behind TLS. mode tells the proxy what the socket may send: view =
+ * screencast only, full = plus input and navigation. */
+export const wsURL = (connectorId: string, sessionId: string, tab: number, mode: "view" | "full" = "view") => {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const q = new URLSearchParams({ session: sessionId, tab: String(tab) });
+  const q = new URLSearchParams({ session: sessionId, tab: String(tab), mode });
   return `${proto}//${location.host}${root(connectorId)}/ws?${q.toString()}`;
 };

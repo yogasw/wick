@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ThreadMessage from "../ThreadMessage.svelte";
+import { setViewerId } from "../../viewer.js";
 import type { ConversationTurn } from "../../types/agents.js";
 
 const turn = (o: Partial<ConversationTurn> = {}): ConversationTurn => ({
@@ -46,5 +47,92 @@ describe("held Slack reply", () => {
     const row = screen.getByTestId("listen-problem");
     expect(row.textContent).toContain("Listen: Not passed to the agent: someone else answered");
     expect(row.querySelector("button")).toBeNull();
+  });
+});
+
+describe("listening thread", () => {
+  test("a heard reply shows who said it and that it is not read yet", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ role: "system", kind: "thread_heard", text: "kenapa form-nya kosong?", extras: { hold_id: "S/1", name: "Dev Example (@dev)", files: "shot.png" } }),
+        heardStatus: "unread",
+      },
+    });
+    const row = screen.getByTestId("heard-message");
+    expect(row.textContent).toContain("Dev Example");
+    expect(row.textContent).not.toContain("(@dev)");
+    expect(row.textContent).toContain("kenapa form-nya kosong?");
+    expect(row.textContent).toContain("shot.png");
+    expect(row.textContent).toContain("not read yet");
+  });
+
+  test("a waiting hold counts down to the read", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ role: "system", kind: "listen_held", text: "Listen · holding", extras: { hold_id: "S/1", state: "held", mode: "listen", delay_sec: "120", started_ms: String(Date.now()), deadline_ms: String(Date.now() + 90_000), heard: "3" } }),
+        agent: { name: "Helper" },
+      },
+    });
+    const row = screen.getByTestId("listen-countdown").textContent ?? "";
+    expect(row).toContain("Helper heard 3 new replies");
+    expect(row).toMatch(/reads in 1:[23]\d/);
+  });
+
+  test("the turn a hold became is a read line once its replies are in the thread", async () => {
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ text: "[listen mode · held 2m0s] Not a mention.\n\nkadang juga ada" }),
+        listenHold: { mode: "listen", state: "sent", delaySec: 120, startedMs: 0, heldFor: "2m0s", msgTs: "", heard: 4 },
+        agent: { name: "Helper" },
+      },
+    });
+    expect(screen.getByTestId("listen-read-line").textContent).toContain("✓ Helper read 4 replies · held 2m0s");
+    await fireEvent.click(screen.getByText("Show prompt"));
+    expect(screen.queryByTestId("listen-read-line")).toBeNull();
+  });
+
+  test("the reader's own heard reply sits on the right, without a name", () => {
+    setViewerId("wick-user-1");
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ role: "system", kind: "thread_heard", text: "cek https://example.com/x", extras: { hold_id: "S/1", user: "U01TEST", name: "Dev Example", wick_user_id: "wick-user-1" } }),
+        heardStatus: "read",
+        heardRun: { first: true, last: true },
+      },
+    });
+    const row = screen.getByTestId("heard-message");
+    expect(row.dataset.mine).toBe("1");
+    expect(row.textContent).not.toContain("Dev Example");
+    expect(row.querySelector("a")?.getAttribute("href")).toBe("https://example.com/x");
+    setViewerId("");
+  });
+
+  test("a run by one author shows the name once and the read state once", () => {
+    const heard = (o: { first: boolean; last: boolean }) =>
+      render(ThreadMessage, {
+        props: {
+          turn: turn({ role: "system", kind: "thread_heard", text: "satu", extras: { hold_id: "S/1", user: "U02TEST", name: "Other Example" } }),
+          heardStatus: "unread",
+          heardRun: o,
+        },
+      }).container.textContent ?? "";
+    const top = heard({ first: true, last: false });
+    expect(top).toContain("Other Example");
+    expect(top).not.toContain("not read yet");
+    const bottom = heard({ first: false, last: true });
+    expect(bottom).not.toContain("Other Example");
+    expect(bottom).toContain("not read yet");
+  });
+
+  test("a bot's heard reply is labelled and carries no read state of its own", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: turn({ role: "system", kind: "thread_heard", text: "form baru masuk", extras: { user: "B01TEST", name: "intake-bot", bot: "1" } }),
+      },
+    });
+    const row = screen.getByTestId("heard-message");
+    expect(row.textContent).toContain("intake-bot");
+    expect(row.textContent).toContain("bot");
+    expect(row.textContent).not.toContain("not read");
   });
 });

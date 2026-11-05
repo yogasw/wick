@@ -73,6 +73,10 @@ type connectorMCPAuthJSON struct {
 	// but every call will 401 until someone re-connects. The UI flags this
 	// in red rather than showing a reassuring account chip.
 	Expired bool `json:"expired"`
+	// AuthError is the last auth refusal recorded on the instance (failed
+	// refresh, refused probe). Stored server-side so a reload keeps the
+	// row flagged; empty once a token works again or after a re-connect.
+	AuthError string `json:"auth_error,omitempty"`
 	// TestURL runs the per-instance auth probe. Empty when the caller may
 	// not configure the row (same gate as StartURL).
 	TestURL string `json:"test_url"`
@@ -89,6 +93,12 @@ type connectorMCPAuthJSON struct {
 	// ConnectMineURL is the "Connect my account" popup target (the SSO
 	// start route). Empty when the viewer may not connect.
 	ConnectMineURL string `json:"connect_mine_url"`
+	// TokenFields is set for a per-user bearer / custom-header instance:
+	// "Connect my account" opens a form with these fields and POSTs them
+	// to ConnectTokenURL instead of opening a login popup. Empty
+	// ConnectTokenURL = the viewer may not connect.
+	TokenFields     []customconn.UserTokenField `json:"token_fields,omitempty"`
+	ConnectTokenURL string                      `json:"connect_token_url,omitempty"`
 }
 
 // connectorListJSON is the shape served at GET /manager/api/connectors/{key}:
@@ -174,6 +184,10 @@ type connectorAccountJSON struct {
 	WickUserID  string   `json:"wick_user_id"`
 	DisabledOps []string `json:"disabled_ops"`
 	CanManage   bool     `json:"can_manage"`
+	// AuthError is set when the account's last call failed on auth: the
+	// row shows "Reconnect needed" until a reconnect or a working call.
+	AuthError   string     `json:"auth_error,omitempty"`
+	AuthErrorAt *time.Time `json:"auth_error_at,omitempty"`
 }
 
 // connectorOAuthJSON mirrors the subset of Module.OAuth the SPA needs to
@@ -182,6 +196,18 @@ type connectorAccountJSON struct {
 type connectorOAuthJSON struct {
 	DisplayName string `json:"display_name"`
 	StartURL    string `json:"start_url"`
+	// SharedCredential is the row's effective "allow shared instance
+	// credential" answer: may a call with no connected account of its own
+	// run on the instance user_token / refresh_token.
+	SharedCredential bool `json:"shared_credential"`
+	// SharedCredentialStored is true when the instance still holds a value
+	// in those slots — the policy section offers to clear it while off.
+	// Only set for a caller who may manage the policy.
+	SharedCredentialStored bool `json:"shared_credential_stored,omitempty"`
+	// NeedsConnect is true when SSO is on, the shared credential is off and
+	// the viewer has no connected account: every call they make fails until
+	// they connect, so the page says so up front.
+	NeedsConnect bool `json:"needs_connect"`
 }
 
 // connectorDetailJSON is the shape served at
@@ -305,6 +331,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		if mod.OAuth != nil {
 			rowJSON.OAuth = h.rowOAuthJSON(mod, row, user)
 			rowJSON.Accounts = h.rowAccountsJSON(ctx, row, user, callerTags)
+			h.fillSharedCredentialJSON(ctx, rowJSON.OAuth, row, user, rowJSON.Accounts)
 		}
 		rowJSON.MCPAuth = h.rowMCPAuthJSON(ctx, key, row, user)
 		out.Rows = append(out.Rows, rowJSON)
@@ -402,6 +429,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	var oauthJSON *connectorOAuthJSON
 	if mod.OAuth != nil {
 		oauthJSON = h.rowOAuthJSON(mod, *row, user)
+		h.fillSharedCredentialJSON(ctx, oauthJSON, *row, user, accounts)
 	}
 
 	writeJSON(w, http.StatusOK, connectorDetailJSON{
@@ -480,6 +508,8 @@ func (h *Handler) rowAccountsJSON(ctx context.Context, row entity.Connector, use
 			WickUserID:  acc.WickUserID,
 			DisabledOps: accountDisabledOpKeys(&acc),
 			CanManage:   canConfigure || (user != nil && acc.WickUserID == user.ID),
+			AuthError:   acc.AuthError,
+			AuthErrorAt: acc.AuthErrorAt,
 		})
 	}
 	return accounts
@@ -501,6 +531,34 @@ func (h *Handler) rowOAuthJSON(mod connector.Module, row entity.Connector, user 
 		}
 	}
 	return out
+}
+
+// fillSharedCredentialJSON sets the shared-credential policy and the
+// viewer's "connect needed" state on a row's OAuth read model. accounts is
+// the visible list already built for the row; the viewer's own accounts are
+// always in it.
+func (h *Handler) fillSharedCredentialJSON(ctx context.Context, out *connectorOAuthJSON, row entity.Connector, user *entity.User, accounts []connectorAccountJSON) {
+	out.SharedCredential = h.sharedCredentialAllowed(ctx, row)
+	if h.canManageAccessPolicy(user, &row) {
+		out.SharedCredentialStored = h.connectors.SharedCredentialStored(row)
+	}
+	if !row.EnableSSO || out.SharedCredential || user == nil {
+		return
+	}
+	for _, acc := range accounts {
+		if acc.WickUserID == user.ID {
+			return
+		}
+	}
+	out.NeedsConnect = true
+}
+
+// sharedCredentialAllowed is the row's effective shared-credential policy.
+// A lookup error reads as "off": the safe answer for both the callback that
+// would otherwise write the slot and the notice that asks for a connect.
+func (h *Handler) sharedCredentialAllowed(ctx context.Context, row entity.Connector) bool {
+	ok, err := h.connectors.SharedCredentialAllowed(ctx, row)
+	return err == nil && ok
 }
 
 // rowMCPAuthJSON builds the per-instance MCP login state, or nil when the
@@ -528,16 +586,28 @@ func (h *Handler) rowMCPAuthJSON(ctx context.Context, key string, row entity.Con
 		return nil
 	}
 	srv, err := h.custom.Store().GetServer(ctx, serverID)
-	if err != nil || srv == nil || srv.AuthScheme != "oauth" {
+	if err != nil || srv == nil {
 		return nil
 	}
-	if h.custom.InstancePerUser(row) {
-		return h.rowMCPPerUserJSON(ctx, key, row, user)
+	if (srv.AuthScheme == "oauth" || srv.AuthScheme == "bearer" || srv.AuthScheme == "custom_header") && h.custom.InstancePerUser(row) {
+		out := h.rowMCPPerUserJSON(ctx, key, row, user)
+		if srv.AuthScheme != "oauth" {
+			out.TokenFields = customconn.UserTokenFields(srv)
+			if out.ConnectMineURL != "" {
+				out.ConnectTokenURL = "/manager/api/connectors/" + key + "/" + row.ID + "/my-token"
+			}
+			out.ConnectMineURL = ""
+		}
+		return out
+	}
+	if srv.AuthScheme != "oauth" {
+		return nil
 	}
 	cfgs := h.connectors.LoadConfigs(row)
 	out := &connectorMCPAuthJSON{
 		Connected: strings.TrimSpace(cfgs["oauth_access_token"]) != "",
 		Account:   strings.TrimSpace(cfgs["oauth_account"]),
+		AuthError: strings.TrimSpace(cfgs["oauth_auth_error"]),
 	}
 	// A token past its expiry with no refresh token left is dead: it still
 	// looks connected but every call 401s. Surface it so the row can warn
@@ -673,6 +743,7 @@ func (h *Handler) apiCreateConnectorRow(w http.ResponseWriter, r *http.Request) 
 	}
 	if h.custom != nil {
 		h.custom.EnsureTagsForKey(ctx, key)
+		h.custom.SeedNewInstance(ctx, key, row.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": row.ID})
 }

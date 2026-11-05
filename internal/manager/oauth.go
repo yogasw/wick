@@ -110,6 +110,13 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-user token MCP connectors (bearer / custom header): the account
+	// is a typed token, saved through the my-token route — no login.
+	if h.custom != nil && h.custom.UsesUserToken(r.Context(), key) {
+		oauthPopupDone(w, key, "", "this connector takes your own token — use Connect my account on the connector list and enter it there")
+		return
+	}
+
 	// oauth MCP connectors (custom): the flow is the MCP PKCE login with
 	// the server row's discovered client, and the callback saves the
 	// caller's ConnectorAccount — same SSO gates as above.
@@ -289,8 +296,14 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Exchange code for token. Generic standard OAuth2 when TokenURL is set; Slack-specific otherwise.
 	var accessToken, refreshToken, fallbackUserID string
+	var expiresAt *time.Time
 	if mod.OAuth.TokenURL != "" {
-		accessToken, refreshToken, err = h.exchangeGenericCode(r.Context(), mod.OAuth.TokenURL, clientID, clientSecret, code, redirectURI)
+		var expiresIn int
+		accessToken, refreshToken, expiresIn, err = h.exchangeGenericTokens(r.Context(), mod.OAuth.TokenURL, clientID, clientSecret, code, redirectURI)
+		if expiresIn > 0 {
+			t := time.Now().Add(time.Duration(expiresIn) * time.Second)
+			expiresAt = &t
+		}
 	} else {
 		accessToken, fallbackUserID, err = h.exchangeSlackCode(r.Context(), clientID, clientSecret, code, redirectURI)
 	}
@@ -324,7 +337,7 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Persist token to connector row. Pass the wick platform user ID (from the
 	// OAuth state entry) as wickUserID and the provider-side user ID as externalUserID.
-	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, entry.wickUserID, userID, displayName, accessToken, refreshToken, entry.connectorRowID)
+	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, entry.wickUserID, userID, displayName, accessToken, refreshToken, entry.connectorRowID, expiresAt)
 	if saveErr != nil {
 		log.Error().Err(saveErr).Str("connector", key).Str("user_id", userID).Msg("manager oauth: oauthSaveToken failed")
 		http.Error(w, "failed to save token: "+saveErr.Error(), http.StatusInternalServerError)
@@ -339,8 +352,10 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// instance also keeps the legacy instance-level copy, which connectors
 	// still read for accounts saved before the per-account column was used.
 	// A multi-account instance must not: that one shared slot was what let
-	// one person's account refresh with somebody else's token.
-	if refreshToken != "" && !row.MultiAccount {
+	// one person's account refresh with somebody else's token. Nor may an
+	// instance whose shared credential is off: nothing runs on that slot, so
+	// filling it again would only re-create the value the toggle cleared.
+	if refreshToken != "" && !row.MultiAccount && h.sharedCredentialAllowed(r.Context(), *row) {
 		if err := h.connectors.Update(r.Context(), savedRowID, row.Label,
 			map[string]string{"refresh_token": refreshToken}, row.Disabled); err != nil {
 			log.Warn().Err(err).Str("connector", key).Msg("manager oauth: failed to save refresh token")
@@ -420,6 +435,14 @@ func (h *Handler) exchangeSlackCode(ctx context.Context, clientID, clientSecret,
 // standard HTTP POST per RFC 6749. Returns accessToken and, if present,
 // refreshToken (e.g. Google offline access).
 func (h *Handler) exchangeGenericCode(ctx context.Context, tokenURL, clientID, clientSecret, code, redirectURI string) (accessToken, refreshToken string, err error) {
+	accessToken, refreshToken, _, err = h.exchangeGenericTokens(ctx, tokenURL, clientID, clientSecret, code, redirectURI)
+	return accessToken, refreshToken, err
+}
+
+// exchangeGenericTokens is exchangeGenericCode that also returns the access
+// token's lifetime in seconds (expires_in; 0 when the provider omits it), so
+// the account can record when it expires and Execute renews it in time.
+func (h *Handler) exchangeGenericTokens(ctx context.Context, tokenURL, clientID, clientSecret, code, redirectURI string) (accessToken, refreshToken string, expiresIn int, err error) {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("code", code)
@@ -429,53 +452,55 @@ func (h *Handler) exchangeGenericCode(ctx context.Context, tokenURL, clientID, c
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		return "", "", fmt.Errorf("build token request: %w", err)
+		return "", "", 0, fmt.Errorf("build token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("token request: %w", err)
+		return "", "", 0, fmt.Errorf("token request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", "", fmt.Errorf("read token response: %w", err)
+		return "", "", 0, fmt.Errorf("read token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("token endpoint %d: %s", resp.StatusCode, string(body))
+		return "", "", 0, fmt.Errorf("token endpoint %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
 		Error        string `json:"error"`
 		ErrorDesc    string `json:"error_description"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", "", fmt.Errorf("decode token response: %w", err)
+		return "", "", 0, fmt.Errorf("decode token response: %w", err)
 	}
 	if result.Error != "" {
-		return "", "", fmt.Errorf("token error: %s: %s", result.Error, result.ErrorDesc)
+		return "", "", 0, fmt.Errorf("token error: %s: %s", result.Error, result.ErrorDesc)
 	}
 	if result.AccessToken == "" {
-		return "", "", fmt.Errorf("empty access_token in token response")
+		return "", "", 0, fmt.Errorf("empty access_token in token response")
 	}
-	return result.AccessToken, result.RefreshToken, nil
+	return result.AccessToken, result.RefreshToken, result.ExpiresIn, nil
 }
 
 // oauthSaveToken persists an access token as a ConnectorAccount under the
 // originating connector row. MultiAccount behaviour is handled by the repo
 // upsert: false = replace existing account, true = add new account.
 // wickUserID is the wick platform user; externalUserID is the provider-side ID.
-// refreshToken may be "" (providers without offline access).
-func (h *Handler) oauthSaveToken(ctx context.Context, key, wickUserID, externalUserID, displayName, accessToken, refreshToken, connectorRowID string) (savedRowID string, err error) {
+// refreshToken may be "" (providers without offline access); expiresAt nil
+// when the provider did not say how long the access token lives.
+func (h *Handler) oauthSaveToken(ctx context.Context, key, wickUserID, externalUserID, displayName, accessToken, refreshToken, connectorRowID string, expiresAt *time.Time) (savedRowID string, err error) {
 	if connectorRowID == "" {
 		return "", fmt.Errorf("oauth save: connector_id is required")
 	}
-	if err := h.connectors.SaveAccountTokens(ctx, connectorRowID, wickUserID, externalUserID, displayName, accessToken, refreshToken, nil); err != nil {
+	if err := h.connectors.SaveAccountTokens(ctx, connectorRowID, wickUserID, externalUserID, displayName, accessToken, refreshToken, expiresAt); err != nil {
 		return "", fmt.Errorf("oauth save: %w", err)
 	}
 	log.Info().Str("connector", key).Str("wick_user_id", wickUserID).Str("external_user_id", externalUserID).

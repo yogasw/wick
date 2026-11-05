@@ -38,6 +38,13 @@
   let busy = $state(false);
 
   /* ── live view state ──────────────────────────────────────────── */
+  /* The panel shows the AGENT'S point of view in every mode: it never resizes
+   * the remote viewport, never changes its colour scheme and never runs page
+   * scripts on its own, so opening the panel cannot shift the agent's
+   * coordinates or interrupt a step. The frame is letterboxed into the box.
+   * view: watch only (no input at all). full: a person may click, type and
+   * navigate. The proxy enforces the same split (connectors_browser_proxy.go),
+   * so an older tab cannot do more than its mode allows. */
   type Mode = "view" | "full";
   let mode = $state<Mode>("view");
   let connected = $state(false);
@@ -49,12 +56,6 @@
    * click in client coords; open=false hides it. */
   let ctxMenu = $state<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
 
-  /* Zoom = CSS→device scale for the emulated viewport. Lower = more page fits
-   * (zoomed out); higher = larger content. The browser viewport is sized to the
-   * canvas box / zoom, so there's no letterbox and content is real size. */
-  let zoom = $state(1);
-  const ZOOM_MIN = 0.5;
-  const ZOOM_MAX = 2;
   let viewportEl = $state<HTMLDivElement | undefined>();
   let resizeObs: ResizeObserver | null = null;
 
@@ -344,7 +345,7 @@
   function openSocket() {
     closeSocket();
     statusText = "connecting…";
-    const sock = new WebSocket(wsURL(instanceId, sessionId, tabIndex));
+    const sock = new WebSocket(wsURL(instanceId, sessionId, tabIndex, mode));
     ws = sock;
     sock.onopen = () => {
       if (ws !== sock) return;
@@ -433,21 +434,14 @@
     if (!connected || paused) return;
     paused = true;
     send("Page.stopScreencast");
-    // Mute + pause any playing media so audio stops when you look away.
-    send("Runtime.evaluate", {
-      expression:
-        "document.querySelectorAll('video,audio').forEach(m=>{m.muted=true;try{m.pause()}catch(e){}});",
-    });
+    // Nothing runs in the page: the agent may be mid-step (a voice note, a
+    // video it is checking), and looking away must not pause it.
   }
 
   function resumeStream() {
     if (!connected || !paused) return;
     paused = false;
-    // Unmute media we muted on pause (leave playback where it is — don't auto-play).
-    send("Runtime.evaluate", {
-      expression: "document.querySelectorAll('video,audio').forEach(m=>{m.muted=false;});",
-    });
-    applyViewport(); // re-emulate + restart screencast for a fresh frame
+    applyViewport(); // restart the screencast for a fresh frame
   }
 
   function onVisibility() {
@@ -460,41 +454,13 @@
     if (wantLive && !connected) reconnectNow();
   }
 
-  // Emulate a viewport matching the on-screen box (÷ zoom), so the page renders
-  // at the right size with NO letterbox — the frame fills the canvas. Lower zoom
-  // = larger emulated viewport = more page visible (zoomed out). deviceScaleF is
-  // kept at 1: we control apparent size via the viewport dimensions, not DPR.
+  // Re-arm the screencast so a fresh frame arrives (after a resize, a resume or
+  // a reconnect). Deliberately nothing else: no Emulation.* — sizing or theming
+  // the remote page from here would change what the agent sees.
   function applyViewport() {
-    if (!connected || !viewportEl) return;
-    // clientWidth/Height exclude the border: using the outer rect made every
-    // frame 2px taller than the box, which grew the box, which grew the frame.
-    const w = Math.max(320, Math.round(viewportEl.clientWidth / zoom));
-    const h = Math.max(240, Math.round(viewportEl.clientHeight / zoom));
-    send("Emulation.setDeviceMetricsOverride", {
-      width: w,
-      height: h,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-    applyColorScheme();
-    // Re-arm screencast so a fresh frame arrives at the new size immediately.
+    if (!connected) return;
     send("Page.stopScreencast");
     requestAnimationFrame(startScreencast);
-  }
-
-  // Make headless Chrome honor the app's theme: emulate prefers-color-scheme so
-  // theme-aware sites (YouTube, etc.) render dark when wick is dark instead of
-  // defaulting to light. Mirrors document.documentElement.classList "dark".
-  function applyColorScheme() {
-    const dark = document.documentElement.classList.contains("dark");
-    send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }],
-    });
-  }
-
-  function setZoom(z: number) {
-    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
-    applyViewport();
   }
 
   function onCdpMessage(raw: string) {
@@ -530,6 +496,7 @@
   let urlFocused = $state(false);
 
   function navigate() {
+    if (mode !== "full") return;
     let u = urlInput.trim();
     if (!u) return;
     if (!/^[a-z]+:\/\//i.test(u)) u = "https://" + u; // bare domain → https
@@ -539,7 +506,7 @@
 
   // Open a chrome:// internal page in the live session (extensions, settings…).
   function gotoChrome(page: string) {
-    if (!connected) return;
+    if (!connected || mode !== "full") return;
     const url = "chrome://" + page;
     urlInput = url;
     send("Page.navigate", { url });
@@ -592,8 +559,8 @@
 
   /* ── interactive input (Full mode only) ───────────────────────── */
   // Map a DOM pointer event to CDP page CSS coordinates. The canvas is
-  // object-fill (frame stretched to fill the whole element, no letterbox), so
-  // it's a straight fraction of the element rect → page CSS pixel space
+  // object-contain (frame letterboxed at its own aspect ratio), so it's a
+  // fraction of the drawn area → page CSS pixel space
   // (deviceWidth/Height from screencast metadata), which Input.dispatch* expects.
   function canvasPoint(ev: MouseEvent): { x: number; y: number } | null {
     const canvas = canvasEl;
@@ -601,8 +568,15 @@
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
 
-    const fracX = (ev.clientX - rect.left) / rect.width;
-    const fracY = (ev.clientY - rect.top) / rect.height;
+    // object-contain: the frame is centred at its aspect ratio inside the
+    // element, with bars on two sides. Map into the drawn area only.
+    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const drawnW = canvas.width * scale;
+    const drawnH = canvas.height * scale;
+    const left = rect.left + (rect.width - drawnW) / 2;
+    const top = rect.top + (rect.height - drawnH) / 2;
+    const fracX = (ev.clientX - left) / drawnW;
+    const fracY = (ev.clientY - top) / drawnH;
     if (fracX < 0 || fracY < 0 || fracX > 1 || fracY > 1) return null;
 
     const pageW = frameCssW || canvas.width;
@@ -775,7 +749,7 @@
 
   // blur: remote clipboard (fallback selection) → PC clipboard.
   async function pullClipboardFromRemote() {
-    if (!connected) return;
+    if (mode !== "full" || !connected) return;
     let text = "";
     try {
       const res = await sendCmd("Runtime.evaluate", {
@@ -864,6 +838,16 @@
       resizeObs.observe(viewportEl);
     }
     applyViewport();
+  });
+
+  // The proxy decides what a socket may send from the mode it was opened with,
+  // so switching mode reopens the socket instead of reusing it.
+  let socketMode: Mode = "view"; // the initial mode; the effect tracks changes
+  $effect(() => {
+    const m = mode;
+    if (m === socketMode) return;
+    socketMode = m;
+    if (wantLive) reconnectNow();
   });
 
   onDestroy(disconnect);
@@ -1039,6 +1023,7 @@
     <div class="inline-flex rounded-lg border border-white-400 dark:border-navy-600 overflow-hidden text-xs font-medium">
       <button
         type="button"
+        title="Watch without touching the browser: no resize, no theme, no input. What you see is what the agent sees."
         class={"px-3 py-1.5 transition-colors " + (mode === "view" ? "bg-green-500 text-white-100" : "bg-white-100 dark:bg-navy-800 text-black-700 dark:text-white-200")}
         onclick={() => (mode = "view")}
         data-testid="browser-mode-view"
@@ -1067,13 +1052,6 @@
         {statusText || "disconnected"}
       </button>
     {/if}
-
-    <!-- Zoom: sizes the emulated viewport (out = more page fits). -->
-    <div class="flex items-center gap-0.5 rounded-lg border border-white-400 dark:border-navy-600 p-0.5">
-      <button type="button" title="Zoom out" aria-label="Zoom out" class="rounded-md px-1.5 py-1 text-xs font-medium text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 disabled:opacity-40" disabled={zoom <= ZOOM_MIN} onclick={() => setZoom(zoom - 0.25)}>−</button>
-      <button type="button" title="Reset zoom" class="rounded-md px-1.5 py-1 text-[10px] font-mono text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 tabular-nums" onclick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
-      <button type="button" title="Zoom in" aria-label="Zoom in" class="rounded-md px-1.5 py-1 text-xs font-medium text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 disabled:opacity-40" disabled={zoom >= ZOOM_MAX} onclick={() => setZoom(zoom + 0.25)}>+</button>
-    </div>
 
     <!-- Expand controls: shown docked; the overlay has its own in the header. -->
     {#if view === "docked"}
@@ -1220,7 +1198,7 @@
   <div bind:this={viewportEl} class={"relative rounded-lg overflow-hidden bg-black-900 border border-white-400 dark:border-navy-700 " + sizeCls}>
     <canvas
       bind:this={canvasEl}
-      class={"w-full h-full block object-fill bg-transparent " + (mode === "full" ? "cursor-crosshair" : "cursor-default")}
+      class={"w-full h-full block bg-transparent " + "object-contain " + (mode === "full" ? "cursor-crosshair" : "cursor-default")}
       tabindex={mode === "full" ? 0 : -1}
       onmousedown={(e) => mouseEvent("mousePressed", e)}
       onmouseup={(e) => mouseEvent("mouseReleased", e)}

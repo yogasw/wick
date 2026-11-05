@@ -460,7 +460,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Result: handlers.ToolCallResult{
-					Content: []handlers.ToolContent{{Type: "text", Text: out.res.ResponseJSON}},
+					Content: handlers.ExecuteContent(out.res.ResponseJSON),
 					IsError: false,
 				},
 			})

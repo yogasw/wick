@@ -6,7 +6,7 @@
      submit on every checkbox change). Access policy toggles submit together
      as one payload; session config has its own endpoint. */
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { setConnectorAccessPolicy, setConnectorSessionConfig, type AccessPolicy } from "$lib/api.js";
+  import { setConnectorAccessPolicy, setConnectorSessionConfig, setConnectorSharedCredential, type AccessPolicy } from "$lib/api.js";
   import type { ConnectorDetail } from "$lib/types.js";
 
   type Props = {
@@ -23,6 +23,8 @@
   let allowOthersConfigure = $state(false);
   let allowOthersSeeAccounts = $state(false);
   let allowSessionConfig = $state(false);
+  let sharedCredential = $state(false);
+  let sharedBusy = $state(false);
   let busy = $state(false);
   let sessionBusy = $state(false);
 
@@ -33,6 +35,7 @@
     allowOthersConfigure = data.allow_others_configure;
     allowOthersSeeAccounts = data.allow_others_see_accounts;
     allowSessionConfig = data.session_config_allowed;
+    sharedCredential = !!data.oauth?.shared_credential;
   });
 
   const hasOauth = $derived(data.oauth !== null);
@@ -56,6 +59,29 @@
     } finally {
       busy = false;
     }
+  }
+
+  /* Own endpoint, like per-session config. Turning it off also clears the
+     stored instance token server-side; clearSharedCredential re-posts false
+     for a row that is already off but still holds a legacy value. */
+  async function saveSharedCredential(): Promise<void> {
+    if (sharedBusy) return;
+    sharedBusy = true;
+    try {
+      sharedCredential = await setConnectorSharedCredential(connectorKey, connectorId, sharedCredential);
+      toastOk(sharedCredential ? "Shared credential allowed" : "Shared credential off — stored token cleared");
+      onchanged?.();
+    } catch (e) {
+      sharedCredential = !sharedCredential;
+      toastError("Save failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      sharedBusy = false;
+    }
+  }
+
+  async function clearSharedCredential(): Promise<void> {
+    sharedCredential = false;
+    await saveSharedCredential();
   }
 
   async function saveSessionConfig(): Promise<void> {
@@ -112,6 +138,23 @@
           </div>
           <input type="checkbox" disabled={busy} bind:checked={allowOthersConnectSso} onchange={savePolicy} aria-label="Allow others to connect via SSO" class="h-5 w-9 accent-green-500" />
         </label>
+        <div class="px-4 py-3">
+          <label class="flex cursor-pointer items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-medium text-black-900 dark:text-white-100">Allow shared instance credential</p>
+              <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+                On (default): calls run on this instance's own configured credential, as they always have; a personal account is used only when a call names it. Off: every call runs as the caller's own connected {data.oauth?.display_name} account, someone with none is told to connect one, and turning it off clears the instance's stored user token.
+              </p>
+            </div>
+            <input type="checkbox" disabled={sharedBusy} bind:checked={sharedCredential} onchange={saveSharedCredential} aria-label="Allow shared instance credential" class="h-5 w-9 accent-green-500" />
+          </label>
+          {#if !sharedCredential && data.oauth?.shared_credential_stored}
+            <div class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs text-black-800 dark:text-black-600" data-shared-credential-stored>
+              <span>A legacy shared token is still stored on this instance. Nothing runs on it while this is off.</span>
+              <button type="button" class="flex-shrink-0 font-medium underline disabled:opacity-50" disabled={sharedBusy} onclick={clearSharedCredential}>Clear it</button>
+            </div>
+          {/if}
+        </div>
       {/if}
     {/if}
     <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3 hover:bg-white-200 dark:hover:bg-navy-800">

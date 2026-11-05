@@ -85,7 +85,7 @@ func (h *Handler) apiMCPServerForm(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp.Info = &mcpServerInfo{DefID: def.ID, Disabled: def.Disabled}
-		form.OAuthPerUser = srv.AuthScheme == "oauth" && h.custom.OAuthPerUser(ctx, def.Key)
+		form.OAuthPerUser = (srv.AuthScheme == "oauth" || srv.AuthScheme == "bearer" || srv.AuthScheme == "custom_header") && h.custom.OAuthPerUser(ctx, def.Key)
 		form.Icon = def.Icon
 		form.Description = def.Description
 	}

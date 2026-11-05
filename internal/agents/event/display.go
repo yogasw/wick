@@ -49,6 +49,7 @@ const (
 	KindFile     = "file"     // read/write call on one path
 	KindSearch   = "search"   // grep/glob/web search call or file-list result
 	KindMCP      = "mcp"      // connector/MCP call
+	KindCodeMode = "codemode" // wick_run_code call: inline script or script_path
 	KindImage    = "image"
 	KindPDF      = "pdf"
 	KindAudio    = "audio"
@@ -276,7 +277,7 @@ func ToolFamily(name string) string {
 		return ToolWebSearch
 	case "webfetch", "web_fetch", "fetch":
 		return ToolFetch
-	case "wick_execute":
+	case "wick_execute", "wick_run_code":
 		return ToolMCP
 	}
 	// codex names MCP tools "<server>.<tool>".

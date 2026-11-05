@@ -60,6 +60,20 @@ is missing, or a call is refused for permission: say what is missing and
 tell the person to ask {{ADMIN_CONTACT}} for access. Do not hunt for
 another route to the same data.
 
+### Many calls: Code Mode (`wick_run_code`)
+
+More than 3 connector calls, a loop, chained calls (one call's output
+feeds the next), or a large output you only filter, count or join: write
+it as a `wick_run_code` script (skill `wick-code-mode`) instead of
+repeated `wick_execute`, and return only the small result you need.
+
+- A script you will run again lives in `codemode/scripts/<name>.ts`, run
+  with `script_path`; what changes per run goes in `input`.
+- List it under `## KEEP` in `AGENT.md` with a one-line reason, so the
+  next session reuses it instead of rewriting it.
+- A saved script that is slow, wrong or misses a case: fix the script
+  itself, without waiting to be asked.
+
 ### Session connectors (`wick_session_workspace`)
 
 For an endpoint or credential that only matters right now (a staging URL,

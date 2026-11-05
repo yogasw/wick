@@ -537,6 +537,8 @@ func Register(r tool.Router) {
 	r.POST("/api/cli/send", apiCLISend)
 	r.POST("/api/cli/todo", apiCLITodo)
 	r.GET("/api/cli/whoami", apiCLIWhoami)
+	// A Code Mode script run as the token's session (api_cli_codemode.go).
+	r.POST("/api/cli/codemode/run", apiCLICodemodeRun)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
 	// code so the settings UI and the docs cannot drift from what actually
@@ -629,6 +631,7 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/workspace/{cid}", sessionWorkspaceSetUI)
 	r.POST("/sessions/{id}/workspace/{cid}/duplicate", sessionWorkspaceDuplicateUI)
 	r.POST("/sessions/{id}/workspace/{cid}/rename", sessionWorkspaceRenameUI)
+	r.POST("/sessions/{id}/workspace/{cid}/expiry", sessionWorkspaceExpiryUI)
 	r.POST("/sessions/{id}/workspace/{cid}/test", sessionWorkspaceTestUI)
 	r.DELETE("/sessions/{id}/workspace/{cid}", sessionWorkspaceRemoveUI)
 
@@ -2433,6 +2436,16 @@ func sendMessage(c *tool.Ctx) {
 	if note := humanMentionNote(bgCtx, sess, id, req.Text); note != "" {
 		text = req.Text + "\n\n" + note
 	}
+	// What teammates answered the person's earlier @mentions in this chat
+	// reaches the agent here, ahead of the new message: it was never woken
+	// for them (teamlink.Hub.TakeUserReplies).
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			if held := h.TakeUserReplies(id); held != "" {
+				text = held + "\n\n---\n\n" + text
+			}
+		}
+	}
 	if err := globalPool.SendWithAttachments(sendCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -3844,6 +3857,12 @@ func streamSSE(c *tool.Ctx) {
 	ctx := c.R.Context()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	var handoff <-chan struct{}
+	if sessionID != "" {
+		handoff = streamHandoff(ctx, sessionID)
+	} else {
+		handoff = streamHandoff(ctx)
+	}
 
 	flush := func() { _ = rc.Flush() }
 
@@ -3881,6 +3900,10 @@ func streamSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining with nothing of this session left here: the
+			// client reconnects to the successor.
+			return
 		case <-ctx.Done():
 			return
 		}
@@ -3975,6 +3998,7 @@ func streamMultiSSE(c *tool.Ctx) {
 	}
 
 	keepalive := time.NewTicker(15 * time.Second)
+	handoff := streamHandoff(ctx, ids...)
 	defer keepalive.Stop()
 	flush := func() { _ = rc.Flush() }
 
@@ -4000,6 +4024,9 @@ func streamMultiSSE(c *tool.Ctx) {
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
+		case <-handoff:
+			// Draining with no turn of these sessions left here.
+			return
 		case <-ctx.Done():
 			return
 		}

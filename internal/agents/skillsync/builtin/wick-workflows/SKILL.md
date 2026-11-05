@@ -51,7 +51,13 @@ If the task is a single prompt and a single reply, a workflow is overhead. Say s
 }
 ```
 
-Node types include `classify`, `agent`, `connector`, `http`, `shell`, `branch`, `parallel`, the `datatable_*` family, and `sticky_note` — a canvas-only annotation (fields `content`, `color`, `width`, `height`, `texts`) that never executes and takes no edges. Do not guess a node's schema — fetch it (see *Authoring over MCP* below).
+Node types include `classify`, `agent`, `connector`, `run_code`, `http`, `shell`, `branch`, `parallel`, the `datatable_*` family, and `sticky_note` — a canvas-only annotation (fields `content`, `color`, `width`, `height`, `texts`) that never executes and takes no edges. Do not guess a node's schema — fetch it (see *Authoring over MCP* below).
+
+`run_code` runs a Code Mode script (TS/JS, as `wick_run_code`) as the workflow creator: several connector calls with
+logic between them in one node. Give `code` inline OR `script_path` (a file relative to the `workspace` project's
+folder, read fresh every run); `workspace` (project id) is also required when the script uses `wick.file`, which
+reads/writes only that project's `codemode/` folder. `input` is rendered as a template and must be JSON;
+`timeout_sec` (default 120, max 300, unless the admin changed them in the agents settings). Output: `ok`, `result`, `logs`, `calls`, `error`. See the `wick-code-mode` skill.
 
 ## Triggers
 

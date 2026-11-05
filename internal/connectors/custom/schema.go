@@ -201,6 +201,10 @@ type HeaderRow struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
 	Secret bool   `json:"secret,omitempty"`
+	// Config (auth headers) = the value is filled after register, not on
+	// the server row: per instance as an instance config, or by each wick
+	// user when the server runs in per-user (SSO) mode.
+	Config bool `json:"config,omitempty"`
 }
 
 // ParseHeaderRows decodes a JSON HeaderRow column. Empty input yields
@@ -238,6 +242,10 @@ type SourceMeta struct {
 	ServerID     string `json:"server_id,omitempty"`
 	HealthOp     string `json:"health_op,omitempty"`
 	HealthExpect string `json:"health_expect,omitempty"`
+	// PerUser (mcp) = the server form's "Users connect their own account
+	// (SSO)". Kept on the definition so it holds with zero instances and
+	// new instances inherit it.
+	PerUser bool `json:"per_user,omitempty"`
 }
 
 // ParseSourceMeta tolerates an empty or legacy column.

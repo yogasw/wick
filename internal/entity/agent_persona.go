@@ -82,6 +82,11 @@ type AgentPersona struct {
 	// MentionAllow is a JSON array of agent ids, read when MentionFrom is
 	// "list".
 	MentionAllow string `gorm:"type:text;not null;default:'[]'" json:"mention_allow"`
+	// ReachAllow is a JSON array of agent ids that may message ANY
+	// top-level session of this agent with chat=, including a Slack
+	// thread session run as another person (a validator correcting the
+	// agent's thread). "[]" = only the default chat= rules.
+	ReachAllow string `gorm:"type:text;not null;default:'[]'" json:"reach_allow"`
 	// MaxHops caps the agent-to-agent turns of an exchange this agent
 	// takes part in (1..teamlink.MaxHopsCeiling); the smallest cap of the
 	// agents involved wins. 0 = teamlink.DefaultMaxHops.

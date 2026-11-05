@@ -169,6 +169,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"request is malformed — inspect each entry's \"ok\". Use \"timeout_ms\" to cap each call " +
 				"(default 3 min, max 5 min). Up to 100 calls per batch; the server runs them a few at a " +
 				"time so a big batch won't overload it.\n\n" +
+				"MANY CALLS OR BIG OUTPUT? Use wick_run_code instead: loop, chain and filter in a script and get back only the summary.\n\n" +
 				"ENCRYPTED FIELDS: values prefixed with \"wick_enc_\" are valid credentials " +
 				"managed by the server. Use them as-is wherever a value is needed — pass them " +
 				"through into params, return them unchanged in your response, and never alter, " +
@@ -218,6 +219,64 @@ func MetaToolDescriptors() []ToolDescriptor {
 			},
 			Annotations: &ToolAnnotation{
 				Title:           "Execute wick tool",
+				ReadOnlyHint:    PtrBool(false),
+				DestructiveHint: PtrBool(true),
+				OpenWorldHint:   PtrBool(true),
+			},
+		},
+		{
+			Name: "wick_run_code",
+			Description: "Run a short TypeScript/JavaScript script that calls wick connectors and returns only what you need. " +
+				"PREFER THIS over wick_execute whenever a task needs (a) more than ~3 connector calls, (b) a loop over items " +
+				"(tickets, rooms, threads, rows), (c) calls that depend on each other's results, or (d) a response you would " +
+				"only filter, count, join, diff or summarise (logs, thread replies, query results, lists). Raw connector output " +
+				"stays inside the script; only the script's return value comes back, so context stays small. " +
+				"Use wick_execute for a single small call or for one write you want to see on its own.\n\n" +
+				"IN THE SCRIPT: `await wick.call(toolId, params)` returns the parsed result or throws; " +
+				"`wick.callMany([{toolId, params}, …])` runs calls in parallel and returns [{ok, toolId, result|error}]; " +
+				"`wick.tool(toolId)` gives a callable. Each call has its own deadline (default 60s unless the admin changed it in the agents settings, never past the run's end): " +
+				"a call past it throws \"timed out after 60s\" like any failed call, so catch and retry; override with a third arg " +
+				"`wick.call(id, params, { timeout_ms })` (callMany items take `timeout_ms` too). `input` holds the input argument; console.log/warn/error go to logs. " +
+				"Top-level await and return are allowed. atob/btoa and TextEncoder/TextDecoder (utf-8) exist. No fetch, timers, require or process: connectors are the only way out. " +
+				"FILES: wick.file.read/write(path[, text]), readJSON/writeJSON(path[, value]), list(dir?), exists(path) work ONLY inside codemode/ of this session's project folder (paths relative to it, 1 MB per file) — the way to hand a script big input or keep big output out of the reply. " +
+				"tool_ids and params are exactly the ones wick_search/wick_get give (same as wick_execute, account suffix @… included); " +
+				"wick_get at op level also returns `ts`, the ready-made call line with typed params. " +
+				"every tool_id written in the script is checked before the run starts. Calls run as this session, with its access.\n\n" +
+				"STYLE: put every tool_id in a named constant at the top with a comment naming the connector, then call by name:\n" +
+				"  // Tools\n" +
+				"  const threadReplies = \"conn:<id>/get_thread_replies\"; // Slack: <bot>\n" +
+				"  const t = await wick.call(threadReplies, { channel: input.channel, thread_ts: input.ts });\n" +
+				"  return t.messages.filter(m => m.user === input.user).map(m => m.text);\n" +
+				"Return a small summary, not raw data (results over 20 KB are cut). " +
+				"Pass exactly one of code or script_path. Prefer script_path for a script reused across runs or a watch code step: a file relative to this session's project folder, read fresh every run; vary it through `input`. " +
+				"Result: {ok, result, error, logs, calls:[{tool_id, label, ok, ms, error}], duration_ms}; a failed script is isError with the calls already made listed.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"code": map[string]any{
+						"type":        "string",
+						"description": "Script body. Runs inside an async function: use await and return freely.",
+					},
+					"script_path": map[string]any{
+						"type":        "string",
+						"description": "Instead of code: a script file relative to this session's project folder (no .., no absolute path, max 256 KB), e.g. scripts/report.ts.",
+					},
+					"lang": map[string]any{
+						"type":        "string",
+						"enum":        []string{"ts", "js"},
+						"description": "Script language. Default ts (types are stripped, not checked); plain JS is valid ts too.",
+					},
+					"input": map[string]any{
+						"description": "Optional JSON value exposed to the script as `input` (ids, a previous snapshot, …).",
+					},
+					"timeout_ms": map[string]any{
+						"type":        "integer",
+						"description": "Script time limit in ms. Default 120000 (2 min), max 300000 (5 min), unless the admin changed them in the agents settings. Connector calls count toward it; on timeout the error names the call in flight.",
+					},
+				},
+			},
+			Annotations: &ToolAnnotation{
+				Title:           "Run code against wick connectors",
 				ReadOnlyHint:    PtrBool(false),
 				DestructiveHint: PtrBool(true),
 				OpenWorldHint:   PtrBool(true),
@@ -496,7 +555,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Name: "wick_session_workspace",
 			Description: "Spin up throwaway connector instances scoped to the CURRENT SESSION — a private clone of a base connector " +
 				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
-				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while — action=list then reports them under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
+				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while, unless a lifetime is set: expires_in (deleted when it passes, idle or not) or idle_after (a longer idle window, e.g. 1d) — action=list reports either kind under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
 				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
 				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +
@@ -506,6 +565,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
 				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
 				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
+				"'set_expiry' sets an instance's lifetime — expires_in (e.g. 4h) or idle_after (e.g. 1d), or neither to go back to the default idle window — use it when the user wants a connector kept longer. " +
 				"'remove' deletes a session instance (use it to clean up an instance you no longer need). " +
 				"After adding+configuring, the instance's id shows in wick_list (pass the same session_id) and you wick_execute it like any connector.",
 			InputSchema: map[string]any{
@@ -513,8 +573,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"action": map[string]any{
 						"type":        "string",
-						"enum":        []string{"list", "add", "duplicate", "configure", "set_config", "test", "remove"},
-						"description": "list | add | duplicate | configure | set_config | test | remove.",
+						"enum":        []string{"list", "add", "duplicate", "configure", "set_config", "set_expiry", "test", "remove"},
+						"description": "list | add | duplicate | configure | set_config | set_expiry | test | remove.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
@@ -526,7 +586,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"connector_id": map[string]any{
 						"type":        "string",
-						"description": "The session instance id (sw_…) for duplicate/configure/set_config/test/remove.",
+						"description": "The session instance id (sw_…) for duplicate/configure/set_config/set_expiry/test/remove.",
 					},
 					"values": map[string]any{
 						"type":        "object",
@@ -535,6 +595,14 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"label": map[string]any{
 						"type":        "string",
 						"description": "action=add/duplicate: optional human label for the new instance.",
+					},
+					"expires_in": map[string]any{
+						"type":        "string",
+						"description": "action=add/set_expiry: keep the instance for this long (e.g. 90m, 4h, 2d; max 7d) even while the session is idle, then delete it. Omit (or none) for the default: deleted once the session sits idle.",
+					},
+					"idle_after": map[string]any{
+						"type":        "string",
+						"description": "action=add/set_expiry: delete the instance once the session has been idle this long (e.g. 3h, 1d; max 7d) instead of the default few minutes. Exclusive with expires_in.",
 					},
 					"prompt": map[string]any{
 						"type":        "boolean",
@@ -856,11 +924,14 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"CREATE A WATCH IN ONE CALL: action=create type=watch message=<what to do once it matches> steps=[…] (defaults: every=10s, match=all, on_match=stop, timeout 24h for every / off for cron, no maximum, timeout=\"off\" runs until match/cancel; names auto). " +
 				"STEP SCHEMA: {kind:connector, tool_id:\"conn:<connector_id>/<op>[@<account_id>]\", params:{…}} — same as wick_execute (get the op schema with wick_get first); " +
 				"{kind:check, rules:[{path, op, value}], fail_rules:[…], match:all|any, extract:{name:path}} — tests the previous step's JSON, no code; " +
-				"{kind:bash, script, timeout_sec≤120} — bash -c in the project folder, input on stdin and $PREV, needs Bash allowed for your agent. " +
+				"{kind:bash, script, timeout_sec≤120} — bash -c in the project folder, input on stdin and $PREV, needs Bash allowed for your agent; " +
+				"{kind:code, code:\"<ts>\" | script_path:\"<relative to the project folder>\", lang:\"ts\"(default)|\"js\", params:{…}, timeout_sec≤300 (default 120, unless the admin changed them in the agents settings)} — a Code Mode script (as in wick_run_code: wick.call/callMany as the watch's run-as user) for \"tell me what is NEW\": " +
+				"it gets input.snapshot (the snapshot it returned last fire, null on the first), input.prev (previous step's output) and input.params, and must return {changed:[…], snapshot, done?}; wick.file works in codemode/ of the watch's project folder; " +
+				"empty changed = pending (no LLM), non-empty = ok and you are woken with changed as the result, done:true ends the watch; the snapshot is kept by wick between fires (only after a run without error), every run records the script hash. " +
 				"Any step may add on_ok:\"next\"(default)|\"done\" and on_fail:\"done\"|\"pending\" (see ERRORS). " +
 				"CONTRACT — EVERY step, at any position, ends one of 3 ways: OK → next step (on the last step, or with on_ok=done: finish, outcome success, you get that step's output); " +
 				"PENDING → stop this tick, retry next tick, no LLM; FAIL → see ERRORS. " +
-				"Per kind: connector ok = success, fail = error/timeout; bash exit 0 = ok, exit 1 = pending (always), other exit/timeout = fail; " +
+				"Per kind: connector ok = success, fail = error/timeout; code changed ≠ [] or done = ok, changed = [] = pending, throw/bad return/missing script_path = fail; bash exit 0 = ok, exit 1 = pending (always), other exit/timeout = fail; " +
 				"check rules met = ok, not met = pending, any fail_rule met = fail (outcome fail — later steps do not run). " +
 				"ERRORS (connector error/timeout, bash exit other than 0/1) on an every/cron watch are retried next tick and logged as result=error; after 5 in a row you get ONE notice (per error text) and the watch keeps running — set on_fail=\"done\" on a step to finish the watch as failed on its first error instead. " +
 				"fail_rules met = explicit fail: one notice with stopped_at, reason and output, the watch is done (outcome fail), in stop and continue mode alike. " +
@@ -907,12 +978,13 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"type": "array",
 						"description": "type=watch (create, or reschedule to replace them): ordered steps, 1-8. kind=check: {\"kind\":\"check\",\"match\":\"all\",\"rules\":[{\"path\":\"state.name\",\"op\":\"equals\",\"value\":\"COMPLETED\"}],\"fail_rules\":[...],\"extract\":{\"state\":\"state.name\"}} (never first — it reads the previous step's JSON). " +
 							"{\"name\":\"get pipeline\",\"kind\":\"connector\",\"tool_id\":\"conn:<connector_id>/<op>[@<account_id>]\",\"params\":{...}} — same tool_id/params as wick_execute (fetch the op schema first). " +
-							"{\"name\":\"check\",\"kind\":\"bash\",\"script\":\"jq -e '.state.name==\\\"COMPLETED\\\"' >/dev/null && echo \\\"$PREV\\\" || exit 1\",\"timeout_sec\":30} — exit 0 matched, 1 pending, else error. kind=go is not supported.",
+							"{\"name\":\"check\",\"kind\":\"bash\",\"script\":\"jq -e '.state.name==\\\"COMPLETED\\\"' >/dev/null && echo \\\"$PREV\\\" || exit 1\",\"timeout_sec\":30} — exit 0 matched, 1 pending, else error. " +
+							"{\"name\":\"new rows\",\"kind\":\"code\",\"script_path\":\"watches/new_rows.ts\",\"params\":{\"table\":\"orders\"}} — returns {changed, snapshot, done?}; changed [] = pending. kind=go is not supported.",
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
 								"name":        map[string]any{"type": "string"},
-								"kind":        map[string]any{"type": "string", "enum": []string{"connector", "bash", "check"}},
+								"kind":        map[string]any{"type": "string", "enum": []string{"connector", "bash", "check", "code"}},
 								"match":       map[string]any{"type": "string", "enum": []string{"all", "any"}},
 								"rules":       map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 								"fail_rules":  map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
@@ -920,6 +992,9 @@ func MetaToolDescriptors() []ToolDescriptor {
 								"tool_id":     map[string]any{"type": "string"},
 								"params":      map[string]any{"type": "object"},
 								"script":      map[string]any{"type": "string"},
+								"code":        map[string]any{"type": "string", "description": "kind=code: inline TS/JS script (≤64KB). Use this or script_path."},
+								"script_path": map[string]any{"type": "string", "description": "kind=code: script file relative to the project folder (no .., no absolute path, read fresh on every fire)."},
+								"lang":        map[string]any{"type": "string", "enum": []string{"ts", "js"}, "description": "kind=code: default ts."},
 								"timeout_sec": map[string]any{"type": "integer"},
 								"on_ok":       map[string]any{"type": "string", "enum": []string{"next", "done"}},
 								"on_fail":     map[string]any{"type": "string", "enum": []string{"done", "pending"}, "description": "On an error: every/cron watches retry by default (pending); \"done\" set here finishes the watch as failed on the first error. A check step's fail_rules always finish it unless this is \"pending\"."},

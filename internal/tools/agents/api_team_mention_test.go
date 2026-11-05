@@ -10,14 +10,14 @@ import (
 
 func TestTeamAllowList(t *testing.T) {
 	own := []entity.AgentPersona{{ID: "a1"}, {ID: "a2"}, {ID: "a3"}}
-	got, err := teamAllowList([]string{"a2", " a3", "a2", ""}, own, "a1")
+	got, err := teamAllowList("mention_allow", []string{"a2", " a3", "a2", ""}, own, "a1")
 	if err != nil || len(got) != 2 || got[0] != "a2" || got[1] != "a3" {
 		t.Fatalf("got %v, %v", got, err)
 	}
-	if _, err := teamAllowList([]string{"a1"}, own, "a1"); err == nil {
+	if _, err := teamAllowList("mention_allow", []string{"a1"}, own, "a1"); err == nil {
 		t.Fatal("self allowed")
 	}
-	if _, err := teamAllowList([]string{"zz"}, own, "a1"); err == nil {
+	if _, err := teamAllowList("mention_allow", []string{"zz"}, own, "a1"); err == nil {
 		t.Fatal("another owner's agent allowed")
 	}
 }

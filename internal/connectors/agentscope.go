@@ -53,6 +53,17 @@ func ToolAllowed(ctx context.Context, name string) bool {
 	return !ok || fs.AllowTool(name)
 }
 
+// LendingScope is the optional part of an AgentScope that lends some
+// connectors from the agent's owner: a person chatting who cannot reach a
+// lent connector on their own runs it as the owner instead. Someone who
+// does reach it keeps their own identity.
+type LendingScope interface {
+	// LentBy names the user lending connectorID, false when it is not lent.
+	LentBy(connectorID string) (lenderID string, ok bool)
+	// LentIDs lists every lent connector instance.
+	LentIDs() []string
+}
+
 type agentScopeKey struct{}
 
 // WithAgentScope attaches scope to ctx. A nil scope leaves ctx unchanged.

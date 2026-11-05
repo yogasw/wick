@@ -5,12 +5,12 @@
        description, system prompt, and the project behind it under
        "Advanced" (default: a new one made from these fields).
      2 Access & mentions — the same connector checklist as Settings ›
-       Access, starting empty (off until added) — or "Same as me" for the
+       Access, starting empty (off until added) — or "All" for the
        Captain — and who in the Team may hand the agent work, with the
        agents it can hand work to. A new agent runs as the caller with
        include-new off — the Captain runs as its owner, since a Team lead
        works for you personally; all of it is changed later in Settings.
-       Next with "Choose connectors" and none added warns once first.
+       Next with "Selected" and none added warns once first.
      ✨ Generate fills every step it can from the brief: persona, the
        connectors it needs (read, or write where it must change things)
        and its mention policy, so Next → Next → Create is enough.
@@ -124,7 +124,7 @@
   // at Write plus new ones, run as the caller, the global system prompt.
   // The user can narrow it on the Access step.
   let includeNew = $state(false);
-  // The Captain starts with the owner's own access ("Same as me"): it
+  // The Captain starts with the owner's own access ("All"): it
   // runs the Team, and a Captain that cannot see what the owner sees
   // cannot hand work out sensibly. Everyone else starts from nothing.
   let accessMode = $state<AccessMode>(firstAgent && !convertProject ? "owner" : "choose");

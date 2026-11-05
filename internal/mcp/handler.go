@@ -421,6 +421,8 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickGet(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
 	case "wick_execute":
 		handlers.WickExecute(w, r, hreq, rsp, h.connectors, h.layout, args, user, tagIDs)
+	case "wick_run_code":
+		handlers.WickRunCode(w, r, hreq, rsp, h.connectors, h.layout, args, user, tagIDs)
 	case "wick_info":
 		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot, h.db)
 	case "wick_encrypt":

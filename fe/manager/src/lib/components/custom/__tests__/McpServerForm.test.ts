@@ -206,3 +206,38 @@ describe("McpServerForm — oauth per-user (SSO) mode", () => {
     expect(tested).toBe(false);
   });
 });
+
+describe("McpServerForm — token schemes filled after register", () => {
+  it("bearer per-user mode saves without a Test", async () => {
+    vi.mocked(api.saveMcpServer).mockResolvedValue({ redirect: "" } as never);
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    await fireEvent.click(screen.getByLabelText("Bearer token"));
+    const save = screen.getByRole("button", { name: "Save & create →" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await fireEvent.click(document.querySelector("[data-cc-oauth-per-user]") as HTMLInputElement);
+    expect(save.disabled).toBe(false);
+    await fireEvent.click(save);
+    const [sent, tested] = vi.mocked(api.saveMcpServer).mock.calls[0];
+    expect(sent.auth_scheme).toBe("bearer");
+    expect(sent.oauth_per_user).toBe(true);
+    expect(tested).toBe(false);
+  });
+
+  it("a Config header row unlocks Save without a Test", async () => {
+    vi.mocked(api.saveMcpServer).mockResolvedValue({ redirect: "" } as never);
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    await fireEvent.click(screen.getByLabelText("Custom header"));
+    await fireEvent.click(screen.getByRole("button", { name: "+ Add row" }));
+    await fireEvent.input(screen.getByLabelText("Header name"), { target: { value: "X-Api-Key" } });
+    const save = screen.getByRole("button", { name: "Save & create →" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await fireEvent.click(document.querySelector("[data-cc-header-config]") as HTMLInputElement);
+    expect(save.disabled).toBe(false);
+    expect(document.querySelector("[data-cc-perinstance-test-note]")).toBeTruthy();
+    await fireEvent.click(save);
+    const [sent] = vi.mocked(api.saveMcpServer).mock.calls[0];
+    expect(sent.auth_headers[0]).toMatchObject({ key: "X-Api-Key", config: true });
+  });
+});

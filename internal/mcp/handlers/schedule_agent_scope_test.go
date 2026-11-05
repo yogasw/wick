@@ -8,6 +8,7 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/connectors"
@@ -88,5 +89,56 @@ func TestScheduleCanManageCaptainOfAdmin(t *testing.T) {
 	}
 	if owner, all := scheduleScope(admin); owner != "" || !all {
 		t.Fatal("person admin list scope changed")
+	}
+}
+
+// A Run-as-caller agent runs as the person chatting, who is not the
+// session's owner: it may still schedule into, and manage the schedules
+// of, its own session — but not another session of that owner, and a
+// person outside an agent keeps the owner rule.
+func TestScheduleOwnAgentSessionAsCaller(t *testing.T) {
+	layout := agentconfig.NewLayout(t.TempDir())
+	for _, o := range []session.CreateOptions{
+		{ID: "ops-thread", AgentID: "ops", UserID: "u1"},
+		{ID: "ops-bot", AgentID: "ops"},
+		{ID: "ops-other", AgentID: "ops", UserID: "u1"},
+	} {
+		if _, err := session.Create(context.Background(), layout, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := &entity.User{ID: "u2", Approved: true}
+	ops := team.ScopeOf(entity.AgentPersona{ID: "ops", OwnerUserID: "u1"}, nil)
+	req := func(scope connectors.AgentScope, sid string) *http.Request {
+		r := httptest.NewRequest("POST", "/", nil)
+		ctx := r.Context()
+		if scope != nil {
+			ctx = connectors.WithAgentScope(ctx, scope)
+		}
+		return r.WithContext(WithSessionID(ctx, sid))
+	}
+	target := func(sid string) schedule.TargetSpec {
+		return schedule.TargetSpec{SessionID: sid, Mode: entity.ScheduledSessionExisting}
+	}
+
+	if owner, err := scheduleAuthorizeTarget(req(ops, "ops-thread"), layout, target("ops-thread"), caller); err != nil || owner != "u1" {
+		t.Fatalf("own session: owner=%q err=%v", owner, err)
+	}
+	if owner, err := scheduleAuthorizeTarget(req(ops, "ops-bot"), layout, target("ops-bot"), caller); err != nil || owner != "u2" {
+		t.Fatalf("ownerless own session: owner=%q err=%v", owner, err)
+	}
+	if _, err := scheduleAuthorizeTarget(req(ops, "ops-thread"), layout, target("ops-other"), caller); err == nil {
+		t.Fatal("caller reached another session of the owner")
+	}
+	if _, err := scheduleAuthorizeTarget(req(nil, "ops-thread"), layout, target("ops-thread"), caller); err == nil {
+		t.Fatal("person outside an agent bypassed the owner rule")
+	}
+
+	watch := entity.ScheduledMessage{OwnerUserID: "u2", SessionID: "ops-thread"}
+	if !scheduleCanManage(req(ops, "ops-thread"), layout, watch, caller) {
+		t.Fatal("agent cannot manage the watch on its own session")
+	}
+	if scheduleCanManage(req(ops, "ops-other"), layout, entity.ScheduledMessage{OwnerUserID: "u9", SessionID: "ops-thread"}, caller) {
+		t.Fatal("agent managed a schedule of a session it is not running in")
 	}
 }

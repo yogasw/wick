@@ -17,14 +17,14 @@ describe("captainAccess", () => {
   beforeEach(() => { makeCaptain.mockClear(); updateAgent.mockClear(); toastError.mockClear(); });
 
   test("accessToday reads the agent's run-as and connector access", () => {
-    expect(accessToday({ run_as: "caller", access_mode: "choose", allowed_connectors: [] })).toBe("Caller · Choose connectors · 0");
+    expect(accessToday({ run_as: "caller", access_mode: "choose", allowed_connectors: [] })).toBe("Caller · Selected · 0");
     expect(accessToday({ run_as: "owner", access_mode: "choose", allowed_connectors: [
       { connector_id: "c1", level: "read", ops: [] }, { connector_id: "c2", level: "off", ops: [] },
-    ] } as never)).toBe("Owner · Choose connectors · 1");
-    expect(accessToday({ run_as: "caller", access_mode: "owner", allowed_connectors: [] })).toBe("Caller · Same as me");
+    ] } as never)).toBe("Owner · Selected · 1");
+    expect(accessToday({ run_as: "caller", access_mode: "owner", allowed_connectors: [] })).toBe("Caller · All");
   });
 
-  test("ticked: makes the Captain, then runs it as the owner with Same as me", async () => {
+  test("ticked: makes the Captain, then runs it as the owner with All", async () => {
     const { agent: a, accessFailed } = await makeCaptainWithAccess("/b", "a1", true);
     expect(makeCaptain).toHaveBeenCalledWith("/b", "a1");
     expect(updateAgent).toHaveBeenCalledTimes(1);
@@ -42,7 +42,7 @@ describe("captainAccess", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  test("already Owner + Same as me: no second call", async () => {
+  test("already Owner + All: no second call", async () => {
     makeCaptain.mockImplementationOnce(() => Promise.resolve({ agent: { ...made, run_as: "owner", access_mode: "owner" }, previous_id: "" }));
     await makeCaptainWithAccess("/b", "a1", true);
     expect(updateAgent).not.toHaveBeenCalled();

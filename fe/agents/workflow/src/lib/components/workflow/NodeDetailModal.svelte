@@ -123,7 +123,7 @@
   let projectOptions = $state<{ id: string; name: string; path: string; no_access?: boolean }[]>([]);
   let projectOptionsLoaded = $state(false);
   $effect(() => {
-    if (node?.type !== "session_init" || projectOptionsLoaded) return;
+    if ((node?.type !== "session_init" && node?.type !== "run_code") || projectOptionsLoaded) return;
     projectOptionsLoaded = true;
     // Ask for the saved workspace by id as well. Without it a project the
     // editor cannot reach is simply absent from the list, and the select
@@ -1185,6 +1185,88 @@
                 </div>
               {/if}
 
+              <!-- ── run_code (Code Mode) ───────────────────────── -->
+              {#if node.type === "run_code"}
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Language</span>
+                  <select
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    value={node.lang || "ts"}
+                    onchange={(e) => patch("lang", (e.target as HTMLSelectElement).value)}
+                  >
+                    <option value="ts">TypeScript</option>
+                    <option value="js">JavaScript</option>
+                  </select>
+                </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Script path (optional)</span>
+                  <input
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    placeholder="scripts/report.ts"
+                    value={node.script_path ?? ""}
+                    oninput={(e) => patch("script_path", (e.target as HTMLInputElement).value)}
+                  />
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
+                    Instead of code: a file relative to the project folder below, read fresh on every run. Leave the editor empty when set.
+                  </span>
+                </label>
+                {#if node.script_path}
+                  <label class="flex flex-col gap-1">
+                    <span class="text-xs font-medium">Project</span>
+                    <select
+                      class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                      value={node.workspace ?? ""}
+                      onchange={(e) => patch("workspace", (e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="">(pick the project holding the script)</option>
+                      {#each projectOptions as p (p.id)}
+                        <option value={p.id}>{p.name || p.id}{p.no_access ? " — no access" : ""}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
+                <div class="space-y-1">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs font-medium">Code{node.script_path ? " (unused while script path is set)" : ""}</span>
+                    <div class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
+                      {#each ["fixed", "expression"] as m}
+                        <button
+                          type="button"
+                          class="px-2 py-0.5 transition-colors"
+                          class:bg-emerald-500={modeFor("code") === m}
+                          class:text-white-100={modeFor("code") === m}
+                          class:text-black-700={modeFor("code") !== m}
+                          class:text-black-600={modeFor("code") !== m}
+                          onclick={() => patchMode("code", m)}
+                        >{m}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <CodeEditor
+                    value={node.code ?? ""}
+                    language={node.lang === "js" ? "javascript" : "typescript"}
+                    rows={14}
+                    theme={{ light: "github", dark: "tomorrow_night" }}
+                    onChange={(v) => patch("code", v)}
+                  />
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
+                    Runs as the workflow creator. Call connectors with <code>await wick.call(tool_id, params)</code> and return a JSON value. Session connectors are not available.
+                  </span>
+                </div>
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Input (JSON)</span>
+                  <textarea
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono min-h-[80px]"
+                    placeholder={'{"name": "{{.Node.fetch.name}}"}'}
+                    value={node.input ?? ""}
+                    oninput={(e) => patch("input", (e.target as HTMLTextAreaElement).value)}
+                  ></textarea>
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
+                    Rendered as a template, then passed to the script as <code>input</code>. Must be valid JSON after rendering.
+                  </span>
+                </label>
+              {/if}
+
               <!-- ── transform ──────────────────────────────────── -->
               {#if node.type === "transform"}
                 <label class="flex flex-col gap-1">
@@ -1429,6 +1511,26 @@
                       </div>
                     {/if}
                   </div>
+                  <!-- Which bot posts. Channel + op stay locked, but the bot
+                       must stay visible and pickable here: unpinned, the run
+                       posts as whichever bot heard the trigger, so a reply
+                       can come out under another team's bot. -->
+                  <ChannelPicker
+                    label="Bot"
+                    channels={($catalog?.channels ?? []).filter((c) => c.name === node?.channel)}
+                    value={node.channel_instance ? (node.channel ?? "") : ""}
+                    instance={node.channel_instance ?? ""}
+                    onChange={(channel, instance) => {
+                      if (channel && channel !== node?.channel) return;
+                      patch("channel_instance", channel ? instance : "");
+                    }}
+                    helper="Which bot this action posts as."
+                  />
+                  {#if !node.channel_instance}
+                    <div class="rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+                      No bot pinned: the run posts as whichever bot received the trigger, which can change from run to run. Pick a bot above to pin it.
+                    </div>
+                  {/if}
                 {:else}
                   <ChannelPicker
                     channels={$catalog?.channels ?? []}

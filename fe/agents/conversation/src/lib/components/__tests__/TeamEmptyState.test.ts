@@ -45,7 +45,7 @@ describe("TeamEmptyState", () => {
     render(TeamEmptyState, { props: { onCreate: vi.fn(), onRemote: vi.fn(), candidates: [c], onMakeCaptain } });
     const give = screen.getByTestId("team-empty-give-access");
     expect(give.textContent).toContain("Give it your access");
-    expect(give.textContent).toContain("Run as: Owner · Connector access: Same as me.");
+    expect(give.textContent).toContain("Run as: Owner · Connector access: All.");
     const box = give.querySelector("input") as HTMLInputElement;
     expect(box.checked).toBe(true);
     await fireEvent.click(box);

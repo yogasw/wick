@@ -355,6 +355,11 @@ type Module struct {
 	// true only when a connector has config (base_url, API key, …) that a
 	// user may legitimately want to swap for one session.
 	AllowSessionConfig bool
+	// SessionBaseFromDefinition offers this connector as a session base
+	// straight from its definition, with no saved instance as parent and
+	// to every caller: the session brings its own config. Set by custom
+	// connectors whose definition toggle is on.
+	SessionBaseFromDefinition bool
 	// DefaultAccess seeds the access-policy flags onto every freshly
 	// created instance row of this connector (Create + the Fixed auto-seed).
 	// Zero value = the historical default (everything off → admin opts in

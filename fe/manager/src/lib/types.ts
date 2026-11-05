@@ -58,6 +58,9 @@ export interface ConnectorMCPAuth {
   /* Token past its expiry with no refresh left — looks connected but every
      call will 401. Rendered as a red flag, not a reassuring account chip. */
   expired?: boolean;
+  /* Last auth refusal stored on the instance (failed refresh, refused
+     probe), so the red flag survives a reload until a token works again. */
+  auth_error?: string;
   /* Per-instance auth probe endpoint; empty when the caller can't configure. */
   test_url?: string;
   /* Per-user (SSO) instance: holds no credential itself, each user connects
@@ -67,6 +70,10 @@ export interface ConnectorMCPAuth {
   account_count?: number;
   mine_connected?: boolean;
   connect_mine_url?: string;
+  /* Per-user bearer / custom-header instance: "Connect my account" opens
+     a form with these fields and POSTs { values } to connect_token_url. */
+  token_fields?: Array<{ key: string; label: string }>;
+  connect_token_url?: string;
 }
 
 export interface InstanceAuthTestResult {
@@ -144,11 +151,22 @@ export interface ConnectorAccount {
   wick_user_id: string;
   disabled_ops: string[] | null;
   can_manage: boolean;
+  /** Last call failed on auth: the account needs a reconnect. */
+  auth_error?: string;
+  auth_error_at?: string;
 }
 
 export interface ConnectorOAuthMeta {
   display_name: string;
   start_url: string;
+  /* Effective "allow shared instance credential": a call with no connected
+     account of its own may run on the instance user_token / refresh_token. */
+  shared_credential?: boolean;
+  /* The instance still holds a value in those slots (policy managers only). */
+  shared_credential_stored?: boolean;
+  /* SSO on, shared credential off, and the viewer has no account: every
+     call they make fails until they connect. */
+  needs_connect?: boolean;
 }
 
 export interface ConnectorDetail {
@@ -281,6 +299,8 @@ export interface AccountDetail {
   display_name: string;
   can_manage: boolean;
   reconnect_url: string;
+  /** Last call failed on auth: the account needs a reconnect. */
+  auth_error?: string;
   ops: AccountOp[] | null;
 }
 
@@ -415,6 +435,9 @@ export interface McpHeaderRow {
   key: string;
   value: string;
   secret?: boolean;
+  /* Auth header filled after register: per instance (instance config), or
+     by each user when the server runs in per-user (SSO) mode. */
+  config?: boolean;
 }
 
 export interface McpSSOExtra {
@@ -441,8 +464,9 @@ export interface McpServerForm {
   oauth: McpOAuthExtra;
   excluded: string[];
   oauth_login_id: string;
-  /* oauth scheme: "Users connect their own account (SSO)" — save needs no
-     Test, and the first instance turns Enable SSO on. */
+  /* oauth / bearer / custom_header: "Users connect their own account
+     (SSO)" — save needs no Test, and the first instance turns Enable SSO
+     on. Token schemes: each user enters their own token on the instance. */
   oauth_per_user?: boolean;
 }
 
@@ -544,8 +568,55 @@ export interface AuditRun {
   status: string;
   user_id: string;
   user_name: string;
+  /* Agent session the call ran under and its project; empty for calls
+     without a session (PAT, panel test). */
+  session_id?: string;
+  session_label?: string;
+  project_id?: string;
+  project_name?: string;
   latency_ms: number;
+  /* First line of the error, for the list. */
+  error?: string;
   started_at: string;
+}
+
+/* One connector call in full (GET /manager/api/runs/{id}). */
+export interface AuditRunDetail extends AuditRun {
+  account_id: string;
+  http_status: number;
+  ip_address: string;
+  user_agent: string;
+  parent_run_id: string;
+  ended_at: string;
+  error_full: string;
+  request: string;
+  response: string;
+}
+
+export interface AuditCount {
+  key: string;
+  label: string;
+  connector_key?: string;
+  op?: string;
+  project?: string;
+  runs: number;
+  failed: number;
+}
+
+export interface AuditBreakdown {
+  instances: AuditCount[] | null;
+  operations: AuditCount[] | null;
+  users: AuditCount[] | null;
+  sessions: AuditCount[] | null;
+  sources: AuditCount[] | null;
+  errors: AuditCount[] | null;
+}
+
+/* Connector type → its instances → each instance's operations. */
+export interface AuditConnectorOption {
+  key: string;
+  runs: number;
+  instances: { id: string; label: string; runs: number; ops: string[] | null }[] | null;
 }
 
 export interface AuditSummary {
@@ -566,11 +637,87 @@ export interface AuditResult {
   total: number;
   page_size: number;
   summary: AuditSummary;
+  /* People with runs in the window, for the User filter. */
+  users?: { id: string; name: string }[] | null;
+  breakdown?: AuditBreakdown;
+  options?: AuditConnectorOption[] | null;
 }
 
+/* Every audit filter. source/status/op/connector/instance/user take one
+   value or a comma list; from/to take YYYY-MM-DD or an ISO time. */
 export interface AuditFilter {
   source: string;
   status: string;
+  user?: string;
+  connector?: string;
+  instance?: string;
+  op?: string;
+  session?: string;
+  error?: string;
+  min_ms?: string;
+  max_ms?: string;
+  from: string;
+  to: string;
+  page: number;
+}
+
+/* One Code Mode script run (agent tool call, CLI, watch step, workflow node). */
+export interface CodeRun {
+  id: string;
+  user_id: string;
+  user_name: string;
+  session_id: string;
+  project_id: string;
+  project_name: string;
+  via: string;
+  script: string;
+  lang: string;
+  runner: string;
+  status: string;
+  error: string;
+  calls: number;
+  call_errors: number;
+  duration_ms: number;
+  queued_ms: number;
+  started_at: string;
+}
+
+export interface CodeRunCount {
+  key: string;
+  label: string;
+  runs: number;
+  failed: number;
+}
+
+export interface CodeRunSummary {
+  total: number;
+  ok: number;
+  failed: number;
+  by_status: Record<string, number> | null;
+  avg_duration_ms: number;
+  calls: number;
+  call_errors: number;
+  top_users: CodeRunCount[] | null;
+  top_projects: CodeRunCount[] | null;
+  top_scripts: CodeRunCount[] | null;
+  top_errors: CodeRunCount[] | null;
+}
+
+export interface CodeRunResult {
+  runs: CodeRun[] | null;
+  page: number;
+  total_pages: number;
+  total: number;
+  page_size: number;
+  summary: CodeRunSummary;
+}
+
+export interface CodeRunFilter {
+  user: string;
+  project: string;
+  via: string;
+  status: string;
+  script: string;
   from: string;
   to: string;
   page: number;

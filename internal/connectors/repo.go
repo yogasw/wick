@@ -308,6 +308,31 @@ func (r *Repo) SetSessionConfigAllowed(ctx context.Context, id string, allowed b
 		}).Error
 }
 
+// SharedCredentialPolicy returns the stored "allow shared instance
+// credential" answer for one instance, or nil when none was ever saved (the
+// caller then applies the default).
+func (r *Repo) SharedCredentialPolicy(ctx context.Context, connectorID string) (*bool, error) {
+	var row entity.ConnectorCredentialPolicy
+	err := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row.AllowSharedCredential, nil
+}
+
+// SetSharedCredentialPolicy upserts the per-instance shared-credential answer.
+func (r *Repo) SetSharedCredentialPolicy(ctx context.Context, connectorID string, allowed bool) error {
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "connector_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"allow_shared_credential", "updated_at"}),
+		}).
+		Create(&entity.ConnectorCredentialPolicy{ConnectorID: connectorID, AllowSharedCredential: allowed, UpdatedAt: time.Now()}).Error
+}
+
 // Delete hard-deletes a connector row plus its operation toggles and
 // connected accounts. Run history is intentionally preserved.
 func (r *Repo) Delete(ctx context.Context, id string) error {
@@ -316,6 +341,9 @@ func (r *Repo) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorAccount{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorCredentialPolicy{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", id).Delete(&entity.Connector{}).Error
@@ -442,6 +470,8 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 			if acc.RefreshToken != "" {
 				updates["refresh_token"] = acc.RefreshToken
 			}
+			// A fresh consent is the reconnect the auth error asked for.
+			updates["auth_error"], updates["auth_error_at"] = "", nil
 			return r.db.WithContext(ctx).Model(&existing).Updates(updates).Error
 		}
 	}
@@ -461,6 +491,19 @@ func (r *Repo) UpdateAccountTokens(ctx context.Context, accountID, access, refre
 	}
 	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
 		Where("id = ?", accountID).Updates(updates).Error
+}
+
+// SetAccountAuthError records (msg != "") or clears (msg == "") the auth
+// failure flagged on one account.
+func (r *Repo) SetAccountAuthError(ctx context.Context, accountID, msg string) error {
+	var at *time.Time
+	if msg != "" {
+		now := time.Now()
+		at = &now
+	}
+	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
+		Where("id = ?", accountID).
+		Updates(map[string]any{"auth_error": msg, "auth_error_at": at}).Error
 }
 
 // DeleteAccount removes one connected account by ID.
@@ -675,11 +718,22 @@ const RunFilterAccountDefault = "default"
 // AuditFilter narrows cross-connector audit queries. All fields are
 // optional — omit to get all runs across every connector instance.
 type AuditFilter struct {
+	// ConnectorID (an instance), OperationKey, Source, Status, UserID and
+	// ConnectorKey take one value or a comma-separated list (any of them).
 	ConnectorID  string
 	OperationKey string
 	Source       string
 	Status       string
 	UserID       string
+	// ConnectorKey is the connector type (slack, github, …): every
+	// instance of it.
+	ConnectorKey string
+	SessionID    string
+	// ErrorContains matches a substring of the error text, case-insensitive.
+	ErrorContains string
+	// MinLatencyMs / MaxLatencyMs bound the latency; 0 = no bound.
+	MinLatencyMs int
+	MaxLatencyMs int
 	From         *time.Time // inclusive lower bound on StartedAt
 	To           *time.Time // inclusive upper bound on StartedAt
 }
@@ -704,6 +758,16 @@ func (r *Repo) ListRunsAudit(ctx context.Context, f AuditFilter, limit, offset i
 func (r *Repo) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error) {
 	var n int64
 	return n, r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).Count(&n).Error
+}
+
+// DistinctRunUsers lists the user ids with runs matching f, busiest
+// first, for the audit page's User filter.
+func (r *Repo) DistinctRunUsers(ctx context.Context, f AuditFilter, limit int) ([]string, error) {
+	var ids []string
+	err := r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).
+		Where("user_id <> ''").Group("user_id").Order("COUNT(*) DESC").
+		Limit(limit).Pluck("user_id", &ids).Error
+	return ids, err
 }
 
 // RunSummary holds aggregated stats for a connector run query window.
@@ -750,20 +814,25 @@ func (r *Repo) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, er
 
 func (r *Repo) auditFilterQuery(ctx context.Context, f AuditFilter) *gorm.DB {
 	q := r.db.WithContext(ctx)
-	if f.ConnectorID != "" {
-		q = q.Where("connector_id = ?", f.ConnectorID)
+	q = whereAnyOf(q, "connector_id", f.ConnectorID)
+	q = whereAnyOf(q, "operation_key", f.OperationKey)
+	q = whereAnyOf(q, "source", f.Source)
+	q = whereAnyOf(q, "status", f.Status)
+	q = whereAnyOf(q, "user_id", f.UserID)
+	if keys := splitList(f.ConnectorKey); len(keys) > 0 {
+		q = q.Where("connector_id IN (?)", r.db.Model(&entity.Connector{}).Select("id").Where("key IN ?", keys))
 	}
-	if f.OperationKey != "" {
-		q = q.Where("operation_key = ?", f.OperationKey)
+	if f.SessionID != "" {
+		q = q.Where("session_id = ?", f.SessionID)
 	}
-	if f.Source != "" {
-		q = q.Where("source = ?", f.Source)
+	if f.ErrorContains != "" {
+		q = q.Where("LOWER(error_msg) LIKE ?", "%"+strings.ToLower(f.ErrorContains)+"%")
 	}
-	if f.Status != "" {
-		q = q.Where("status = ?", f.Status)
+	if f.MinLatencyMs > 0 {
+		q = q.Where("latency_ms >= ?", f.MinLatencyMs)
 	}
-	if f.UserID != "" {
-		q = q.Where("user_id = ?", f.UserID)
+	if f.MaxLatencyMs > 0 {
+		q = q.Where("latency_ms <= ?", f.MaxLatencyMs)
 	}
 	if f.From != nil {
 		q = q.Where("started_at >= ?", *f.From)

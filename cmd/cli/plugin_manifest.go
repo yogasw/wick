@@ -63,24 +63,8 @@ func dumpPluginManifest(kind, srcDir, version, signKey, crossBinPath, goos, goar
 		return nil, fmt.Errorf("run --dump-manifest: %w", err)
 	}
 
-	var m wickplugin.Manifest
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("parse dumped manifest: %w", err)
-	}
-
-	// One identity rule (same as built-in connectors): the plugin's Meta.Key MUST
-	// equal its folder name. Key is the slug used everywhere downstream — the zip
-	// name, the install dir (DefaultDir/<key>), the runtime registry key, and the
-	// catalog match — so a folder/key mismatch would silently drift (build a
-	// "gworkspace-*.zip" that installs into ".../google_workspace/"). Fail loudly
-	// at build time instead. Meta.Name stays free for display.
-	folder := filepath.Base(srcDir)
-	if m.Module.Meta.Key != folder {
-		return nil, fmt.Errorf(
-			"Meta.Key %q must equal the folder name %q (key is the slug used for the zip, install dir, and registry — rename one so they match; Meta.Name is the free display name)",
-			m.Module.Meta.Key, folder)
-	}
-	if err := wickplugin.ValidateKey(m.Module.Meta.Key); err != nil {
+	m, err := parseDumpedManifest(raw, srcDir)
+	if err != nil {
 		return nil, err
 	}
 
@@ -111,6 +95,35 @@ func dumpPluginManifest(kind, srcDir, version, signKey, crossBinPath, goos, goar
 		return nil, fmt.Errorf("marshal manifest: %w", err)
 	}
 	return out, nil
+}
+
+// parseDumpedManifest parses a binary's --dump-manifest output and checks its
+// key. The key is read from Module.Meta for every kind: a kind=service dump
+// carries no "module" block, and Manifest.UnmarshalJSON mirrors its
+// service.meta there, so a service plugin passes the same rule.
+func parseDumpedManifest(raw []byte, srcDir string) (wickplugin.Manifest, error) {
+	var m wickplugin.Manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return m, fmt.Errorf("parse dumped manifest: %w", err)
+	}
+
+	// One identity rule (same as built-in connectors): the plugin's Meta.Key MUST
+	// equal its folder name. Key is the slug used everywhere downstream — the zip
+	// name, the install dir (DefaultDir/<key>), the runtime registry key, and the
+	// catalog match — so a folder/key mismatch would silently drift (build a
+	// "gworkspace-*.zip" that installs into ".../google_workspace/"). Fail loudly
+	// at build time instead. Meta.Name stays free for display.
+	folder := filepath.Base(srcDir)
+	if m.Module.Meta.Key != folder {
+		return m, fmt.Errorf(
+			"Meta.Key %q must equal the folder name %q (key is the slug used for the zip, install dir, and registry — rename one so they match; Meta.Name is the free display name)",
+			m.Module.Meta.Key, folder)
+	}
+	if err := wickplugin.ValidateKey(m.Module.Meta.Key); err != nil {
+		return m, err
+	}
+
+	return m, nil
 }
 
 // sha256OfFile returns the hex sha256 of the file at path.

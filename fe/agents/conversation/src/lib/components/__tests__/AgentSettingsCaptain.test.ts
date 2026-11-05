@@ -70,7 +70,7 @@ describe("AgentSettings › Captain", () => {
     expect(updateAgent.mock.calls.some((c) => "is_captain" in (c[2] as object))).toBe(false);
   });
 
-  test("Make Captain gives your access by default: Run as Owner + Same as me", async () => {
+  test("Make Captain gives your access by default: Run as Owner + All", async () => {
     const p = props(worker, "captain");
     render(AgentSettings, { props: p });
     const btn = screen.getByRole("button", { name: "Make Captain" });
@@ -79,8 +79,8 @@ describe("AgentSettings › Captain", () => {
     const give = await screen.findByTestId("captain-give-access");
     expect((give.querySelector("input") as HTMLInputElement).checked).toBe(true);
     expect(give.textContent).toContain("Give @worker your access");
-    expect(give.textContent).toContain("Run as: Owner · Connector access: Same as me. A Team lead works for you personally.");
-    expect(give.textContent).toContain("Today: Caller · Choose connectors · 0. Untick to keep that.");
+    expect(give.textContent).toContain("Run as: Owner · Connector access: All. A Team lead works for you personally.");
+    expect(give.textContent).toContain("Today: Caller · Selected · 0. Untick to keep that.");
     await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
     await waitFor(() => expect(lastBody()).toEqual({ run_as: "owner", access_mode: "owner" }));
     expect(makeCaptain.mock.invocationCallOrder[0]).toBeLessThan(updateAgent.mock.invocationCallOrder.at(-1)!);
@@ -99,7 +99,7 @@ describe("AgentSettings › Captain", () => {
     expect(updateAgent.mock.calls.some((c) => "run_as" in (c[2] as object) || "access_mode" in (c[2] as object))).toBe(false);
   });
 
-  test("untick then tick again: the access is given once, as Owner + Same as me", async () => {
+  test("untick then tick again: the access is given once, as Owner + All", async () => {
     const p = props(worker, "captain");
     render(AgentSettings, { props: p });
     const btn = screen.getByRole("button", { name: "Make Captain" });
@@ -119,13 +119,12 @@ describe("AgentSettings › Captain", () => {
   });
 
   test("unticked, Make Captain keeps unsaved Access edits", async () => {
-    // The Run as edit fails to autosave, so it stays an unsaved draft.
+    // The access-mode edit fails to autosave, so it stays an unsaved draft.
     updateAgent.mockImplementationOnce(() => Promise.reject(new Error("offline")));
     const p = props(worker, "access");
     const { rerender } = render(AgentSettings, { props: p });
-    const runAs = (await screen.findByLabelText("Run as")) as HTMLSelectElement;
-    await fireEvent.change(runAs, { target: { value: "owner" } });
-    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ run_as: "owner" })));
+    await fireEvent.click(await screen.findByRole("radio", { name: "All" }));
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ access_mode: "owner" })));
     await rerender({ ...p, tab: "captain" });
     const btn = screen.getByRole("button", { name: "Make Captain" });
     await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
@@ -134,7 +133,7 @@ describe("AgentSettings › Captain", () => {
     await fireEvent.click(screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!);
     await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
     await rerender({ ...p, tab: "access" });
-    expect(((await screen.findByLabelText("Run as")) as HTMLSelectElement).value).toBe("owner");
+    expect(await screen.findByRole("radio", { name: "All", checked: true })).toBeTruthy();
   });
 
   test("a failed access update shows one error toast and no success toast", async () => {

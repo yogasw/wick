@@ -99,6 +99,8 @@ type toolDetail struct {
 	// (wick_get without a category). It is populated only when the caller
 	// scopes the request to a single category.
 	InputSchema *JSONSchema `json:"input_schema,omitempty"`
+	// TS is the op as a wick_run_code line (op schema level only).
+	TS string `json:"ts,omitempty"`
 }
 
 // categoryDetail is one group entry in the wick_get list-mode response.
@@ -476,13 +478,15 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 				return connectorDetail{}, fmt.Errorf("operation %q is disabled on this connector", selector)
 			}
 			schema := ConfigsToJSONSchema(op.Input)
+			toolID := toolIDFor(op.Key)
 			detail.Tools = append(detail.Tools, toolDetail{
-				ToolID:      toolIDFor(op.Key),
+				ToolID:      toolID,
 				Name:        op.Name,
 				Description: opDescription(op),
 				Destructive: op.Destructive,
 				Category:    mod.CategoryOf(op.Key),
 				InputSchema: &schema,
+				TS:          TSCall(toolID, op.Input),
 			})
 			return detail, nil
 		}
@@ -677,7 +681,7 @@ func writeExecuteResult(w http.ResponseWriter, id json.RawMessage, rsp Responder
 		return
 	}
 	rsp.WriteResult(w, id, ToolCallResult{
-		Content: []ToolContent{{Type: "text", Text: text}},
+		Content: ExecuteContent(text),
 		IsError: false,
 	})
 }
@@ -755,6 +759,12 @@ func executeOne(r *http.Request, svc *connectors.Service, layout agentconfig.Lay
 }
 
 func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string) (string, error) {
+	return executeOneFrom(ctx, r, svc, layout, toolID, rawParams, sessionID, user, tagIDs, entity.ConnectorRunSourceMCP)
+}
+
+// executeOneFrom is executeOneCtx with the run's source named (wick_run_code
+// records its calls as code_mode).
+func executeOneFrom(ctx context.Context, r *http.Request, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string, source entity.ConnectorRunSource) (string, error) {
 	connectorID, opKey, accountID, err := ParseToolIDFull(toolID)
 	if err != nil {
 		return "", err
@@ -785,7 +795,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 		OperationKey:    opKey,
 		Input:           input,
 		RawInput:        rawParams,
-		Source:          entity.ConnectorRunSourceMCP,
+		Source:          source,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),
 		TagIDs:          tagIDs,
