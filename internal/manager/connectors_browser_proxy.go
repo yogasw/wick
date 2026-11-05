@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -264,7 +265,8 @@ func (h *Handler) apiBrowserWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	l := log.With().Str("component", "browser-proxy").Str("connector", row.ID).Str("session", sid).Int("tab", tabIdx).Logger()
+	mode := panelMode(r.URL.Query().Get("mode"))
+	l := log.With().Str("component", "browser-proxy").Str("connector", row.ID).Str("session", sid).Int("tab", tabIdx).Str("mode", mode).Logger()
 
 	// Some reverse proxies rewrite Connection: to "keep-alive", stripping the
 	// "upgrade" token so gorilla's Upgrade() rejects an otherwise-valid handshake.
@@ -296,29 +298,125 @@ func (h *Handler) apiBrowserWS(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 
 	l.Debug().Msg("browser proxy connected")
-	proxyWebSocket(client, upstream)
+	proxyWebSocket(client, upstream, func(msg []byte) []byte { return cdpGate(mode, msg) })
 	l.Debug().Msg("browser proxy closed")
+}
+
+// panelMode normalises the panel's mode query. Anything but "full" (an older
+// tab that sends none included) is watch-only.
+func panelMode(q string) string {
+	if q == "full" {
+		return "full"
+	}
+	return "view"
+}
+
+// cdpGate decides whether one client → browser CDP message may pass. It
+// returns nil to forward the message, or the error reply to send back to the
+// client instead.
+//
+// The live panel shows the agent's own browser, and opening it must not
+// change what the agent sees or interrupt what it is doing. So in every mode
+// the panel may only stream (screencast, acks, the "1" heartbeat), and never
+// emulate: Emulation.* would resize the viewport or swap the colour scheme
+// under the agent and move every coordinate it measured. Full mode adds what a
+// person taking over needs: input, navigation and page scripts (clipboard
+// sync). Everything else is refused here, so a stale or modified client
+// cannot do more than its mode allows.
+func cdpGate(mode string, raw []byte) []byte {
+	var msg struct {
+		ID     *int64          `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil || msg.Method == "" {
+		return cdpRefusal(msg.ID, "malformed CDP message")
+	}
+	switch msg.Method {
+	case "Page.enable", "Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck":
+		return nil
+	case "Runtime.evaluate":
+		if mode == "full" || isHeartbeat(msg.Params) {
+			return nil
+		}
+	case "Page.navigate":
+		if mode == "full" {
+			return nil
+		}
+	default:
+		if mode == "full" && strings.HasPrefix(msg.Method, "Input.") {
+			return nil
+		}
+	}
+	return cdpRefusal(msg.ID, msg.Method+" is not allowed in "+mode+" mode: the panel must not change the agent's browser")
+}
+
+// isHeartbeat reports a Runtime.evaluate of the literal "1" (the panel's
+// liveness ping), which reads nothing and changes nothing.
+func isHeartbeat(params json.RawMessage) bool {
+	var p struct {
+		Expression string `json:"expression"`
+	}
+	return json.Unmarshal(params, &p) == nil && strings.TrimSpace(p.Expression) == "1"
+}
+
+// cdpRefusal is the CDP error reply for a refused command. A message without
+// an id gets no reply (nothing on the client waits for one).
+func cdpRefusal(id *int64, reason string) []byte {
+	if id == nil {
+		return []byte{}
+	}
+	b, _ := json.Marshal(map[string]any{"id": *id, "error": map[string]any{"code": -32000, "message": reason}})
+	return b
 }
 
 // proxyWebSocket pumps messages in both directions until either side closes.
 // Each direction runs in its own goroutine; the first to finish forces the other
-// pump's read to error via a past read deadline.
-func proxyWebSocket(client, upstream *websocket.Conn) {
+// pump's read to error via a past read deadline. gate, when set, vets each
+// client → upstream message: nil forwards it, anything else is not forwarded
+// and (when non-empty) is written back to the client as the reply.
+func proxyWebSocket(client, upstream *websocket.Conn, gate func([]byte) []byte) {
 	done := make(chan struct{}, 2)
-	pump := func(dst, src *websocket.Conn) {
+	var clientMu sync.Mutex // the client conn is written by both pumps
+	writeClient := func(mt int, msg []byte) error {
+		clientMu.Lock()
+		defer clientMu.Unlock()
+		return client.WriteMessage(mt, msg)
+	}
+	go func() {
 		defer func() { done <- struct{}{} }()
 		for {
-			mt, msg, err := src.ReadMessage()
+			mt, msg, err := client.ReadMessage()
 			if err != nil {
 				return
 			}
-			if err := dst.WriteMessage(mt, msg); err != nil {
+			if gate != nil {
+				if reply := gate(msg); reply != nil {
+					if len(reply) > 0 {
+						if err := writeClient(websocket.TextMessage, reply); err != nil {
+							return
+						}
+					}
+					continue
+				}
+			}
+			if err := upstream.WriteMessage(mt, msg); err != nil {
 				return
 			}
 		}
-	}
-	go pump(upstream, client)
-	go pump(client, upstream)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			mt, msg, err := upstream.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := writeClient(mt, msg); err != nil {
+				return
+			}
+		}
+	}()
 
 	<-done
 	// Unblock the other pump: closing both conns forces its ReadMessage to error.
