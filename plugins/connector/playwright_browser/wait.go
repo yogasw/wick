@@ -141,6 +141,57 @@ func capList(l []string, n int) []string {
 type runState struct {
 	start         map[string]string // frame URL → normalized text, run start
 	beforeTrigger map[string]string // frame URL → normalized text, before the last trigger
+	token         string            // names this run's element marks in each frame
+}
+
+// Element marks. Counting occurrences fails on virtualised lists (a WhatsApp
+// chat keeps only part of its messages in the DOM): a new reply can arrive
+// while an old one scrolls out, and the count stays the same. So the frames
+// also remember WHICH elements existed: each snapshot puts every element in
+// a WeakSet on the page (nothing is written to the DOM), and an element that
+// matches but is not in the set is new. A frame with no set (opened, or
+// navigated, after the snapshot) has only new elements.
+const markSeenJS = `(tok) => {
+  const s = new WeakSet();
+  for (const el of document.querySelectorAll('*')) s.add(el);
+  (window.__wickSeen = window.__wickSeen || {})[tok] = s;
+  return true;
+}`
+
+// newMatchJS returns the text of a visible element absent from the marks
+// whose text matches, or null. Deepest match first is not needed: any new
+// node holding the text proves the text is new.
+const newMatchJS = `(o) => {
+  const seen = (window.__wickSeen || {})[o.tok];
+  const norm = (t) => (t || '').replace(/\s+/g, ' ').trim();
+  let re = null;
+  if (o.pattern) { try { re = new RegExp(o.pattern); } catch (e) { return null; } }
+  const ok = (t) => re ? re.test(t) : t.includes(o.text);
+  for (const el of document.querySelectorAll('body *')) {
+    if (seen && seen.has(el)) continue;
+    if (!el.getClientRects().length) continue;
+    const t = norm(el.innerText || el.textContent);
+    if (t && ok(t)) return t.slice(0, 200);
+  }
+  return null;
+}`
+
+// markFrames puts the current elements of every frame under tok.
+func markFrames(page playwright.Page, tok string) {
+	frames, _ := listFrames(page)
+	for _, f := range frames {
+		_, _ = f.Evaluate(markSeenJS, tok)
+	}
+}
+
+// newMatch asks f for a new element matching the wait.
+func newMatch(f playwright.Frame, tok, want, pattern string) (string, bool) {
+	v, err := f.Evaluate(newMatchJS, map[string]any{"tok": tok, "text": want, "pattern": pattern})
+	if err != nil || v == nil {
+		return "", false
+	}
+	t, ok := v.(string)
+	return t, ok && t != ""
 }
 
 // triggerActions are the actions that can make the page show something new.
@@ -173,8 +224,11 @@ func (r *runState) observeTrigger(page playwright.Page, a action, first bool) {
 	snap := snapshotFrames(page)
 	if first {
 		r.start = snap
+		r.token = fmt.Sprintf("r%d", time.Now().UnixNano())
+		markFrames(page, r.token+"_start")
 	}
 	r.beforeTrigger = snap
+	markFrames(page, r.token)
 }
 
 // normSpace collapses every run of whitespace (newlines included) to one
@@ -254,6 +308,17 @@ func waitForText(page playwright.Page, env mouseEnv, a action) (any, error) {
 		n, _ := countMatches(snap[f.URL()], want, re)
 		return n
 	}
+	// markTok names the element marks this wait compares against.
+	markTok := ""
+	switch baseline {
+	case "trigger":
+		markTok = env.run.token
+	case "run_start":
+		markTok = env.run.token + "_start"
+	case "call_start":
+		markTok = fmt.Sprintf("c%d", time.Now().UnixNano())
+		markFrames(page, markTok)
+	}
 	start := time.Now()
 	deadline := start.Add(waitTimeout(a.TimeoutMS))
 	// The frame is resolved again on every poll: it may not exist yet when
@@ -282,7 +347,12 @@ func waitForText(page playwright.Page, env mouseEnv, a action) (any, error) {
 					base, baseURL = baseFor(f, now), lastURL
 				}
 				if n, hit := countMatches(now, want, re); n > base {
-					return map[string]any{"matched": true, "line": hit, "baseline": baseline, "frame_url": lastURL, "waited_ms": time.Since(start).Milliseconds()}, nil
+					return map[string]any{"matched": true, "line": hit, "baseline": baseline, "by": "count", "frame_url": lastURL, "waited_ms": time.Since(start).Milliseconds()}, nil
+				}
+				if markTok != "" {
+					if hit, ok := newMatch(f, markTok, want, a.Pattern); ok {
+						return map[string]any{"matched": true, "line": hit, "baseline": baseline, "by": "new_element", "frame_url": lastURL, "waited_ms": time.Since(start).Milliseconds()}, nil
+					}
 				}
 			}
 		}
