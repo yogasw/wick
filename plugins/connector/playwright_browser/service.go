@@ -201,8 +201,11 @@ type action struct {
 	Compact         bool `json:"compact,omitempty"`
 	// wait_for_text: Fresh ignores matches already on screen at the start;
 	// IncludeValues (also wait_for_change / observe) adds field values.
-	Fresh         bool `json:"fresh,omitempty"`
-	IncludeValues bool `json:"include_values,omitempty"`
+	Fresh bool `json:"fresh,omitempty"`
+	// Baseline picks what fresh compares against: trigger (default),
+	// run_start or call_start.
+	Baseline      string `json:"baseline,omitempty"`
+	IncludeValues bool   `json:"include_values,omitempty"`
 	// wait_for_text / wait_for_change / observe.
 	Pattern       string `json:"pattern,omitempty"` // regex (wait_for_text)
 	TimeoutMS     int    `json:"timeout_ms,omitempty"`
@@ -328,6 +331,11 @@ func validateActionArgs(i int, a action) error {
 		}
 		if a.TimeoutMS < 0 || a.TimeoutMS > maxWaitMS {
 			return fmt.Errorf("action[%d] %s: timeout_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
+		switch a.Baseline {
+		case "", "trigger", "run_start", "call_start":
+		default:
+			return fmt.Errorf("action[%d] %s: baseline must be trigger, run_start or call_start", i, a.Action)
 		}
 		if a.UntilStableMS < 0 || a.UntilStableMS > maxWaitMS {
 			return fmt.Errorf("action[%d] %s: until_stable_ms must be between 0 and %d", i, a.Action, maxWaitMS)

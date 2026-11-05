@@ -550,7 +550,11 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 // live-session paths.
 func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[string]any {
 	results := make([]stepResult, 0, len(actions))
+	if needsBaseline(actions) {
+		env.run = &runState{}
+	}
 	for i, a := range actions {
+		env.run.observeTrigger(page, a, i == 0)
 		out, err := execAction(page, a, env)
 		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out}
 		if err != nil {
@@ -704,7 +708,7 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	case "mouse_wheel":
 		return humanWheel(page, env, a.DeltaX, a.DeltaY, a.Steps)
 	case "wait_for_text":
-		return waitForText(page, a)
+		return waitForText(page, env, a)
 	case "wait_for_change":
 		return waitForChange(page, a)
 	case "observe":

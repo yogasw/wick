@@ -46,8 +46,9 @@ var sessionViewport sync.Map // session id → [2]int{width, height}
 
 // mouseEnv carries what mouse actions need beyond the page.
 type mouseEnv struct {
-	key    string // live session id; "" for a throwaway browser
-	cursor bool   // draw the cursor overlay
+	key    string    // live session id; "" for a throwaway browser
+	cursor bool      // draw the cursor overlay
+	run    *runState // per-run baselines for wait_for_text fresh
 }
 
 func newMouseEnv(c *connector.Ctx, sessionID string) mouseEnv {

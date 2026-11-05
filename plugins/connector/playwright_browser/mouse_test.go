@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -94,7 +95,7 @@ func TestValidateMouseActions(t *testing.T) {
 		{action{Action: "frame_eval", Script: "document.title"}, ""},
 		{action{Action: "frame_text"}, ""},
 		{action{Action: "frame_click", FrameURLContains: "flow"}, "selector or text"},
-		{action{Action: "frame_click", Text: "Provinsi"}, ""},
+		{action{Action: "frame_click", Text: "Region"}, ""},
 	}
 	for _, tc := range cases {
 		err := validateActionArgs(0, tc.a)
@@ -162,5 +163,31 @@ func TestTextIsAsHasText(t *testing.T) {
 	}
 	if _, _, ok := textIsAsHasText("button:has-text('Back')"); ok {
 		t.Fatal("has-text rewritten")
+	}
+}
+
+func TestCountMatchesNormalizesWhitespace(t *testing.T) {
+	norm := normSpace("Please fill\n  the   sample\n\nthen Please fill the sample")
+	n, hit := countMatches(norm, normSpace("Please fill the\nsample"), nil)
+	if n != 2 || !strings.Contains(hit, "Please fill the sample") {
+		t.Fatalf("n=%d hit=%q", n, hit)
+	}
+	n, hit = countMatches(norm, "", regexp.MustCompile(`the\s+sample`))
+	if n != 2 || hit != "the sample" {
+		t.Fatalf("regex n=%d hit=%q", n, hit)
+	}
+}
+
+func TestBaselineValidation(t *testing.T) {
+	ok := action{Action: "wait_for_text", Text: "x", Fresh: true, Baseline: "run_start"}
+	if err := validateActionArgs(0, ok); err != nil {
+		t.Fatal(err)
+	}
+	bad := action{Action: "wait_for_text", Text: "x", Fresh: true, Baseline: "yesterday"}
+	if err := validateActionArgs(0, bad); err == nil {
+		t.Fatal("bad baseline accepted")
+	}
+	if !needsBaseline([]action{{Action: "click"}, {Action: "wait_for_text", Fresh: true}}) || needsBaseline([]action{{Action: "wait_for_text"}}) {
+		t.Fatal("needsBaseline")
 	}
 }

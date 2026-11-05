@@ -148,15 +148,19 @@ func frameEval(page playwright.Page, a action) (any, error) {
 const frameTextJS = `(sel) => {
   const scope = sel ? document.querySelector(sel) : document.body;
   if (!scope) return {error: 'selector not found: ' + sel};
-  const q = 'button,a[href],input,select,textarea,[role=button],[role=link],[role=checkbox],' +
+  const controls = 'button,a[href],input,select,textarea,[role=button],[role=link],[role=checkbox],' +
     '[role=radio],[role=option],[role=combobox],[role=listbox],[role=menuitem],[role=tab],' +
     '[role=switch],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"])';
+  // Plus small elements named only by a title: icon controls such as a WA
+  // Flow header's Back arrow (<div title="Back">), which have no role.
+  const q = controls + ',[title]:not(iframe):not(abbr)';
   const items = [];
   for (const el of scope.querySelectorAll(q)) {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
     const st = getComputedStyle(el);
     if (st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') continue;
+    if (!el.matches(controls) && (r.width > 80 || r.height > 80)) continue;
     const text = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
       el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 120);
     const it = {tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', text,
@@ -275,7 +279,14 @@ func locate(f playwright.Frame, a action, filter string) playwright.Locator {
 	if n, err := loc.Count(); err == nil && n > 0 {
 		return loc
 	}
-	return f.Locator(`text=` + q + filter)
+	loc = f.Locator(`text=` + q + filter)
+	if n, err := loc.Count(); err == nil && n > 0 {
+		return loc
+	}
+	// Icon controls carry their name in aria-label or title, not in text: a
+	// WA Flow header's back arrow is <div title="Back">, so text "Back" must
+	// reach it too.
+	return f.Locator(`[aria-label="` + q + `"], [title="` + q + `"]` + filter)
 }
 
 // findBox returns the page-viewport box to click for the action's element.

@@ -132,8 +132,86 @@ func capList(l []string, n int) []string {
 	return l
 }
 
-// waitForText polls until the text contains `text` or matches `pattern`.
-func waitForText(page playwright.Page, a action) (any, error) {
+// runState carries what wait_for_text fresh compares against within one run:
+// the text of every frame at the start of the run, and again just before each
+// action that can change the page (a click, typing, a navigation, a script).
+// A step that waits for a bot reply usually follows the click that triggered
+// it in the same run, and the reply may already be on screen when the wait
+// starts; measuring "new" from the moment the wait starts would call it old.
+type runState struct {
+	start         map[string]string // frame URL → normalized text, run start
+	beforeTrigger map[string]string // frame URL → normalized text, before the last trigger
+}
+
+// triggerActions are the actions that can make the page show something new.
+var triggerActions = map[string]bool{
+	"goto": true, "go_back": true, "go_forward": true, "reload": true,
+	"click": true, "dblclick": true, "tap": true, "fill": true, "type": true, "press": true,
+	"check": true, "uncheck": true, "select_option": true, "set_input_files": true,
+	"drag_and_drop": true, "eval": true, "mouse_click": true,
+	"frame_click": true, "frame_type": true, "frame_fill": true, "frame_eval": true,
+}
+
+// snapshotFrames reads every frame's text (field values included), normalized.
+func snapshotFrames(page playwright.Page) map[string]string {
+	out := map[string]string{}
+	frames, _ := listFrames(page)
+	for _, f := range frames {
+		if txt, err := scopeText(f, "", true); err == nil {
+			out[f.URL()] += normSpace(txt)
+		}
+	}
+	return out
+}
+
+// observeTrigger records the baselines: the first call (run start) fills both,
+// later ones refresh beforeTrigger ahead of each trigger action.
+func (r *runState) observeTrigger(page playwright.Page, a action, first bool) {
+	if r == nil || (!first && !triggerActions[a.Action]) {
+		return
+	}
+	snap := snapshotFrames(page)
+	if first {
+		r.start = snap
+	}
+	r.beforeTrigger = snap
+}
+
+// normSpace collapses every run of whitespace (newlines included) to one
+// space, so a long heading split over lines still matches its text.
+func normSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// countMatches counts occurrences of the wanted text (or regex) in norm and
+// returns the last one with a little context.
+func countMatches(norm, want string, re *regexp.Regexp) (int, string) {
+	if re != nil {
+		all := re.FindAllStringIndex(norm, -1)
+		if len(all) == 0 {
+			return 0, ""
+		}
+		last := all[len(all)-1]
+		return len(all), norm[last[0]:last[1]]
+	}
+	if want == "" {
+		return 0, ""
+	}
+	n := strings.Count(norm, want)
+	if n == 0 {
+		return 0, ""
+	}
+	i := strings.LastIndex(norm, want)
+	lo, hi := max(0, i-40), min(len(norm), i+len(want)+40)
+	return n, norm[lo:hi]
+}
+
+// waitForText polls until the text contains `text` or matches `pattern`,
+// both compared with whitespace and newlines collapsed. With fresh, only an
+// occurrence beyond those in the baseline counts; the baseline is chosen by
+// `baseline`: "trigger" (default) = the frame just before the last
+// page-changing action in this run (the run start when there was none),
+// "run_start", or "call_start" = when this step begins. A fresh wait counts
+// over the whole frame, since the baseline is taken over the whole frame.
+func waitForText(page playwright.Page, env mouseEnv, a action) (any, error) {
 	f, err := waitFrame(page, a)
 	if err != nil {
 		return nil, err
@@ -144,40 +222,46 @@ func waitForText(page playwright.Page, a action) (any, error) {
 			return nil, fmt.Errorf("pattern: %w", err)
 		}
 	}
-	match := func(l string) bool {
-		return (re != nil && re.MatchString(l)) || (re == nil && strings.Contains(l, a.Text))
-	}
+	want := normSpace(a.Text)
 	sel := strings.TrimSpace(a.Selector)
-	// fresh: lines already on screen when the step starts do not count, only
-	// a new occurrence does (a bot reply that repeats an earlier line too).
-	seen := map[string]int{}
+	values := a.IncludeValues
 	if a.Fresh {
-		if txt, err := scopeText(f, sel, a.IncludeValues); err == nil {
-			for _, l := range textLines(txt) {
-				if match(l) {
-					seen[l]++
-				}
-			}
+		sel, values = "", true // compare like for like with the snapshot
+	}
+	read := func() (string, error) {
+		txt, err := scopeText(f, sel, values)
+		return normSpace(txt), err
+	}
+	base := 0
+	baseline := "none"
+	if a.Fresh {
+		baseline = a.Baseline
+		if baseline == "" {
+			baseline = "trigger"
 		}
+		var snap map[string]string
+		switch {
+		case baseline == "call_start" || env.run == nil:
+			baseline = "call_start"
+			txt, _ := read()
+			snap = map[string]string{f.URL(): txt}
+		case baseline == "run_start":
+			snap = env.run.start
+		default:
+			snap = env.run.beforeTrigger
+		}
+		base, _ = countMatches(snap[f.URL()], want, re)
 	}
 	start := time.Now()
 	deadline := start.Add(waitTimeout(a.TimeoutMS))
 	for {
-		txt, err := scopeText(f, sel, a.IncludeValues)
-		if err == nil {
-			count := map[string]int{}
-			for _, l := range textLines(txt) {
-				if !match(l) {
-					continue
-				}
-				count[l]++
-				if count[l] > seen[l] {
-					return map[string]any{"matched": true, "line": l, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
-				}
+		if txt, err := read(); err == nil {
+			if n, hit := countMatches(txt, want, re); n > base {
+				return map[string]any{"matched": true, "line": hit, "baseline": baseline, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
 			}
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("text not seen within %dms", time.Since(start).Milliseconds())
+			return nil, fmt.Errorf("text not seen within %dms (baseline %s, %d earlier occurrence(s) ignored)", time.Since(start).Milliseconds(), baseline, base)
 		}
 		time.Sleep(pollEvery)
 	}
@@ -316,4 +400,15 @@ func frameAction(a action, f playwright.Frame, page playwright.Page) action {
 		}
 	}
 	return out
+}
+
+// needsBaseline reports whether any step waits with fresh, so runs that do
+// not pay for snapshots they would never read.
+func needsBaseline(actions []action) bool {
+	for _, a := range actions {
+		if a.Action == "wait_for_text" && a.Fresh {
+			return true
+		}
+	}
+	return false
 }
