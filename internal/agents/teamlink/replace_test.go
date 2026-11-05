@@ -199,7 +199,7 @@ func TestRetryFromUserDoubleSubmit(t *testing.T) {
 func TestReplaceLinkPersists(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := askHub()
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	failed := endedTask(t, h1, "check logs", a2a.TaskStateFailed)
@@ -210,7 +210,7 @@ func TestReplaceLinkPersists(t *testing.T) {
 	waitFor(t, "the new task to settle", func() bool { return viewOf(t, h1, out.TaskID).State != "working" })
 
 	h2, _, _ := askHub()
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	old, next := viewOf(t, h2, failed), viewOf(t, h2, out.TaskID)
@@ -279,7 +279,7 @@ func TestRetryRefusesAChangedTeammate(t *testing.T) {
 func TestPendingReplaceAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := askHub()
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -300,7 +300,7 @@ func TestPendingReplaceAfterRestart(t *testing.T) {
 	waitFor(t, "the new task to settle", func() bool { return viewOf(t, h1, next.TaskID).State != "working" })
 
 	h2, _, _ := askHub()
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h2.RetryFromUser(ctx, "sess-cap", sent); !errors.Is(err, ErrAlreadyReplaced) {

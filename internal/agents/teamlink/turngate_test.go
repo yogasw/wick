@@ -187,7 +187,7 @@ func TestCancelQueuedTaskLeavesTheRunningTurn(t *testing.T) {
 func TestCancelBehindAnotherConversation(t *testing.T) {
 	h, turns, note := newGateHub(t)
 	dir := t.TempDir()
-	if err := h.Persist(dir); err != nil {
+	if err := persistTest(t, h, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -215,7 +215,7 @@ func TestCancelBehindAnotherConversation(t *testing.T) {
 	}
 
 	h2, _, _ := newTestHub(func(Peer, string) string { return "" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := h2.GetTask(ctx, "a-cap", res.TaskID); err != nil || again.State != "canceled" || again.Reason != want {

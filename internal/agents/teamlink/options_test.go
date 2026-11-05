@@ -20,7 +20,7 @@ func TestQuestionOptionsLine(t *testing.T) {
 		}
 		return InputRequiredToken + " Which environment?\n[options: prod | staging | " + strings.Repeat("x", 45) + " | dev | qa]"
 	})
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -35,7 +35,7 @@ func TestQuestionOptionsLine(t *testing.T) {
 	}
 
 	h2, _, _ := newTestHub(func(Peer, string) string { return "deployed to prod" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if list := h2.SentFrom("sess-cap"); len(list) != 1 || !reflect.DeepEqual(list[0].Options, want) {

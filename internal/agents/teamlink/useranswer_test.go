@@ -300,7 +300,7 @@ func TestUnclaimKeepsConcurrentCancel(t *testing.T) {
 // again: a live exchange is not pushed into its turn cap by refetches.
 func TestSentFromDoesNotRechargeTurns(t *testing.T) {
 	h, _, _ := newTestHub(func(Peer, string) string { return "ok" })
-	if err := h.Persist(t.TempDir()); err != nil {
+	if err := persistTest(t, h, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	clk := &fakeClock{t: time.Unix(1_000_000, 0)}

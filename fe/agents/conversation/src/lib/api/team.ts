@@ -78,6 +78,9 @@ export type AgentItem = {
   mention_from?: MentionFrom;
   mention_allow?: string[];
   max_hops?: number;
+  /** Agents that may message ANY session of this agent with chat= (a
+      validator correcting its Slack threads). Older servers omit it. */
+  reach_allow?: string[];
   /** Spawns carry the global system prompt instead of the Team one
       (on for agents converted from a project). */
   use_global_prompt?: boolean;
@@ -285,6 +288,7 @@ export type AgentWrite = Partial<{
   mention_from: MentionFrom;
   mention_allow: string[];
   max_hops: number;
+  reach_allow: string[];
   manage_agents: boolean;
   captain_can: CaptainCan;
   captain_policy: CaptainPolicy;

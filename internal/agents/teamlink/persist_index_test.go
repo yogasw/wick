@@ -56,7 +56,7 @@ func indexOf(h *Hub) map[a2a.TaskID]string {
 func TestSentFromReadsOnlyItsSessionFiles(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := newTestHub(func(Peer, string) string { return "ok" })
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -126,7 +126,7 @@ func TestSentFromReadsOnlyItsSessionFiles(t *testing.T) {
 
 	// A new Hub over the folder builds the index while loading.
 	h2, _, _ := newTestHub(func(Peer, string) string { return "" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if idx := indexOf(h2); len(idx) != 6 || idx["t-foreign"] != "sess-a" {

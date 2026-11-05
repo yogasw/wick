@@ -54,7 +54,7 @@ func TestTaskAskedAndEndedAt(t *testing.T) {
 		return "deployed to prod"
 	})
 	h1.now = clock.get
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -82,7 +82,7 @@ func TestTaskAskedAndEndedAt(t *testing.T) {
 	// The same clock: on the real one the fixed 2026-10-10 dates age past
 	// TaskKeep and the restart drops the task.
 	h2.now = clock.get
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	v = viewOf(t, h2, q.TaskID)
@@ -230,7 +230,7 @@ func TestTaskAskedAtMovesOnReask(t *testing.T) {
 func TestTaskEndedAtOnSupersede(t *testing.T) {
 	dir := t.TempDir()
 	h1, _, _ := newTestHub(func(Peer, string) string { return InputRequiredToken + " which environment?" })
-	if err := h1.Persist(dir); err != nil {
+	if err := persistTest(t, h1, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -243,7 +243,7 @@ func TestTaskEndedAtOnSupersede(t *testing.T) {
 	clock := &testClock{now: time.Now().Add(time.Hour).UTC().Truncate(time.Second)}
 	h2, _, _ := newTestHub(func(Peer, string) string { return "deployed to prod" })
 	h2.now = clock.get
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h2.AnswerFromUser(ctx, "sess-cap", q.TaskID, "prod"); err != nil {
@@ -304,7 +304,7 @@ func TestTaskEndedAtOnOrphanSettle(t *testing.T) {
 	h2, _, _ := newTestHub(func(Peer, string) string { return "" })
 	h2.now = clock.get
 	h2.orphanPoll = 5 * time.Millisecond
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the task to settle", func() bool {

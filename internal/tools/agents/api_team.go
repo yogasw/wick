@@ -91,6 +91,9 @@ type TeamAgentItem struct {
 	MentionFrom  string   `json:"mention_from"`
 	MentionAllow []string `json:"mention_allow"`
 	MaxHops      int      `json:"max_hops"`
+	// ReachAllow: agents that may message any session of this agent with
+	// chat= (entity.AgentPersona.ReachAllow).
+	ReachAllow []string `json:"reach_allow"`
 	// UseGlobalPrompt is stored but no longer read (every Team spawn
 	// carries system_prompt); kept for API compatibility.
 	UseGlobalPrompt bool `json:"use_global_prompt"`
@@ -295,6 +298,7 @@ type teamAgentWriteReq struct {
 	UseGlobalPrompt      *bool                   `json:"use_global_prompt"`
 	MentionFrom          *string                 `json:"mention_from"`
 	MentionAllow         *[]string               `json:"mention_allow"`
+	ReachAllow           *[]string               `json:"reach_allow"`
 	MaxHops              *int                    `json:"max_hops"`
 	ManageAgents         *bool                   `json:"manage_agents"`
 	CaptainCan           *team.CaptainCan        `json:"captain_can"`
@@ -507,19 +511,32 @@ func applyMentionSettings(c *tool.Ctx, p *entity.AgentPersona, req teamAgentWrit
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return false
 		}
-		ids, err := teamAllowList(*req.MentionAllow, own, p.ID)
+		ids, err := teamAllowList("mention_allow", *req.MentionAllow, own, p.ID)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return false
 		}
 		p.MentionAllow = encodeIDList(ids)
 	}
+	if req.ReachAllow != nil {
+		own, err := globalTeam.List(c.Context(), p.OwnerUserID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return false
+		}
+		ids, err := teamAllowList("reach_allow", *req.ReachAllow, own, p.ID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return false
+		}
+		p.ReachAllow = encodeIDList(ids)
+	}
 	return true
 }
 
 // teamAllowList dedupes ids and checks each names an agent in own other
 // than self.
-func teamAllowList(ids []string, own []entity.AgentPersona, self string) ([]string, error) {
+func teamAllowList(field string, ids []string, own []entity.AgentPersona, self string) ([]string, error) {
 	known := make(map[string]bool, len(own))
 	for _, a := range own {
 		known[a.ID] = true
@@ -532,7 +549,7 @@ func teamAllowList(ids []string, own []entity.AgentPersona, self string) ([]stri
 			continue
 		}
 		if id == self || !known[id] {
-			return nil, fmt.Errorf("mention_allow: %q is not another agent of yours", id)
+			return nil, fmt.Errorf("%s: %q is not another agent of yours", field, id)
 		}
 		seen[id] = true
 		out = append(out, id)
@@ -1084,6 +1101,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		Disabled:             p.Disabled,
 		MentionFrom:          teamlink.NormalizeMentionFrom(p.MentionFrom),
 		MentionAllow:         nonNilIDs(decodeIDList(p.MentionAllow)),
+		ReachAllow:           nonNilIDs(decodeIDList(p.ReachAllow)),
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  !team.LocksProvider(p.AllowProviderSwitch, p.IsCaptain, p.SessionPolicy),

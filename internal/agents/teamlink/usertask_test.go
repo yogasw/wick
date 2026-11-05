@@ -25,7 +25,7 @@ func userAskingHub(t *testing.T, dir string) (*Hub, *fakeNotify, string) {
 		return InputRequiredToken + " which environment?"
 	})
 	if dir != "" {
-		if err := h.Persist(dir); err != nil {
+		if err := persistTest(t, h, dir); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -137,7 +137,7 @@ func TestUserTaskOriginPersisted(t *testing.T) {
 		t.Fatalf("record = %+v", rec)
 	}
 	h2, _, _ := newTestHub(func(Peer, string) string { return "x" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	list := h2.SentFrom("sess-cap")
@@ -170,7 +170,7 @@ func TestOldRecordWithoutOriginIsAgentTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	h2, _, _ := newTestHub(func(Peer, string) string { return "x" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	list := h2.SentFrom("sess-cap")
@@ -211,7 +211,7 @@ func TestUserTaskLostOnRestartStaysTheirs(t *testing.T) {
 	waitTaskState(t, h1, "sess-cap", id, "input_required")
 
 	h2, _, note := newTestHub(func(Peer, string) string { return InputRequiredToken + " which region?" })
-	if err := h2.Persist(dir); err != nil {
+	if err := persistTest(t, h2, dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

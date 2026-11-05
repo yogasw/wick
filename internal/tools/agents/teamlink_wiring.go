@@ -729,8 +729,9 @@ func (d teamDirectory) peer(p entity.AgentPersona) teamlink.Peer {
 		Name: m.Name, Tagline: m.Tagline, Description: m.Description,
 		IsCaptain: p.IsCaptain, Disabled: p.Disabled,
 		MentionFrom: teamlink.NormalizeMentionFrom(p.MentionFrom), MentionAllow: decodeIDList(p.MentionAllow),
-		MaxHops: p.MaxHops,
-		Remote:  IsRemoteAgent(p), RemoteOwnerOnly: remoteOwnerOnly(p),
+		ReachAllow: decodeIDList(p.ReachAllow),
+		MaxHops:    p.MaxHops,
+		Remote:     IsRemoteAgent(p), RemoteOwnerOnly: remoteOwnerOnly(p),
 		StopAfterTask: team.StopsAfterTeamTask(p.StopAfterTeamTask),
 	}
 }
@@ -1272,7 +1273,9 @@ func errNotTicketOwner(chat, ticketID string) error {
 // agent (teamAgentOfSession), and be agent's chat user's, or in the same
 // ticket of chat's project as callerSession (ticket = true). Through the
 // ticket a Slack thread session is admitted only as the ticket's
-// owner_session, never by falling back to the chat user path.
+// owner_session, never by falling back to the chat user path. An agent
+// on agent's ReachAllow list, asking from its own session, reaches any
+// such session, whoever it runs as.
 func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSession, chat string) (bool, error) {
 	if storage.ValidateSessionID(chat) != nil {
 		return false, errChatNotFound(chat)
@@ -1287,6 +1290,9 @@ func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSessi
 	m := s.Meta
 	if m.ParentSessionID != "" || m.GroupSessionID != "" || m.TicketRoom != nil || m.AgentGroup != nil || teamAgentOfSession(ctx, chat) != agent.ID {
 		return false, teamlink.ErrUnknownChat
+	}
+	if callerSession != "" && slices.Contains(agent.ReachAllow, teamAgentOfSession(ctx, callerSession)) {
+		return false, nil
 	}
 	if callerSession != "" && m.ProjectID != "" {
 		if tk, ok := ticket.FindBySession(globalLayout, m.ProjectID, chat); ok {
