@@ -713,6 +713,7 @@ func readMeta(dir, id string) (sessionMeta, error) {
 // it. Anonymous sessions (empty Profile) keep the original sweep behavior.
 func removeSession(dir string, m sessionMeta) {
 	_ = os.Remove(metaPath(dir, m.ID))
+	_ = os.Remove(pointerPath(dir, m.ID))
 	if m.Profile != "" {
 		return // named profile: keep the user-data dir so login persists
 	}

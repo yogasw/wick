@@ -207,3 +207,29 @@ func TestClampWaitAndMainAlias(t *testing.T) {
 		t.Fatalf("url alias: %+v", u)
 	}
 }
+
+func TestPointerPositionSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	env := mouseEnv{key: "sess-1", posFile: pointerPath(dir, "sess-1")}
+	rememberPos(env, point{321, 123})
+	lastPos.Delete("sess-1") // as after a plugin restart
+	p, ok := loadPos(env)
+	if !ok || p != (point{321, 123}) {
+		t.Fatalf("loaded %v %v", p, ok)
+	}
+	if strings.HasSuffix(env.posFile, ".json") {
+		t.Fatal("pointer file must not look like session metadata")
+	}
+}
+
+func TestRestingPointAndClamp(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		p := restingPoint(1366, 768)
+		if p.X < 1366*0.75 || p.X >= 1366 || p.Y < 768*0.7 || p.Y >= 768 {
+			t.Fatalf("resting point %v not in the lower right", p)
+		}
+	}
+	if c := clampPoint(point{2153, 929}, 1366, 768); c != (point{1365, 767}) {
+		t.Fatalf("clamp = %v", c)
+	}
+}

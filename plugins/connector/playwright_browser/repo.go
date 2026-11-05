@@ -555,9 +555,13 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 	if needsBaseline(actions) {
 		env.run = &runState{}
 	}
+	refreshCursor(page, env)
 	for i, a := range actions {
 		env.run.observeTrigger(page, a, i == 0)
 		out, err := execAction(page, a, env)
+		if err == nil && triggerActions[a.Action] && !strings.HasPrefix(a.Action, "mouse_") {
+			refreshCursor(page, env) // a navigation or reload drops the overlay
+		}
 		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out, Warning: a.Warning}
 		if err != nil {
 			res.Error = err.Error()
@@ -610,6 +614,12 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		}
 		if env.key != "" {
 			sessionViewport.Store(env.key, [2]int{a.Width, a.Height})
+			// A pointer left outside the new viewport goes back to rest
+			// inside it rather than sitting on the edge.
+			if p, ok := knownPos(page, env); ok && (p.X >= float64(a.Width) || p.Y >= float64(a.Height)) {
+				rememberPos(env, restingPoint(float64(a.Width), float64(a.Height)))
+			}
+			refreshCursor(page, env)
 		}
 		return map[string]any{"width": a.Width, "height": a.Height}, nil
 	case "content":

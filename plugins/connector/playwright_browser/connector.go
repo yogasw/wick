@@ -64,7 +64,8 @@ type Config struct {
 	// ShowCursor paints a virtual pointer that follows the mouse_* actions, so
 	// a person watching the live panel sees the hand move. Headless browsers
 	// draw no cursor of their own.
-	ShowCursor bool `wick:"bool;default=true;group=Display;desc=Draw a visible cursor overlay that follows mouse_move / mouse_click / mouse_wheel, so the movement shows in the live browser panel. The overlay ignores pointer events. Turn off to leave the page DOM untouched."`
+	ShowCursor        bool `wick:"bool;default=true;group=Display;desc=Draw a visible arrow cursor that follows mouse_move / mouse_click / mouse_wheel and natural frame_click / frame_type, so the movement shows in the live browser panel. The overlay ignores pointer events and is put back after a navigation. Turn off to leave the page DOM untouched."`
+	CursorClickRipple bool `wick:"bool;group=Display;desc=Flash a thin ring where each click lands (with the cursor overlay). Off by default."`
 
 	// Network — proxy.
 	ProxyServer string `wick:"group=Network|Route browser traffic through a proxy.|collapsed;desc=Proxy for all browser traffic. Example: http://proxy.abc.com:3128 or socks5://proxy.abc.com:1080"`
