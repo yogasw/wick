@@ -3060,7 +3060,7 @@ var liveStreamText = false
 // cutSegment closes the text written since the last tool call: a
 // non-empty one becomes lastSeg. Caller holds s.mu.
 func (t *turn) cutSegment() {
-	if seg := t.buf.String()[t.segStart:]; strings.TrimSpace(seg) != "" {
+	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
 		t.lastSeg = seg
 	}
 	t.segStart = t.buf.Len()
@@ -3070,10 +3070,18 @@ func (t *turn) cutSegment() {
 // the last non-empty text before it when the turn ended on a tool.
 // Caller holds s.mu.
 func (t *turn) replyText() string {
-	if seg := t.buf.String()[t.segStart:]; strings.TrimSpace(seg) != "" {
+	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
 		return seg
 	}
 	return t.lastSeg
+}
+
+// blankSegment reports whether seg has nothing a reader would see once
+// posted. A closing segment that is only a [silent] marker is blank: the
+// turn opened with real text, so the registry let it through, and taking
+// the marker as the reply stripped it to nothing and posted no answer.
+func blankSegment(seg string) bool {
+	return strings.TrimSpace(stripSilentMarker(seg)) == ""
 }
 
 // resetText empties the turn's text and its segments. Caller holds s.mu.
