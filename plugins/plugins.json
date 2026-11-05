@@ -28,10 +28,22 @@
     }
   },
   {
+    "key": "codemode_goja",
+    "name": "Code Mode runner (JS/TS)",
+    "description": "Runs wick_run_code scripts in JavaScript or TypeScript on goja. Scripts reach connectors only through wick; this process holds no credential.",
+    "version": "0.4.0",
+    "kind": "service",
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/codemode_goja/v0.4.0/codemode_goja-0.4.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/codemode_goja/v0.4.0/codemode_goja-0.4.0-linux-arm64.zip"
+    }
+  },
+  {
     "key": "example_a2a_repeater",
     "name": "A2A repeater (echo bot)",
     "description": "Puts a bot API behind A2A; this example's bot echoes.",
     "version": "0.1.0",
+    "kind": "service",
     "assets": {
       "linux/amd64": "https://github.com/yogasw/wick/releases/download/example_a2a_repeater/v0.1.0/example_a2a_repeater-0.1.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/example_a2a_repeater/v0.1.0/example_a2a_repeater-0.1.0-linux-arm64.zip"
@@ -42,6 +54,7 @@
     "name": "Counter (plugin)",
     "description": "Count characters, words, and lines — served by a tool plugin.",
     "version": "0.1.0",
+    "kind": "tool",
     "assets": {
       "linux/amd64": "https://github.com/yogasw/wick/releases/download/example_counter/v0.1.0/example_counter-0.1.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/example_counter/v0.1.0/example_counter-0.1.0-linux-arm64.zip"
@@ -52,6 +65,7 @@
     "name": "Example Heartbeat",
     "description": "Example job plugin: logs progress and returns a heartbeat.",
     "version": "0.1.0",
+    "kind": "job",
     "assets": {
       "linux/amd64": "https://github.com/yogasw/wick/releases/download/example_heartbeat/v0.1.0/example_heartbeat-0.1.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/example_heartbeat/v0.1.0/example_heartbeat-0.1.0-linux-arm64.zip"
@@ -146,6 +160,7 @@
     "name": "GitLab Webhook",
     "description": "Receives GitLab webhooks and wakes the schedule watches subscribed to that project (wake_on gitlab_webhook:\u003cgroup/repo\u003e).",
     "version": "0.1.0",
+    "kind": "tool",
     "assets": {
       "linux/amd64": "https://github.com/yogasw/wick/releases/download/gitlab_webhook/v0.1.0/gitlab_webhook-0.1.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/gitlab_webhook/v0.1.0/gitlab_webhook-0.1.0-linux-arm64.zip"
@@ -155,7 +170,7 @@
     "key": "google_workspace",
     "name": "Google Workspace",
     "description": "Manage Drive files, Sheets data, Docs content, and Slides; read, send, and label Gmail; manage Calendar events with Meet links; and read Meet recordings and transcripts — all with one Google OAuth account.",
-    "version": "0.2.1",
+    "version": "0.2.4",
     "default_tags": [
       {
         "Name": "Connector",
@@ -175,8 +190,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.1/google_workspace-0.2.1-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.1/google_workspace-0.2.1-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.4/google_workspace-0.2.4-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.4/google_workspace-0.2.4-linux-arm64.zip"
     }
   },
   {
@@ -351,7 +366,7 @@
     "key": "playwright_browser",
     "name": "Playwright Browser",
     "description": "Drive a real browser (Chromium/Firefox/WebKit, or the lightweight Moli engine) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
-    "version": "0.14.1",
+    "version": "0.14.18",
     "default_tags": [
       {
         "Name": "Connector",
@@ -371,8 +386,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.1/playwright_browser-0.14.1-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.1/playwright_browser-0.14.1-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.18/playwright_browser-0.14.18-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.18/playwright_browser-0.14.18-linux-arm64.zip"
     }
   }
 ]
