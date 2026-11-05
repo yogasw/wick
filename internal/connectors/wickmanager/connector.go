@@ -188,7 +188,9 @@ func Operations(deps Deps) []connector.Category {
 				// emptyInput marks an op that takes no arguments. Reflected into an
 				// empty Configs slice; the LLM sees `{}` as the input schema.
 			}),
-	)}
+	),
+		connector.Cat("Usage", "Who uses wick and what it costs: the People & usage page as data.", usageOps(h)...),
+	}
 }
 
 type emptyInput struct{}

@@ -3,7 +3,7 @@
      describing the same conversation two different ways. -->
 <script lang="ts">
   import type { AnalyticsSessionRef } from "$lib/types";
-  import { ago, channelClass } from "$lib/format";
+  import { ago, channelClass, sessionHref } from "$lib/format";
 
   type Props = {
     items: AnalyticsSessionRef[];
@@ -27,7 +27,7 @@
     {#each items as s}
       <div class="flex items-baseline gap-2 text-xs">
         <span class="rounded px-1.5 py-0.5 text-[10px] font-medium {channelClass(s.channel)}">{s.channel}</span>
-        <a href={`/agents/conversation?session=${encodeURIComponent(s.id)}`} class="truncate text-black-900 hover:underline dark:text-white-100">
+        <a href={sessionHref(s.id)} class="truncate text-black-900 hover:underline dark:text-white-100">
           {s.label || s.id}
         </a>
         {#if s.token}

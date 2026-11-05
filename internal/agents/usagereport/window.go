@@ -139,7 +139,61 @@ func ParseDate(s string, loc *time.Location) time.Time {
 func WindowFromQuery(window, since, until string, now time.Time) Window {
 	if strings.TrimSpace(since) != "" || strings.TrimSpace(until) != "" {
 		loc := now.Location()
+		if hasClock(since) || hasClock(until) {
+			return ExactWindow(ParseInstant(since, loc), ParseInstant(until, loc))
+		}
 		return CustomWindow(ParseDate(since, loc), ParseDate(until, loc))
 	}
 	return ParseWindow(window, now)
+}
+
+// instantLayouts are the forms a bound with a time of day may take, most
+// specific first. Seconds are optional because nobody types them.
+var instantLayouts = []string{
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02 15:04:05",
+	"2006-01-02 15:04",
+}
+
+// hasClock reports whether a bound carries a time of day, i.e. asks for
+// an exact instant rather than a whole day.
+func hasClock(s string) bool {
+	s = strings.TrimSpace(s)
+	return len(s) > len("2006-01-02") && (s[10] == 'T' || s[10] == ' ')
+}
+
+// ParseInstant reads a bound that may carry a time of day; a date alone
+// is that day's midnight. Without a zone the value is read in loc.
+// Unreadable is a zero time, the same "no bound" ParseDate answers.
+func ParseInstant(s string, loc *time.Location) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range instantLayouts {
+		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
+			return t
+		}
+	}
+	return ParseDate(s, loc)
+}
+
+// ExactWindow bounds the ledger by two instants, kept as given: a
+// provider's rate-limit window starts mid-afternoon, not at midnight, and
+// a question about it must not be widened to whole days. An inverted pair
+// drops the upper bound, as CustomWindow does.
+func ExactWindow(from, to time.Time) Window {
+	w := Window{Key: "custom", Label: "Custom", Since: from}
+	if !to.IsZero() && (from.IsZero() || to.After(from)) {
+		w.Until = to
+	}
+	if w.Since.IsZero() && w.Until.IsZero() {
+		return ParseWindow("all", time.Now())
+	}
+	if !w.Since.IsZero() && !w.Until.IsZero() {
+		w.Label = w.Since.Format("2 Jan 15:04") + " – " + w.Until.Format("2 Jan 15:04")
+	}
+	return w
 }

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { ago, isDormant, channelClass } from "../format.js";
+import { ago, isDormant, channelClass, sessionHref } from "../format.js";
 
 const NOW = new Date("2026-09-16T12:00:00Z");
 
@@ -41,5 +41,12 @@ describe("channelClass", () => {
   });
   test("an unknown channel still gets a readable chip", () => {
     expect(channelClass("whatsapp")).toContain("text-black-700");
+  });
+});
+
+describe("sessionHref", () => {
+  test("opens the conversation in the agents tool, not a route that 404s", () => {
+    expect(sessionHref("slackagent-abc-1.2")).toBe("/tools/agents/sessions/slackagent-abc-1.2");
+    expect(sessionHref("a b/c")).toBe("/tools/agents/sessions/a%20b%2Fc");
   });
 });

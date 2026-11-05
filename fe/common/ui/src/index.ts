@@ -68,6 +68,7 @@ export {
   sinceText,
   fetchUsageReport,
   fetchProviderUsage,
+  fetchUsageSessions,
   EMPTY_TOTALS,
 } from "./usageReport.js";
 export type {
@@ -78,6 +79,10 @@ export type {
   WindowOption,
   ProviderUsageDetail,
   TrendPoint,
+  SessionUsageRow,
+  SessionsUsage,
+  SessionSort,
+  LedgerScope,
 } from "./usageReport.js";
 export {
   contextMeter,

@@ -74,3 +74,9 @@ export function channelColor(channel: string): string {
   for (let i = 0; i < channel.length; i++) h = (h * 31 + channel.charCodeAt(i)) >>> 0;
   return spare[h % spare.length];
 }
+
+/** Where a conversation opens. The agents tool owns the route; this page
+ *  only links to it. */
+export function sessionHref(id: string): string {
+  return `/tools/agents/sessions/${encodeURIComponent(id)}`;
+}

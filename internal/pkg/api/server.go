@@ -2083,7 +2083,11 @@ func NewServer() *Server {
 	// downstream connector uses. Register here, after all services
 	// the handlers need are constructed but before Bootstrap so the
 	// fixed instance gets seeded in the same pass as user connectors.
+	// The admin handler that serves People & usage is built further down;
+	// the usage_* ops read it through this variable once it exists.
+	var adminUsage wickmanager.UsageSource
 	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Usage:      func() wickmanager.UsageSource { return adminUsage },
 		Configs:    configsSvc,
 		Connectors: connectorsSvc,
 		Jobs:       jobsSvc,
@@ -3193,6 +3197,7 @@ func NewServer() *Server {
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
 	adminHandler.SetToolsSource(liveItems)
+	adminUsage = adminHandler
 	// The People & usage page reads the session store. Handed the SAME
 	// resolved layout the agents tool uses — resolving that path twice is how
 	// two parts of one binary end up reading two different directories.

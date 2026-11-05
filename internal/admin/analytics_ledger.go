@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -179,9 +180,11 @@ func ledgerTags(id string) store.SessionTags {
 	}
 }
 
-// analyticsLedgerJSON serves GET /admin/analytics/ledger/usage and
-// /admin/analytics/ledger/{type}/{name}/usage — the fleet report and one
-// provider's slice of it, in the shape the shared UsageReport component
+// analyticsLedgerJSON serves GET /admin/analytics/ledger/usage,
+// /admin/analytics/ledger/sessions and
+// /admin/analytics/ledger/{type}/{name}/usage — the fleet report, every
+// conversation's own spend (sort=tokens|cost|turns|recent, limit=N), and
+// one provider's slice, in the shape the shared UsageReport component
 // reads.
 func (h *Handler) analyticsLedgerJSON(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -201,6 +204,16 @@ func (h *Handler) analyticsLedgerJSON(w http.ResponseWriter, r *http.Request) {
 	// Everything after /ledger/ is either "usage" (the fleet) or
 	// "<type>/<name>/usage" (one provider).
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/analytics/ledger"), "/")
+	if rest == "sessions" {
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		rep, err := h.ledger().Sessions(win, sc, force, q.Get("sort"), limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, rep)
+		return
+	}
 	if rest == "usage" || rest == "" {
 		rep, err := h.ledger().Report(win, sc, force)
 		if err != nil {
