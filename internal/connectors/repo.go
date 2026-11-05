@@ -718,11 +718,22 @@ const RunFilterAccountDefault = "default"
 // AuditFilter narrows cross-connector audit queries. All fields are
 // optional — omit to get all runs across every connector instance.
 type AuditFilter struct {
+	// ConnectorID (an instance), OperationKey, Source, Status, UserID and
+	// ConnectorKey take one value or a comma-separated list (any of them).
 	ConnectorID  string
 	OperationKey string
 	Source       string
 	Status       string
 	UserID       string
+	// ConnectorKey is the connector type (slack, github, …): every
+	// instance of it.
+	ConnectorKey string
+	SessionID    string
+	// ErrorContains matches a substring of the error text, case-insensitive.
+	ErrorContains string
+	// MinLatencyMs / MaxLatencyMs bound the latency; 0 = no bound.
+	MinLatencyMs int
+	MaxLatencyMs int
 	From         *time.Time // inclusive lower bound on StartedAt
 	To           *time.Time // inclusive upper bound on StartedAt
 }
@@ -747,6 +758,16 @@ func (r *Repo) ListRunsAudit(ctx context.Context, f AuditFilter, limit, offset i
 func (r *Repo) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error) {
 	var n int64
 	return n, r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).Count(&n).Error
+}
+
+// DistinctRunUsers lists the user ids with runs matching f, busiest
+// first, for the audit page's User filter.
+func (r *Repo) DistinctRunUsers(ctx context.Context, f AuditFilter, limit int) ([]string, error) {
+	var ids []string
+	err := r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).
+		Where("user_id <> ''").Group("user_id").Order("COUNT(*) DESC").
+		Limit(limit).Pluck("user_id", &ids).Error
+	return ids, err
 }
 
 // RunSummary holds aggregated stats for a connector run query window.
@@ -793,20 +814,25 @@ func (r *Repo) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, er
 
 func (r *Repo) auditFilterQuery(ctx context.Context, f AuditFilter) *gorm.DB {
 	q := r.db.WithContext(ctx)
-	if f.ConnectorID != "" {
-		q = q.Where("connector_id = ?", f.ConnectorID)
+	q = whereAnyOf(q, "connector_id", f.ConnectorID)
+	q = whereAnyOf(q, "operation_key", f.OperationKey)
+	q = whereAnyOf(q, "source", f.Source)
+	q = whereAnyOf(q, "status", f.Status)
+	q = whereAnyOf(q, "user_id", f.UserID)
+	if keys := splitList(f.ConnectorKey); len(keys) > 0 {
+		q = q.Where("connector_id IN (?)", r.db.Model(&entity.Connector{}).Select("id").Where("key IN ?", keys))
 	}
-	if f.OperationKey != "" {
-		q = q.Where("operation_key = ?", f.OperationKey)
+	if f.SessionID != "" {
+		q = q.Where("session_id = ?", f.SessionID)
 	}
-	if f.Source != "" {
-		q = q.Where("source = ?", f.Source)
+	if f.ErrorContains != "" {
+		q = q.Where("LOWER(error_msg) LIKE ?", "%"+strings.ToLower(f.ErrorContains)+"%")
 	}
-	if f.Status != "" {
-		q = q.Where("status = ?", f.Status)
+	if f.MinLatencyMs > 0 {
+		q = q.Where("latency_ms >= ?", f.MinLatencyMs)
 	}
-	if f.UserID != "" {
-		q = q.Where("user_id = ?", f.UserID)
+	if f.MaxLatencyMs > 0 {
+		q = q.Where("latency_ms <= ?", f.MaxLatencyMs)
 	}
 	if f.From != nil {
 		q = q.Where("started_at >= ?", *f.From)

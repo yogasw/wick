@@ -874,6 +874,46 @@ func (p *Pool) callerChanged(ctx context.Context, entry *runEntry) bool {
 	return now != "" && now != entry.callerUserID
 }
 
+// callerRecycleWait caps how long a caller-change recycle waits for the
+// running turn to end before it kills the process anyway.
+var callerRecycleWait = 10 * time.Minute
+
+// callerRecyclePoll is how often that wait looks at the turn again.
+var callerRecyclePoll = 200 * time.Millisecond
+
+// waitTurnForRecycle holds a caller-change recycle until the process at key
+// finishes the turn it is on. Killing it mid-turn cut the reply short: the
+// words streamed so far went out as the whole answer, and the new caller's
+// turn, run in a fresh process, never wrote the rest. Returns once the
+// process is idle, gone or replaced, ctx ends, or callerRecycleWait passed.
+func (p *Pool) waitTurnForRecycle(ctx context.Context, key string, entry *runEntry) {
+	if entry == nil || entry.state == nil || entry.state.Lifecycle() != state.LifecycleWorking {
+		return
+	}
+	deadline := time.Now().Add(callerRecycleWait)
+	tick := time.NewTicker(callerRecyclePoll)
+	defer tick.Stop()
+	for entry.state.Lifecycle() == state.LifecycleWorking {
+		p.mu.Lock()
+		cur := p.active[key]
+		p.mu.Unlock()
+		if cur != entry {
+			return
+		}
+		if time.Now().After(deadline) {
+			log.Ctx(ctx).Warn().Str("component", "pool").Str("session", entry.sessID).
+				Dur("waited", callerRecycleWait).
+				Msg("pool.send: caller changed and the running turn did not end in time; recycling it mid-turn")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
 func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
 	// delivered: the message was written to the live process or buffered.
 	delivered := false
@@ -975,8 +1015,19 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	//
 	// Only when explicitly enabled, and only for role "user": a system or
 	// sub-agent message is not a human taking over the conversation.
-	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) &&
-		(p.cfg.IdentityFixed == nil || !p.cfg.IdentityFixed(ctx, sessionID)) {
+	recycle := func() bool {
+		return alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) &&
+			(p.cfg.IdentityFixed == nil || !p.cfg.IdentityFixed(ctx, sessionID))
+	}
+	if recycle() && entry.state != nil && entry.state.Lifecycle() == state.LifecycleWorking {
+		// Let the turn finish first, then look again: the process may
+		// have exited or been replaced meanwhile.
+		p.waitTurnForRecycle(ctx, key, entry)
+		p.mu.Lock()
+		entry, alive = p.active[key]
+		p.mu.Unlock()
+	}
+	if recycle() {
 		log.Ctx(ctx).Info().
 			Str("component", "pool").
 			Str("session", sessionID).

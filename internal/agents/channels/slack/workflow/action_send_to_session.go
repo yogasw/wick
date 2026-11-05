@@ -21,6 +21,9 @@ type SendToSessionInput struct {
 	// instead of a new, empty session. Off by default: first-check relies on
 	// this node to start the card's session.
 	RequireExisting bool `json:"require_existing" wick:"key=require_existing;desc=Only continue a session that already exists for this thread. When it is gone, fail with session not found instead of starting a new empty one"`
+	// ArmOnly readies the session without a turn: for a thread that may
+	// never need the agent.
+	ArmOnly bool `json:"arm_only" wick:"key=arm_only;desc=Run no turn now. Keep text as a note for the agent and switch on auto-reply, so the session runs only when someone posts in the thread"`
 }
 
 // SendToSessionOutput reports where the work went, not what the agent said —
@@ -56,6 +59,7 @@ func registerActionSendToSession(reg *integration.Registry, pick ChannelPicker) 
 				"The session runs as the wick user who OWNS this Slack instance, not as whoever triggered the workflow. An instance with no owner errors instead of falling back to admin access.",
 				"text must carry everything the agent needs (links, ids, which skill to use) — it starts with no view of the workflow's other nodes.",
 				"Re-running the workflow on the same thread continues the SAME session rather than starting a fresh one.",
+				"With arm_only: true no turn runs: text waits as a note for the first message someone posts in the thread, and auto-reply is switched on so that message reaches the agent. Use it for a thread that may never need the agent; queued is false.",
 				"With require_existing: true a thread whose session no longer exists fails with `session <id> not found` — nothing is created and nothing is posted. Leave it off when this node is meant to START the thread's session (e.g. right after posting the card).",
 			},
 			PairWith: []string{"channel:slack.send_message", "channel:slack.add_reaction"},
@@ -103,6 +107,13 @@ func registerActionSendToSession(reg *integration.Registry, pick ChannelPicker) 
 			text, err := argString(args, "text")
 			if err != nil {
 				return nil, err
+			}
+			if argBool(args, "arm_only", false) {
+				sessionID, isNew, err := ch.ArmThreadSession(ctx, channelID, threadTS, text)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"session_id": sessionID, "queued": false, "new_session": isNew, "auto_reply": "armed"}, nil
 			}
 			autoReply := argBool(args, "auto_reply", false)
 			requireExisting := argBool(args, "require_existing", false)

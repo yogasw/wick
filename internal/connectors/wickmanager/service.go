@@ -43,6 +43,10 @@ type Deps struct {
 	// AgentOf names the Team agent ("@handle") a session belongs to, ""
 	// for none. Optional; only labels who proposed a prompt change.
 	AgentOf func(sessionID string) string
+	// Usage returns the People & usage page behind the usage_* ops. A
+	// func because the admin handler is built after this connector is
+	// registered; nil, or a nil result, answers unavailable.
+	Usage func() UsageSource
 }
 
 type handlers struct {

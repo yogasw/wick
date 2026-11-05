@@ -449,9 +449,17 @@ type listenWait struct {
 	delay time.Duration
 	// holdID ties the hold's listen_held turns into one row in the web UI.
 	holdID string
-	// eyesTS is the reply carrying the bot's 👀, "" for none.
+	// eyesTS is the reply carrying the bot's 👀: the latest one heard, so
+	// the thread shows one marker, not one per message.
 	eyesTS  string
 	channel string
+	// heard counts the replies this hold heard.
+	heard int
+	// human: a person (not a bot) wrote one of them. A hold of bot
+	// replies only counts toward listenBotStreak.
+	human bool
+	// deadline is when the timer fires, for the web UI's countdown.
+	deadline time.Time
 }
 
 // queueListenMessage takes a plain reply in a listening thread: it goes to
@@ -468,7 +476,35 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 		st = s.listenSettingsIn(sessionID, ev.Channel)
 		delay = st.Delay
 	}
+	// A reply's author: a person's user id, or a bot's id when the app
+	// posts with none, so two bots never count as one author.
+	author := ev.User
+	if author == "" {
+		author = ev.BotID
+	}
+	// Bots answering each other could keep the agent busy forever: after
+	// listenBotStreak turns in a row that only bots started, a bot's reply is
+	// heard but starts nothing until a person speaks again.
+	if ev.BotID != "" && s.botTurnsInARow(sessionID) >= listenBotStreak {
+		s.mu.Lock()
+		w := s.listenWaits[sessionID]
+		s.mu.Unlock()
+		s.reportHeard(sessionID, w, ev, files)
+		return
+	}
+	if ev.BotID == "" {
+		s.resetBotTurns(sessionID)
+	}
 	if delay <= 0 {
+		s.dispatchListen(sessionID, ev, files, st, 0, false, auto)
+		return
+	}
+	// The agent is working in this thread right now: the reply joins that
+	// turn at once, as a message sent mid-turn in the web chat does, rather
+	// than waiting for the turn to end and then for the thread to go quiet.
+	// ⏳ moves onto it, so the thread shows one marker, on the latest reply.
+	if s.joinsRunningTurn(sessionID) {
+		s.markWorking(sessionID, ev.Channel, []string{ev.TimeStamp})
 		s.dispatchListen(sessionID, ev, files, st, 0, false, auto)
 		return
 	}
@@ -484,18 +520,19 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	w := s.listenWaits[sessionID]
 	switch {
 	case w == nil:
-		w = &listenWait{ev: ev, files: files, author: ev.User, st: st, started: time.Now(),
+		w = &listenWait{ev: ev, files: files, author: author, st: st, started: time.Now(), human: ev.BotID == "",
 			auto: auto, delay: delay, channel: ev.Channel,
-			holdID: sessionID + "/" + ev.TimeStamp, eyesTS: ev.TimeStamp}
+			holdID: sessionID + "/" + ev.TimeStamp, eyesTS: ev.TimeStamp, heard: 1,
+			deadline: time.Now().Add(delay)}
 		w.timer = time.AfterFunc(delay, func() { s.fireListenWait(sessionID, w) })
 		s.listenWaits[sessionID] = w
 		report, reportWhat = w, heldStateHeld
-	case w.author == ev.User || w.auto:
+	case w.author == author || w.auto:
 		// The asker is still typing it out (or, in auto-reply, the thread
 		// is still talking): wait for all of it. An auto-reply merge never
 		// runs past autoReplyMaxHold from its first reply.
 		w.ev = ev
-		w.author = ev.User
+		w.author = author
 		w.files = append(w.files, files...)
 		wait := w.delay
 		if w.auto {
@@ -504,14 +541,30 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 			}
 		}
 		w.timer.Reset(wait)
+		w.deadline = time.Now().Add(wait)
+		w.heard++
+		w.human = w.human || ev.BotID == ""
 		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
 		report, reportWhat = w, heldStateHeld
 	default:
 		if s.noteOtherLocked(sessionID, w) {
 			report, reportWhat = w, heldStateSkipped
+			break
 		}
+		// Someone else joined in: the agent reads once the thread goes
+		// quiet, so their reply waits with the asker's. The asker's
+		// message stays the one the turn answers.
+		w.timer.Reset(w.delay)
+		w.deadline = time.Now().Add(w.delay)
+		w.heard++
+		w.human = w.human || ev.BotID == ""
+		moveFrom, w.eyesTS = w.eyesTS, ev.TimeStamp
+		report, reportWhat = w, heldStateHeld
 	}
 	s.mu.Unlock()
+	// Every reply is part of the conversation: it is in the session the
+	// moment it arrives, whether or not the agent ever answers it.
+	s.reportHeard(sessionID, report, ev, files)
 	switch reportWhat {
 	case heldStateHeld:
 		if moveFrom != "" && moveFrom != ev.TimeStamp {
@@ -525,9 +578,15 @@ func (s *Channel) queueListenMessage(ctx context.Context, sessionID string, ev *
 	_ = ctx
 }
 
-// heldReaction puts the bot's 👀 on a held reply, or takes it off. Quiet
-// when the API is not up (tests) or the reaction is already in that state.
+// heldReaction puts the bot's 👀 on a held reply, or takes it off.
 func (s *Channel) heldReaction(channelID, ts string, on bool) {
+	s.reaction(reactionHeld, channelID, ts, on)
+}
+
+// reaction puts one of the bot's listen markers on a reply, or takes it
+// off. Quiet when the API is not up (tests) or the reaction is already in
+// that state.
+func (s *Channel) reaction(name, channelID, ts string, on bool) {
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
@@ -537,13 +596,13 @@ func (s *Channel) heldReaction(channelID, ts string, on bool) {
 	ref := slackgo.ItemRef{Channel: channelID, Timestamp: ts}
 	var err error
 	if on {
-		err = api.AddReaction(reactionHeld, ref)
+		err = api.AddReaction(name, ref)
 	} else {
-		err = api.RemoveReaction(reactionHeld, ref)
+		err = api.RemoveReaction(name, ref)
 	}
 	if err != nil && !strings.Contains(err.Error(), "already_reacted") && !strings.Contains(err.Error(), "no_reaction") {
-		log.Debug().Str("channel", "slack").Str("slack_channel", channelID).Str("ts", ts).Bool("on", on).
-			Err(err).Msg("listen: held marker reaction failed")
+		log.Debug().Str("channel", "slack").Str("slack_channel", channelID).Str("ts", ts).Str("reaction", name).Bool("on", on).
+			Err(err).Msg("listen: marker reaction failed")
 	}
 }
 
@@ -553,8 +612,13 @@ func (s *Channel) releaseHeld(sessionID string, w *listenWait, state, why string
 	if w == nil {
 		return
 	}
-	s.heldReaction(w.channel, w.eyesTS, false)
+	s.clearHeldReactions(w)
 	s.reportHeld(sessionID, w, state, why)
+}
+
+// clearHeldReactions takes the bot's 👀 off the reply carrying it.
+func (s *Channel) clearHeldReactions(w *listenWait) {
+	s.heldReaction(w.channel, w.eyesTS, false)
 }
 
 // noteListenOther records that someone other than the asker (a person or
@@ -625,12 +689,21 @@ func (s *Channel) fireListenWait(sessionID string, w *listenWait) {
 	}
 	delete(s.listenWaits, sessionID)
 	others := w.othersReplied
+	if w.human {
+		delete(s.listenBotRuns, sessionID)
+	} else {
+		if s.listenBotRuns == nil {
+			s.listenBotRuns = map[string]int{}
+		}
+		s.listenBotRuns[sessionID]++
+	}
 	s.mu.Unlock()
 	if others && w.st.OnTeamReply == listenReplySkip {
 		s.releaseHeld(sessionID, w, heldStateSkipped, "someone else answered meanwhile")
 		return
 	}
-	s.heldReaction(w.channel, w.eyesTS, false)
+	s.clearHeldReactions(w)
+	s.markWorking(sessionID, w.channel, []string{w.eyesTS})
 	s.reportHeld(sessionID, w, heldStateSent, "")
 	s.dispatchListen(sessionID, w.ev, w.files, w.st, time.Since(w.started), others, w.auto)
 }
@@ -648,6 +721,9 @@ type listenTurn struct {
 	// with, so docInstructions go along in the note.
 	docsChanged     bool
 	docInstructions string
+	// pendingMention names who sent a mention or workflow brief the running
+	// turn has not answered yet; this reply joins that turn.
+	pendingMention string
 }
 
 type listenTurnKey struct{}
@@ -678,7 +754,7 @@ func (s *Channel) dispatchListen(sessionID string, ev *slackevents.MessageEvent,
 
 // listenRules is what every listening agent is told once, in its system
 // prompt (ListenPrompt); a listening turn itself only carries listenNote.
-const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message that opens with "[auto-reply]" comes from a thread set to auto-reply: answer it as you would a mention, never [silent]. A message without either marker (a mention, a DM) is answered as usual.`
+const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message that opens with "[auto-reply]" comes from a thread set to auto-reply: answer it as you would a mention, never [silent]. A message without either marker (a mention, a DM) is answered as usual, even when a [listen mode] reply arrives in the same turn.`
 
 // ListenPrompt is the "Slack listen mode" section of sessionID's system
 // prompt: the rules and its LISTEN.md instructions. The instructions are
@@ -747,6 +823,9 @@ func listenNote(lt listenTurn) string {
 		b.WriteString(" · someone else replied meanwhile")
 	}
 	b.WriteString("] Not a mention: answer only if it is meant for you, else [silent]; a thank-you gets [react :pray:].")
+	if lt.pendingMention != "" {
+		fmt.Fprintf(&b, "\nThis joins a turn that also holds a message from %s you have not answered yet: still do what that message asks. [silent] and [react] apply only to this reply, never to that message.", lt.pendingMention)
+	}
 	if lt.threadPrompt != "" {
 		b.WriteString("\nFor this thread: ")
 		b.WriteString(lt.threadPrompt)

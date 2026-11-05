@@ -56,6 +56,7 @@ var migratedModels = []any{
 	&entity.Connector{},
 	&entity.ConnectorOperation{},
 	&entity.ConnectorRun{},
+	&entity.CodeModeRun{},
 	&entity.ConnectorAccount{},
 	&entity.ConnectorCredentialPolicy{},
 	&entity.CustomConnector{},

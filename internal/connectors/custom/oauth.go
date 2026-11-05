@@ -71,6 +71,10 @@ const (
 	// save/connect path sets it — Enable SSO alone never diverts a legacy
 	// instance away from its own stored token.
 	cfgOAuthPerUser = "oauth_per_user"
+	// cfgOAuthError holds the last auth refusal (a failed refresh or a
+	// probe the server refused) so the row stays flagged across reloads;
+	// cleared by the next token that works or a fresh login.
+	cfgOAuthError = "oauth_auth_error"
 )
 
 // oauthLogin is one in-flight browser login, created by StartOAuthLogin
@@ -694,6 +698,7 @@ func oauthInstanceConfigs() []DefField {
 		{Key: cfgOAuthRefresh, Secret: true, Widget: "secret", Hidden: true, Desc: "OAuth refresh token (managed automatically)."},
 		{Key: cfgOAuthExpiry, Hidden: true, Desc: "Access token expiry (RFC3339, managed automatically)."},
 		{Key: cfgOAuthPerUser, Hidden: true, Desc: "Per-user (SSO) mode marker (managed automatically)."},
+		{Key: cfgOAuthError, Hidden: true, Desc: "Last auth failure for this instance (managed automatically)."},
 	}
 }
 
@@ -715,6 +720,7 @@ func (s *Service) persistInstanceTokens(ctx context.Context, instanceID string, 
 		cfgOAuthAccess:  t.AccessToken,
 		cfgOAuthRefresh: t.RefreshToken,
 		cfgOAuthExpiry:  expiry,
+		cfgOAuthError:   "",
 	}
 	if account != "" {
 		values[cfgOAuthAccount] = account
@@ -850,18 +856,36 @@ func (s *Service) accountAccessToken(ctx context.Context, meta *oauthClientMeta,
 	if acc.ExpiresAt == nil || time.Now().Before(acc.ExpiresAt.Add(-30*time.Second)) {
 		return acc.AccessToken, nil
 	}
-	refresh := acc.RefreshToken
+	// One refresh per account at a time: a server that rotates refresh
+	// tokens (n8n does) answers invalid_grant to the second of two
+	// concurrent refreshes that share the old token.
+	defer s.lockRefresh("account:" + acc.ID)()
+	if s.conns != nil {
+		if cur, err := s.conns.GetAccount(ctx, acc.ID); err == nil && cur != nil {
+			acc.AccessToken, acc.RefreshToken, acc.ExpiresAt = cur.AccessToken, cur.RefreshToken, cur.ExpiresAt
+			if acc.ExpiresAt == nil || time.Now().Before(acc.ExpiresAt.Add(-30*time.Second)) {
+				return acc.AccessToken, nil // renewed while we waited
+			}
+		}
+	}
+	refresh, err := s.plainRefresh(acc.RefreshToken)
+	if err != nil {
+		return "", err
+	}
 	if refresh == "" {
 		return acc.AccessToken, nil // expired with no refresh path — let the call 401
 	}
-	if isSecretToken(refresh) && s.keys != nil {
-		dec, err := s.keys.DecryptSecret(refresh)
-		if err != nil {
-			return "", fmt.Errorf("decrypt refresh token: %w", err)
-		}
-		refresh = dec
-	}
 	fresh, err := s.refreshTokens(ctx, meta, refresh)
+	if err != nil && s.conns != nil {
+		// Another process (a draining predecessor) may have rotated the
+		// token meanwhile: retry once with the stored one if it changed.
+		if cur, gerr := s.conns.GetAccount(ctx, acc.ID); gerr == nil && cur != nil && cur.RefreshToken != acc.RefreshToken {
+			if retry, perr := s.plainRefresh(cur.RefreshToken); perr == nil && retry != "" {
+				refresh = retry
+				fresh, err = s.refreshTokens(ctx, meta, refresh)
+			}
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("refresh oauth token for @%s: %w", acc.DisplayName, err)
 	}
@@ -1023,12 +1047,14 @@ func (s *Service) instanceAccessToken(ctx context.Context, meta *oauthClientMeta
 	if access == "" {
 		return "", nil
 	}
-	expiry := s.keys.GetOwned(owner, cfgOAuthExpiry)
-	if expiry == "" {
+	if instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry)) {
 		return access, nil
 	}
-	exp, err := time.Parse(time.RFC3339, expiry)
-	if err != nil || time.Now().Before(exp.Add(-30*time.Second)) {
+	// Serialized like accountAccessToken; re-read after the wait so the
+	// loser of a race uses the winner's token instead of a spent refresh.
+	defer s.lockRefresh("instance:" + instanceID)()
+	access = s.keys.GetOwned(owner, cfgOAuthAccess)
+	if instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry)) {
 		return access, nil
 	}
 	refresh := s.keys.GetOwned(owner, cfgOAuthRefresh)
@@ -1037,11 +1063,62 @@ func (s *Service) instanceAccessToken(ctx context.Context, meta *oauthClientMeta
 	}
 	fresh, err := s.refreshTokens(ctx, meta, refresh)
 	if err != nil {
-		return "", fmt.Errorf("refresh oauth token: %w", err)
+		if cur := s.keys.GetOwned(owner, cfgOAuthRefresh); cur != "" && cur != refresh {
+			fresh, err = s.refreshTokens(ctx, meta, cur)
+		}
+	}
+	if err != nil {
+		err = fmt.Errorf("refresh oauth token: %w", err)
+		s.recordInstanceAuth(ctx, instanceID, err.Error())
+		return "", err
 	}
 	// Refresh keeps the stored account label — "" skips that key.
 	if err := s.persistInstanceTokens(ctx, instanceID, fresh, ""); err != nil {
 		return "", err
 	}
 	return fresh.AccessToken, nil
+}
+
+// instanceTokenLive reports whether a stored RFC3339 expiry is still more
+// than 30s away. Empty or unparsable counts as live (no expiry known).
+func instanceTokenLive(expiry string) bool {
+	if expiry == "" {
+		return true
+	}
+	exp, err := time.Parse(time.RFC3339, expiry)
+	return err != nil || time.Now().Before(exp.Add(-30*time.Second))
+}
+
+// plainRefresh decrypts a stored refresh token when it is encrypted.
+func (s *Service) plainRefresh(refresh string) (string, error) {
+	if refresh == "" || !isSecretToken(refresh) || s.keys == nil {
+		return refresh, nil
+	}
+	dec, err := s.keys.DecryptSecret(refresh)
+	if err != nil {
+		return "", fmt.Errorf("decrypt refresh token: %w", err)
+	}
+	return dec, nil
+}
+
+// lockRefresh serializes token refreshes for one credential key and
+// returns the unlock.
+func (s *Service) lockRefresh(key string) func() {
+	m, _ := s.refreshMu.LoadOrStore(key, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// recordInstanceAuth stores (msg != "") or clears the instance's last auth
+// failure. Best-effort: the verdict is display state, never a call error.
+func (s *Service) recordInstanceAuth(ctx context.Context, instanceID, msg string) {
+	owner := "connector:" + instanceID
+	if s.keys.GetOwned(owner, cfgOAuthError) == msg {
+		return
+	}
+	if err := s.keys.EnsureOwned(ctx, owner, FieldsToConfigs(oauthInstanceConfigs())...); err != nil {
+		return
+	}
+	_ = s.keys.SetOwned(ctx, owner, cfgOAuthError, msg)
 }

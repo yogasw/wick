@@ -335,31 +335,21 @@ func (s *session) screenshot(in screenshotInput) (any, error) {
 		return nil, err
 	}
 
-	var raw []byte
-	if in.Selector != "" {
-		el, err := page.WaitForSelector(in.Selector)
-		if err != nil {
-			return nil, fmt.Errorf("selector %q: %w", in.Selector, err)
-		}
-		raw, err = el.Screenshot()
-		if err != nil {
-			return nil, fmt.Errorf("element screenshot: %w", err)
-		}
-	} else {
-		raw, err = page.Screenshot(playwright.PageScreenshotOptions{
-			FullPage: playwright.Bool(in.FullPage),
-			Type:     playwright.ScreenshotTypePng,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("screenshot: %w", err)
-		}
+	o, err := in.shotOpts()
+	if err != nil {
+		return nil, err
 	}
-	return map[string]any{
-		"url":       in.URL,
-		"format":    "png",
-		"full_page": in.FullPage && in.Selector == "",
-		"image":     base64.StdEncoding.EncodeToString(raw),
-	}, nil
+	raw, err := takeShot(page, in.Selector, in.FullPage, o)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot: %w", err)
+	}
+	res, err := shotResult(raw, o.format(), in.SaveDir)
+	if err != nil {
+		return nil, err
+	}
+	res["url"] = in.URL
+	res["full_page"] = in.FullPage && in.Selector == ""
+	return res, nil
 }
 
 func (s *session) getContent(in getContentInput) (any, error) {
@@ -477,6 +467,8 @@ type stepResult struct {
 	OK     bool   `json:"ok"`
 	Error  string `json:"error,omitempty"`
 	Output any    `json:"output,omitempty"`
+	// Warning notes an adjustment made to the step (a clamped timeout).
+	Warning string `json:"warning,omitempty"`
 }
 
 // runActions executes the validated action list on a throwaway page in this
@@ -486,7 +478,7 @@ func (s *session) runActions(actions []action) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runActionLoop(page, actions), nil
+	return runActionLoop(page, actions, newMouseEnv(s.c, "")), nil
 }
 
 // runActionsInContext runs the actions against the tab at tabIndex in an
@@ -524,13 +516,21 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 	page.SetDefaultTimeout(actionTimeout(c))
 	page.SetDefaultNavigationTimeout(navTimeout(c))
 
+	// A viewport set earlier in this session is an emulation tied to the CDP
+	// connection, so it lapses when the previous run disconnected. Re-apply it
+	// before the actions so coordinates stay where the agent measured them.
+	if v, ok := sessionViewport.Load(strings.TrimSpace(c.Input("session_id"))); ok {
+		wh := v.([2]int)
+		_ = page.SetViewportSize(wh[0], wh[1])
+	}
+
 	var cap *capture
 	if boolInput(c, "record_request") {
 		cap = newCapture(c.Input("record_url_pattern"), boolInput(c, "record_include_assets"))
 		cap.attach(ctx)
 	}
 
-	res := runActionLoop(page, actions)
+	res := runActionLoop(page, actions, newMouseEnv(c, strings.TrimSpace(c.Input("session_id"))))
 
 	if cap != nil {
 		// Detach BEFORE returning (the caller disconnects the CDP link on
@@ -550,11 +550,19 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 // at the first failing step (later steps almost always depend on earlier ones,
 // so continuing would produce misleading errors). Shared by the ephemeral and
 // live-session paths.
-func runActionLoop(page playwright.Page, actions []action) map[string]any {
+func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[string]any {
 	results := make([]stepResult, 0, len(actions))
+	if needsBaseline(actions) {
+		env.run = &runState{}
+	}
+	refreshCursor(page, env)
 	for i, a := range actions {
-		out, err := execAction(page, a)
-		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out}
+		env.run.observeTrigger(page, a, i == 0)
+		out, err := execAction(page, a, env)
+		if err == nil && triggerActions[a.Action] && !strings.HasPrefix(a.Action, "mouse_") {
+			refreshCursor(page, env) // a navigation or reload drops the overlay
+		}
+		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out, Warning: a.Warning}
 		if err != nil {
 			res.Error = err.Error()
 			results = append(results, res)
@@ -566,7 +574,7 @@ func runActionLoop(page playwright.Page, actions []action) map[string]any {
 }
 
 // execAction runs one action against the live page and returns its output.
-func execAction(page playwright.Page, a action) (any, error) {
+func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	switch a.Action {
 	case "goto":
 		if _, err := page.Goto(a.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateLoad}); err != nil {
@@ -580,13 +588,13 @@ func execAction(page playwright.Page, a action) (any, error) {
 	case "type":
 		return nil, page.Type(a.Selector, a.Value)
 	case "press":
-		// Playwright's Press needs a selector; default to the body so the LLM
-		// can send global keys (Enter, Escape) without naming a target.
-		selector := a.Selector
-		if selector == "" {
-			selector = "body"
+		// Without a selector the key goes to whatever has focus (an input
+		// inside an iframe included). Pressing on "body" would first move the
+		// focus there and drop the key outside the field.
+		if a.Selector == "" {
+			return nil, page.Keyboard().Press(a.Key)
 		}
-		return nil, page.Press(selector, a.Key)
+		return nil, page.Press(a.Selector, a.Key)
 	case "wait_for":
 		_, err := page.WaitForSelector(a.Selector)
 		return nil, err
@@ -594,24 +602,26 @@ func execAction(page playwright.Page, a action) (any, error) {
 		page.WaitForTimeout(float64(a.MS))
 		return nil, nil
 	case "screenshot":
-		var raw []byte
-		var err error
-		if a.Selector != "" {
-			el, e := page.WaitForSelector(a.Selector)
-			if e != nil {
-				return nil, e
-			}
-			raw, err = el.Screenshot()
-		} else {
-			raw, err = page.Screenshot(playwright.PageScreenshotOptions{
-				FullPage: playwright.Bool(a.FullPage),
-				Type:     playwright.ScreenshotTypePng,
-			})
-		}
+		o := a.shotOpts()
+		raw, err := takeShot(page, a.Selector, a.FullPage, o)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"format": "png", "image": base64.StdEncoding.EncodeToString(raw)}, nil
+		return shotResult(raw, o.format(), a.SaveDir)
+	case "set_viewport":
+		if err := page.SetViewportSize(a.Width, a.Height); err != nil {
+			return nil, err
+		}
+		if env.key != "" {
+			sessionViewport.Store(env.key, [2]int{a.Width, a.Height})
+			// A pointer left outside the new viewport goes back to rest
+			// inside it rather than sitting on the edge.
+			if p, ok := knownPos(page, env); ok && (p.X >= float64(a.Width) || p.Y >= float64(a.Height)) {
+				rememberPos(env, restingPoint(float64(a.Width), float64(a.Height)))
+			}
+			refreshCursor(page, env)
+		}
+		return map[string]any{"width": a.Width, "height": a.Height}, nil
 	case "content":
 		if a.Selector != "" {
 			el, err := page.WaitForSelector(a.Selector)
@@ -703,6 +713,35 @@ func execAction(page playwright.Page, a action) (any, error) {
 		return nil, page.DragAndDrop(a.Selector, a.Target)
 	case "scroll":
 		return nil, page.Mouse().Wheel(a.DeltaX, a.DeltaY)
+	case "mouse_move":
+		return humanMove(page, env, *a.X, *a.Y, a.Steps)
+	case "mouse_click":
+		return humanClick(page, env, a)
+	case "mouse_wheel":
+		return humanWheel(page, env, a.DeltaX, a.DeltaY, a.Steps)
+	case "wait_for_text":
+		return waitForText(page, env, a)
+	case "wait_for_change":
+		return waitForChange(page, a)
+	case "observe":
+		return observe(page, env, a)
+	case "frame_type":
+		return frameType(page, env, a, false)
+	case "frame_fill":
+		return frameType(page, env, a, true)
+	case "frame_eval":
+		return frameEval(page, a)
+	case "frame_text":
+		if a.OnlyAdded {
+			return observe(page, env, a)
+		}
+		out, err := frameText(page, a)
+		if m, ok := out.(map[string]any); ok && err == nil {
+			return trimView(m, a), nil
+		}
+		return out, err
+	case "frame_click":
+		return frameClick(page, env, a)
 
 	// ── read / extract ──────────────────────────────────────────────
 	case "get_attribute":

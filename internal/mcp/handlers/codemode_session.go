@@ -38,6 +38,7 @@ func RunCodeInSession(ctx context.Context, svc *connectors.Service, layout agent
 	if err != nil {
 		return nil, codeSourceError{err}
 	}
+	ctx = WithCodeRunOrigin(ctx, entity.CodeModeViaCLI, run.ScriptPath)
 	return RunCodeAs(ctx, svc, layout, codemode.Request{Lang: run.Lang, Code: code, Input: run.Input, Timeout: run.Timeout, Dir: dir, NoDir: noDir}, sessionID, user, tagIDs)
 }
 

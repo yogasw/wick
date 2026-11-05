@@ -69,7 +69,11 @@ func idleTimeoutFor(c *connector.Ctx, m sessionMeta) time.Duration {
 	if m.Profile == "" {
 		return base
 	}
-	// Named profile: one knob still controls both, scaled by a fixed factor.
+	// Named profile: profile_idle_timeout_min when set, else the same knob
+	// scaled by a fixed factor.
+	if v := c.CfgInt("profile_idle_timeout_min"); v > 0 {
+		return time.Duration(v) * time.Minute
+	}
 	return base * namedProfileFactor
 }
 

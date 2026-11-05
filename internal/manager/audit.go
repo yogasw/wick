@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -69,31 +69,35 @@ func (h *Handler) apiRunsSummary(w http.ResponseWriter, r *http.Request) {
 
 // buildAuditFilter parses the standard audit query params into an
 // AuditFilter plus the raw from/to strings (for pre-filling inputs).
+// connector_id/instance (an instance id), op, source, status, user and
+// connector (the connector type) take one value or a comma list; session,
+// error (substring), min_ms/max_ms narrow further. from/to take a date
+// (YYYY-MM-DD; to = end of that day) or an RFC3339 time to the minute.
 func buildAuditFilter(r *http.Request) (connectors.AuditFilter, string, string) {
 	q := r.URL.Query()
+	instance := q.Get("connector_id")
+	if v := q.Get("instance"); v != "" {
+		instance = v
+	}
 	f := connectors.AuditFilter{
-		ConnectorID:  q.Get("connector_id"),
-		OperationKey: q.Get("op"),
-		Source:       q.Get("source"),
-		Status:       q.Get("status"),
-		UserID:       q.Get("user"),
+		ConnectorID:   instance,
+		OperationKey:  q.Get("op"),
+		Source:        q.Get("source"),
+		Status:        q.Get("status"),
+		UserID:        q.Get("user"),
+		ConnectorKey:  q.Get("connector"),
+		SessionID:     q.Get("session"),
+		ErrorContains: strings.TrimSpace(q.Get("error")),
 	}
-	fromStr := q.Get("from")
-	toStr := q.Get("to")
-	if fromStr != "" {
-		if t, err := time.Parse("2006-01-02", fromStr); err == nil {
-			f.From = &t
-		} else {
-			fromStr = ""
-		}
+	f.MinLatencyMs, _ = strconv.Atoi(q.Get("min_ms"))
+	f.MaxLatencyMs, _ = strconv.Atoi(q.Get("max_ms"))
+	fromStr, toStr := q.Get("from"), q.Get("to")
+	f.From, f.To = auditDateRange(fromStr, toStr)
+	if f.From == nil {
+		fromStr = ""
 	}
-	if toStr != "" {
-		if t, err := time.Parse("2006-01-02", toStr); err == nil {
-			eod := t.Add(24*time.Hour - time.Second)
-			f.To = &eod
-		} else {
-			toStr = ""
-		}
+	if f.To == nil {
+		toStr = ""
 	}
 	return f, fromStr, toStr
 }

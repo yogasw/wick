@@ -298,6 +298,12 @@ const KindRemoteQueue = "remote_queue"
 // arrives instead of only once it reaches the agent.
 const KindListenHeld = "listen_held"
 
+// KindThreadHeard: one reply a listening Slack thread heard, recorded the
+// moment it arrives (text = the reply; extras: hold_id, msg_ts, user, name,
+// files). A record only: it never reaches the provider — the agent reads
+// it in the listening turn that follows.
+const KindThreadHeard = "thread_heard"
+
 // KindRemoteLink: the remote's own page for the running turn (extras: url),
 // e.g. a Jules session, where a turn wick cannot stop can be stopped.
 const KindRemoteLink = "remote_link"

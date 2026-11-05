@@ -52,6 +52,14 @@ type ClaudeParser struct {
 	// once as the final block). Cleared on Done/Error.
 	partialTextEmitted bool
 
+	// streamedText is the text streamed as deltas since the last text
+	// frame (or message_start). The frame that follows is compared with
+	// it rather than dropped outright: when claude's stream breaks after
+	// a few deltas and it falls back to a non-streamed request, the
+	// whole reply arrives only in that frame, and suppressing it left
+	// the turn with just its opening words.
+	streamedText strings.Builder
+
 	// partialThinkingEmitted tracks whether any thinking_delta has been
 	// streamed in the current turn. When true, the trailing `assistant`
 	// frame's thinking block is suppressed — same dedup logic as text.
@@ -167,6 +175,24 @@ func isSyntheticText(text string) bool {
 // NewClaudeParser returns a fresh parser ready to consume Claude
 // stream-json lines.
 func NewClaudeParser() *ClaudeParser { return &ClaudeParser{} }
+
+// unstreamedText is the part of a text frame its deltas did not already
+// stream: nothing when they carried all of it, the tail when they
+// stopped partway, the whole frame when none of it was streamed (a
+// block claude sent without deltas) or it does not continue what was
+// streamed (a request retried from scratch) — then the reader sees the
+// opening twice rather than losing the reply.
+func unstreamedText(frame, streamed string) string {
+	switch {
+	case streamed == "":
+		return frame
+	case strings.HasPrefix(streamed, frame):
+		return ""
+	case strings.HasPrefix(frame, streamed):
+		return frame[len(streamed):]
+	}
+	return "\n\n" + frame
+}
 
 // claudeRaw is the wire shape of one stream-json line. We model only
 // the fields we use; unknown fields are ignored.
@@ -603,6 +629,9 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 			log.Debug().Msg("claude.parse: stream_event without inner event")
 			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 		}
+		if raw.Event.Type == "message_start" {
+			p.streamedText.Reset()
+		}
 		if raw.Event.Type != "content_block_delta" || raw.Event.Delta == nil {
 			log.Debug().Str("inner_type", raw.Event.Type).Msg("claude.parse: stream_event bookend, skipping")
 			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
@@ -613,6 +642,7 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 				return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 			}
 			p.partialTextEmitted = true
+			p.streamedText.WriteString(raw.Event.Delta.Text)
 			log.Debug().Int("len", len(raw.Event.Delta.Text)).Msg("claude.parse: stream text_delta")
 			return AgentEvent{
 				Type: TextDelta,
@@ -665,6 +695,9 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		for _, b := range raw.Message.Content {
 			switch b.Type {
 			case "tool_use":
+				// Text streamed before it belongs to a block already
+				// settled; the next text block streams afresh.
+				p.streamedText.Reset()
 				return live(AgentEvent{
 					Type:      ToolUse,
 					ToolName:  b.Name,
@@ -694,14 +727,6 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 			code = errorCode(raw.Message.Error)
 		}
 		synthModel := raw.Message.Model == claudeSyntheticModel || code != "" || raw.IsAPIErrorMessage
-		// If --include-partial-messages already streamed the text via
-		// stream_event content_block_delta, suppress the trailing
-		// `assistant` frame's text — it's the same content concatenated,
-		// emitting it again would double-render in the UI bubble and
-		// double the assistant turn body in conversation.jsonl.
-		if p.partialTextEmitted && !synthModel {
-			return live(AgentEvent{Type: Unknown, Raw: trimmed})
-		}
 		// No tool_use/thinking — return concatenated text as TextDelta.
 		var buf strings.Builder
 		for _, b := range raw.Message.Content {
@@ -709,12 +734,23 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 				buf.WriteString(b.Text)
 			}
 		}
-		if buf.Len() == 0 {
+		text := buf.String()
+		// If --include-partial-messages already streamed the text via
+		// stream_event content_block_delta, the trailing `assistant`
+		// frame repeats it: emitting it again would double-render in the
+		// UI bubble and double the assistant turn body in
+		// conversation.jsonl. Only what the deltas did not carry goes on.
+		if p.partialTextEmitted && !synthModel {
+			streamed := p.streamedText.String()
+			p.streamedText.Reset()
+			text = unstreamedText(text, streamed)
+		}
+		if text == "" {
 			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
 		ev := AgentEvent{
 			Type: TextDelta,
-			Text: buf.String(),
+			Text: text,
 			Raw:  trimmed,
 		}
 		// claude announces a limit as an assistant message of its own
@@ -778,6 +814,7 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// for short replies — claude can batch them).
 		p.partialTextEmitted = false
 		p.partialThinkingEmitted = false
+		p.streamedText.Reset()
 		synthKind, synthReset, synthCoded := p.synthKind, p.synthReset, p.synthCoded
 		p.synthKind, p.synthReset, p.synthCoded = ErrNone, time.Time{}, false
 		// Error results carry the same running totals (error_max_turns,

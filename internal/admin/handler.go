@@ -270,6 +270,9 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	// People & usage: who still logs in, through which channel, on what.
 	// Admin-only — it names every account and what they touched.
 	mux.Handle("GET /admin/analytics", admin(h.analyticsPage))
+	// Audit: Code Mode script runs and every connector call, with who,
+	// where and how it ended. Hosts the manager SPA's audit views.
+	mux.Handle("GET /admin/audit", admin(h.auditPage))
 	mux.Handle("GET /admin/analytics/users.json", admin(h.analyticsUsersJSON))
 	// The token ledger, same report the providers page reads.
 	mux.Handle("GET /admin/analytics/ledger/", admin(h.analyticsLedgerJSON))

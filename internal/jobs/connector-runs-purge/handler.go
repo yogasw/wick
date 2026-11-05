@@ -76,7 +76,13 @@ func NewRun(db *gorm.DB) job.RunFunc {
 		if err != nil {
 			return "", fmt.Errorf("purge connector_runs: %w", err)
 		}
-		return fmt.Sprintf("Purged **%d** connector_run row(s) older than %d day(s) (cutoff: %s).",
-			n, days, cutoff.Format(time.RFC3339)), nil
+		// Code Mode script runs share the window: they are the runs
+		// around the code_mode connector rows purged above.
+		cm, err := repo.PurgeCodeRunsOlderThan(ctx, cutoff)
+		if err != nil {
+			return "", fmt.Errorf("purge code_mode_runs: %w", err)
+		}
+		return fmt.Sprintf("Purged **%d** connector_run and **%d** code_mode_run row(s) older than %d day(s) (cutoff: %s).",
+			n, cm, days, cutoff.Format(time.RFC3339)), nil
 	}
 }

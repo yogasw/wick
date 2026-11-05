@@ -73,6 +73,10 @@ type connectorMCPAuthJSON struct {
 	// but every call will 401 until someone re-connects. The UI flags this
 	// in red rather than showing a reassuring account chip.
 	Expired bool `json:"expired"`
+	// AuthError is the last auth refusal recorded on the instance (failed
+	// refresh, refused probe). Stored server-side so a reload keeps the
+	// row flagged; empty once a token works again or after a re-connect.
+	AuthError string `json:"auth_error,omitempty"`
 	// TestURL runs the per-instance auth probe. Empty when the caller may
 	// not configure the row (same gate as StartURL).
 	TestURL string `json:"test_url"`
@@ -603,6 +607,7 @@ func (h *Handler) rowMCPAuthJSON(ctx context.Context, key string, row entity.Con
 	out := &connectorMCPAuthJSON{
 		Connected: strings.TrimSpace(cfgs["oauth_access_token"]) != "",
 		Account:   strings.TrimSpace(cfgs["oauth_account"]),
+		AuthError: strings.TrimSpace(cfgs["oauth_auth_error"]),
 	}
 	// A token past its expiry with no refresh token left is dead: it still
 	// looks connected but every call 401s. Surface it so the row can warn

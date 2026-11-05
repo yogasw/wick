@@ -16,7 +16,11 @@ async function pickOption(trigger: HTMLElement, value: string): Promise<void> {
 }
 
 
-vi.mock("$lib/api.js");
+vi.mock("$lib/api.js", async (orig) => ({
+  ...(await orig<typeof import("$lib/api.js")>()),
+  getAuditRuns: vi.fn(),
+  getAuditRun: vi.fn(),
+}));
 vi.mock("$lib/router.js", () => ({ push: vi.fn() }));
 vi.mock("@wick-fe/common-stores", () => ({ toastError: vi.fn() }));
 
@@ -46,6 +50,7 @@ function makeResult(over: Partial<AuditResult> = {}): AuditResult {
     total: 1,
     page_size: 25,
     summary: { total: 1, succeeded: 1, errored: 0, avg_latency_ms: 42 },
+    users: [{ id: "u-1", name: "Alice" }],
     ...over,
   };
 }
@@ -61,7 +66,7 @@ describe("AuditLog", () => {
     render(AuditLog);
     expect(await screen.findByText("Prod Slack")).toBeTruthy();
     expect(screen.getByText("Alice")).toBeTruthy();
-    expect(screen.getByText("42 ms")).toBeTruthy();
+    expect(screen.getAllByText("42 ms").length).toBeGreaterThan(0);
   });
 
   it("renders the summary block", async () => {
@@ -74,17 +79,41 @@ describe("AuditLog", () => {
   it("re-fetches and syncs ?source= when the source filter changes", async () => {
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[0];
+    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[3];
     await pickOption(sourceSelect, "mcp");
     await waitFor(() => expect(window.location.search).toBe("?source=mcp"));
     expect(api.getAuditRuns).toHaveBeenLastCalledWith(expect.objectContaining({ source: "mcp", page: 1 }));
   });
 
-  it("navigates to the connector detail on row click", async () => {
+  it("opens the call in full on row click, then the connector from there", async () => {
+    vi.mocked(api.getAuditRun).mockResolvedValue({
+      ...makeResult().runs![0],
+      session_id: "s-1", session_label: "Ops chat", project_name: "Acme",
+      account_id: "", http_status: 200, ip_address: "", user_agent: "", parent_run_id: "",
+      ended_at: new Date().toISOString(), error_full: "", request: '{"text":"hi"}', response: '{"ok":true}',
+    });
     render(AuditLog);
-    await screen.findByText("Prod Slack");
+    await fireEvent.click(await screen.findByText("Prod Slack"));
+    await waitFor(() => expect(api.getAuditRun).toHaveBeenCalledWith("r1"));
+    expect(await screen.findByText("Ops chat")).toBeTruthy();
+    expect(screen.getByText("Acme")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Prod Slack" }));
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/c-1");
+  });
+
+  it("applies the advanced filter query", async () => {
+    render(AuditLog);
+    await screen.findByText("Prod Slack");
+    const box = screen.getByLabelText("Advanced filter") as HTMLInputElement;
+    await fireEvent.input(box, { target: { value: 'connector:slack op:send,get status:error user:Alice latency>500 "rate limit"' } });
+    await fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() =>
+      expect(api.getAuditRuns).toHaveBeenLastCalledWith(
+        expect.objectContaining({ connector: "slack", op: "send,get", status: "error", user: "u-1", min_ms: "500", error: "rate limit", page: 1 }),
+      ),
+    );
+    expect(window.location.search).toContain("connector=slack");
+    expect(window.location.search).toContain("user=u-1");
   });
 
   it("paginates to the next page", async () => {
@@ -105,7 +134,7 @@ describe("AuditLog", () => {
   it("does not flash the Loading screen on a filter-change refresh", async () => {
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[0];
+    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[3];
     await pickOption(sourceSelect, "mcp");
     expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.getByText("Prod Slack")).toBeTruthy();
@@ -116,7 +145,7 @@ describe("AuditLog", () => {
   it("renders table header cells with uppercase tracking-wide classes", async () => {
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const th = screen.getByText("Connector").closest("th");
+    const th = screen.getByRole("columnheader", { name: "Connector" });
     expect(th?.className).toContain("uppercase");
     expect(th?.className).toContain("tracking-wide");
     expect(th?.className).toContain("text-xs");
@@ -126,7 +155,7 @@ describe("AuditLog", () => {
     vi.mocked(api.getAuditRuns).mockResolvedValueOnce(makeResult()).mockRejectedValueOnce(new Error("refresh boom"));
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[0];
+    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[3];
     await pickOption(sourceSelect, "mcp");
     await waitFor(() => expect(stores.toastError).toHaveBeenCalledWith("Refresh failed", "refresh boom"));
     expect(screen.queryByText("refresh boom")).toBeNull();

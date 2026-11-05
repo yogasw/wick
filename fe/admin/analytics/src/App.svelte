@@ -6,6 +6,7 @@
   import { conditionValues, emptyConditions, filterQuery, readFilter, type Conditions, type Range } from "$lib/urlFilter";
   import Chart from "$lib/Chart.svelte";
   import RecentSessions from "$lib/RecentSessions.svelte";
+  import TopSessions from "$lib/TopSessions.svelte";
   import AdvancedFilters, { condFieldLabels, condOpLabels, filterRule, type Advanced } from "$lib/AdvancedFilters.svelte";
   import { UsageReport, fetchUsageReport, compactTokens, formatCost } from "@wick-fe/common-ui";
   import type { UsageReportData } from "@wick-fe/common-ui";
@@ -25,6 +26,17 @@
   );
   const ledgerSince = $derived(range === "custom" ? customFrom : "");
   const ledgerUntil = $derived(range === "custom" ? customTo : "");
+  /* The page's filter as the ledger reads it, shared by the usage card
+     and the conversation lists so all three answer the same question. */
+  const ledgerScope = $derived({
+    channels: picked,
+    instances: pickedInstances,
+    providers: pickedProviders,
+    people: pickedPeople,
+    models: pickedModels,
+    match: conditionValues(pickedText),
+    matchOp: pickedText.join,
+  });
   /* A second copy of the report, for the drill-downs: the card renders
      the fleet, a person's panel needs that person's row. The server
      caches per range, so asking twice costs one walk. */
@@ -538,6 +550,19 @@
       matchOp={pickedText.join}
       report={ledger}
     />
+
+    <!-- Which conversations spent it, under the same range and filters:
+         pick a person in the filter bar to see only theirs. -->
+    <div class="rounded-xl border border-white-300 bg-white-100 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+      <TopSessions
+        endpoint={ledgerEndpoint}
+        window={ledgerWindow}
+        since={ledgerSince}
+        until={ledgerUntil}
+        scope={ledgerScope}
+        onProject={openProjectByID}
+      />
+    </div>
 
     <!-- Overview: always on top, never a tab. It is the context every list
          below is read against. -->
@@ -1221,6 +1246,17 @@
             onProject={openProjectByID}
           />
         {/if}
+
+        <TopSessions
+          endpoint={ledgerEndpoint}
+          window={ledgerWindow}
+          since={ledgerSince}
+          until={ledgerUntil}
+          scope={{ ...ledgerScope, people: [u.id] }}
+          title="Their conversations by usage"
+          showUser={false}
+          onProject={openProjectByID}
+        />
 
         {#if u.agents?.length}
           <div class="border-t border-white-300 px-5 py-3 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">

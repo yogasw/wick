@@ -2083,7 +2083,11 @@ func NewServer() *Server {
 	// downstream connector uses. Register here, after all services
 	// the handlers need are constructed but before Bootstrap so the
 	// fixed instance gets seeded in the same pass as user connectors.
+	// The admin handler that serves People & usage is built further down;
+	// the usage_* ops read it through this variable once it exists.
+	var adminUsage wickmanager.UsageSource
 	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Usage:      func() wickmanager.UsageSource { return adminUsage },
 		Configs:    configsSvc,
 		Connectors: connectorsSvc,
 		Jobs:       jobsSvc,
@@ -2345,6 +2349,10 @@ func NewServer() *Server {
 			// Show a reply listen mode is holding the moment it arrives.
 			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
+			})
+			// Each reply a listening thread hears lands in its session at once.
+			slackCh.SetHeardFn(func(sessionID, text string, extras map[string]string) {
+				agentstool.EmitSystemEvent(sessionID, store.KindThreadHeard, text, extras)
 			})
 
 			// Background ticker: refresh every 5 minutes.
@@ -2998,6 +3006,7 @@ func NewServer() *Server {
 		WithWebhookRoutes(tr.WebhookRoutes())
 	managerHandler.SetWebhookRoutesSource(pluginTools.WebhookRoutes)
 	managerHandler.SetCustomConnectors(customConnSvc)
+	managerHandler.SetAuditPlaces(auditPlaces{layout: agentsLayout})
 	if pluginMgr != nil {
 		managerHandler.SetPluginResolver(pluginMgr)
 	}
@@ -3188,6 +3197,7 @@ func NewServer() *Server {
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
 	adminHandler.SetToolsSource(liveItems)
+	adminUsage = adminHandler
 	// The People & usage page reads the session store. Handed the SAME
 	// resolved layout the agents tool uses — resolving that path twice is how
 	// two parts of one binary end up reading two different directories.
@@ -3720,6 +3730,7 @@ func NewServer() *Server {
 		},
 		func(ctx context.Context, run schedule.CodeRun, sessionID string, u *entity.User, tagIDs []string) (*schedule.CodeOutcome, error) {
 			ctx = mcp.WithAgentScope(ctx, sessionID)
+			ctx = mcphandlers.WithCodeRunOrigin(ctx, entity.CodeModeViaWatch, run.ScriptPath)
 			res, err := mcphandlers.RunCodeAs(ctx, connectorsSvc, agentsLayout, codemode.Request{Lang: run.Lang, Code: run.Code, Input: run.Input, Timeout: run.Timeout, Dir: run.Dir, NoDir: run.NoDir}, sessionID, u, tagIDs)
 			if err != nil {
 				return nil, err

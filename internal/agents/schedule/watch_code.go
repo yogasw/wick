@@ -54,6 +54,9 @@ type CodeRun struct {
 	// (codemode.Request.Dir); NoDir says why there is none.
 	Dir   string
 	NoDir string
+	// ScriptPath is the step's script_path, empty for inline code; the
+	// run audit names the script by it.
+	ScriptPath string
 }
 
 // CodeOutcome is what a code run returned (a subset of codemode.Result).
@@ -183,7 +186,7 @@ func runCodeStep(ctx context.Context, m entity.ScheduledMessage, s Step, i int, 
 	cctx, cancel := context.WithTimeout(ctx, timeout+codeQueueSlack)
 	defer cancel()
 	res, err := x.code(cctx, m, CodeRun{Lang: s.Lang, Code: src, Input: in, Timeout: timeout,
-		Dir: x.codeDir, NoDir: "the watch's project folder could not be resolved"})
+		Dir: x.codeDir, NoDir: "the watch's project folder could not be resolved", ScriptPath: strings.TrimSpace(s.ScriptPath)})
 	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
 			return r, fmt.Errorf("timed out after %s", timeout+codeQueueSlack)

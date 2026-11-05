@@ -71,6 +71,7 @@ type Service struct {
 	keyToID  map[string]string    // def key → def ID
 
 	markerLoaded sync.Map // instance ID → per-user marker row declared
+	refreshMu    sync.Map // credential key → *sync.Mutex, see lockRefresh
 }
 
 func New(d Deps) *Service {
@@ -1391,6 +1392,14 @@ func (s *Service) ProbeInstance(ctx context.Context, instanceID string, caller *
 			return ProbeResult{OK: false, Error: "no connected account — use Connect to sign in"}, nil
 		}
 		srv.AccessToken = tok
+		res := s.mcp(nil).Probe(ctx, srv, caller)
+		switch {
+		case res.OK:
+			s.recordInstanceAuth(ctx, instanceID, "")
+		case res.NeedsLogin:
+			s.recordInstanceAuth(ctx, instanceID, res.Error)
+		}
+		return res, nil
 	}
 	return s.mcp(nil).Probe(ctx, srv, caller), nil
 }

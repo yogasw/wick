@@ -88,8 +88,12 @@ describe("wsURL", () => {
   test("builds a wss URL under https with encoded params", () => {
     const u = wsURL("c 1", "s/1", 2);
     expect(u).toBe(
-      "wss://wick.example.com/manager/api/connectors/playwright_browser/c%201/browser/ws?session=s%2F1&tab=2",
+      "wss://wick.example.com/manager/api/connectors/playwright_browser/c%201/browser/ws?session=s%2F1&tab=2&mode=view",
     );
+  });
+
+  test("carries the panel mode for the proxy", () => {
+    expect(wsURL("c1", "s1", 0, "full")).toContain("mode=full");
   });
 
   test("uses ws:// under http", () => {

@@ -155,6 +155,47 @@ export async function fetchProviderUsage(
   return (await res.json()) as ProviderUsageDetail;
 }
 
+/** One conversation's spend, merged across every provider it ran on. */
+export type SessionUsageRow = SessionUse & {
+  channel?: string;
+  agent?: string;
+  providers?: string[];
+  /** Percentage of the report total. */
+  share: number;
+};
+
+/** "Which conversations spent it": GET <endpoint>/sessions. */
+export type SessionsUsage = Windowed & {
+  sort: string;
+  totals: UsageTotals;
+  turns: number;
+  /** How many sessions matched; `sessions` holds at most the limit. */
+  total: number;
+  sessions: SessionUsageRow[];
+};
+
+export type SessionSort = "tokens" | "cost" | "turns" | "recent";
+
+/** fetchUsageSessions lists conversations by what they spent, heaviest
+ *  first unless `sort` says otherwise. Same range and scope words as
+ *  fetchUsageReport, so the list agrees with the card above it. */
+export async function fetchUsageSessions(
+  endpoint: string,
+  window = "all",
+  since = "",
+  until = "",
+  scope: LedgerScope = {},
+  sort: SessionSort = "tokens",
+  limit = 20,
+): Promise<SessionsUsage> {
+  const url =
+    `${endpoint}/sessions?${rangeQuery(window, since, until)}${scopeQuery(scope)}` +
+    `&sort=${sort}&limit=${limit}`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`usage sessions: ${res.status}`);
+  return (await res.json()) as SessionsUsage;
+}
+
 /** LedgerScope narrows the ledger the way a page's filter bar does. A
  *  page that filters its chart by channel has to filter its cost by the
  *  same channel, or the two numbers below one filter disagree. */

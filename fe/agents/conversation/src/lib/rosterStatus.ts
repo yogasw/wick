@@ -68,14 +68,14 @@ export function avatarWorking(status: string, w: WorkState): boolean {
 }
 
 /** replyingLabel is the working line for a chat it works on for someone,
-    with what that chat is doing: "for Captain · running Bash…", "for you ·
-    thinking…", or the bare activity for one nobody on the Team asked for
-    (an outside caller, a channel, a schedule). doing is the activity
-    label, or null when no turn of that chat is seen running (queued,
-    between two turns of the task). */
+    with what that chat is doing: "for Captain · running Bash…" for a
+    teammate's task, or the bare activity ("thinking…") for the person's own
+    chat and one nobody on the Team asked for (an outside caller, a channel,
+    a schedule). doing is the activity label, or null when no turn of that
+    chat is seen running (queued, between two turns of the task). */
 export function replyingLabel(to: string, doing: string | null = THINKING_LABEL): string {
   const what = doing ?? "waiting to start…";
-  return to ? `for ${to} · ${what}` : doing ?? "working…";
+  return to && to !== "you" ? `for ${to} · ${what}` : doing ?? "working…";
 }
 
 /** teamWaitingLabel is the working line while open Team tasks wait on

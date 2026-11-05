@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/playwright-community/playwright-go"
@@ -28,12 +29,34 @@ func parseScreenshot(c *connector.Ctx) (screenshotInput, error) {
 	if err != nil {
 		return screenshotInput{}, err
 	}
-	return screenshotInput{
+	in := screenshotInput{
 		URL:      url,
 		FullPage: c.InputBool("full_page"),
 		Selector: strings.TrimSpace(c.Input("selector")),
 		WaitFor:  strings.TrimSpace(c.Input("wait_for")),
-	}, nil
+		Clip:     c.Input("clip"),
+		Type:     strings.ToLower(strings.TrimSpace(c.Input("type"))),
+		Quality:  c.InputInt("quality"),
+		SaveDir:  strings.TrimSpace(c.Input("save_dir")),
+	}
+	if _, err := in.shotOpts(); err != nil {
+		return screenshotInput{}, err
+	}
+	if err := checkSaveDir(in.SaveDir); err != nil {
+		return screenshotInput{}, err
+	}
+	return in, nil
+}
+
+// shotOpts turns the op's flat clip/type/quality inputs into shotOpts and
+// validates them against the selector.
+func (in screenshotInput) shotOpts() (shotOpts, error) {
+	clip, err := parseClip(in.Clip)
+	if err != nil {
+		return shotOpts{}, err
+	}
+	o := shotOpts{Clip: clip, Format: in.Type, Quality: in.Quality}
+	return o, o.validate(in.Selector)
 }
 
 func parseGetContent(c *connector.Ctx) (getContentInput, error) {
@@ -154,6 +177,55 @@ type action struct {
 	MS       int      `json:"ms,omitempty"`
 	DeltaX   float64  `json:"delta_x,omitempty"` // scroll
 	DeltaY   float64  `json:"delta_y,omitempty"` // scroll
+	// mouse_move / mouse_click / mouse_wheel: viewport coordinates, so a click
+	// lands on whatever is painted there — cross-origin iframes included.
+	X       *float64 `json:"x,omitempty"`
+	Y       *float64 `json:"y,omitempty"`
+	Steps   int      `json:"steps,omitempty"`    // path points (move) / wheel ticks
+	Button  string   `json:"button,omitempty"`   // left|right|middle
+	DelayMS int      `json:"delay_ms,omitempty"` // press-to-release hold (click)
+	// HoverDwellMS is the pause on the target before pressing (click).
+	HoverDwellMS int `json:"hover_dwell_ms,omitempty"`
+	// frame_*: which frame to act in (url substring or index into page.Frames()).
+	FrameURLContains string `json:"frame_url_contains,omitempty"`
+	FrameIndex       *int   `json:"frame_index,omitempty"`
+	Text             string `json:"text,omitempty"` // frame_click by visible text
+	// Nth picks which visible match frame_click / frame_type use: 0 = first
+	// (default), 1 = second, -1 = last, -2 = second to last.
+	Nth *int `json:"nth,omitempty"`
+	// Warning is set by parseActions when it adjusted the step (a clamped
+	// timeout); it is reported on the step result, not read from input.
+	Warning string `json:"-"`
+	// Frame is an alias of frame_url_contains; "main" means the page itself.
+	Frame string `json:"frame,omitempty"`
+	// frame_type / frame_fill: [min,max] ms between keys.
+	PerCharDelayMS []int `json:"per_char_delay_ms,omitempty"`
+	// frame_text / observe size knobs.
+	MaxItems        int  `json:"max_items,omitempty"`
+	OnlyInteractive bool `json:"only_interactive,omitempty"`
+	OnlyAdded       bool `json:"only_added,omitempty"`
+	Compact         bool `json:"compact,omitempty"`
+	// wait_for_text: Fresh ignores matches already on screen at the start;
+	// IncludeValues (also wait_for_change / observe) adds field values.
+	Fresh bool `json:"fresh,omitempty"`
+	// Baseline picks what fresh compares against: trigger (default),
+	// run_start or call_start.
+	Baseline      string `json:"baseline,omitempty"`
+	IncludeValues bool   `json:"include_values,omitempty"`
+	// wait_for_text / wait_for_change / observe.
+	Pattern       string `json:"pattern,omitempty"` // regex (wait_for_text)
+	TimeoutMS     int    `json:"timeout_ms,omitempty"`
+	UntilStableMS int    `json:"until_stable_ms,omitempty"` // observe
+	// set_viewport.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
+	// SaveDir writes a screenshot to this directory and returns its path
+	// instead of base64.
+	SaveDir string `json:"save_dir,omitempty"`
+	// screenshot framing + encoding.
+	Clip    *clipRect `json:"clip,omitempty"`
+	Type    string    `json:"type,omitempty"` // png|jpeg
+	Quality int       `json:"quality,omitempty"`
 }
 
 // knownActions is the closed set `run` dispatches on. Validated up front so a
@@ -168,6 +240,10 @@ var knownActions = map[string]bool{
 	"fill": true, "type": true, "press": true, "focus": true,
 	"check": true, "uncheck": true, "select_option": true,
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
+	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
+	"frame_eval": true, "frame_text": true, "frame_click": true,
+	"set_viewport": true, "frame_type": true, "frame_fill": true,
+	"wait_for_text": true, "wait_for_change": true, "observe": true,
 	// wait
 	"wait_for": true, "wait": true,
 	// read / extract
@@ -199,7 +275,8 @@ func parseActions(c *connector.Ctx) ([]action, error) {
 		if !knownActions[name] {
 			return nil, fmt.Errorf("action[%d]: unknown action %q", i, name)
 		}
-		if err := validateActionArgs(i, a); err != nil {
+		clampWait(&actions[i])
+		if err := validateActionArgs(i, actions[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -250,6 +327,56 @@ func validateActionArgs(i int, a action) error {
 			return err
 		}
 		return need("target", a.Target)
+	case "wait_for_text", "wait_for_change", "observe":
+		if a.Action == "wait_for_text" && a.Text == "" && a.Pattern == "" {
+			return fmt.Errorf("action[%d] wait_for_text: text or pattern is required", i)
+		}
+		if a.Pattern != "" {
+			if _, err := regexp.Compile(a.Pattern); err != nil {
+				return fmt.Errorf("action[%d] %s: pattern: %w", i, a.Action, err)
+			}
+		}
+		if a.TimeoutMS < 0 || a.TimeoutMS > maxWaitMS {
+			return fmt.Errorf("action[%d] %s: timeout_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
+		switch a.Baseline {
+		case "", "trigger", "run_start", "call_start":
+		default:
+			return fmt.Errorf("action[%d] %s: baseline must be trigger, run_start or call_start", i, a.Action)
+		}
+		if a.UntilStableMS < 0 || a.UntilStableMS > maxWaitMS {
+			return fmt.Errorf("action[%d] %s: until_stable_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
+	case "set_viewport":
+		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {
+			return fmt.Errorf("action[%d] set_viewport: width and height must be between 200 and 7680x4320", i)
+		}
+	case "frame_type", "frame_fill":
+		if strings.TrimSpace(a.Selector) == "" && strings.TrimSpace(a.Text) == "" {
+			return fmt.Errorf("action[%d] %s: selector or text is required", i, a.Action)
+		}
+		if a.Value == "" {
+			return fmt.Errorf("action[%d] %s: value is required", i, a.Action)
+		}
+		if d := a.PerCharDelayMS; d != nil && (len(d) != 2 || d[0] < 0 || d[1] < d[0] || d[1] > 2000) {
+			return fmt.Errorf("action[%d] %s: per_char_delay_ms must be [min,max] with 0 <= min <= max <= 2000", i, a.Action)
+		}
+	case "frame_eval":
+		return need("script", a.Script)
+	case "frame_click":
+		if strings.TrimSpace(a.Selector) == "" && strings.TrimSpace(a.Text) == "" {
+			return fmt.Errorf("action[%d] frame_click: selector or text is required", i)
+		}
+		if a.HoverDwellMS < 0 || a.HoverDwellMS > maxClickDelayMS {
+			return fmt.Errorf("action[%d] frame_click: hover_dwell_ms must be between 0 and %d", i, maxClickDelayMS)
+		}
+	case "screenshot":
+		if err := a.shotOpts().validate(a.Selector); err != nil {
+			return fmt.Errorf("action[%d] screenshot: %w", i, err)
+		}
+		if err := checkSaveDir(a.SaveDir); err != nil {
+			return fmt.Errorf("action[%d] screenshot: %w", i, err)
+		}
 	case "press":
 		return need("key", a.Key)
 	case "eval":
@@ -258,9 +385,30 @@ func validateActionArgs(i int, a action) error {
 		if a.MS <= 0 {
 			return fmt.Errorf("action[%d] wait: ms must be a positive integer", i)
 		}
-	case "scroll":
+	case "scroll", "mouse_wheel":
 		if a.DeltaX == 0 && a.DeltaY == 0 {
-			return fmt.Errorf("action[%d] scroll: delta_x or delta_y must be non-zero", i)
+			return fmt.Errorf("action[%d] %s: delta_x or delta_y must be non-zero", i, a.Action)
+		}
+	case "mouse_move", "mouse_click":
+		if a.X == nil || a.Y == nil {
+			return fmt.Errorf("action[%d] %s: x and y are required (viewport pixels)", i, a.Action)
+		}
+		if *a.X < 0 || *a.Y < 0 {
+			return fmt.Errorf("action[%d] %s: x and y must be >= 0", i, a.Action)
+		}
+		if a.Steps < 0 || a.Steps > maxMouseSteps {
+			return fmt.Errorf("action[%d] %s: steps must be between 0 and %d", i, a.Action, maxMouseSteps)
+		}
+		if a.DelayMS < 0 || a.DelayMS > maxClickDelayMS {
+			return fmt.Errorf("action[%d] %s: delay_ms must be between 0 and %d", i, a.Action, maxClickDelayMS)
+		}
+		if a.HoverDwellMS < 0 || a.HoverDwellMS > maxClickDelayMS {
+			return fmt.Errorf("action[%d] %s: hover_dwell_ms must be between 0 and %d", i, a.Action, maxClickDelayMS)
+		}
+		switch a.Button {
+		case "", "left", "right", "middle":
+		default:
+			return fmt.Errorf("action[%d] %s: button must be left, right or middle", i, a.Action)
 		}
 	}
 	return nil
@@ -459,4 +607,42 @@ func clip(s string) string {
 		return s
 	}
 	return string(r[:maxOutputRune]) + "…[truncated]"
+}
+
+// shotOpts reads a screenshot action's clip/type/quality.
+func (a action) shotOpts() shotOpts {
+	return shotOpts{Clip: a.Clip, Format: strings.ToLower(strings.TrimSpace(a.Type)), Quality: a.Quality}
+}
+
+// withFrameAlias folds the "frame" shorthand into frame_url_contains, and
+// frame:"main" into frame_index 0 (the page itself).
+func (a action) withFrameAlias() action {
+	f := strings.TrimSpace(a.Frame)
+	switch {
+	case f == "":
+	case strings.EqualFold(f, "main"):
+		if a.FrameIndex == nil && a.FrameURLContains == "" {
+			zero := 0
+			a.FrameIndex = &zero
+		}
+	case a.FrameURLContains == "":
+		a.FrameURLContains = f
+	}
+	return a
+}
+
+// clampWait caps timeout_ms and until_stable_ms at maxWaitMS instead of
+// refusing the run: one over-long wait used to cancel every step before
+// anything ran. The step still runs and carries a warning.
+func clampWait(a *action) {
+	var notes []string
+	if a.TimeoutMS > maxWaitMS {
+		notes = append(notes, fmt.Sprintf("timeout_ms %d clamped to %d", a.TimeoutMS, maxWaitMS))
+		a.TimeoutMS = maxWaitMS
+	}
+	if a.UntilStableMS > maxWaitMS {
+		notes = append(notes, fmt.Sprintf("until_stable_ms %d clamped to %d", a.UntilStableMS, maxWaitMS))
+		a.UntilStableMS = maxWaitMS
+	}
+	a.Warning = strings.Join(notes, "; ")
 }

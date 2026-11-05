@@ -170,6 +170,22 @@ func openSession(c *connector.Ctx) (any, error) {
 	// past its idle timeout should not hold the last slot hostage.
 	maybeReap(c)
 
+	// A named profile already driven by a live session is handed back instead
+	// of refused: a Chromium --user-data-dir is single-owner, and an agent that
+	// lost its session_id should land on the one browser, never start a second.
+	// Checked before the cap so "reopen my profile" never reads as "limit hit".
+	if profile, err := resolveProfile(c, c.Input("profile")); err == nil && profile != "" {
+		if owner, ok := profileInUse(c, profile); ok {
+			touchSession(c, owner)
+			return map[string]any{
+				"session_id": owner,
+				"profile":    profile,
+				"reused":     true,
+				"note":       "This profile already has a live browser; reusing it instead of opening a second one. Pass this session_id to run/screenshot/etc.",
+			}, nil
+		}
+	}
+
 	// Enforce the live-session cap (count valid, still-running sessions).
 	// listSessions already sweeps dead ones, so a browser that crashed or was
 	// killed no longer counts against the cap. cap == 0 means unlimited.
@@ -262,7 +278,10 @@ func openSession(c *connector.Ctx) (any, error) {
 		args = append(args, "--headless=new")
 	}
 	if isCloakEngine(b) {
-		args = append(args, cloakArgs(c)...)
+		args = append(args, cloakArgsFor(c, profile)...)
+	}
+	if c.CfgBool("in_process_iframes") {
+		args = append(args, "--disable-site-isolation-trials", "--disable-features=IsolateOrigins,site-per-process")
 	}
 	if len(exts) > 0 {
 		joined := strings.Join(exts, ",")
@@ -694,6 +713,7 @@ func readMeta(dir, id string) (sessionMeta, error) {
 // it. Anonymous sessions (empty Profile) keep the original sweep behavior.
 func removeSession(dir string, m sessionMeta) {
 	_ = os.Remove(metaPath(dir, m.ID))
+	_ = os.Remove(pointerPath(dir, m.ID))
 	if m.Profile != "" {
 		return // named profile: keep the user-data dir so login persists
 	}

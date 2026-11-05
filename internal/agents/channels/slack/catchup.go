@@ -54,6 +54,14 @@ func (s *Channel) lastSeenTS(sessionID, channelID, threadTS string) string {
 	return b.LastSeenTS
 }
 
+// threadCatchUpOn reports whether a mention turn in an existing thread opens
+// with the catch-up block. Off by default (enabled is the bot's opt-in), but
+// always on in a thread the agent listens to: it heard every reply there,
+// and a held one merged into this mention would otherwise never reach it.
+func threadCatchUpOn(enabled, listening bool) bool {
+	return enabled || listening
+}
+
 // tsAfter is agentchannels.SlackTSAfter, short for the filters below.
 func tsAfter(a, b string) bool { return agentchannels.SlackTSAfter(a, b) }
 

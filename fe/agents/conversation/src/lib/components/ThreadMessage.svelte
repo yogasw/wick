@@ -17,6 +17,8 @@
   import { isSystemEventKind } from "../systemEvents.js";
   import SystemEventChip from "./system/SystemEventChip.svelte";
   import RemoteQueueChip from "./RemoteQueueChip.svelte";
+  import HeardMessage from "./HeardMessage.svelte";
+  import ListenCountdown from "./ListenCountdown.svelte";
   import InputRequestCard from "./system/InputRequestCard.svelte";
   import ProviderFailoverCard from "./system/ProviderFailoverCard.svelte";
   import ActionCard from "./system/ActionCard.svelte";
@@ -43,7 +45,7 @@
   import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
   import { renderWithSourceTags } from "../sourceTags.js";
   import { splitWickPreamble } from "../wickPreamble.js";
-  import type { ListenHold } from "../listenHolds.js";
+  import type { HeardStatus, ListenHold } from "../listenHolds.js";
   import { delayText } from "../api/listen.js";
   import HoverCard from "./HoverCard.svelte";
   import { splitReactMarker, emojiGlyph } from "../reactMarker.js";
@@ -94,13 +96,17 @@
     laterAnswer?: boolean;
     /** The Slack listen / auto-reply hold this user turn came from. */
     listenHold?: ListenHold;
+    /** A heard Slack reply (thread_heard): whether the agent read it yet. */
+    heardStatus?: HeardStatus;
+    /** Where a heard reply sits in a run by one author. */
+    heardRun?: { first: boolean; last: boolean };
     /** A group thread: the speaker row carries the clock and this (the
         "open in …'s chat" link) instead of each taking a line of its own. */
     speakerAside?: Snippet;
     /** Emoji a later reply's [react :x:] marker put on this user turn. */
     reactions?: string[];
   };
-  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, speakerAside, reactions = [] }: Props = $props();
+  let { turn, teammatesHidden = false, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false, laterAnswer = false, listenHold, heardStatus, heardRun, speakerAside, reactions = [] }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -246,6 +252,11 @@
   });
   let stampEl: HTMLSpanElement | undefined = $state();
   let stampHover = $state(false);
+  /* The turn a hold became, once its replies are already in the thread as
+     heard messages: a line saying the agent read them, the prompt it got
+     folded behind it. */
+  const readLine = $derived(isUser && (listenHold?.heard ?? 0) > 0);
+  let showListenPrompt = $state(false);
 
   /* A hold that never reached the agent: the server's reason, short. */
   const holdProblem = $derived(
@@ -614,7 +625,11 @@
   );
 </script>
 
-{#if isSystem}
+{#if turn.kind === "thread_heard"}
+  <HeardMessage {turn} status={heardStatus} first={heardRun?.first ?? true} last={heardRun?.last ?? true} />
+{:else if turn.kind === "listen_held" && turn.extras?.state === "held"}
+  <ListenCountdown {turn} agentName={agent?.name ?? ""} />
+{:else if isSystem}
   <div class="flex justify-center py-1">
     <div class="flex flex-col items-center gap-1 max-w-full">
       {#if turn.kind === "interrupted"}
@@ -783,6 +798,13 @@
         <FoldToggle open={cardOpen} testid="card-fold" onclick={() => (cardOpen = !cardOpen)} />
       {/if}
     </div>
+  </div>
+{:else if readLine && !showListenPrompt}
+  <div data-testid="listen-read-line" class="flex items-center gap-2 py-1 text-[11px] text-black-600 dark:text-black-500">
+    <span class="h-px flex-1 bg-white-300 dark:bg-navy-600"></span>
+    <span class="min-w-0 truncate">✓ {agent?.name || "The agent"} read {listenHold?.heard === 1 ? "1 reply" : `${listenHold?.heard} replies`}{listenHold?.heldFor ? ` · held ${listenHold.heldFor}` : ""}</span>
+    <button type="button" class="shrink-0 underline hover:no-underline" onclick={() => (showListenPrompt = true)}>Show prompt</button>
+    <span class="h-px flex-1 bg-white-300 dark:bg-navy-600"></span>
   </div>
 {:else if isUser}
   <!-- Only the bubble the user just sent (optimistic local turn) slides in;
