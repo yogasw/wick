@@ -1,21 +1,10 @@
 name: PR Tests
 
 on:
-  # Auto-run on every PR is DISABLED, and the local pre-push gate
-  # (.githooks/pre-push) is off too. Every push to develop runs this
-  # instead: the release pipeline used to be the first place a race or a
-  # tag lint failure showed up, failing the release itself. To re-enable
-  # per-PR CI, uncomment the pull_request block below.
-  push:
-    branches:
-      - develop
-    paths:
-      - '**.go'
-      - '**.templ'
-      - 'go.mod'
-      - 'go.sum'
-      - 'fe/**'
-      - '.github/workflows/pr-tests.yml'
+  # Auto-run on every PR is DISABLED — the mandatory test gate moved to
+  # local pre-push (.githooks/pre-push) + the release pipeline. Kept as a
+  # manual escape hatch (run from the Actions tab). To re-enable per-PR CI,
+  # delete workflow_dispatch and uncomment the pull_request block below.
   workflow_dispatch:
   # pull_request:
   #   types: [opened, synchronize, reopened]
@@ -28,11 +17,6 @@ on:
   #     - 'go.sum'
   #     - 'fe/**'
   #     - '.github/workflows/pr-tests.yml'
-
-# A newer push to develop supersedes the run still going for the last one.
-concurrency:
-  group: pr-tests-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   # Detect which area changed so the Go and FE jobs only run when their
@@ -138,18 +122,8 @@ jobs:
 
       - name: Run race detector on changed packages
         run: |
-          if [ -n "${{ github.base_ref }}" ]; then
-            base="origin/${{ github.base_ref }}"
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" 2>/dev/null || true
-          else
-            # A push: what it added on top of the previous tip. A new
-            # branch (all-zero before) or a force-push past it has no
-            # usable before, so the last commit stands in.
-            base="${{ github.event.before }}"
-            if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-              base="HEAD~1"
-            fi
-          fi
+          base="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" 2>/dev/null || true
           # Map changed .go files -> their package import paths.
           changed=$(git diff --name-only "$base"...HEAD -- '*.go' \
             | xargs -r -n1 dirname | sort -u \
