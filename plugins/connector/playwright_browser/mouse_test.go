@@ -147,3 +147,20 @@ func TestValidateWaitActions(t *testing.T) {
 		t.Fatalf("valid wait_for_change rejected: %v", err)
 	}
 }
+
+func TestValidateWaitForTextFresh(t *testing.T) {
+	a := action{Action: "wait_for_text", Text: "Total", Fresh: true, IncludeValues: true}
+	if err := validateActionArgs(0, a); err != nil {
+		t.Fatalf("fresh/include_values rejected: %v", err)
+	}
+}
+
+func TestTextIsAsHasText(t *testing.T) {
+	sel, want, ok := textIsAsHasText("a:text-is('OK')")
+	if !ok || sel != "a:has-text('OK')" || want != "OK" {
+		t.Fatalf("got %q %q %v", sel, want, ok)
+	}
+	if _, _, ok := textIsAsHasText("button:has-text('Back')"); ok {
+		t.Fatal("has-text rewritten")
+	}
+}

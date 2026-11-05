@@ -199,6 +199,10 @@ type action struct {
 	OnlyInteractive bool `json:"only_interactive,omitempty"`
 	OnlyAdded       bool `json:"only_added,omitempty"`
 	Compact         bool `json:"compact,omitempty"`
+	// wait_for_text: Fresh ignores matches already on screen at the start;
+	// IncludeValues (also wait_for_change / observe) adds field values.
+	Fresh         bool `json:"fresh,omitempty"`
+	IncludeValues bool `json:"include_values,omitempty"`
 	// wait_for_text / wait_for_change / observe.
 	Pattern       string `json:"pattern,omitempty"` // regex (wait_for_text)
 	TimeoutMS     int    `json:"timeout_ms,omitempty"`

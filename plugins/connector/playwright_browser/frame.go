@@ -257,34 +257,146 @@ func round1(v float64) float64 { return math.Round(v*10) / 10 }
 // matches count, so a hidden twin earlier in the DOM (a picker's template
 // button, an offscreen copy) is skipped.
 func locateInFrame(f playwright.Frame, a action) playwright.Locator {
+	return locate(f, a, " >> visible=true").First()
+}
+
+// rawLocator is locateInFrame without the visibility filter: the candidates
+// boxFromDOM measures itself when Playwright's actionability check gives up.
+func rawLocator(f playwright.Frame, a action) playwright.Locator {
+	return locate(f, a, "")
+}
+
+func locate(f playwright.Frame, a action, filter string) playwright.Locator {
 	if sel := strings.TrimSpace(a.Selector); sel != "" {
-		return f.Locator(sel + " >> visible=true").First()
+		return f.Locator(sel + filter)
 	}
 	q := strings.ReplaceAll(a.Text, `"`, `\"`)
-	loc := f.Locator(`text="` + q + `" >> visible=true`).First()
+	loc := f.Locator(`text="` + q + `"` + filter)
 	if n, err := loc.Count(); err == nil && n > 0 {
 		return loc
 	}
-	return f.Locator(`text=` + q + ` >> visible=true`).First()
+	return f.Locator(`text=` + q + filter)
 }
 
-// elementBox scrolls the element into view and returns its page-viewport
-// box. When the actionability wait fails (an overlay on top, an element that
-// keeps animating, a non-standard control), the box is read directly so the
-// caller can still click its coordinates like a hand would.
-func elementBox(loc playwright.Locator) (*playwright.Rect, error) {
-	scrollErr := loc.ScrollIntoViewIfNeeded(playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(3000)})
-	box, err := loc.BoundingBox(playwright.LocatorBoundingBoxOptions{Timeout: playwright.Float(2000)})
-	if err != nil {
-		if scrollErr != nil {
-			return nil, fmt.Errorf("find element: %w", scrollErr)
+// findBox returns the page-viewport box to click for the action's element.
+// It first asks Playwright for the visible match (scrolled into view, ~1.5s
+// in total). When that is not actionable in time (a zero-size anchor around
+// its label, an overlay on top, a control that keeps animating), it measures
+// the matching elements itself (see boxFromDOM) and clicks the first one that
+// is painted, so no coordinates have to be passed.
+func findBox(f playwright.Frame, a action) (*playwright.Rect, string, error) {
+	loc := locateInFrame(f, a)
+	_ = loc.ScrollIntoViewIfNeeded(playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(1000)})
+	box, err := loc.BoundingBox(playwright.LocatorBoundingBoxOptions{Timeout: playwright.Float(500)})
+	if err == nil && box != nil && box.Width >= 1 && box.Height >= 1 {
+		return box, "", nil
+	}
+	b, derr := boxFromDOM(f, rawLocator(f, a), "")
+	if derr == nil {
+		return b, "dom_box", nil
+	}
+	// a:text-is('OK') only matches the DEEPEST element holding the text, so
+	// it finds nothing when the label sits in a <span> inside the <a>. Retry
+	// as :has-text and keep only elements whose whole text is exactly it.
+	if sel, want, ok := textIsAsHasText(a.Selector); ok {
+		b, err2 := boxFromDOM(f, f.Locator(sel), want)
+		if err2 == nil {
+			return b, "dom_box_has_text", nil
 		}
-		return nil, fmt.Errorf("element box: %w", err)
+		derr = fmt.Errorf("%v; as %s: %v", derr, sel, err2)
 	}
-	if box == nil || box.Width < 1 || box.Height < 1 {
-		return nil, fmt.Errorf("element is not visible")
+	if err == nil {
+		return nil, "", fmt.Errorf("element not visible; DOM fallback: %v", derr)
 	}
-	return box, nil
+	return nil, "", fmt.Errorf("element not actionable (%v); DOM fallback: %v", err, derr)
+}
+
+// textIsAsHasText rewrites the first :text-is('X') in sel to :has-text('X')
+// and returns X, for the exact-text check boxFromDOM then applies.
+func textIsAsHasText(sel string) (string, string, bool) {
+	i := strings.Index(sel, ":text-is(")
+	if i < 0 {
+		return "", "", false
+	}
+	rest := sel[i+len(":text-is("):]
+	j := strings.Index(rest, ")")
+	if j < 0 {
+		return "", "", false
+	}
+	want := strings.Trim(strings.TrimSpace(rest[:j]), `'"`)
+	return sel[:i] + ":has-text(" + rest[:j] + ")" + rest[j+1:], want, true
+}
+
+// boxJS scrolls an element to the middle of its frame and returns its box,
+// or, when the element itself has no size (an inline wrapper whose children
+// are positioned), the union of its painted descendants. Frame-local CSS
+// pixels plus the frame viewport, for frameOffset.
+const boxJS = `(el, want) => {
+  if (want && (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ') !== want) return null;
+  const st = getComputedStyle(el);
+  if (st.display === 'none' || st.visibility === 'hidden') return null;
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  let r = el.getBoundingClientRect();
+  if (r.width < 1 || r.height < 1) {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const c of el.querySelectorAll('*')) {
+      const q = c.getBoundingClientRect();
+      if (q.width < 1 || q.height < 1) continue;
+      x1 = Math.min(x1, q.left); y1 = Math.min(y1, q.top);
+      x2 = Math.max(x2, q.right); y2 = Math.max(y2, q.bottom);
+    }
+    if (x1 === Infinity) return null;
+    r = {left: x1, top: y1, width: x2 - x1, height: y2 - y1};
+  }
+  return {x: r.left, y: r.top, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight};
+}`
+
+// boxFromDOM measures up to ten matches and returns the first painted one,
+// mapped to page-viewport pixels.
+// want, when set, keeps only elements whose whole text equals it.
+func boxFromDOM(f playwright.Frame, raw playwright.Locator, want string) (*playwright.Rect, error) {
+	// Element handles, not raw.Nth(i).Evaluate: the locator path waits on
+	// the same resolution that just timed out, the handles are already there.
+	els, err := raw.ElementHandles()
+	if err != nil {
+		return nil, err
+	}
+	n := len(els)
+	if n == 0 {
+		return nil, fmt.Errorf("no element matches")
+	}
+	defer func() {
+		for _, el := range els {
+			_ = el.Dispose()
+		}
+	}()
+	var lastErr error
+	for i := 0; i < min(n, 10); i++ {
+		v, err := els[i].Evaluate(boxJS, want)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		x, _ := toFloat(m["x"])
+		y, _ := toFloat(m["y"])
+		w, _ := toFloat(m["w"])
+		h, _ := toFloat(m["h"])
+		vw, _ := toFloat(m["vw"])
+		vh, _ := toFloat(m["vh"])
+		if w < 1 || h < 1 {
+			continue
+		}
+		ox, oy, sx, sy := frameOffset(f, vw, vh)
+		return &playwright.Rect{X: ox + x*sx, Y: oy + y*sy, Width: w * sx, Height: h * sy}, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("%d matches, none measurable: %w", n, lastErr)
+	}
+	return nil, fmt.Errorf("%d matches, none painted", n)
 }
 
 // clickBox clicks a random point in the middle half of box with the natural
@@ -314,11 +426,15 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	box, err := elementBox(locateInFrame(f, a))
+	box, via, err := findBox(f, a)
 	if err != nil {
 		return nil, err
 	}
-	return clickBox(page, env, a, box)
+	res, err := clickBox(page, env, a, box)
+	if err == nil && via != "" {
+		res["fallback"] = via
+	}
+	return res, err
 }
 
 // frameType clicks an input in the frame like a hand, then types value one
@@ -334,13 +450,16 @@ func frameType(page playwright.Page, env mouseEnv, a action, clear bool) (any, e
 		return nil, err
 	}
 	loc := locateInFrame(f, a)
-	box, err := elementBox(loc)
+	box, via, err := findBox(f, a)
 	if err != nil {
 		return nil, err
 	}
 	res, err := clickBox(page, env, a, box)
 	if err != nil {
 		return nil, err
+	}
+	if via != "" {
+		res["fallback"] = via
 	}
 	if clear {
 		if err := loc.Fill(""); err != nil {

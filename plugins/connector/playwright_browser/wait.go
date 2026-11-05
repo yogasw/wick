@@ -52,14 +52,29 @@ func waitTimeout(ms int) time.Duration {
 	return time.Duration(min(ms, maxWaitMS)) * time.Millisecond
 }
 
-const scopeTextJS = `(sel) => {
-  const el = sel ? document.querySelector(sel) : document.body;
-  return el ? (el.innerText || '') : null;
+// scopeTextJS returns the visible text of the scope; with values, the current
+// value of every input, textarea and select in it follows, one per line
+// ("<label>: <value>"), since innerText never includes what a field holds.
+const scopeTextJS = `(o) => {
+  const el = o.sel ? document.querySelector(o.sel) : document.body;
+  if (!el) return null;
+  let t = el.innerText || '';
+  if (o.values) {
+    for (const f of el.querySelectorAll('input,textarea,select')) {
+      if (f.type === 'password' || f.type === 'hidden') continue;
+      const v = f.tagName === 'SELECT' ? (f.selectedOptions[0] || {}).text || f.value : f.value;
+      if (!v) continue;
+      const label = f.getAttribute('aria-label') || f.getAttribute('placeholder') || f.name || f.id || f.tagName.toLowerCase();
+      t += '\n' + label + ': ' + v;
+    }
+  }
+  return t;
 }`
 
-// scopeText reads the visible text of selector (or the body) in f.
-func scopeText(f playwright.Frame, selector string) (string, error) {
-	v, err := f.Evaluate(scopeTextJS, selector)
+// scopeText reads the visible text of selector (or the body) in f, plus the
+// field values when values is set.
+func scopeText(f playwright.Frame, selector string, values bool) (string, error) {
+	v, err := f.Evaluate(scopeTextJS, map[string]any{"sel": selector, "values": values})
 	if err != nil {
 		return "", err
 	}
@@ -129,13 +144,34 @@ func waitForText(page playwright.Page, a action) (any, error) {
 			return nil, fmt.Errorf("pattern: %w", err)
 		}
 	}
+	match := func(l string) bool {
+		return (re != nil && re.MatchString(l)) || (re == nil && strings.Contains(l, a.Text))
+	}
+	sel := strings.TrimSpace(a.Selector)
+	// fresh: lines already on screen when the step starts do not count, only
+	// a new occurrence does (a bot reply that repeats an earlier line too).
+	seen := map[string]int{}
+	if a.Fresh {
+		if txt, err := scopeText(f, sel, a.IncludeValues); err == nil {
+			for _, l := range textLines(txt) {
+				if match(l) {
+					seen[l]++
+				}
+			}
+		}
+	}
 	start := time.Now()
 	deadline := start.Add(waitTimeout(a.TimeoutMS))
 	for {
-		txt, err := scopeText(f, strings.TrimSpace(a.Selector))
+		txt, err := scopeText(f, sel, a.IncludeValues)
 		if err == nil {
+			count := map[string]int{}
 			for _, l := range textLines(txt) {
-				if (re != nil && re.MatchString(l)) || (re == nil && strings.Contains(l, a.Text)) {
+				if !match(l) {
+					continue
+				}
+				count[l]++
+				if count[l] > seen[l] {
 					return map[string]any{"matched": true, "line": l, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
 				}
 			}
@@ -155,7 +191,7 @@ func waitForChange(page playwright.Page, a action) (any, error) {
 		return nil, err
 	}
 	sel := strings.TrimSpace(a.Selector)
-	base, err := scopeText(f, sel)
+	base, err := scopeText(f, sel, a.IncludeValues)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +199,7 @@ func waitForChange(page playwright.Page, a action) (any, error) {
 	deadline := start.Add(waitTimeout(a.TimeoutMS))
 	for {
 		time.Sleep(pollEvery)
-		now, err := scopeText(f, sel)
+		now, err := scopeText(f, sel, a.IncludeValues)
 		if err == nil && now != base {
 			added, removed := lineDiff(textLines(base), textLines(now))
 			return map[string]any{"changed": true, "added": added, "removed": removed, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
@@ -191,7 +227,7 @@ func observe(page playwright.Page, env mouseEnv, a action) (any, error) {
 	}
 	start := time.Now()
 	deadline := start.Add(waitTimeout(a.TimeoutMS))
-	last, err := scopeText(f, sel)
+	last, err := scopeText(f, sel, a.IncludeValues)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +239,7 @@ func observe(page playwright.Page, env mouseEnv, a action) (any, error) {
 			break
 		}
 		time.Sleep(pollEvery)
-		now, err := scopeText(f, sel)
+		now, err := scopeText(f, sel, a.IncludeValues)
 		if err != nil {
 			return nil, err
 		}
