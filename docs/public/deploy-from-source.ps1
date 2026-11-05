@@ -138,7 +138,7 @@ function Setup-WickCli {
     $wv = 'latest'; $mod = Join-Path $Dir 'go.mod'
     if (Test-Path $mod) { $m = Select-String -Path $mod -Pattern '^\s*github.com/yogasw/wick (\S+)' | Select-Object -First 1; if ($m) { $wv = $m.Matches[0].Groups[1].Value } }
     Say "install wick CLI $wv"
-    Run go @('install', "github.com/yogasw/wick@v1.18.0")
+    Run go @('install', "github.com/yogasw/wick@v1.18.1")
   } else { Write-Host "   wick CLI ok ($((Get-Command wick).Source))" }
 }
 
