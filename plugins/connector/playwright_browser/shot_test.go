@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -62,8 +64,13 @@ func TestCheckSaveDir(t *testing.T) {
 	if err := checkSaveDir("relative/dir"); err == nil {
 		t.Fatal("relative path accepted")
 	}
-	if err := checkSaveDir("/nonexistent-dir-for-test"); err == nil {
-		t.Fatal("missing dir accepted")
+	// A missing directory is fine (shotResult creates it); a file is not.
+	f := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSaveDir(filepath.Join(f, "sub")); err == nil {
+		t.Fatal("path under a regular file accepted")
 	}
 }
 

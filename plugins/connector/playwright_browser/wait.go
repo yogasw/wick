@@ -38,6 +38,7 @@ type obsState struct {
 // waitFrame is the frame a wait/observe action reads: the one named by
 // frame_url_contains / frame_index, else the main page.
 func waitFrame(page playwright.Page, a action) (playwright.Frame, error) {
+	a = a.withFrameAlias()
 	if a.FrameIndex == nil && strings.TrimSpace(a.FrameURLContains) == "" {
 		return page.MainFrame(), nil
 	}
@@ -135,7 +136,7 @@ func waitForText(page playwright.Page, a action) (any, error) {
 		if err == nil {
 			for _, l := range textLines(txt) {
 				if (re != nil && re.MatchString(l)) || (re == nil && strings.Contains(l, a.Text)) {
-					return map[string]any{"matched": true, "line": l, "waited_ms": time.Since(start).Milliseconds()}, nil
+					return map[string]any{"matched": true, "line": l, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
 				}
 			}
 		}
@@ -165,7 +166,7 @@ func waitForChange(page playwright.Page, a action) (any, error) {
 		now, err := scopeText(f, sel)
 		if err == nil && now != base {
 			added, removed := lineDiff(textLines(base), textLines(now))
-			return map[string]any{"changed": true, "added": added, "removed": removed, "waited_ms": time.Since(start).Milliseconds()}, nil
+			return map[string]any{"changed": true, "added": added, "removed": removed, "frame_url": f.URL(), "waited_ms": time.Since(start).Milliseconds()}, nil
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("no change within %dms", time.Since(start).Milliseconds())
@@ -253,7 +254,8 @@ func observe(page playwright.Page, env mouseEnv, a action) (any, error) {
 	if len(changed) > maxChangedItems {
 		changed = changed[:maxChangedItems]
 	}
-	return map[string]any{
+	return trimView(map[string]any{
+		"frame_url": f.URL(),
 		"first":     !had,
 		"settled":   settled,
 		"waited_ms": time.Since(start).Milliseconds(),
@@ -261,7 +263,7 @@ func observe(page playwright.Page, env mouseEnv, a action) (any, error) {
 		"added":     capList(added, maxChangedLines),
 		"removed":   capList(removed, maxChangedLines),
 		"items":     changed,
-	}, nil
+	}, a), nil
 }
 
 // frameAction points frameText at the frame already resolved for observe:

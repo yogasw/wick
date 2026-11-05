@@ -40,6 +40,10 @@ const (
 // previous one ended instead of jumping.
 var lastPos sync.Map // session id → point
 
+// sessionViewport keeps the size set_viewport pinned per live session, so
+// every later run re-applies it (see runActionsInContext).
+var sessionViewport sync.Map // session id → [2]int{width, height}
+
 // mouseEnv carries what mouse actions need beyond the page.
 type mouseEnv struct {
 	key    string // live session id; "" for a throwaway browser

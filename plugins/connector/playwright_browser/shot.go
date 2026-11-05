@@ -114,9 +114,11 @@ func takeShot(page playwright.Page, selector string, fullPage bool, o shotOpts) 
 	return page.Screenshot(opts)
 }
 
-// checkSaveDir accepts an empty value, or an existing absolute directory under
-// the app data tree (~/.<app>/...): agents' working folders live there, and
-// the plugin must not become a way to drop files anywhere on the host.
+// checkSaveDir accepts an empty value, or an absolute directory under the app
+// data tree (~/.<app>/...): agents' working folders live there, and the plugin
+// must not become a way to drop files anywhere on the host. The directory may
+// not exist yet (shotResult creates it); its nearest existing ancestor is what
+// gets checked, after resolving symlinks.
 func checkSaveDir(dir string) error {
 	if dir == "" {
 		return nil
@@ -124,12 +126,23 @@ func checkSaveDir(dir string) error {
 	if !filepath.IsAbs(dir) {
 		return fmt.Errorf("save_dir must be an absolute path")
 	}
-	real, err := filepath.EvalSymlinks(dir)
+	clean := filepath.Clean(dir)
+	existing := clean
+	for {
+		if _, err := os.Stat(existing); err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return fmt.Errorf("save_dir %q has no existing parent", dir)
+		}
+		existing = parent
+	}
+	real, err := filepath.EvalSymlinks(existing)
 	if err != nil {
 		return fmt.Errorf("save_dir: %w", err)
 	}
-	st, err := os.Stat(real)
-	if err != nil || !st.IsDir() {
+	if st, err := os.Stat(real); err != nil || !st.IsDir() {
 		return fmt.Errorf("save_dir %q is not a directory", dir)
 	}
 	if root := appDataRoot(); root == "" || !strings.HasPrefix(real+string(os.PathSeparator), root+string(os.PathSeparator)) {
@@ -159,6 +172,9 @@ func shotResult(raw []byte, format, saveDir string) (map[string]any, error) {
 	ext := ".png"
 	if format == "jpeg" {
 		ext = ".jpg"
+	}
+	if err := os.MkdirAll(saveDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create save_dir: %w", err)
 	}
 	path := filepath.Join(saveDir, fmt.Sprintf("shot-%s%s", time.Now().Format("20060102-150405.000"), ext))
 	if err := os.WriteFile(path, raw, 0o644); err != nil {

@@ -190,6 +190,15 @@ type action struct {
 	FrameURLContains string `json:"frame_url_contains,omitempty"`
 	FrameIndex       *int   `json:"frame_index,omitempty"`
 	Text             string `json:"text,omitempty"` // frame_click by visible text
+	// Frame is an alias of frame_url_contains.
+	Frame string `json:"frame,omitempty"`
+	// frame_type / frame_fill: [min,max] ms between keys.
+	PerCharDelayMS []int `json:"per_char_delay_ms,omitempty"`
+	// frame_text / observe size knobs.
+	MaxItems        int  `json:"max_items,omitempty"`
+	OnlyInteractive bool `json:"only_interactive,omitempty"`
+	OnlyAdded       bool `json:"only_added,omitempty"`
+	Compact         bool `json:"compact,omitempty"`
 	// wait_for_text / wait_for_change / observe.
 	Pattern       string `json:"pattern,omitempty"` // regex (wait_for_text)
 	TimeoutMS     int    `json:"timeout_ms,omitempty"`
@@ -220,7 +229,7 @@ var knownActions = map[string]bool{
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
 	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
 	"frame_eval": true, "frame_text": true, "frame_click": true,
-	"set_viewport":  true,
+	"set_viewport": true, "frame_type": true, "frame_fill": true,
 	"wait_for_text": true, "wait_for_change": true, "observe": true,
 	// wait
 	"wait_for": true, "wait": true,
@@ -322,6 +331,16 @@ func validateActionArgs(i int, a action) error {
 	case "set_viewport":
 		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {
 			return fmt.Errorf("action[%d] set_viewport: width and height must be between 200 and 7680x4320", i)
+		}
+	case "frame_type", "frame_fill":
+		if strings.TrimSpace(a.Selector) == "" && strings.TrimSpace(a.Text) == "" {
+			return fmt.Errorf("action[%d] %s: selector or text is required", i, a.Action)
+		}
+		if a.Value == "" {
+			return fmt.Errorf("action[%d] %s: value is required", i, a.Action)
+		}
+		if d := a.PerCharDelayMS; d != nil && (len(d) != 2 || d[0] < 0 || d[1] < d[0] || d[1] > 2000) {
+			return fmt.Errorf("action[%d] %s: per_char_delay_ms must be [min,max] with 0 <= min <= max <= 2000", i, a.Action)
 		}
 	case "frame_eval":
 		return need("script", a.Script)
@@ -574,4 +593,12 @@ func clip(s string) string {
 // shotOpts reads a screenshot action's clip/type/quality.
 func (a action) shotOpts() shotOpts {
 	return shotOpts{Clip: a.Clip, Format: strings.ToLower(strings.TrimSpace(a.Type)), Quality: a.Quality}
+}
+
+// withFrameAlias folds the "frame" shorthand into frame_url_contains.
+func (a action) withFrameAlias() action {
+	if a.FrameURLContains == "" && strings.TrimSpace(a.Frame) != "" {
+		a.FrameURLContains = strings.TrimSpace(a.Frame)
+	}
+	return a
 }

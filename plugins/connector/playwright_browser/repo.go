@@ -514,6 +514,14 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 	page.SetDefaultTimeout(actionTimeout(c))
 	page.SetDefaultNavigationTimeout(navTimeout(c))
 
+	// A viewport set earlier in this session is an emulation tied to the CDP
+	// connection, so it lapses when the previous run disconnected. Re-apply it
+	// before the actions so coordinates stay where the agent measured them.
+	if v, ok := sessionViewport.Load(strings.TrimSpace(c.Input("session_id"))); ok {
+		wh := v.([2]int)
+		_ = page.SetViewportSize(wh[0], wh[1])
+	}
+
 	var cap *capture
 	if boolInput(c, "record_request") {
 		cap = newCapture(c.Input("record_url_pattern"), boolInput(c, "record_include_assets"))
@@ -570,13 +578,13 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	case "type":
 		return nil, page.Type(a.Selector, a.Value)
 	case "press":
-		// Playwright's Press needs a selector; default to the body so the LLM
-		// can send global keys (Enter, Escape) without naming a target.
-		selector := a.Selector
-		if selector == "" {
-			selector = "body"
+		// Without a selector the key goes to whatever has focus (an input
+		// inside an iframe included). Pressing on "body" would first move the
+		// focus there and drop the key outside the field.
+		if a.Selector == "" {
+			return nil, page.Keyboard().Press(a.Key)
 		}
-		return nil, page.Press(selector, a.Key)
+		return nil, page.Press(a.Selector, a.Key)
 	case "wait_for":
 		_, err := page.WaitForSelector(a.Selector)
 		return nil, err
@@ -593,6 +601,9 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	case "set_viewport":
 		if err := page.SetViewportSize(a.Width, a.Height); err != nil {
 			return nil, err
+		}
+		if env.key != "" {
+			sessionViewport.Store(env.key, [2]int{a.Width, a.Height})
 		}
 		return map[string]any{"width": a.Width, "height": a.Height}, nil
 	case "content":
@@ -698,10 +709,21 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		return waitForChange(page, a)
 	case "observe":
 		return observe(page, env, a)
+	case "frame_type":
+		return frameType(page, env, a, false)
+	case "frame_fill":
+		return frameType(page, env, a, true)
 	case "frame_eval":
 		return frameEval(page, a)
 	case "frame_text":
-		return frameText(page, a)
+		if a.OnlyAdded {
+			return observe(page, env, a)
+		}
+		out, err := frameText(page, a)
+		if m, ok := out.(map[string]any); ok && err == nil {
+			return trimView(m, a), nil
+		}
+		return out, err
 	case "frame_click":
 		return frameClick(page, env, a)
 

@@ -18,6 +18,7 @@ import (
 // (0 = main), else the first frame whose URL (or iframe src) contains
 // frame_url_contains, else the first child frame.
 func pickFrame(page playwright.Page, a action) (playwright.Frame, error) {
+	a = a.withFrameAlias()
 	frames, srcs := listFrames(page)
 	if a.FrameIndex != nil {
 		i := *a.FrameIndex
@@ -27,10 +28,16 @@ func pickFrame(page playwright.Page, a action) (playwright.Frame, error) {
 		return frames[i], nil
 	}
 	if want := strings.TrimSpace(a.FrameURLContains); want != "" {
-		for i, f := range frames {
-			if strings.Contains(f.URL(), want) || strings.Contains(srcs[i], want) {
-				return f, nil
+		// Child frames first: the main page's URL can carry the same words
+		// (a data: page, a query string naming the widget), and the caller
+		// asking by URL almost always means an iframe.
+		for i := 1; i < len(frames); i++ {
+			if strings.Contains(frames[i].URL(), want) || strings.Contains(srcs[i], want) {
+				return frames[i], nil
 			}
+		}
+		if strings.Contains(frames[0].URL(), want) {
+			return frames[0], nil
 		}
 		return nil, fmt.Errorf("no frame URL contains %q: %s", want, frameURLs(frames, srcs))
 	}
@@ -205,37 +212,84 @@ func frameText(page playwright.Page, a action) (any, error) {
 	return m, nil
 }
 
-func round1(v float64) float64 { return math.Round(v*10) / 10 }
-
-// frameClick finds the element by selector or visible text, scrolls it into
-// view, and clicks it with the natural mouse at a random point in the middle
-// half of its box (not dead centre every time, like a hand).
-func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
-	f, err := pickFrame(page, a)
-	if err != nil {
-		return nil, err
+// trimView applies the size knobs shared by frame_text and observe:
+// only_interactive drops the text, compact keeps the fields an agent clicks
+// with, max_items caps the list.
+func trimView(m map[string]any, a action) map[string]any {
+	if a.OnlyInteractive {
+		delete(m, "text")
+		delete(m, "added")
+		delete(m, "removed")
 	}
-	var loc playwright.Locator
-	if sel := strings.TrimSpace(a.Selector); sel != "" {
-		loc = f.Locator(sel).First()
-	} else {
-		// Exact text first: a substring match lands on the first label that
-		// merely mentions the word ("Pilih X" heading before the "X" button).
-		loc = f.GetByText(a.Text, playwright.FrameGetByTextOptions{Exact: playwright.Bool(true)}).First()
-		if n, err := loc.Count(); err != nil || n == 0 {
-			loc = f.GetByText(a.Text).First()
+	items, _ := m["items"].([]any)
+	if a.Compact {
+		for i, raw := range items {
+			it, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			c := map[string]any{"text": it["text"], "cx": it["cx"], "cy": it["cy"]}
+			for _, k := range []string{"value", "disabled", "checked", "offscreen"} {
+				if v, ok := it[k]; ok {
+					c[k] = v
+				}
+			}
+			if tag, _ := it["tag"].(string); tag == "input" || tag == "select" || tag == "textarea" {
+				c["tag"] = tag
+			}
+			items[i] = c
 		}
 	}
-	if err := loc.ScrollIntoViewIfNeeded(); err != nil {
-		return nil, fmt.Errorf("find element: %w", err)
+	if a.MaxItems > 0 && len(items) > a.MaxItems {
+		items = items[:a.MaxItems]
+		m["truncated"] = true
 	}
-	box, err := loc.BoundingBox()
+	if items != nil {
+		m["items"] = items
+	}
+	return m
+}
+
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
+
+// locateInFrame resolves the action's element in f: a CSS/Playwright
+// selector, or visible text (exact first, then substring). Only VISIBLE
+// matches count, so a hidden twin earlier in the DOM (a picker's template
+// button, an offscreen copy) is skipped.
+func locateInFrame(f playwright.Frame, a action) playwright.Locator {
+	if sel := strings.TrimSpace(a.Selector); sel != "" {
+		return f.Locator(sel + " >> visible=true").First()
+	}
+	q := strings.ReplaceAll(a.Text, `"`, `\"`)
+	loc := f.Locator(`text="` + q + `" >> visible=true`).First()
+	if n, err := loc.Count(); err == nil && n > 0 {
+		return loc
+	}
+	return f.Locator(`text=` + q + ` >> visible=true`).First()
+}
+
+// elementBox scrolls the element into view and returns its page-viewport
+// box. When the actionability wait fails (an overlay on top, an element that
+// keeps animating, a non-standard control), the box is read directly so the
+// caller can still click its coordinates like a hand would.
+func elementBox(loc playwright.Locator) (*playwright.Rect, error) {
+	scrollErr := loc.ScrollIntoViewIfNeeded(playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(3000)})
+	box, err := loc.BoundingBox(playwright.LocatorBoundingBoxOptions{Timeout: playwright.Float(2000)})
 	if err != nil {
+		if scrollErr != nil {
+			return nil, fmt.Errorf("find element: %w", scrollErr)
+		}
 		return nil, fmt.Errorf("element box: %w", err)
 	}
 	if box == nil || box.Width < 1 || box.Height < 1 {
 		return nil, fmt.Errorf("element is not visible")
 	}
+	return box, nil
+}
+
+// clickBox clicks a random point in the middle half of box with the natural
+// mouse (not dead centre every time, like a hand).
+func clickBox(page playwright.Page, env mouseEnv, a action, box *playwright.Rect) (map[string]any, error) {
 	rng := newRNG()
 	x := box.X + box.Width*(0.25+rng.Float64()*0.5)
 	y := box.Y + box.Height*(0.25+rng.Float64()*0.5)
@@ -250,5 +304,73 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 		res = map[string]any{}
 	}
 	res["box"] = map[string]any{"x": round1(box.X), "y": round1(box.Y), "w": round1(box.Width), "h": round1(box.Height)}
+	return res, nil
+}
+
+// frameClick finds the element by selector or visible text and clicks it
+// with the natural mouse.
+func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
+	f, err := pickFrame(page, a)
+	if err != nil {
+		return nil, err
+	}
+	box, err := elementBox(locateInFrame(f, a))
+	if err != nil {
+		return nil, err
+	}
+	return clickBox(page, env, a, box)
+}
+
+// frameType clicks an input in the frame like a hand, then types value one
+// key at a time with a random per-character delay. The keys go through the
+// page keyboard (CDP Input.dispatchKeyEvent), which the browser routes to
+// the focused element, inside the iframe included. clear (frame_fill) empties
+// the field first. When the field still does not hold the value afterwards
+// (a widget that swallowed the keys), the element's own keyboard path is
+// used as a fallback.
+func frameType(page playwright.Page, env mouseEnv, a action, clear bool) (any, error) {
+	f, err := pickFrame(page, a)
+	if err != nil {
+		return nil, err
+	}
+	loc := locateInFrame(f, a)
+	box, err := elementBox(loc)
+	if err != nil {
+		return nil, err
+	}
+	res, err := clickBox(page, env, a, box)
+	if err != nil {
+		return nil, err
+	}
+	if clear {
+		if err := loc.Fill(""); err != nil {
+			return nil, fmt.Errorf("clear field: %w", err)
+		}
+	}
+	lo, hi := 60, 180
+	if len(a.PerCharDelayMS) == 2 {
+		lo, hi = a.PerCharDelayMS[0], a.PerCharDelayMS[1]
+	}
+	rng := newRNG()
+	kb := page.Keyboard()
+	for _, r := range a.Value {
+		if err := kb.Type(string(r)); err != nil {
+			return nil, err
+		}
+		jitterSleep(rng, lo, hi-lo)
+	}
+	got, verr := loc.InputValue(playwright.LocatorInputValueOptions{Timeout: playwright.Float(1000)})
+	if verr == nil && !strings.Contains(got, a.Value) {
+		_ = loc.Fill("")
+		if err := loc.PressSequentially(a.Value, playwright.LocatorPressSequentiallyOptions{Delay: playwright.Float(float64(lo+hi) / 2)}); err != nil {
+			return nil, fmt.Errorf("type into field: %w", err)
+		}
+		got, verr = loc.InputValue(playwright.LocatorInputValueOptions{Timeout: playwright.Float(1000)})
+		res["fallback"] = "press_sequentially"
+	}
+	if verr == nil {
+		res["value"] = clip(got)
+	}
+	res["typed"] = len([]rune(a.Value))
 	return res, nil
 }
