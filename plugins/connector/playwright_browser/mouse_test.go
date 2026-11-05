@@ -141,9 +141,6 @@ func TestValidateWaitActions(t *testing.T) {
 	if err := validateActionArgs(0, action{Action: "wait_for_text", Pattern: "("}); err == nil {
 		t.Fatal("bad regex accepted")
 	}
-	if err := validateActionArgs(0, action{Action: "observe", TimeoutMS: maxWaitMS + 1}); err == nil {
-		t.Fatal("timeout over max accepted")
-	}
 	if err := validateActionArgs(0, action{Action: "wait_for_change", TimeoutMS: 5000}); err != nil {
 		t.Fatalf("valid wait_for_change rejected: %v", err)
 	}
@@ -189,5 +186,24 @@ func TestBaselineValidation(t *testing.T) {
 	}
 	if !needsBaseline([]action{{Action: "click"}, {Action: "wait_for_text", Fresh: true}}) || needsBaseline([]action{{Action: "wait_for_text"}}) {
 		t.Fatal("needsBaseline")
+	}
+}
+
+func TestClampWaitAndMainAlias(t *testing.T) {
+	a := action{Action: "wait_for_text", Text: "x", TimeoutMS: 90000}
+	clampWait(&a)
+	if a.TimeoutMS != maxWaitMS || a.Warning == "" {
+		t.Fatalf("not clamped: %+v", a)
+	}
+	if err := validateActionArgs(0, a); err != nil {
+		t.Fatalf("clamped action rejected: %v", err)
+	}
+	m := action{Frame: "main"}.withFrameAlias()
+	if m.FrameIndex == nil || *m.FrameIndex != 0 || m.FrameURLContains != "" {
+		t.Fatalf("main alias: %+v", m)
+	}
+	u := action{Frame: "example.com"}.withFrameAlias()
+	if u.FrameURLContains != "example.com" || u.FrameIndex != nil {
+		t.Fatalf("url alias: %+v", u)
 	}
 }

@@ -467,6 +467,8 @@ type stepResult struct {
 	OK     bool   `json:"ok"`
 	Error  string `json:"error,omitempty"`
 	Output any    `json:"output,omitempty"`
+	// Warning notes an adjustment made to the step (a clamped timeout).
+	Warning string `json:"warning,omitempty"`
 }
 
 // runActions executes the validated action list on a throwaway page in this
@@ -556,7 +558,7 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 	for i, a := range actions {
 		env.run.observeTrigger(page, a, i == 0)
 		out, err := execAction(page, a, env)
-		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out}
+		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out, Warning: a.Warning}
 		if err != nil {
 			res.Error = err.Error()
 			results = append(results, res)

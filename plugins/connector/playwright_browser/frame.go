@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/playwright-community/playwright-go"
 )
@@ -261,7 +262,26 @@ func round1(v float64) float64 { return math.Round(v*10) / 10 }
 // matches count, so a hidden twin earlier in the DOM (a picker's template
 // button, an offscreen copy) is skipped.
 func locateInFrame(f playwright.Frame, a action) playwright.Locator {
-	return locate(f, a, " >> visible=true").First()
+	return pickNth(locate(f, a, " >> visible=true"), a.Nth)
+}
+
+// pickNth narrows a locator to the nth match: nil = first, negative counts
+// from the end (-1 = last, e.g. the newest "View items" in a chat).
+func pickNth(loc playwright.Locator, nth *int) playwright.Locator {
+	if nth == nil || *nth == 0 {
+		return loc.First()
+	}
+	if *nth == -1 {
+		return loc.Last()
+	}
+	if *nth > 0 {
+		return loc.Nth(*nth)
+	}
+	n, err := loc.Count()
+	if err != nil || n+*nth < 0 {
+		return loc.Last()
+	}
+	return loc.Nth(n + *nth)
 }
 
 // rawLocator is locateInFrame without the visibility filter: the candidates
@@ -298,7 +318,7 @@ func locate(f playwright.Frame, a action, filter string) playwright.Locator {
 func findBox(f playwright.Frame, a action) (*playwright.Rect, string, error) {
 	loc := locateInFrame(f, a)
 	_ = loc.ScrollIntoViewIfNeeded(playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(1000)})
-	box, err := loc.BoundingBox(playwright.LocatorBoundingBoxOptions{Timeout: playwright.Float(500)})
+	box, err := settledBox(loc)
 	if err == nil && box != nil && box.Width >= 1 && box.Height >= 1 {
 		return box, "", nil
 	}
@@ -336,6 +356,29 @@ func textIsAsHasText(sel string) (string, string, bool) {
 	}
 	want := strings.Trim(strings.TrimSpace(rest[:j]), `'"`)
 	return sel[:i] + ":has-text(" + rest[:j] + ")" + rest[j+1:], want, true
+}
+
+// settledBox measures the element until two readings agree: after a scroll
+// a chat list can keep shifting (smooth scrolling, lazy-loaded messages),
+// and clicking the first reading landed on whatever moved into its place.
+func settledBox(loc playwright.Locator) (*playwright.Rect, error) {
+	opts := playwright.LocatorBoundingBoxOptions{Timeout: playwright.Float(500)}
+	prev, err := loc.BoundingBox(opts)
+	if err != nil || prev == nil {
+		return prev, err
+	}
+	for i := 0; i < 6; i++ {
+		time.Sleep(120 * time.Millisecond)
+		cur, err := loc.BoundingBox(opts)
+		if err != nil || cur == nil {
+			return prev, nil
+		}
+		if math.Abs(cur.X-prev.X) < 1 && math.Abs(cur.Y-prev.Y) < 1 && math.Abs(cur.Height-prev.Height) < 1 {
+			return cur, nil
+		}
+		prev = cur
+	}
+	return prev, nil
 }
 
 // boxJS scrolls an element to the middle of its frame and returns its box,

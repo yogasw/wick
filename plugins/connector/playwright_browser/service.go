@@ -190,7 +190,13 @@ type action struct {
 	FrameURLContains string `json:"frame_url_contains,omitempty"`
 	FrameIndex       *int   `json:"frame_index,omitempty"`
 	Text             string `json:"text,omitempty"` // frame_click by visible text
-	// Frame is an alias of frame_url_contains.
+	// Nth picks which visible match frame_click / frame_type use: 0 = first
+	// (default), 1 = second, -1 = last, -2 = second to last.
+	Nth *int `json:"nth,omitempty"`
+	// Warning is set by parseActions when it adjusted the step (a clamped
+	// timeout); it is reported on the step result, not read from input.
+	Warning string `json:"-"`
+	// Frame is an alias of frame_url_contains; "main" means the page itself.
 	Frame string `json:"frame,omitempty"`
 	// frame_type / frame_fill: [min,max] ms between keys.
 	PerCharDelayMS []int `json:"per_char_delay_ms,omitempty"`
@@ -269,7 +275,8 @@ func parseActions(c *connector.Ctx) ([]action, error) {
 		if !knownActions[name] {
 			return nil, fmt.Errorf("action[%d]: unknown action %q", i, name)
 		}
-		if err := validateActionArgs(i, a); err != nil {
+		clampWait(&actions[i])
+		if err := validateActionArgs(i, actions[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -607,10 +614,35 @@ func (a action) shotOpts() shotOpts {
 	return shotOpts{Clip: a.Clip, Format: strings.ToLower(strings.TrimSpace(a.Type)), Quality: a.Quality}
 }
 
-// withFrameAlias folds the "frame" shorthand into frame_url_contains.
+// withFrameAlias folds the "frame" shorthand into frame_url_contains, and
+// frame:"main" into frame_index 0 (the page itself).
 func (a action) withFrameAlias() action {
-	if a.FrameURLContains == "" && strings.TrimSpace(a.Frame) != "" {
-		a.FrameURLContains = strings.TrimSpace(a.Frame)
+	f := strings.TrimSpace(a.Frame)
+	switch {
+	case f == "":
+	case strings.EqualFold(f, "main"):
+		if a.FrameIndex == nil && a.FrameURLContains == "" {
+			zero := 0
+			a.FrameIndex = &zero
+		}
+	case a.FrameURLContains == "":
+		a.FrameURLContains = f
 	}
 	return a
+}
+
+// clampWait caps timeout_ms and until_stable_ms at maxWaitMS instead of
+// refusing the run: one over-long wait used to cancel every step before
+// anything ran. The step still runs and carries a warning.
+func clampWait(a *action) {
+	var notes []string
+	if a.TimeoutMS > maxWaitMS {
+		notes = append(notes, fmt.Sprintf("timeout_ms %d clamped to %d", a.TimeoutMS, maxWaitMS))
+		a.TimeoutMS = maxWaitMS
+	}
+	if a.UntilStableMS > maxWaitMS {
+		notes = append(notes, fmt.Sprintf("until_stable_ms %d clamped to %d", a.UntilStableMS, maxWaitMS))
+		a.UntilStableMS = maxWaitMS
+	}
+	a.Warning = strings.Join(notes, "; ")
 }
