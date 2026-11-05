@@ -97,6 +97,9 @@ type Config struct {
 	// this name; adding ForceDefaultProfile pins EVERY session to it.
 	DefaultProfile      string `wick:"group=Live sessions;desc=Named profile used when session_open is called without a profile argument. Set this so logins persist by default instead of being swept on close. Letters, digits, dash, underscore only. Leave empty to keep anonymous throwaway sessions as the default."`
 	ForceDefaultProfile bool   `wick:"bool;group=Live sessions;desc=Always use the default profile, ignoring any profile argument passed to session_open. Guarantees every session shares one identity. Requires a default profile to be set."`
+	// LockedProfiles guards logins that are costly to redo (a scanned QR, a
+	// 2FA device): profile_delete refuses these names outright.
+	LockedProfiles string `wick:"group=Live sessions;desc=Comma-separated profile names that profile_delete refuses to remove, so a hard-won login cannot be wiped by an agent. Example: wa-test, meta-admin. Clear the name here first to delete it."`
 
 	// Custom binary — rarely touched.
 	ExecutablePath string `wick:"group=Custom binary|Point at a non-bundled browser build. Most setups leave these empty.|collapsed;desc=Path to a custom browser binary to launch instead of the bundled one. Example: /usr/bin/google-chrome"`
@@ -171,7 +174,7 @@ type evalInput struct {
 
 // runInput is the argument schema for the "run" script-runner operation.
 type runInput struct {
-	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
+	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. REAL MOUSE (viewport pixels, reaches inside cross-origin iframes, human-like curved path + timing): mouse_move{x,y,steps?}, mouse_click{x,y,button?,delay_ms?,steps?}, mouse_wheel{delta_x?,delta_y?,steps?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
 	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
 	// Network-capture opt-in. Decided up front (before the actions run) so the
@@ -412,7 +415,7 @@ func Module() connector.Module {
 				connector.OpDestructive(
 					"profile_delete",
 					"Delete Profile",
-					"Delete a named profile and its stored login/cookies for good. Refused while a live session is using the profile — close that session first. The only way a named profile is removed.",
+					"Delete a named profile and its stored login/cookies for good. Refused while a live session is using the profile — close that session first — and for names listed in the instance's locked_profiles. The only way a named profile is removed.",
 					profileDeleteInput{},
 					profileDeleteOp, wickdocs.Docs{},
 				),

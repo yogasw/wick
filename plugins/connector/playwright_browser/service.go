@@ -154,6 +154,13 @@ type action struct {
 	MS       int      `json:"ms,omitempty"`
 	DeltaX   float64  `json:"delta_x,omitempty"` // scroll
 	DeltaY   float64  `json:"delta_y,omitempty"` // scroll
+	// mouse_move / mouse_click / mouse_wheel: viewport coordinates, so a click
+	// lands on whatever is painted there — cross-origin iframes included.
+	X       *float64 `json:"x,omitempty"`
+	Y       *float64 `json:"y,omitempty"`
+	Steps   int      `json:"steps,omitempty"`    // path points (move) / wheel ticks
+	Button  string   `json:"button,omitempty"`   // left|right|middle
+	DelayMS int      `json:"delay_ms,omitempty"` // press-to-release hold (click)
 }
 
 // knownActions is the closed set `run` dispatches on. Validated up front so a
@@ -168,6 +175,7 @@ var knownActions = map[string]bool{
 	"fill": true, "type": true, "press": true, "focus": true,
 	"check": true, "uncheck": true, "select_option": true,
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
+	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
 	// wait
 	"wait_for": true, "wait": true,
 	// read / extract
@@ -258,9 +266,27 @@ func validateActionArgs(i int, a action) error {
 		if a.MS <= 0 {
 			return fmt.Errorf("action[%d] wait: ms must be a positive integer", i)
 		}
-	case "scroll":
+	case "scroll", "mouse_wheel":
 		if a.DeltaX == 0 && a.DeltaY == 0 {
-			return fmt.Errorf("action[%d] scroll: delta_x or delta_y must be non-zero", i)
+			return fmt.Errorf("action[%d] %s: delta_x or delta_y must be non-zero", i, a.Action)
+		}
+	case "mouse_move", "mouse_click":
+		if a.X == nil || a.Y == nil {
+			return fmt.Errorf("action[%d] %s: x and y are required (viewport pixels)", i, a.Action)
+		}
+		if *a.X < 0 || *a.Y < 0 {
+			return fmt.Errorf("action[%d] %s: x and y must be >= 0", i, a.Action)
+		}
+		if a.Steps < 0 || a.Steps > maxMouseSteps {
+			return fmt.Errorf("action[%d] %s: steps must be between 0 and %d", i, a.Action, maxMouseSteps)
+		}
+		if a.DelayMS < 0 || a.DelayMS > maxClickDelayMS {
+			return fmt.Errorf("action[%d] %s: delay_ms must be between 0 and %d", i, a.Action, maxClickDelayMS)
+		}
+		switch a.Button {
+		case "", "left", "right", "middle":
+		default:
+			return fmt.Errorf("action[%d] %s: button must be left, right or middle", i, a.Action)
 		}
 	}
 	return nil

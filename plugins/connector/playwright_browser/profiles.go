@@ -192,6 +192,9 @@ func profileDelete(c *connector.Ctx) (any, error) {
 	if !validProfileName(name) {
 		return nil, fmt.Errorf("invalid profile name %q: use letters, digits, dash, underscore (no path separators)", name)
 	}
+	if profileLocked(c, name) {
+		return nil, fmt.Errorf("profile %q is locked (locked_profiles in the instance config): remove it from that list first to delete it", name)
+	}
 	if owner, ok := profileInUse(c, name); ok {
 		return nil, fmt.Errorf("profile %q is in use by live session %s: close it first (session_close) before deleting", name, owner)
 	}
@@ -207,4 +210,14 @@ func profileDelete(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf("delete profile %q: %w", name, err)
 	}
 	return map[string]any{"name": name, "deleted": true}, nil
+}
+
+// profileLocked reports whether name is listed in the locked_profiles config.
+func profileLocked(c *connector.Ctx, name string) bool {
+	for _, n := range strings.Split(c.Cfg("locked_profiles"), ",") {
+		if strings.EqualFold(strings.TrimSpace(n), name) {
+			return true
+		}
+	}
+	return false
 }

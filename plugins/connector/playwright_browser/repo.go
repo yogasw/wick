@@ -703,6 +703,12 @@ func execAction(page playwright.Page, a action) (any, error) {
 		return nil, page.DragAndDrop(a.Selector, a.Target)
 	case "scroll":
 		return nil, page.Mouse().Wheel(a.DeltaX, a.DeltaY)
+	case "mouse_move":
+		return humanMove(page, *a.X, *a.Y, a.Steps)
+	case "mouse_click":
+		return humanClick(page, a)
+	case "mouse_wheel":
+		return humanWheel(page, a.DeltaX, a.DeltaY, a.Steps)
 
 	// ── read / extract ──────────────────────────────────────────────
 	case "get_attribute":
