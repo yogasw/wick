@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
@@ -348,5 +349,24 @@ func TestParseFilterReadsPeopleAndModels(t *testing.T) {
 	f := parseFilter(q)
 	if !f.Who["user-a"] || !f.Who[noPerson] || !f.Model["opus"] {
 		t.Errorf("filter = %+v / %+v, want people and models read", f.Who, f.Model)
+	}
+}
+
+func TestFilterMatchingNothingSendsEmptyLists(t *testing.T) {
+	h := seedForProviders(t)
+	out := build(t, h, providerFilter("nobody/never"))
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"users", "channels", "projects"} {
+		if _, ok := got[key].([]any); !ok {
+			t.Errorf("%s = %v, want a JSON array (the page reads .length)", key, got[key])
+		}
 	}
 }
