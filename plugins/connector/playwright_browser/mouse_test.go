@@ -16,7 +16,7 @@ func TestHumanPath_EndsExactlyOnTarget(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	from, to := point{10, 10}, point{410, 310}
 	pts := humanPath(from, to, 0, rng)
-	if len(pts) < 8 || len(pts) > 60 {
+	if len(pts) < 4 || len(pts) > maxMouseSteps {
 		t.Fatalf("derived step count out of range: %d", len(pts))
 	}
 	if pts[len(pts)-1] != to {
@@ -44,6 +44,36 @@ func TestHumanPath_ExplicitStepsAndZeroDistance(t *testing.T) {
 	}
 }
 
+func TestHumanPath_LongMovesLandOnTarget(t *testing.T) {
+	for seed := int64(0); seed < 50; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		to := point{900, 700}
+		pts := humanPath(point{0, 0}, to, 0, rng)
+		if pts[len(pts)-1] != to {
+			t.Fatalf("seed %d: ends at %v", seed, pts[len(pts)-1])
+		}
+		for _, p := range pts {
+			if p.X > to.X*1.1 || p.Y > to.Y*1.1 {
+				t.Fatalf("seed %d: overshoot too far: %v", seed, p)
+			}
+		}
+	}
+}
+
+func TestWheelSlicesSumToTotal(t *testing.T) {
+	sl := wheelSlices(300, 20)
+	sum := 0.0
+	for _, v := range sl {
+		sum += v
+	}
+	if math.Abs(sum-300) > 1e-9 {
+		t.Fatalf("sum = %v", sum)
+	}
+	if sl[0] >= sl[10] {
+		t.Fatalf("not eased: first %v, middle %v", sl[0], sl[10])
+	}
+}
+
 func TestValidateMouseActions(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	cases := []struct {
@@ -57,8 +87,14 @@ func TestValidateMouseActions(t *testing.T) {
 		{action{Action: "mouse_click", X: f(1), Y: f(2), Button: "side"}, "button must be"},
 		{action{Action: "mouse_click", X: f(1), Y: f(2), DelayMS: 999999}, "delay_ms"},
 		{action{Action: "mouse_move", X: f(1), Y: f(2), Steps: 999}, "steps"},
+		{action{Action: "mouse_click", X: f(1), Y: f(2), HoverDwellMS: -1}, "hover_dwell_ms"},
 		{action{Action: "mouse_wheel", DeltaY: 300}, ""},
 		{action{Action: "mouse_wheel"}, "must be non-zero"},
+		{action{Action: "frame_eval", FrameURLContains: "flow"}, "script is required"},
+		{action{Action: "frame_eval", Script: "document.title"}, ""},
+		{action{Action: "frame_text"}, ""},
+		{action{Action: "frame_click", FrameURLContains: "flow"}, "selector or text"},
+		{action{Action: "frame_click", Text: "Provinsi"}, ""},
 	}
 	for _, tc := range cases {
 		err := validateActionArgs(0, tc.a)

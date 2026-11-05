@@ -28,12 +28,30 @@ func parseScreenshot(c *connector.Ctx) (screenshotInput, error) {
 	if err != nil {
 		return screenshotInput{}, err
 	}
-	return screenshotInput{
+	in := screenshotInput{
 		URL:      url,
 		FullPage: c.InputBool("full_page"),
 		Selector: strings.TrimSpace(c.Input("selector")),
 		WaitFor:  strings.TrimSpace(c.Input("wait_for")),
-	}, nil
+		Clip:     c.Input("clip"),
+		Type:     strings.ToLower(strings.TrimSpace(c.Input("type"))),
+		Quality:  c.InputInt("quality"),
+	}
+	if _, err := in.shotOpts(); err != nil {
+		return screenshotInput{}, err
+	}
+	return in, nil
+}
+
+// shotOpts turns the op's flat clip/type/quality inputs into shotOpts and
+// validates them against the selector.
+func (in screenshotInput) shotOpts() (shotOpts, error) {
+	clip, err := parseClip(in.Clip)
+	if err != nil {
+		return shotOpts{}, err
+	}
+	o := shotOpts{Clip: clip, Format: in.Type, Quality: in.Quality}
+	return o, o.validate(in.Selector)
 }
 
 func parseGetContent(c *connector.Ctx) (getContentInput, error) {
@@ -161,6 +179,16 @@ type action struct {
 	Steps   int      `json:"steps,omitempty"`    // path points (move) / wheel ticks
 	Button  string   `json:"button,omitempty"`   // left|right|middle
 	DelayMS int      `json:"delay_ms,omitempty"` // press-to-release hold (click)
+	// HoverDwellMS is the pause on the target before pressing (click).
+	HoverDwellMS int `json:"hover_dwell_ms,omitempty"`
+	// frame_*: which frame to act in (url substring or index into page.Frames()).
+	FrameURLContains string `json:"frame_url_contains,omitempty"`
+	FrameIndex       *int   `json:"frame_index,omitempty"`
+	Text             string `json:"text,omitempty"` // frame_click by visible text
+	// screenshot framing + encoding.
+	Clip    *clipRect `json:"clip,omitempty"`
+	Type    string    `json:"type,omitempty"` // png|jpeg
+	Quality int       `json:"quality,omitempty"`
 }
 
 // knownActions is the closed set `run` dispatches on. Validated up front so a
@@ -176,6 +204,7 @@ var knownActions = map[string]bool{
 	"check": true, "uncheck": true, "select_option": true,
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
 	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
+	"frame_eval": true, "frame_text": true, "frame_click": true,
 	// wait
 	"wait_for": true, "wait": true,
 	// read / extract
@@ -258,6 +287,19 @@ func validateActionArgs(i int, a action) error {
 			return err
 		}
 		return need("target", a.Target)
+	case "frame_eval":
+		return need("script", a.Script)
+	case "frame_click":
+		if strings.TrimSpace(a.Selector) == "" && strings.TrimSpace(a.Text) == "" {
+			return fmt.Errorf("action[%d] frame_click: selector or text is required", i)
+		}
+		if a.HoverDwellMS < 0 || a.HoverDwellMS > maxClickDelayMS {
+			return fmt.Errorf("action[%d] frame_click: hover_dwell_ms must be between 0 and %d", i, maxClickDelayMS)
+		}
+	case "screenshot":
+		if err := a.shotOpts().validate(a.Selector); err != nil {
+			return fmt.Errorf("action[%d] screenshot: %w", i, err)
+		}
 	case "press":
 		return need("key", a.Key)
 	case "eval":
@@ -282,6 +324,9 @@ func validateActionArgs(i int, a action) error {
 		}
 		if a.DelayMS < 0 || a.DelayMS > maxClickDelayMS {
 			return fmt.Errorf("action[%d] %s: delay_ms must be between 0 and %d", i, a.Action, maxClickDelayMS)
+		}
+		if a.HoverDwellMS < 0 || a.HoverDwellMS > maxClickDelayMS {
+			return fmt.Errorf("action[%d] %s: hover_dwell_ms must be between 0 and %d", i, a.Action, maxClickDelayMS)
 		}
 		switch a.Button {
 		case "", "left", "right", "middle":
@@ -485,4 +530,9 @@ func clip(s string) string {
 		return s
 	}
 	return string(r[:maxOutputRune]) + "…[truncated]"
+}
+
+// shotOpts reads a screenshot action's clip/type/quality.
+func (a action) shotOpts() shotOpts {
+	return shotOpts{Clip: a.Clip, Format: strings.ToLower(strings.TrimSpace(a.Type)), Quality: a.Quality}
 }

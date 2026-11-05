@@ -335,28 +335,17 @@ func (s *session) screenshot(in screenshotInput) (any, error) {
 		return nil, err
 	}
 
-	var raw []byte
-	if in.Selector != "" {
-		el, err := page.WaitForSelector(in.Selector)
-		if err != nil {
-			return nil, fmt.Errorf("selector %q: %w", in.Selector, err)
-		}
-		raw, err = el.Screenshot()
-		if err != nil {
-			return nil, fmt.Errorf("element screenshot: %w", err)
-		}
-	} else {
-		raw, err = page.Screenshot(playwright.PageScreenshotOptions{
-			FullPage: playwright.Bool(in.FullPage),
-			Type:     playwright.ScreenshotTypePng,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("screenshot: %w", err)
-		}
+	o, err := in.shotOpts()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := takeShot(page, in.Selector, in.FullPage, o)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot: %w", err)
 	}
 	return map[string]any{
 		"url":       in.URL,
-		"format":    "png",
+		"format":    o.format(),
 		"full_page": in.FullPage && in.Selector == "",
 		"image":     base64.StdEncoding.EncodeToString(raw),
 	}, nil
@@ -486,7 +475,7 @@ func (s *session) runActions(actions []action) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runActionLoop(page, actions), nil
+	return runActionLoop(page, actions, newMouseEnv(s.c, "")), nil
 }
 
 // runActionsInContext runs the actions against the tab at tabIndex in an
@@ -530,7 +519,7 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 		cap.attach(ctx)
 	}
 
-	res := runActionLoop(page, actions)
+	res := runActionLoop(page, actions, newMouseEnv(c, strings.TrimSpace(c.Input("session_id"))))
 
 	if cap != nil {
 		// Detach BEFORE returning (the caller disconnects the CDP link on
@@ -550,10 +539,10 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 // at the first failing step (later steps almost always depend on earlier ones,
 // so continuing would produce misleading errors). Shared by the ephemeral and
 // live-session paths.
-func runActionLoop(page playwright.Page, actions []action) map[string]any {
+func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[string]any {
 	results := make([]stepResult, 0, len(actions))
 	for i, a := range actions {
-		out, err := execAction(page, a)
+		out, err := execAction(page, a, env)
 		res := stepResult{Step: i, Action: a.Action, OK: err == nil, Output: out}
 		if err != nil {
 			res.Error = err.Error()
@@ -566,7 +555,7 @@ func runActionLoop(page playwright.Page, actions []action) map[string]any {
 }
 
 // execAction runs one action against the live page and returns its output.
-func execAction(page playwright.Page, a action) (any, error) {
+func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	switch a.Action {
 	case "goto":
 		if _, err := page.Goto(a.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateLoad}); err != nil {
@@ -594,24 +583,12 @@ func execAction(page playwright.Page, a action) (any, error) {
 		page.WaitForTimeout(float64(a.MS))
 		return nil, nil
 	case "screenshot":
-		var raw []byte
-		var err error
-		if a.Selector != "" {
-			el, e := page.WaitForSelector(a.Selector)
-			if e != nil {
-				return nil, e
-			}
-			raw, err = el.Screenshot()
-		} else {
-			raw, err = page.Screenshot(playwright.PageScreenshotOptions{
-				FullPage: playwright.Bool(a.FullPage),
-				Type:     playwright.ScreenshotTypePng,
-			})
-		}
+		o := a.shotOpts()
+		raw, err := takeShot(page, a.Selector, a.FullPage, o)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"format": "png", "image": base64.StdEncoding.EncodeToString(raw)}, nil
+		return map[string]any{"format": o.format(), "image": base64.StdEncoding.EncodeToString(raw)}, nil
 	case "content":
 		if a.Selector != "" {
 			el, err := page.WaitForSelector(a.Selector)
@@ -704,11 +681,17 @@ func execAction(page playwright.Page, a action) (any, error) {
 	case "scroll":
 		return nil, page.Mouse().Wheel(a.DeltaX, a.DeltaY)
 	case "mouse_move":
-		return humanMove(page, *a.X, *a.Y, a.Steps)
+		return humanMove(page, env, *a.X, *a.Y, a.Steps)
 	case "mouse_click":
-		return humanClick(page, a)
+		return humanClick(page, env, a)
 	case "mouse_wheel":
-		return humanWheel(page, a.DeltaX, a.DeltaY, a.Steps)
+		return humanWheel(page, env, a.DeltaX, a.DeltaY, a.Steps)
+	case "frame_eval":
+		return frameEval(page, a)
+	case "frame_text":
+		return frameText(page, a)
+	case "frame_click":
+		return frameClick(page, env, a)
 
 	// ── read / extract ──────────────────────────────────────────────
 	case "get_attribute":

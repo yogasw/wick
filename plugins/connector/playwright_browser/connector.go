@@ -61,6 +61,10 @@ type Config struct {
 	ViewportHeight int    `wick:"default=800;group=Display;desc=Viewport height in pixels. Ignored when a device is set."`
 	UserAgent      string `wick:"group=Display;desc=Override the User-Agent header. Leave empty for the browser default."`
 	Device         string `wick:"group=Display;desc=Emulate a named device (e.g. \"iPhone 15\", \"Pixel 7\"). Sets viewport, UA, and touch. Overrides the viewport fields when set."`
+	// ShowCursor paints a virtual pointer that follows the mouse_* actions, so
+	// a person watching the live panel sees the hand move. Headless browsers
+	// draw no cursor of their own.
+	ShowCursor bool `wick:"bool;default=true;group=Display;desc=Draw a visible cursor overlay that follows mouse_move / mouse_click / mouse_wheel, so the movement shows in the live browser panel. The overlay ignores pointer events. Turn off to leave the page DOM untouched."`
 
 	// Network — proxy.
 	ProxyServer string `wick:"group=Network|Route browser traffic through a proxy.|collapsed;desc=Proxy for all browser traffic. Example: http://proxy.abc.com:3128 or socks5://proxy.abc.com:1080"`
@@ -84,6 +88,10 @@ type Config struct {
 	// Sessions on a NAMED profile get a proportionally longer leash, since
 	// reaping those costs the user their logged-in state.
 	BrowserIdleTimeoutMin int `wick:"number;default=1;group=Live sessions;desc=Minutes a live session may sit with no activity before it is closed automatically. Any op touching the session resets the clock. Sessions using a named profile get 8x this value, since closing them ends a logged-in session. Set -1 to never auto-close. Default 1."`
+	// ProfileIdleTimeoutMin overrides the 8x leash for named-profile sessions,
+	// for hosts that would rather reopen a profile (its login persists on disk)
+	// than keep a browser resident between tests.
+	ProfileIdleTimeoutMin int `wick:"number;group=Live sessions;desc=Minutes a session on a NAMED profile may sit idle before it is closed. The login stays on disk, so reopening the profile is cheap. Leave 0 to use 8x the idle timeout above. Ignored when that is -1."`
 	// BrowserKillOrphans catches what the PID-based reap cannot: children an
 	// engine forked on its own (Chrome renderers) and browsers whose recorded
 	// PID no longer matches the running one (Firefox re-forks). Ownership is
@@ -135,6 +143,9 @@ type screenshotInput struct {
 	FullPage bool   `wick:"bool;desc=Capture the entire scrollable page instead of just the viewport."`
 	Selector string `wick:"desc=Optional CSS selector. When set, only that element is captured instead of the page."`
 	WaitFor  string `wick:"desc=Optional CSS selector to wait for before capturing. Useful for JS-rendered content."`
+	Clip     string `wick:"desc=Optional JSON rectangle {\"x\":..,\"y\":..,\"width\":..,\"height\":..} in viewport pixels (page pixels with full_page) to capture only that area. Reaches content inside cross-origin iframes, which a selector cannot. Not combinable with selector."`
+	Type     string `wick:"dropdown=png|jpeg;default=png;desc=Image format. jpeg is much smaller; set quality with it."`
+	Quality  int    `wick:"desc=JPEG quality 1-100 (type=jpeg only). Leave empty for the default."`
 }
 
 // getContentInput is the argument schema for the "get_content" operation.
@@ -174,7 +185,7 @@ type evalInput struct {
 
 // runInput is the argument schema for the "run" script-runner operation.
 type runInput struct {
-	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. REAL MOUSE (viewport pixels, reaches inside cross-origin iframes, human-like curved path + timing): mouse_move{x,y,steps?}, mouse_click{x,y,button?,delay_ms?,steps?}, mouse_wheel{delta_x?,delta_y?,steps?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
+	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. IFRAMES (also cross-origin; pick the frame with frame_url_contains or frame_index into the page frame list, 0 = main; neither = first child frame): frame_eval{script} returns the JSON result; frame_text{selector?} returns the frame text plus every visible interactive element (tag, role, text, value, x,y,w,h in page viewport pixels, cx,cy centre); frame_click{selector|text,hover_dwell_ms?} clicks an element (text: exact match first, then substring) with the natural mouse at a random point inside its box. REAL MOUSE (viewport pixels, reaches inside cross-origin iframes, human-like curved path + timing): mouse_move{x,y,steps?}, mouse_click{x,y,button?,delay_ms?,hover_dwell_ms?,steps?}, mouse_wheel{delta_x?,delta_y?,steps?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?,clip?{x,y,width,height},type?(png|jpeg),quality?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
 	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
 	// Network-capture opt-in. Decided up front (before the actions run) so the
@@ -297,7 +308,7 @@ func Module() connector.Module {
 				connector.Op(
 					"screenshot",
 					"Screenshot Page",
-					"Open {url} and return a PNG screenshot as base64. Set full_page to capture the whole scrollable page, or selector to capture one element. Use wait_for to delay until JS-rendered content appears.",
+					"Open {url} and return a screenshot as base64 (PNG, or JPEG with type=jpeg + quality). Set full_page to capture the whole scrollable page, selector to capture one element, or clip {x,y,width,height} to capture one rectangle (works inside cross-origin iframes). Use wait_for to delay until JS-rendered content appears.",
 					screenshotInput{},
 					screenshot, wickdocs.Docs{},
 				),
@@ -362,7 +373,7 @@ func Module() connector.Module {
 				connector.OpDestructive(
 					"session_open",
 					"Open Live Session",
-					"Launch a persistent browser and return its session_id. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. Destructive because it holds an OS browser process open.",
+					"Launch a persistent browser and return its session_id. If the requested (or default) named profile already has a live browser, that session is returned with reused=true instead of opening a second one. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. Destructive because it holds an OS browser process open.",
 					sessionOpenInput{},
 					sessionOpen, wickdocs.Docs{},
 				),
