@@ -4101,6 +4101,52 @@ func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, 
 	return sessionID, isNewSession, nil
 }
 
+// ArmThreadSession readies a thread's session without running a turn: the
+// thread is bound, text is kept as a note the agent reads with the first
+// message someone posts there, and 🤖 auto-reply is switched on so that
+// message reaches the session without a mention. For a thread that may
+// never need the agent (a card mirroring work done elsewhere), so an
+// unused one costs no turn.
+func (s *Channel) ArmThreadSession(ctx context.Context, channelID, threadTS, text string) (string, bool, error) {
+	if channelID == "" || threadTS == "" {
+		return "", false, fmt.Errorf("channel and thread ts are required")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", false, fmt.Errorf("text is required")
+	}
+	if s.sendFn == nil {
+		return "", false, fmt.Errorf("slack channel not wired to the agent pool")
+	}
+	callerUserID := s.ownerUserID
+	if callerUserID == "" {
+		return "", false, fmt.Errorf("this slack instance has no owning wick user; cannot start a session on its behalf")
+	}
+	sessionID := s.sessionKey(threadTS)
+	s.persistThreadBinding(sessionID, channelID, threadTS)
+	isNewSession := !s.sessionOnDisk(sessionID)
+	note := normalizeUserText(text)
+	if isNewSession {
+		if ctxText := s.buildWorkflowSessionContext(channelID, threadTS); ctxText != "" {
+			note = ctxText + "\n\n" + note
+		}
+	}
+	// A non-user message is held for the next user turn and spawns
+	// nothing on its own (pool.send).
+	if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "system", note); err != nil {
+		return sessionID, isNewSession, fmt.Errorf("pool send failed: %w", err)
+	}
+	if s.ownerFn != nil {
+		s.ownerFn(context.Background(), sessionID, callerUserID)
+	}
+	s.setAutoReply(sessionID, true)
+	s.setReaction(reactionTrigger, channelID, threadTS, "")
+	log.Info().Str("channel", "slack").Str("slack_channel", channelID).
+		Str("thread_ts", threadTS).Str("session", sessionID).
+		Bool("new_session", isNewSession).
+		Msg("workflow armed slack thread session without a turn")
+	return sessionID, isNewSession, nil
+}
+
 // buildWorkflowSessionContext is buildSessionContext's sibling for the
 // workflow path, where there is no sender to describe — only the thread the
 // agent is about to work in. Kept deliberately small: the workflow's own
