@@ -278,7 +278,10 @@ func openSession(c *connector.Ctx) (any, error) {
 		args = append(args, "--headless=new")
 	}
 	if isCloakEngine(b) {
-		args = append(args, cloakArgs(c)...)
+		args = append(args, cloakArgsFor(c, profile)...)
+	}
+	if c.CfgBool("in_process_iframes") {
+		args = append(args, "--disable-site-isolation-trials", "--disable-features=IsolateOrigins,site-per-process")
 	}
 	if len(exts) > 0 {
 		joined := strings.Join(exts, ",")

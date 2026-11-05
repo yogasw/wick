@@ -36,8 +36,12 @@ func parseScreenshot(c *connector.Ctx) (screenshotInput, error) {
 		Clip:     c.Input("clip"),
 		Type:     strings.ToLower(strings.TrimSpace(c.Input("type"))),
 		Quality:  c.InputInt("quality"),
+		SaveDir:  strings.TrimSpace(c.Input("save_dir")),
 	}
 	if _, err := in.shotOpts(); err != nil {
+		return screenshotInput{}, err
+	}
+	if err := checkSaveDir(in.SaveDir); err != nil {
 		return screenshotInput{}, err
 	}
 	return in, nil
@@ -185,6 +189,12 @@ type action struct {
 	FrameURLContains string `json:"frame_url_contains,omitempty"`
 	FrameIndex       *int   `json:"frame_index,omitempty"`
 	Text             string `json:"text,omitempty"` // frame_click by visible text
+	// set_viewport.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
+	// SaveDir writes a screenshot to this directory and returns its path
+	// instead of base64.
+	SaveDir string `json:"save_dir,omitempty"`
 	// screenshot framing + encoding.
 	Clip    *clipRect `json:"clip,omitempty"`
 	Type    string    `json:"type,omitempty"` // png|jpeg
@@ -205,6 +215,7 @@ var knownActions = map[string]bool{
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
 	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
 	"frame_eval": true, "frame_text": true, "frame_click": true,
+	"set_viewport": true,
 	// wait
 	"wait_for": true, "wait": true,
 	// read / extract
@@ -287,6 +298,10 @@ func validateActionArgs(i int, a action) error {
 			return err
 		}
 		return need("target", a.Target)
+	case "set_viewport":
+		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {
+			return fmt.Errorf("action[%d] set_viewport: width and height must be between 200 and 7680x4320", i)
+		}
 	case "frame_eval":
 		return need("script", a.Script)
 	case "frame_click":
@@ -298,6 +313,9 @@ func validateActionArgs(i int, a action) error {
 		}
 	case "screenshot":
 		if err := a.shotOpts().validate(a.Selector); err != nil {
+			return fmt.Errorf("action[%d] screenshot: %w", i, err)
+		}
+		if err := checkSaveDir(a.SaveDir); err != nil {
 			return fmt.Errorf("action[%d] screenshot: %w", i, err)
 		}
 	case "press":

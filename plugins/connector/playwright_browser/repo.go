@@ -343,12 +343,13 @@ func (s *session) screenshot(in screenshotInput) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("screenshot: %w", err)
 	}
-	return map[string]any{
-		"url":       in.URL,
-		"format":    o.format(),
-		"full_page": in.FullPage && in.Selector == "",
-		"image":     base64.StdEncoding.EncodeToString(raw),
-	}, nil
+	res, err := shotResult(raw, o.format(), in.SaveDir)
+	if err != nil {
+		return nil, err
+	}
+	res["url"] = in.URL
+	res["full_page"] = in.FullPage && in.Selector == ""
+	return res, nil
 }
 
 func (s *session) getContent(in getContentInput) (any, error) {
@@ -588,7 +589,12 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"format": o.format(), "image": base64.StdEncoding.EncodeToString(raw)}, nil
+		return shotResult(raw, o.format(), a.SaveDir)
+	case "set_viewport":
+		if err := page.SetViewportSize(a.Width, a.Height); err != nil {
+			return nil, err
+		}
+		return map[string]any{"width": a.Width, "height": a.Height}, nil
 	case "content":
 		if a.Selector != "" {
 			el, err := page.WaitForSelector(a.Selector)

@@ -54,3 +54,25 @@ func TestValidateScreenshotAction(t *testing.T) {
 		t.Fatalf("valid action rejected: %v", err)
 	}
 }
+
+func TestCheckSaveDir(t *testing.T) {
+	if err := checkSaveDir(""); err != nil {
+		t.Fatalf("empty: %v", err)
+	}
+	if err := checkSaveDir("relative/dir"); err == nil {
+		t.Fatal("relative path accepted")
+	}
+	if err := checkSaveDir("/nonexistent-dir-for-test"); err == nil {
+		t.Fatal("missing dir accepted")
+	}
+}
+
+func TestProfileSeedStable(t *testing.T) {
+	a, b := profileSeed("profile-a"), profileSeed("profile-a")
+	if a != b || a < 10000 || a > 99999 {
+		t.Fatalf("seed %d / %d", a, b)
+	}
+	if profileSeed("profile-a") == profileSeed("profile-b") {
+		t.Log("distinct names collided (allowed, just unlikely)")
+	}
+}

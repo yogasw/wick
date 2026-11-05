@@ -8,9 +8,13 @@ package main
 // a rectangle of the page can.
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/playwright-community/playwright-go"
 )
@@ -108,4 +112,57 @@ func takeShot(page playwright.Page, selector string, fullPage bool, o shotOpts) 
 		opts.Clip = &playwright.Rect{X: o.Clip.X, Y: o.Clip.Y, Width: o.Clip.Width, Height: o.Clip.Height}
 	}
 	return page.Screenshot(opts)
+}
+
+// checkSaveDir accepts an empty value, or an existing absolute directory under
+// the app data tree (~/.<app>/...): agents' working folders live there, and
+// the plugin must not become a way to drop files anywhere on the host.
+func checkSaveDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("save_dir must be an absolute path")
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("save_dir: %w", err)
+	}
+	st, err := os.Stat(real)
+	if err != nil || !st.IsDir() {
+		return fmt.Errorf("save_dir %q is not a directory", dir)
+	}
+	if root := appDataRoot(); root == "" || !strings.HasPrefix(real+string(os.PathSeparator), root+string(os.PathSeparator)) {
+		return fmt.Errorf("save_dir must be inside the app data tree")
+	}
+	return nil
+}
+
+// appDataRoot is the app tree this plugin runs under: the parent of the
+// plugins dir that holds its persistent data.
+func appDataRoot() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	// <root>/plugins/connectors/<key>/<binary>
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(exe))))
+}
+
+// shotResult returns the image as base64, or writes it into saveDir and
+// returns the path.
+func shotResult(raw []byte, format, saveDir string) (map[string]any, error) {
+	if saveDir == "" {
+		return map[string]any{"format": format, "image": base64.StdEncoding.EncodeToString(raw)}, nil
+	}
+	ext := ".png"
+	if format == "jpeg" {
+		ext = ".jpg"
+	}
+	path := filepath.Join(saveDir, fmt.Sprintf("shot-%s%s", time.Now().Format("20060102-150405.000"), ext))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return nil, fmt.Errorf("save screenshot: %w", err)
+	}
+	return map[string]any{"format": format, "path": path, "bytes": len(raw)}, nil
 }

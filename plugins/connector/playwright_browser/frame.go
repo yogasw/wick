@@ -14,25 +14,25 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-// pickFrame resolves the action's frame: frame_index into page.Frames()
-// (0 = main), else the first frame whose URL contains frame_url_contains,
-// else the first child frame.
+// pickFrame resolves the action's frame: frame_index into the frame list
+// (0 = main), else the first frame whose URL (or iframe src) contains
+// frame_url_contains, else the first child frame.
 func pickFrame(page playwright.Page, a action) (playwright.Frame, error) {
-	frames := page.Frames()
+	frames, srcs := listFrames(page)
 	if a.FrameIndex != nil {
 		i := *a.FrameIndex
 		if i < 0 || i >= len(frames) {
-			return nil, fmt.Errorf("frame_index %d out of range (%d frames): %s", i, len(frames), frameURLs(frames))
+			return nil, fmt.Errorf("frame_index %d out of range (%d frames): %s", i, len(frames), frameURLs(frames, srcs))
 		}
 		return frames[i], nil
 	}
 	if want := strings.TrimSpace(a.FrameURLContains); want != "" {
-		for _, f := range frames {
-			if strings.Contains(f.URL(), want) {
+		for i, f := range frames {
+			if strings.Contains(f.URL(), want) || strings.Contains(srcs[i], want) {
 				return f, nil
 			}
 		}
-		return nil, fmt.Errorf("no frame URL contains %q: %s", want, frameURLs(frames))
+		return nil, fmt.Errorf("no frame URL contains %q: %s", want, frameURLs(frames, srcs))
 	}
 	if len(frames) < 2 {
 		return nil, fmt.Errorf("page has no iframe; give frame_index 0 to act on the main page")
@@ -40,11 +40,53 @@ func pickFrame(page playwright.Page, a action) (playwright.Frame, error) {
 	return frames[1], nil
 }
 
+// listFrames returns the main frame first, then every child frame, with the
+// src attribute of the iframe element each came from ("" when unknown).
+//
+// Children are resolved from the <iframe> elements of the main document
+// (ElementHandle.ContentFrame) before falling back to page.Frames(): on a
+// live session reconnected over CDP, Frames() can keep the frame objects of
+// the page as it was before a navigation in the same run, and acting on one
+// of those fails with "target closed" / "frame was detached". The main frame
+// comes from MainFrame(), which page.Evaluate itself uses.
+func listFrames(page playwright.Page) ([]playwright.Frame, []string) {
+	main := page.MainFrame()
+	frames := []playwright.Frame{main}
+	srcs := []string{""}
+	seen := map[playwright.Frame]bool{main: true}
+	add := func(f playwright.Frame, src string) {
+		if f == nil || seen[f] || f.IsDetached() {
+			return
+		}
+		seen[f] = true
+		frames = append(frames, f)
+		srcs = append(srcs, src)
+	}
+	if els, err := main.QuerySelectorAll("iframe, frame"); err == nil {
+		for _, el := range els {
+			src, _ := el.GetAttribute("src")
+			f, err := el.ContentFrame()
+			if err == nil {
+				add(f, src)
+			}
+		}
+	}
+	for _, f := range page.Frames() {
+		add(f, "")
+	}
+	return frames, srcs
+}
+
 // frameURLs lists frames for an error message, so the caller can pick one.
-func frameURLs(frames []playwright.Frame) string {
+func frameURLs(frames []playwright.Frame, srcs []string) string {
 	parts := make([]string, 0, len(frames))
 	for i, f := range frames {
 		u := f.URL()
+		if u == "" || u == "about:blank" {
+			if srcs[i] != "" {
+				u = srcs[i]
+			}
+		}
 		if len(u) > 100 {
 			u = u[:100] + "…"
 		}
