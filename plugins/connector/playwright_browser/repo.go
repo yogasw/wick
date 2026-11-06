@@ -282,7 +282,6 @@ func boolInput(c *connector.Ctx, key string) bool {
 	return false
 }
 
-
 // newPage opens a page in the session context, enforcing the tab cap and
 // wiring the configured action + navigation timeouts.
 func (s *session) newPage() (playwright.Page, error) {
@@ -516,12 +515,23 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 	page.SetDefaultTimeout(actionTimeout(c))
 	page.SetDefaultNavigationTimeout(navTimeout(c))
 
-	// A viewport set earlier in this session is an emulation tied to the CDP
-	// connection, so it lapses when the previous run disconnected. Re-apply it
-	// before the actions so coordinates stay where the agent measured them.
-	if v, ok := sessionViewport.Load(strings.TrimSpace(c.Input("session_id"))); ok {
-		wh := v.([2]int)
-		_ = page.SetViewportSize(wh[0], wh[1])
+	// Keep the window at one size: the size a set_viewport chose earlier in this
+	// session, else the connector's configured size (1280x800 by default). It is
+	// the real window, not an emulation, so it also holds while no run is going
+	// and the live view never swings between two shapes. A device profile brings
+	// its own size and is left alone. If the browser refuses a window resize, an
+	// explicit set_viewport falls back to the emulation, which lapses between
+	// runs, so it is re-applied here to keep the agent's coordinates.
+	if strings.TrimSpace(c.Cfg("device")) == "" {
+		w, h := windowSize(c)
+		v, chosen := sessionViewport.Load(strings.TrimSpace(c.Input("session_id")))
+		if chosen {
+			wh := v.([2]int)
+			w, h = wh[0], wh[1]
+		}
+		if err := setWindowSize(ctx, page, w, h); err != nil && chosen {
+			_ = page.SetViewportSize(w, h)
+		}
 	}
 
 	var cap *capture
@@ -609,8 +619,17 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		}
 		return shotResult(raw, o.format(), a.SaveDir)
 	case "set_viewport":
-		if err := page.SetViewportSize(a.Width, a.Height); err != nil {
-			return nil, err
+		// A live session resizes the real window so the size holds between
+		// runs; a throwaway browser (or a browser that refuses the resize)
+		// uses the emulation, which lasts as long as this one connection.
+		resized := false
+		if env.key != "" {
+			resized = setWindowSize(page.Context(), page, a.Width, a.Height) == nil
+		}
+		if !resized {
+			if err := page.SetViewportSize(a.Width, a.Height); err != nil {
+				return nil, err
+			}
 		}
 		if env.key != "" {
 			sessionViewport.Store(env.key, [2]int{a.Width, a.Height})
@@ -621,7 +640,7 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 			}
 			refreshCursor(page, env)
 		}
-		return map[string]any{"width": a.Width, "height": a.Height}, nil
+		return map[string]any{"width": a.Width, "height": a.Height, "window": resized}, nil
 	case "content":
 		if a.Selector != "" {
 			el, err := page.WaitForSelector(a.Selector)

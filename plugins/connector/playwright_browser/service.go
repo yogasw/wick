@@ -576,6 +576,56 @@ func headless(c *connector.Ctx) bool {
 	return c.CfgBool("headless")
 }
 
+// windowSize is the size a browser window is locked to: viewport_width x
+// viewport_height from Config, 1280x800 when left unset. A live session opens
+// at this size and every run puts the window back to it (or to the size a
+// set_viewport chose), so the live view never swings between two shapes.
+func windowSize(c *connector.Ctx) (int, int) {
+	w, h := c.CfgInt("viewport_width"), c.CfgInt("viewport_height")
+	if w <= 0 {
+		w = defViewportW
+	}
+	if h <= 0 {
+		h = defViewportH
+	}
+	return w, h
+}
+
+// setWindowSize resizes the REAL browser window over CDP. Unlike
+// Page.SetViewportSize, which is a device-metrics override that lapses when the
+// CDP connection closes (the page then falls back to the window's own size),
+// the window keeps its size between runs, so the live view stays one shape. It
+// does nothing when the window is already that size, and returns an error when
+// the browser refuses (the caller falls back to the emulation).
+func setWindowSize(ctx playwright.BrowserContext, page playwright.Page, w, h int) error {
+	cdp, err := ctx.NewCDPSession(page)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = cdp.Detach() }()
+	res, err := cdp.Send("Browser.getWindowForTarget", nil)
+	if err != nil {
+		return err
+	}
+	m, _ := res.(map[string]any)
+	id, ok := m["windowId"].(float64)
+	if !ok {
+		return fmt.Errorf("browser returned no window id")
+	}
+	if b, ok := m["bounds"].(map[string]any); ok {
+		cw, _ := b["width"].(float64)
+		ch, _ := b["height"].(float64)
+		if state, _ := b["windowState"].(string); int(cw) == w && int(ch) == h && (state == "" || state == "normal") {
+			return nil
+		}
+	}
+	_, err = cdp.Send("Browser.setWindowBounds", map[string]any{
+		"windowId": int(id),
+		"bounds":   map[string]any{"windowState": "normal", "width": w, "height": h},
+	})
+	return err
+}
+
 // actionTimeout / navTimeout / maxTab read their config with the documented
 // defaults substituted for a zero value.
 func actionTimeout(c *connector.Ctx) float64 {

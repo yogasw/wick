@@ -35,7 +35,7 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 |---|---|---|
 | Browser | `Browser` | Engine to launch — rendered as a picker widget (see below) showing install status per engine; click an installed row to select it, or **Download** a missing one right there. Default `chromium`. |
 | Browser | `Headless` | Run without a visible window. Default on; turn off only for local debugging. |
-| Display *(collapsed)* | `ViewportWidth` / `ViewportHeight` | Viewport size in pixels. Ignored when `Device` is set. Defaults `1280x800`. |
+| Display *(collapsed)* | `ViewportWidth` / `ViewportHeight` | Browser window size in pixels, default `1280x800`. A live session opens at this size and keeps it between steps (the live view does not change shape); `set_viewport` overrides it for that session. Ignored when `Device` is set. |
 | Display | `UserAgent` | Override the `User-Agent` header. |
 | Display | `Device` | Emulate a named device (e.g. `iPhone 15`, `Pixel 7`) — sets viewport, UA, and touch; overrides the viewport fields. |
 | Network *(collapsed)* | `ProxyServer` | Route browser traffic through a proxy, e.g. `http://proxy.abc.com:3128` or `socks5://proxy.abc.com:1080`. |

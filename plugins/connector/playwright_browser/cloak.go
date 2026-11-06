@@ -601,6 +601,7 @@ func safeJoin(base, name string) (string, error) {
 //   - Args carries --no-sandbox plus the stealth fingerprint flags; the seed is
 //     randomized PER LAUNCH (see cloakArgs) so each session is a distinct, real-
 //     world device identity. --fingerprint-platform pins a Windows profile.
+//
 // The heavy fingerprint spoofing is compiled into the binary; these flags just
 // turn it on + avoid re-flagging automation.
 var cloakLaunchArgs = struct {
@@ -620,6 +621,7 @@ const headlessNoViewportMinVersion = "148.0.7778.215.4"
 // cloakBinaryVersion returns the resolved CloakBrowser binary version, best-effort:
 //   - pro engine: from `cloakbrowser info` (the CLI-managed binary).
 //   - free engine: from the VERSION tag recorded at install (leading "v" stripped).
+//
 // "" when unknown — callers then take the conservative (older-binary) path.
 func cloakBinaryVersion(c *connector.Ctx) string {
 	engine := strings.TrimSpace(c.Cfg("browser"))
@@ -697,16 +699,17 @@ func atoiSafe(s string) int {
 //     Chrome behind the basic driver needs it too. (An earlier launch matrix
 //     mis-attributed a "target closed" to this flag; the real cause was an
 //     exhausted free-tier license session slot, not the flag.)
-//   - --start-maximized: only on binaries at/above headlessNoViewportMinVersion
-//     (Pro v148+), where a maximized window stays coherent (outer == screen).
+//   - --window-size: only on binaries at/above headlessNoViewportMinVersion
+//     (Pro v148+), where the window stays coherent with the reported screen.
 //     Below the gate it would create outerWidth < innerWidth — an impossible
 //     window — so it must be omitted, exactly like the wrapper's
-//     binary_supports_maximized_window gate.
+//     binary_supports_maximized_window gate. The size is the connector's
+//     viewport_width x viewport_height (see windowSize).
 func cloakArgs(c *connector.Ctx) []string { return cloakArgsFor(c, "") }
 
 // cloakArgsFor is cloakArgs for a session on a named profile. The fingerprint
-// seed decides the emulated screen, and with it the maximized viewport, so a
-// random seed per launch moved every coordinate between sessions. A named
+// seed decides the emulated screen, so a random seed per launch changed what the
+// page reported between sessions. A named
 // profile gets a seed derived from its name instead: the same "device" every
 // time it is opened, which is also what a returning logged-in user looks like.
 // Anonymous sessions keep a fresh random seed.
@@ -725,11 +728,26 @@ func cloakArgsFor(c *connector.Ctx, profile string) []string {
 	if runtime.GOOS == "windows" {
 		args = append(args, "--ignore-gpu-blocklist")
 	}
-	// Maximized window, gated to binaries where it stays coherent.
-	if cloakSupportsNoViewport(c) {
-		args = append(args, "--start-maximized")
+	// Window at the configured size (1280x800 by default), gated to binaries
+	// where the window stays coherent. It used to be --start-maximized, which
+	// takes the fingerprint's emulated screen (an ultrawide 3440x1440 for one
+	// seed) and made the live view swing between that and the size a
+	// set_viewport pinned for the length of one run. A window smaller than the
+	// screen is what a real user has; outerWidth stays >= innerWidth.
+	w, h := windowSize(c)
+	if a := cloakWindowArg(cloakSupportsNoViewport(c), w, h); a != "" {
+		args = append(args, a)
 	}
 	return args
+}
+
+// cloakWindowArg is the window-size launch flag, or "" below the binary gate
+// where a window set this way would be incoherent with the reported screen.
+func cloakWindowArg(supported bool, w, h int) string {
+	if !supported {
+		return ""
+	}
+	return fmt.Sprintf("--window-size=%d,%d", w, h)
 }
 
 // profileSeed maps a profile name to a stable fingerprint seed in the same
