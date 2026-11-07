@@ -14,7 +14,7 @@ import (
 // wrapper runs the script and writes its exit code to $WICK_DEPLOY_EXIT. The script is
 // not wick's child for long: wick is the thing it replaces, so the exit code has to land
 // in a file the next wick reads, not in a Wait() nobody is left to call.
-const wrapper = `"$@"; echo $? > "$WICK_DEPLOY_EXIT"`
+const wrapper = `"$@"; code=$?; echo "$code" > "$WICK_DEPLOY_EXIT"; "$WICK_DEPLOY_NOTIFY_EXE" --notify-run || true; exit "$code"`
 
 // launch starts the script detached and returns its pid.
 //
@@ -23,7 +23,7 @@ const wrapper = `"$@"; echo $? > "$WICK_DEPLOY_EXIT"`
 // whole cgroup — the deploy would die halfway through the swap it is doing. So when the
 // user manager is reachable it runs in its own transient scope; elsewhere (Termux, a
 // plain `<app> start`, a system unit with no user bus) a new session is enough.
-func launch(script string, args []string, exitFile string, logf *os.File) (int, error) {
+func launch(script string, args []string, exitFile, runID string, logf *os.File) (int, error) {
 	interp, err := interpreter(script)
 	if err != nil {
 		return 0, err
@@ -39,7 +39,7 @@ func launch(script string, args []string, exitFile string, logf *os.File) (int, 
 		}
 	}
 	cmd := safeexec.Command(argv[0], argv[1:]...)
-	cmd.Env = childEnv(exitFile)
+	cmd.Env = childEnv(exitFile, runID)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if dir, err := os.UserHomeDir(); err == nil {
