@@ -291,6 +291,9 @@ func rawLocator(f playwright.Frame, a action) playwright.Locator {
 }
 
 func locate(f playwright.Frame, a action, filter string) playwright.Locator {
+	if a.pinned != nil {
+		return a.pinned
+	}
 	if sel := strings.TrimSpace(a.Selector); sel != "" {
 		return f.Locator(sel + filter)
 	}
@@ -480,7 +483,120 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(a.Menu) != "" {
+		if a, err = openMenu(page, env, f, a); err != nil {
+			return nil, err
+		}
+	}
+	res, err := clickTarget(page, env, f, a)
+	if err != nil {
+		return nil, err
+	}
+	if a.Menu != "" {
+		res["menu"] = a.Menu
+	}
+	if strings.TrimSpace(a.ExpectURL) != "" {
+		if err := expectURL(page, f, a, res); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// openMenu clicks the menu that holds the target and waits up to 3s for a
+// match that was not on screen before (the same label can sit elsewhere on
+// the page, a hero heading or a footer link). It returns the action pinned
+// to that match with nth.
+func openMenu(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (action, error) {
+	before := map[string]bool{}
+	if _, boxes := visibleBoxes(f, a); boxes != nil {
+		for _, b := range boxes {
+			before[b] = true
+		}
+	}
+	m := a
+	m.Selector, m.Text, m.Nth, m.Menu, m.ExpectURL = "", a.Menu, nil, "", ""
+	if _, err := clickTarget(page, env, f, m); err != nil {
+		return a, fmt.Errorf("open menu %q: %w", a.Menu, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		els, boxes := visibleBoxes(f, a)
+		for i, b := range boxes {
+			if b != "" && !before[b] {
+				a.pinned = els[i]
+				return a, nil
+			}
+		}
+		time.Sleep(pollEvery)
+	}
+	return a, fmt.Errorf("menu %q opened but %q did not show within 3s", a.Menu, a.Text+a.Selector)
+}
+
+// visibleBoxes returns every match of the action with its box ("" when
+// hidden or empty), so openMenu can tell which one the menu revealed.
+func visibleBoxes(f playwright.Frame, a action) ([]playwright.Locator, []string) {
+	q := a
+	q.Nth = nil
+	els, err := rawLocator(f, q).All()
+	if err != nil {
+		return nil, nil
+	}
+	out := make([]string, len(els))
+	for i, el := range els {
+		if v, _ := el.IsVisible(); !v {
+			continue
+		}
+		if b, err := el.BoundingBox(); err == nil && b != nil && b.Width >= 1 && b.Height >= 1 {
+			out[i] = fmt.Sprintf("%.0f,%.0f,%.0f,%.0f", b.X, b.Y, b.Width, b.Height)
+		}
+	}
+	return els, out
+}
+
+// expectURL waits for the click to reach the address. When it does not, the
+// element is clicked once more through the DOM (a click the page swallowed)
+// and the wait repeats, so a run never moves on from the wrong page.
+func expectURL(page playwright.Page, f playwright.Frame, a action, res map[string]any) error {
+	first := 5 * time.Second
+	if a.TimeoutMS > 0 {
+		first = waitTimeout(a.TimeoutMS)
+	}
+	if err := pollURL(page, a.ExpectURL, first); err == nil {
+		res["url"] = currentURL(page)
+		return nil
+	}
+	if h, herr := rawLocator(f, a).First().ElementHandle(playwright.LocatorElementHandleOptions{Timeout: playwright.Float(1000)}); herr == nil {
+		_, _ = h.Evaluate(`el => el.click()`)
+		_ = h.Dispose()
+		res["retried"] = "dom_click"
+	}
+	if err := pollURL(page, a.ExpectURL, 5*time.Second); err != nil {
+		return fmt.Errorf("click on %q did not lead to %s: %w", a.Text+a.Selector, a.ExpectURL, err)
+	}
+	res["url"] = currentURL(page)
+	return nil
+}
+
+func currentURL(page playwright.Page) string {
+	if v, err := page.Evaluate(`location.href`); err == nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return page.URL()
+}
+
+// clickTarget is one frame_click on f: find the box, click it like a hand,
+// and on moli finish a click that landed elsewhere.
+func clickTarget(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (map[string]any, error) {
 	box, via, err := findBox(f, a)
+	// Moli now and then reports the page's script context destroyed without
+	// any navigation. The page is still there: look again.
+	for try := 0; err != nil && try < 2 && contextLost(err); try++ {
+		time.Sleep(500 * time.Millisecond)
+		box, via, err = findBox(f, a)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -503,6 +619,10 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 		res["fallback"] = "dom_click"
 	}
 	return res, err
+}
+
+func contextLost(err error) bool {
+	return strings.Contains(err.Error(), "Execution context was destroyed")
 }
 
 // hitTarget is the element frame_click means, as a handle: the visible match,

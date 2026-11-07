@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 func TestBehindSchedule(t *testing.T) {
@@ -35,5 +38,18 @@ func TestGlobToRegexp(t *testing.T) {
 		if got := globToRegexp(c.glob).MatchString(c.url); got != c.want {
 			t.Errorf("%q vs %q = %v, want %v", c.glob, c.url, got, c.want)
 		}
+	}
+}
+
+func TestParseFrameClickMenuAndExpectURL(t *testing.T) {
+	c := connector.NewCtx(context.Background(), "inst", nil, map[string]string{
+		"actions": `[{"action":"frame_click","menu":"Products","text":"Pricing","expect_url":"**/pricing"}]`,
+	}, nil, nil, nil)
+	acts, err := parseActions(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acts[0].Menu != "Products" || acts[0].ExpectURL != "**/pricing" {
+		t.Fatalf("menu/expect_url not decoded: %+v", acts[0])
 	}
 }

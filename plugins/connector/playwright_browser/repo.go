@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/playwright-community/playwright-go"
 	"github.com/yogasw/wick/pkg/connector"
@@ -567,6 +568,7 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 	}
 	refreshCursor(page, env)
 	for i, a := range actions {
+		trackStep(env.key, i, a.Action, results)
 		env.run.observeTrigger(page, a, i == 0)
 		out, err := execAction(page, a, env)
 		if err == nil && triggerActions[a.Action] && !strings.HasPrefix(a.Action, "mouse_") {
@@ -580,7 +582,31 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 		}
 		results = append(results, res)
 	}
+	runProgress.Delete(env.key)
 	return map[string]any{"steps": results, "completed": true}
+}
+
+// runProgress is the step a live run is on, per session, so a run that hits
+// the op deadline can still say where it stopped and what had finished.
+var runProgress sync.Map // session id → string
+
+func trackStep(sid string, i int, act string, done []stepResult) {
+	if sid == "" {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "stuck at step %d (%s) since %s", i, act, time.Now().Format("15:04:05"))
+	if len(done) > 0 {
+		b.WriteString(", done before it:")
+		for _, r := range done {
+			fmt.Fprintf(&b, " %d %s", r.Step, r.Action)
+			if m, ok := r.Output.(map[string]any); ok && m["fallback"] != nil {
+				fmt.Fprintf(&b, "(%v)", m["fallback"])
+			}
+			b.WriteString(",")
+		}
+	}
+	runProgress.Store(sid, strings.TrimSuffix(b.String(), ","))
 }
 
 // execAction runs one action against the live page and returns its output.

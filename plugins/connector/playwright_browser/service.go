@@ -198,6 +198,12 @@ type action struct {
 	Warning string `json:"-"`
 	// Frame is an alias of frame_url_contains; "main" means the page itself.
 	Frame string `json:"frame,omitempty"`
+	// frame_click: Menu is opened first when the target is not on screen
+	// yet; ExpectURL is the address the click must lead to.
+	Menu      string `json:"menu,omitempty"`
+	ExpectURL string `json:"expect_url,omitempty"`
+	// pinned is the exact match openMenu found; locate returns it as is.
+	pinned playwright.Locator
 	// frame_type / frame_fill: [min,max] ms between keys.
 	PerCharDelayMS []int `json:"per_char_delay_ms,omitempty"`
 	// frame_text / observe size knobs.
