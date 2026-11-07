@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/playwright-community/playwright-go"
@@ -77,11 +78,10 @@ func runCDP(page playwright.Page, a action) (any, error) {
 	if err := cdpBlocked(a.Method); err != nil {
 		return nil, err
 	}
-	sess, err := page.Context().NewCDPSession(page)
+	sess, err := pageCDPSession(page)
 	if err != nil {
-		return nil, fmt.Errorf("open a CDP session: %w", err)
+		return nil, err
 	}
-	defer func() { _ = sess.Detach() }()
 	var params map[string]any
 	if len(a.Params) > 0 {
 		params = a.Params
@@ -107,6 +107,29 @@ func runCDP(page playwright.Page, a action) (any, error) {
 			"note": "the result is larger than a step may return: for base64 data (a PDF, an image) pass save_dir to get a file instead"}, nil
 	}
 	return res, nil
+}
+
+// cdpSessions keeps one CDP session per page. Chrome drops what a session
+// set (Emulation overrides, extra headers, scripts added on new documents)
+// when that session detaches, so a session per command made those commands
+// report success and do nothing. The session lives until the page closes,
+// which for a live session is when the call's Playwright connection ends.
+var cdpSessions sync.Map // playwright.Page → playwright.CDPSession
+
+func pageCDPSession(page playwright.Page) (playwright.CDPSession, error) {
+	if s, ok := cdpSessions.Load(page); ok {
+		return s.(playwright.CDPSession), nil
+	}
+	sess, err := page.Context().NewCDPSession(page)
+	if err != nil {
+		return nil, fmt.Errorf("open a CDP session: %w", err)
+	}
+	if prev, loaded := cdpSessions.LoadOrStore(page, sess); loaded {
+		_ = sess.Detach()
+		return prev.(playwright.CDPSession), nil
+	}
+	page.Once("close", func() { cdpSessions.Delete(page) })
+	return sess, nil
 }
 
 // saveCDPData decodes a base64 payload into save_dir and returns its path.
