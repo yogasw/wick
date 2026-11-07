@@ -260,7 +260,10 @@ function Wick-Self {
   if (-not $script:Dir) { $script:Dir = Join-Path $env:USERPROFILE 'wick-agent' }
   if (-not $script:App) { $script:App = Split-Path $script:Dir -Leaf }
   Setup-Git
-  if (Test-Path (Join-Path $Src '.git')) {
+  if ($NoPull -and (Test-Path (Join-Path $Src '.git'))) {
+    # Locked by hand: whatever is checked out (and edited) in -Src is what gets built.
+    Say "wick source $Src as it is (-NoPull: no fetch, local changes kept)"
+  } elseif (Test-Path (Join-Path $Src '.git')) {
     Say "wick source $Src -> $Ref"
     Run git @('-C', $Src, 'fetch', '--quiet', 'origin', $Ref)
     Run git @('-C', $Src, 'checkout', '--quiet', '--detach', 'FETCH_HEAD')

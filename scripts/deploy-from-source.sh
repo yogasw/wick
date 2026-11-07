@@ -40,7 +40,8 @@ Flags
   --app NAME       installed binary name (default: name: in wick.yml)
   --wick DIR       build against a local wick checkout (temporary go.mod replace, always restored)
   --no-upgrade     keep the wick version in go.mod (default: `wick upgrade -y` to the latest release)
-  --no-pull        do not git pull
+  --no-pull        do not git pull. wick: build --src exactly as it is — no fetch, no
+                   checkout, local edits kept (you pick the commit by hand)
   --no-bump        keep wick.yml's version (default: bump the patch so reload accepts the build)
   --no-test        skip go test before building
   --all-plugins    rebuild every plugin, not only the newer ones
@@ -384,7 +385,10 @@ prep_wick_source() {
 wick_self() {
   DIR="${DIR:-$HOME/wick-agent}"; APP="${APP:-$(basename "$DIR")}"
   need_pkgs git curl tar
-  if [ -d "$SRC/.git" ]; then
+  if [ "$PULL" = 0 ] && [ -d "$SRC/.git" ]; then
+    # Locked by hand: whatever is checked out (and edited) in --src is what gets built.
+    say "wick source $SRC as it is (--no-pull: no fetch, local changes kept)"
+  elif [ -d "$SRC/.git" ]; then
     say "wick source $SRC -> $REF"
     run git -C "$SRC" fetch --quiet origin "$REF"
     run git -C "$SRC" checkout --quiet --force --detach FETCH_HEAD   # a build dir: local edits are not kept
@@ -395,6 +399,8 @@ wick_self() {
   # Same commit as the installed build: nothing to rebuild, only make sure it runs.
   local sha="" stamp="$HOME/.$APP/built-commit"   # next to the app's own data (~/.wick-agent)
   [ -d "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
+  # Uncommitted edits are not in the commit id: a dirty tree always rebuilds.
+  [ -n "$sha" ] && [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ] && sha=""
   if [ -n "$sha" ] && [ -z "$FORCE" ] && command -v "$APP" >/dev/null 2>&1 && \
      [ "$(cat "$stamp" 2>/dev/null)" = "$sha" ]; then
     say "$APP is already built from ${sha:0:12} ($REF) — nothing to rebuild (--force to rebuild anyway)"
