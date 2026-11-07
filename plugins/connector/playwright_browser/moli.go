@@ -350,7 +350,11 @@ func moliNetArgs(c *connector.Ctx) []string {
 // moliFetchArgs builds the `moli fetch` argv for get_markdown. No --layout:
 // markdown and the semantic tree are read from the DOM, not from paint.
 func moliFetchArgs(c *connector.Ctx, in getMarkdownInput) []string {
-	args := []string{"fetch", "--dump", in.Format, "--wait", "done"}
+	wait := in.Wait
+	if wait == "" {
+		wait = "done"
+	}
+	args := []string{"fetch", "--dump", in.Format, "--wait", wait}
 	if in.WaitSelector != "" {
 		args = append(args, "--wait-selector", in.WaitSelector)
 	}
@@ -362,9 +366,48 @@ func moliFetchArgs(c *connector.Ctx, in getMarkdownInput) []string {
 // server, no CDP, no Playwright, which is what makes it much faster than
 // get_content. Bounded by the navigation timeout plus a little for startup.
 func moliFetch(c *connector.Ctx, in getMarkdownInput) (any, error) {
+	out, err := moliFetchOnce(c, in)
+	if err != nil {
+		return nil, err
+	}
+	// A page that renders its text with JavaScript is empty at "done".
+	// Retry once on network idle instead of handing back nothing.
+	if in.Wait == "done" && in.WaitSelector == "" && thinPage(out) {
+		in.Wait = "networkidle"
+		if again, err := moliFetchOnce(c, in); err == nil && !thinPage(again) {
+			return map[string]any{"url": in.URL, "format": in.Format, "content": again, "wait": in.Wait,
+				"note": "empty at wait=done (page renders with JavaScript), read again at wait=networkidle: pass wait=networkidle next time"}, nil
+		}
+		in.Wait = "done"
+	}
+	res := map[string]any{"url": in.URL, "format": in.Format, "content": out, "wait": in.Wait}
+	if thinPage(out) {
+		res["warning"] = "page came back (almost) empty: it likely renders with JavaScript. Try wait=domstable, or wait_selector on the element that holds the text"
+	}
+	return res, nil
+}
+
+// thinPage reports a dump with next to no text (under 40 words).
+func thinPage(s string) bool { return len(strings.Fields(s)) < 40 }
+
+// moliFetchSlots caps how many `moli fetch` processes run at once in this
+// plugin. Each one is a full engine: a caller that fans out over many URLs
+// (dozens of parallel calls) would otherwise start them all together, starve
+// the host and see every fetch time out. Extra calls wait for a slot.
+var moliFetchSlots = make(chan struct{}, maxMoliFetches)
+
+const maxMoliFetches = 3
+
+func moliFetchOnce(c *connector.Ctx, in getMarkdownInput) (string, error) {
+	select {
+	case moliFetchSlots <- struct{}{}:
+		defer func() { <-moliFetchSlots }()
+	case <-c.Context().Done():
+		return "", fmt.Errorf("moli fetch %s: gave up waiting for a free slot (%d run at once): %w", in.URL, maxMoliFetches, c.Context().Err())
+	}
 	bin := moliBinaryPath(c)
 	if bin == "" || !fileExists(bin) {
-		return nil, fmt.Errorf("moli is not installed: download it from the Browser card on this connector, or set moli_executable_path")
+		return "", fmt.Errorf("moli is not installed: download it from the Browser card on this connector, or set moli_executable_path")
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), time.Duration(navTimeout(c))*time.Millisecond+5*time.Second)
 	defer cancel()
@@ -386,9 +429,14 @@ func moliFetch(c *connector.Ctx, in getMarkdownInput) (any, error) {
 		if msg == "" {
 			msg = "(no output)"
 		}
-		return nil, fmt.Errorf("moli fetch %s: %v: %s", in.URL, err, msg)
+		// moli prints "Error: failed to fetch …" then "Reason: …"; lead with
+		// the reason, the part that says what to change.
+		if i := strings.Index(msg, "Reason:"); i >= 0 {
+			msg = strings.TrimSpace(msg[i+len("Reason:"):]) + " (" + strings.TrimSpace(msg[:i]) + ")"
+		}
+		return "", fmt.Errorf("moli fetch %s (wait=%s): %v: %s", in.URL, in.Wait, err, msg)
 	}
-	return map[string]any{"url": in.URL, "format": in.Format, "content": clip(stdout.String())}, nil
+	return clip(stdout.String()), nil
 }
 
 // moliProfileFlag is the flag form that marks a Moli process as ours in the

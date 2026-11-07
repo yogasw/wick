@@ -585,16 +585,31 @@ func expectURL(page playwright.Page, f playwright.Frame, a action, res map[strin
 		res["url"] = currentURL(page)
 		return nil
 	}
+	href := ""
 	if h, herr := rawLocator(f, a).First().ElementHandle(playwright.LocatorElementHandleOptions{Timeout: playwright.Float(1000)}); herr == nil {
-		_, _ = within(2*time.Second, func() (any, error) { return h.Evaluate(`el => el.click()`) })
+		v, _ := within(2*time.Second, func() (any, error) {
+			return h.Evaluate(`el => { const a = el.closest("a[href]"); el.click(); return a ? a.href : "" }`)
+		})
+		href, _ = v.(string)
 		_ = h.Dispose()
 		res["retried"] = "dom_click"
 	}
-	if err := pollURL(page, a.ExpectURL, 5*time.Second); err != nil {
-		return fmt.Errorf("click on %q did not lead to %s: %w", a.Text+a.Selector, a.ExpectURL, err)
+	if err := pollURL(page, a.ExpectURL, 5*time.Second); err == nil {
+		res["url"] = currentURL(page)
+		return nil
 	}
-	res["url"] = currentURL(page)
-	return nil
+	// A plain link whose click the page (or engine) swallowed: open its
+	// address, which is where the click was meant to go.
+	if strings.HasPrefix(href, "http") {
+		res["retried"] = "goto_href"
+		if _, err := page.Goto(href, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateCommit}); err == nil {
+			if err := pollURL(page, a.ExpectURL, 10*time.Second); err == nil {
+				res["url"] = currentURL(page)
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("click on %q did not lead to %s (now %s)", a.Text+a.Selector, a.ExpectURL, currentURL(page))
 }
 
 func currentURL(page playwright.Page) string {

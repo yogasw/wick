@@ -76,7 +76,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 |---|---|---|
 | `screenshot` | `url`, `full_page`, `selector`, `wait_for` | PNG screenshot as base64. `full_page` captures the whole scrollable page; `selector` scopes to one element. |
 | `get_content` | `url`, `selector`, `as_text` (default true), `wait_for` | Rendered content after JS runs — visible text by default, or HTML when `as_text` is false. |
-| `get_markdown` | `url`, `format` (`markdown` \| `semantic_tree_text`), `wait_selector` | One-shot `moli fetch`: the page as Markdown, or a compact semantic outline. No screenshot or JS interaction, but much faster than `get_content`. **Only offered on `Browser=moli` instances** (`VisibleWhen = "browser:moli"`). |
+| `get_markdown` | `url`, `format` (`markdown` \| `semantic_tree_text`), `wait` (`done` \| `networkidle` \| `domstable` \| `load` \| `domcontentloaded`), `wait_selector` | One-shot `moli fetch`: the page as Markdown, or a compact semantic outline. No screenshot or JS interaction, but much faster than `get_content`. **Only offered on `Browser=moli` instances** (`VisibleWhen = "browser:moli"`). |
 | `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **chromium and moli only** — `VisibleWhen = "browser:chromium\|moli"`, so other engine instances never list it. |
 | `scrape` | `url`, `fields` (JSON map of key → CSS selector), `wait_for` | Structured extraction — each selector's inner text is returned under its key; a selector matching nothing returns `""`. |
 | `eval` | `url`, `script` | Evaluates a JS expression in the page, returns the JSON-serialized result. Marked **destructive** — arbitrary JavaScript can submit forms and change remote state. |
@@ -297,6 +297,14 @@ How to drive a site well, on any engine:
 - **Wait on what the page shows,** `wait_for_text` / `wait_for_url`, not a fixed `wait` before reading.
 - **One `run` has a 45 s budget.** Split a longer flow into several runs on the same live session, or chain them in one `wick_run_code` script so no model turn sits between them. A run that hits the budget names the step it was on.
 - **A link that will not navigate** (a redirect through another domain on `moli`): `goto` its address. Efficient beats human-like when nobody watches.
+
+Reading many pages (a docs site, a catalogue):
+
+- **`get_markdown`, not clicks.** One `moli fetch` per URL, no session: about 1.5 s a page against 20–40 s and a model turn when a browser clicks through.
+- **JavaScript-rendered sites** come back empty at the default `wait=done`. Pass `wait=networkidle` (or `domstable`, or `wait_selector` on the element that holds the text). An empty result is retried once with `networkidle` on its own, and the result says so in `note`.
+- **Try one page first,** check the word count, then run the rest.
+- **One `wick_run_code` script:** read the index page, collect the links, fetch them a few at a time and write each page to its own file (a script call returns after 120 s and a single file holds 1 MB, so store per page and make the script skip pages already stored). Return counts, not the pages.
+- **The plugin runs at most 3 `moli fetch` at once** and queues the rest, so a fan-out over dozens of URLs waits instead of starving the host.
 
 ## Moli
 

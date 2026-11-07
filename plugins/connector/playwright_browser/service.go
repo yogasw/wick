@@ -93,7 +93,15 @@ func parseGetMarkdown(c *connector.Ctx) (getMarkdownInput, error) {
 	default:
 		return getMarkdownInput{}, fmt.Errorf("format must be markdown or semantic_tree_text, got %q", format)
 	}
-	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector"))}, nil
+	wait := strings.TrimSpace(c.Input("wait"))
+	switch wait {
+	case "":
+		wait = "done"
+	case "done", "networkidle", "domstable", "load", "domcontentloaded":
+	default:
+		return getMarkdownInput{}, fmt.Errorf("wait must be done, networkidle, domstable, load or domcontentloaded, got %q", wait)
+	}
+	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector")), Wait: wait}, nil
 }
 
 func parsePDF(c *connector.Ctx) (pdfInput, error) {

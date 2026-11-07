@@ -79,6 +79,11 @@ func scopeText(f playwright.Frame, selector string, values bool) (string, error)
 		return "", err
 	}
 	if v == nil {
+		if selector == "" {
+			// No body yet: the page is between documents (a submit or a
+			// navigation). Empty text, so the wait keeps going.
+			return "", nil
+		}
 		return "", fmt.Errorf("selector not found: %s", selector)
 	}
 	s, _ := v.(string)
