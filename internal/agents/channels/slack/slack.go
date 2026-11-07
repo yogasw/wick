@@ -139,6 +139,12 @@ type turn struct {
 	// agent wrote between tools.
 	segStart int
 	lastSeg  string
+	// postedInThread is set when a tool call of the turn wrote into this
+	// thread itself (a Slack send/update op naming its channel and
+	// thread_ts). The agent delivered its answer that way, so a turn
+	// closing on a tool or a bare [silent] posts nothing instead of the
+	// narration it wrote before its last tools.
+	postedInThread bool
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -242,6 +248,7 @@ func (t *turn) carryOver(old *turn) {
 	t.buf.WriteString(old.buf.String())
 	t.hasStarted = old.hasStarted
 	t.segStart, t.lastSeg = old.segStart, old.lastSeg
+	t.postedInThread = old.postedInThread
 	// Keep pointing at the live message: dropping these makes finalizeReply
 	// post a fresh message and strand the streamed one mid-word.
 	t.liveTS = old.liveTS
@@ -3067,13 +3074,31 @@ func (t *turn) cutSegment() {
 }
 
 // replyText is the turn's reply: the text after its last tool call, or
-// the last non-empty text before it when the turn ended on a tool.
+// the last non-empty text before it when the turn ended on a tool and
+// did not already post into the thread through a tool (postedInThread).
 // Caller holds s.mu.
 func (t *turn) replyText() string {
 	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
 		return seg
 	}
+	if t.postedInThread {
+		return ""
+	}
 	return t.lastSeg
+}
+
+// threadWriteOp matches a tool input that writes a Slack message: the
+// connector's send/update/upload ops or a raw chat.postMessage/update.
+var threadWriteOp = regexp.MustCompile(`(send_message|update_message|upload_file|chat\.postMessage|chat\.update)`)
+
+// postsToThread reports whether a tool input writes a message into the
+// thread channelID/threadTS. A read of the same thread names both too,
+// so the op must be a write.
+func postsToThread(input, channelID, threadTS string) bool {
+	if channelID == "" || threadTS == "" {
+		return false
+	}
+	return strings.Contains(input, channelID) && strings.Contains(input, threadTS) && threadWriteOp.MatchString(input)
 }
 
 // blankSegment reports whether seg has nothing a reader would see once
@@ -3088,6 +3113,7 @@ func blankSegment(seg string) bool {
 func (t *turn) resetText() {
 	t.buf.Reset()
 	t.segStart, t.lastSeg = 0, ""
+	t.postedInThread = false
 }
 
 // startEditTicker launches a goroutine that flushes the accumulated text
@@ -3736,6 +3762,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		if t := s.turns[sessionKey]; t != nil {
 			t.interim.Tool(ev.ToolName, ev.ToolInput, ev.ToolUseID, hide)
 			t.cutSegment()
+			if postsToThread(ev.ToolInput, t.channelID, t.threadTS) {
+				t.postedInThread = true
+			}
 		}
 		s.mu.Unlock()
 

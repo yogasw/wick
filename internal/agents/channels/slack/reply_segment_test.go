@@ -52,3 +52,50 @@ func TestBlankSegment(t *testing.T) {
 		}
 	}
 }
+
+// playThreadTurn runs: answer text, a tool call with input, narration,
+// one more tool, then the closing text; it returns the turn's reply.
+func playThreadTurn(t *testing.T, input, closing string) string {
+	t.Helper()
+	c := &Channel{turns: map[string]*turn{"slack-1": {channelID: "C01TESTCHAN", threadTS: "1700000000.000100", running: true}}}
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.TextDelta, Text: "Posting the answer."})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolUse, ToolName: "mcp__wick__wick_execute", ToolInput: input, ToolUseID: "a"})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "a", Text: "ok"})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.TextDelta, Text: "Good. Now the log and the archive."})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: `{"command":"ls"}`, ToolUseID: "b"})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolResult, ToolUseID: "b", Text: "ok"})
+	if closing != "" {
+		c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.TextDelta, Text: closing})
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turns["slack-1"].replyText()
+}
+
+// A turn that posted its answer into its own thread through a tool and
+// then closed on a tool (or a bare [silent]) posts nothing: the text
+// before its last tool is narration, not an answer.
+func TestReplyTextAfterToolPostToThreadIsEmpty(t *testing.T) {
+	send := `{"tool_id":"conn:x/send_message","params":{"channel":"C01TESTCHAN","thread_ts":"1700000000.000100","text":"answer"}}`
+	for _, closing := range []string{"", "[silent]"} {
+		if got := playThreadTurn(t, send, closing); got != "" {
+			t.Fatalf("closing %q: replyText = %q, want empty", closing, got)
+		}
+	}
+	// Real closing text still goes out.
+	if got := playThreadTurn(t, send, "Done, see above."); got != "Done, see above." {
+		t.Fatalf("replyText = %q", got)
+	}
+}
+
+// Reading the thread, or posting to another thread, keeps the fallback.
+func TestReplyTextFallbackWithoutThreadPost(t *testing.T) {
+	for _, input := range []string{
+		`{"tool_id":"conn:x/get_thread_replies","params":{"channel":"C01TESTCHAN","thread_ts":"1700000000.000100"}}`,
+		`{"tool_id":"conn:x/send_message","params":{"channel":"C01OTHER","thread_ts":"1700000000.000999","text":"note"}}`,
+	} {
+		if got := playThreadTurn(t, input, ""); got != "Good. Now the log and the archive." {
+			t.Fatalf("input %s: replyText = %q", input, got)
+		}
+	}
+}
