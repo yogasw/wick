@@ -811,6 +811,8 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		return out, err
 	case "frame_click":
 		return frameClick(page, env, a)
+	case "cdp":
+		return runCDP(page, a)
 
 	// ── read / extract ──────────────────────────────────────────────
 	case "get_attribute":

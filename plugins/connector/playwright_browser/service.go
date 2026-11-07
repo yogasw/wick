@@ -101,7 +101,10 @@ func parseGetMarkdown(c *connector.Ctx) (getMarkdownInput, error) {
 	default:
 		return getMarkdownInput{}, fmt.Errorf("wait must be done, networkidle, domstable, load or domcontentloaded, got %q", wait)
 	}
-	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector")), Wait: wait}, nil
+	if _, err := parseMoliExtraArgs(c.Input("extra_args")); err != nil {
+		return getMarkdownInput{}, err
+	}
+	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector")), Wait: wait, ExtraArgs: c.Input("extra_args")}, nil
 }
 
 func parsePDF(c *connector.Ctx) (pdfInput, error) {
@@ -233,6 +236,9 @@ type action struct {
 	// set_viewport.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
+	// cdp: a raw DevTools protocol command on the page (see cdpBlocked).
+	Method string         `json:"method,omitempty"`
+	Params map[string]any `json:"params,omitempty"`
 	// SaveDir writes a screenshot to this directory and returns its path
 	// instead of base64.
 	SaveDir string `json:"save_dir,omitempty"`
@@ -256,7 +262,7 @@ var knownActions = map[string]bool{
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
 	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
 	"frame_eval": true, "frame_text": true, "frame_click": true,
-	"set_viewport": true, "frame_type": true, "frame_fill": true,
+	"set_viewport": true, "frame_type": true, "frame_fill": true, "cdp": true,
 	"wait_for_text": true, "wait_for_change": true, "observe": true,
 	// wait
 	"wait_for": true, "wait": true,
@@ -360,6 +366,10 @@ func validateActionArgs(i int, a action) error {
 		}
 		if a.UntilStableMS < 0 || a.UntilStableMS > maxWaitMS {
 			return fmt.Errorf("action[%d] %s: until_stable_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
+	case "cdp":
+		if err := cdpBlocked(a.Method); err != nil {
+			return fmt.Errorf("action[%d] cdp: %w", i, err)
 		}
 	case "set_viewport":
 		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {

@@ -358,6 +358,12 @@ func moliFetchArgs(c *connector.Ctx, in getMarkdownInput) []string {
 	if in.WaitSelector != "" {
 		args = append(args, "--wait-selector", in.WaitSelector)
 	}
+	// Validated in parseGetMarkdown; a bad value here drops the extras.
+	if extra, err := parseMoliExtraArgs(in.ExtraArgs); err == nil {
+		args = append(args, extra...)
+	}
+	// The connector's network policy goes last so a pass-through flag can
+	// never come after it.
 	args = append(args, moliNetArgs(c)...)
 	return append(args, in.URL)
 }

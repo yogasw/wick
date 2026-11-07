@@ -76,7 +76,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 |---|---|---|
 | `screenshot` | `url`, `full_page`, `selector`, `wait_for` | PNG screenshot as base64. `full_page` captures the whole scrollable page; `selector` scopes to one element. |
 | `get_content` | `url`, `selector`, `as_text` (default true), `wait_for` | Rendered content after JS runs — visible text by default, or HTML when `as_text` is false. |
-| `get_markdown` | `url`, `format` (`markdown` \| `semantic_tree_text`), `wait` (`done` \| `networkidle` \| `domstable` \| `load` \| `domcontentloaded`), `wait_selector` | One-shot `moli fetch`: the page as Markdown, or a compact semantic outline. No screenshot or JS interaction, but much faster than `get_content`. **Only offered on `Browser=moli` instances** (`VisibleWhen = "browser:moli"`). |
+| `get_markdown` | `url`, `format` (`markdown` \| `semantic_tree_text`), `wait` (`done` \| `networkidle` \| `domstable` \| `load` \| `domcontentloaded`), `wait_selector`, `extra_args` | One-shot `moli fetch`: the page as Markdown, or a compact semantic outline. No screenshot or JS interaction, but much faster than `get_content`. **Only offered on `Browser=moli` instances** (`VisibleWhen = "browser:moli"`). |
 | `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **chromium and moli only** — `VisibleWhen = "browser:chromium\|moli"`, so other engine instances never list it. |
 | `scrape` | `url`, `fields` (JSON map of key → CSS selector), `wait_for` | Structured extraction — each selector's inner text is returned under its key; a selector matching nothing returns `""`. |
 | `eval` | `url`, `script` | Evaluates a JS expression in the page, returns the JSON-serialized result. Marked **destructive** — arbitrary JavaScript can submit forms and change remote state. |
@@ -305,6 +305,24 @@ Reading many pages (a docs site, a catalogue):
 - **Try one page first,** check the word count, then run the rest.
 - **One `wick_run_code` script:** read the index page, collect the links, fetch them a few at a time and write each page to its own file (a script call returns after 120 s and a single file holds 1 MB, so store per page and make the script skip pages already stored). Return counts, not the pages.
 - **The plugin runs at most 3 `moli fetch` at once** and queues the rest, so a fan-out over dozens of URLs waits instead of starving the host.
+
+## Using what the connector does not wrap yet
+
+Engines move faster than this connector. Two pass-throughs let an agent use a new engine feature without waiting for a release:
+
+| Need | Use | Engines |
+|---|---|---|
+| A newer engine build | `browser_update` | all |
+| Logic inside the page | `eval` / `frame_eval` | all |
+| A DevTools protocol command the connector does not wrap | `run` action `cdp{method, params}` | chromium, cloak engines, moli |
+| A `moli fetch` flag the connector does not expose | `get_markdown` `extra_args` (JSON array) | moli |
+
+Both are fenced:
+
+- **`cdp`** reaches the page only. The `Browser`, `Target`, `Storage`, `SystemInfo`, `Tethering` and `Memory` domains are refused, and so are single commands that read cookies or stored site data, turn off TLS checks, write downloads, or close/crash the tab. One command gets 10 s.
+- **`extra_args`** passes page-scoped flags only: `--eval`, the `--wait-*` family (a `--wait-*` flag moli adds later passes too), `--delay-ms`, `--redirect-wait-ms`, `--header`, `--strip-mode`, `--document-start-script`, `--with-frames`, `--with-base`, `--disable-js`, `--disable-css`, `--disable-subframes`, `--image`, `--font`, `--scrollbars`, `--timeout`, `--fail`, `--fail-with-body`. Flags that read host files (`*-file`, `--cookie-jar`, `--ca-cert`, `--client-*`) or change network, proxy, TLS, profile or output settings are refused. The connector's own network policy flags always come after the extras.
+
+A pass-through that turns out to be needed often is the signal to wrap it as a proper option.
 
 ## Moli
 
