@@ -70,7 +70,10 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, err.Error(), "")
 		return
 	}
-	out, err := json.Marshal(res)
+	// The audit above keeps every call; the model gets them folded.
+	shown := *res
+	shown.Calls = codemode.CompactCalls(res.Calls)
+	out, err := json.Marshal(shown)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "failed to encode result: "+err.Error(), "")
 		return

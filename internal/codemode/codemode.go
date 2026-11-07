@@ -90,6 +90,39 @@ type Call struct {
 	Destructive bool   `json:"destructive,omitempty"`
 	MS          int64  `json:"ms"`
 	Error       string `json:"error,omitempty"`
+	// Count is set on a folded entry (CompactCalls): this many successful
+	// calls to the same tool, MS their total.
+	Count int `json:"count,omitempty"`
+}
+
+// CompactCalls folds the successful calls of each tool into one entry with a
+// count, in first-call order, and keeps every failed call as it is. A script
+// that loops over dozens of pages would otherwise send its model a line per
+// file check and fetch, more text than its own result. The full list stays
+// on the run's audit record.
+func CompactCalls(calls []Call) []Call {
+	out := make([]Call, 0, len(calls))
+	folded := map[string]int{} // tool_id -> index in out of its folded entry
+	for _, c := range calls {
+		if !c.OK {
+			out = append(out, c)
+			continue
+		}
+		if i, ok := folded[c.ToolID]; ok {
+			out[i].Count++
+			out[i].MS += c.MS
+			continue
+		}
+		c.Count = 1
+		folded[c.ToolID] = len(out)
+		out = append(out, c)
+	}
+	for i := range out {
+		if out[i].Count == 1 {
+			out[i].Count = 0 // a single call reads as before
+		}
+	}
+	return out
 }
 
 // Result is what wick_run_code returns.

@@ -101,6 +101,26 @@ project gets a clear "no project folder" error.
 - The runner is downloaded automatically the first time a run finds none
   installed (unless the host turned that off). A "runner too old" error means
   the `codemode_goja` plugin needs an update.
+- `calls` comes back folded: successful calls to one tool are one entry with
+  a `count` (and their total `ms`); every failed call is listed on its own.
+  The run's audit record keeps the full list.
+
+## Many items (pages, rooms, tickets)
+
+- **Try one or two first**, check the output is what you want (not empty,
+  not just navigation), then run the rest.
+- **A few at a time**, not one `callMany` over everything: a connector that
+  starts a process per call (a browser, a CLI) starves a shared host and
+  every call times out. Batches of 3–5 in a loop.
+- **Store each item as it lands**, one `wick.file.write` per item (a file
+  holds 1 MB, a run ends at its timeout), and skip items already stored, so
+  a run that stops early is resumed by running it again.
+- **Stop before the timeout** (check `Date.now()` against a budget) and
+  return `remaining`, instead of being cut mid-batch.
+- **Return counts and a short sample,** not the items: the model reads the
+  files afterwards only when it needs them.
+- **Show progress** with the session `todo` (one item per stage or batch)
+  when someone is watching.
 
 ## In a watch (kind=code)
 
