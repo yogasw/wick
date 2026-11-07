@@ -665,23 +665,33 @@ func contextLost(err error) bool {
 	return strings.Contains(err.Error(), "Execution context was destroyed")
 }
 
-// moliClick is frame_click on moli. Moli hit-tests without stacking, so the
-// element's box is not enough: it asks the page for a point inside the
+// moliClick is frame_click on moli. Moli hit-tests a lazily refreshed layout,
+// so the element's box is not enough: it asks the page for a point inside the
 // element that moli itself resolves to it, and clicks there with the real
-// mouse (trusted events, like a person). Only when no such point exists (a
-// dropdown moli places under the page) is the element clicked through the
-// DOM, reported as via=dom.
+// mouse (trusted events, like a person). Only when no such point shows up
+// within 1.5s is the element clicked through the DOM, reported as via=dom.
 func moliClick(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (map[string]any, error) {
 	h := hitTarget(f, a)
 	if h == nil {
 		return nil, fmt.Errorf("element not found")
 	}
 	defer func() { _ = h.Dispose() }()
-	v, err := within(2*time.Second, func() (any, error) { return h.Evaluate(moliPointJS) })
-	if err != nil {
-		return nil, err
+	// Moli's layout is an on-demand snapshot: right after a menu opens, hit
+	// testing can still see the page as it was for ~0.5s. Ask again until a
+	// point resolves to the element, then click it with the mouse.
+	var p map[string]any
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for {
+		v, err := within(2*time.Second, func() (any, error) { return h.Evaluate(moliPointJS) })
+		if err != nil {
+			return nil, err
+		}
+		p, _ = v.(map[string]any)
+		if _, ok := p["px"]; ok || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	p, _ := v.(map[string]any)
 	box := map[string]any{"x": p["x"], "y": p["y"], "w": p["w"], "h": p["h"]}
 	px, okx := p["px"].(float64)
 	py, oky := p["py"].(float64)
@@ -706,13 +716,20 @@ func moliClick(page playwright.Page, env mouseEnv, f playwright.Frame, a action)
 }
 
 // moliPointJS scrolls the element into view and looks for a point inside it
-// (centre first, then a grid) that elementFromPoint resolves to the element
-// or a child.
+// (centre first, then a grid) that elementFromPoint resolves to the element,
+// a child, or the control wrapping it.
 const moliPointJS = `el => {
-  el.scrollIntoView({block: "center"});
-  const r = el.getBoundingClientRect();
+  let r = el.getBoundingClientRect();
+  // Scroll only when off screen: a scroll closes many dropdown menus.
+  if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) {
+    el.scrollIntoView({block: "center"});
+    r = el.getBoundingClientRect();
+  }
   const out = {x: r.x, y: r.y, w: r.width, h: r.height};
-  const hits = (x, y) => { const t = document.elementFromPoint(x, y); return !!t && (t === el || el.contains(t)); };
+  // The element, a child, or the control wrapping it (moli resolves a label
+  // inside a link to the link itself, which is what the click is meant for).
+  const ctl = el.closest("a,button,label,summary,select,input,textarea,[role],[onclick],[tabindex]");
+  const hits = (x, y) => { const t = document.elementFromPoint(x, y); return !!t && (t === el || el.contains(t) || t === ctl); };
   const fr = [[.5,.5],[.3,.5],[.7,.5],[.5,.3],[.5,.7],[.2,.2],[.8,.2],[.2,.8],[.8,.8]];
   for (const [fx, fy] of fr) {
     const x = r.x + r.width * fx, y = r.y + r.height * fy;

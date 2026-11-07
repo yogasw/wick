@@ -529,6 +529,14 @@ func sessionList(c *connector.Ctx) (any, error) {
 // describeTabs lists a session's open pages (index, url, title). Best-effort:
 // returns nil on any connect error rather than failing the whole list.
 func describeTabs(c *connector.Ctx, id string) []map[string]any {
+	if meta, err := readMeta(sessionDir(c), id); err == nil && isMoliEngine(meta.Browser) {
+		// Moli shares Playwright's utility world across CDP clients, so a
+		// listing that attaches and detaches Playwright tears down the world
+		// a run on the same browser is using ("Execution context was
+		// destroyed"). Read the tabs over plain HTTP instead.
+		touchSession(c, id)
+		return tabsOverHTTP(meta.CDPURL)
+	}
 	lc, err := connectSession(c, id)
 	if err != nil {
 		return nil
@@ -748,6 +756,33 @@ func readDevToolsPort(udd string, wait time.Duration) (string, bool) {
 
 // cdpAlive reports whether a CDP endpoint answers /json/version — the liveness
 // probe used to sweep dead sessions.
+// tabsOverHTTP lists a browser's pages from its /json/list endpoint, without
+// attaching a CDP client. Nil on any error, like describeTabs.
+func tabsOverHTTP(cdpURL string) []map[string]any {
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(cdpURL + "/json/list")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var targets []struct {
+		Type  string `json:"type"`
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil
+	}
+	tabs := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		if t.Type != "page" {
+			continue
+		}
+		tabs = append(tabs, map[string]any{"index": len(tabs), "url": t.URL, "title": t.Title})
+	}
+	return tabs
+}
+
 func cdpAlive(cdpURL string) bool {
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(cdpURL + "/json/version")

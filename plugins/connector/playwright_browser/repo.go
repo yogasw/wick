@@ -582,7 +582,6 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 		}
 		results = append(results, res)
 	}
-	runProgress.Delete(env.key)
 	return map[string]any{"steps": results, "completed": true}
 }
 
