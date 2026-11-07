@@ -192,6 +192,7 @@
             profile={selected}
             {tags}
             {providerList}
+            loadModels={loadProviderModels}
             readonly={!isAdmin}
             {saving}
             error={formError}

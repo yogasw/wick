@@ -167,6 +167,7 @@
       profile={editing}
       {tags}
       {providerList}
+      loadModels={loadProviderModels}
       {saving}
       error={formError}
       onsave={save}

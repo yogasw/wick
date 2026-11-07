@@ -197,4 +197,22 @@ describe("AgentProfileEditor", () => {
     });
     expect(screen.getByRole("button", { name: /delete/i })).toBeTruthy();
   });
+
+  // omp/opencode keep their models in live lists the provider list does not
+  // carry: without the loader the role's picker drilled into an empty list.
+  test("hands the model loader to the provider picker", async () => {
+    const loadModels = vi.fn().mockResolvedValue([{ id: "zen", label: "Zen", default: false, live: true }]);
+    render(AgentProfileEditor, {
+      profile: profile({ key: "k", description: "d", provider: "omp/acme" }),
+      providerList: [{ type: "omp", name: "acme" }],
+      loadModels,
+      onsave: vi.fn(),
+    });
+
+    await fireEvent.click(screen.getAllByRole("button", { name: /omp/i })[0]);
+    const rows = await screen.findAllByRole("button", { name: /omp/i });
+    await fireEvent.click(rows[rows.length - 1]);
+    expect(loadModels).toHaveBeenCalledWith("omp/acme", undefined);
+    expect(await screen.findByText("Zen")).toBeTruthy();
+  });
 });

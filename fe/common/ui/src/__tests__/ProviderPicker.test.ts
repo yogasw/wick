@@ -135,9 +135,30 @@ describe("ProviderPicker live sets", () => {
     render(ProviderPicker, { options: [WICK], value: "", onChange, loadModels });
 
     await openAndDrill();
-    await fireEvent.click(await screen.findByText(/use default model/i));
+    await fireEvent.click(await screen.findByRole("button", { name: /default model/i }));
 
     expect(onChange).toHaveBeenCalledWith("wick/x");
+  });
+
+  // Same rows as the chat picker: the instance's own default sits above the
+  // list, and a live row says so whatever the provider type.
+  test("offers the default model row and marks live rows like the chat picker", async () => {
+    const onChange = vi.fn();
+    const loadModels = vi.fn().mockResolvedValue([
+      { id: "zen", label: "Zen", default: true, live: true, desc: "43 models" },
+    ] satisfies ComposerModelOption[]);
+    const OMP = { value: "omp/acme", label: "omp · acme", models: [] as ComposerModelOption[] };
+    render(ProviderPicker, { options: [OMP], value: "", onChange, loadModels });
+
+    await fireEvent.click(screen.getByRole("button", { name: /select provider/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /omp · acme/i }));
+    expect(await screen.findByText("live set")).toBeTruthy();
+    expect(screen.getByText("default")).toBeTruthy();
+    expect(screen.getByText("43 models")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /refresh models/i })).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("button", { name: /default model/i }));
+    expect(onChange).toHaveBeenCalledWith("omp/acme");
   });
 
   // A live-set pin matches no entry in the static list, so showing the bare

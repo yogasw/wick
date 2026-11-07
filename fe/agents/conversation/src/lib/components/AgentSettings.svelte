@@ -15,7 +15,7 @@
   const pendingImage = (a: AvatarSpec) => isImageKind(a.kind) && !a.image?.v;
   import AvatarImageEditor from "./AvatarImageEditor.svelte";
   import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
-  import { getProviderOptions, getProjectOptions } from "../api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getProjectOptions } from "../api/options.js";
   import {
     getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
@@ -124,6 +124,14 @@
   }
 
   let providers = $state<{ type: string; name: string; models?: { id: string; label: string; default: boolean }[] }[]>([]);
+  // Same lazy loader the chat's picker uses: omp/opencode keep their models
+  // in live lists the provider options do not carry.
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return runApi(getProviderOptionModels(base, type, name, opts));
+  }
   let catalog = $state<AgentConnector[]>([]);
   let catalogError = $state("");
   let catalogLoading = $state(true);
@@ -1049,6 +1057,7 @@
         value={draft.pick}
         onChange={(v) => (draft.pick = v)}
         placeholder="Default project"
+        loadModels={loadProviderModels}
       />
     </div>
     <div class="space-y-2" role="radiogroup" aria-label="Provider in chats" data-testid="as-provider-lock">

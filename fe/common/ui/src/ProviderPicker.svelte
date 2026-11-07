@@ -8,6 +8,7 @@
   import { matchModelFilter } from "./modelFilter.js";
   import { decodePin, encodePath, encodePin } from "./model-path.js";
   import { modelListMeta, describeModelListMeta, type ModelListMeta } from "./model-list-meta.js";
+  import ProviderIcon from "./ProviderIcon.svelte";
 
   type Props = {
     options: ComposerSelectOption[];
@@ -167,8 +168,7 @@
     void ensureModels(d.value, encodePath(drillStack.map((x) => x.id)));
   }
 
-  // Focus the search box the moment we drill into a model list (only shown
-  // when the list is long enough to be worth filtering).
+  // Focus the search box the moment we drill into a model list.
   $effect(() => {
     if (modelDrill && modelSearchEl) modelSearchEl.focus();
   });
@@ -219,7 +219,7 @@
       // One segment (a wick live set): the set's own name is noise, show
       // the model. Deeper paths name every level ("Codex · akun A · gpt-5"),
       // resolved from the loaded levels when the picker has seen them.
-      if (pin.path.length <= 1) return `${opt.label} · ${pin.model}`;
+      if (pin.path.length <= 1 && rawType(opt.value) === "wick") return `${opt.label} · ${pin.model}`;
       const parts = [opt.label];
       for (let i = 0; i < pin.path.length; i++) {
         const level = modelCache[cacheKey(opt.value, i ? encodePath(pin.path.slice(0, i)) : undefined)];
@@ -240,11 +240,23 @@
 
   /* Resolve the current pin's name once on mount when the static options
      cannot, so the closed trigger reads as a model name rather than an id.
-     Only for an id-shaped pin (no "@" — a live-set leaf is already named). */
+     A wick live-set leaf ("set@model") is already named by its model. */
   $effect(() => {
     if (!loadModels) return;
     const { key, modelID } = splitPin(value);
-    if (!key || !modelID || modelID.includes("@")) return;
+    if (!key || !modelID) return;
+    // An omp/opencode pin ("openai-codex@auto") is named from its levels:
+    // load each one so the trigger reads "openai-codex · Auto (rotation)".
+    if (modelID.includes("@")) {
+      const opt = options.find((o) => o.value === key);
+      if (!opt || rawType(opt.value) === "wick") return;
+      const { path } = decodePin(modelID);
+      for (let i = 0; i <= path.length; i++) {
+        const entry = i ? encodePath(path.slice(0, i)) : undefined;
+        if (!modelCache[cacheKey(opt.value, entry)]) void ensureModels(opt.value, entry);
+      }
+      return;
+    }
     const opt = options.find((o) => o.value === key);
     if (!opt || opt.models?.some((x) => x.id === modelID)) return;
     if (modelCache[cacheKey(opt.value)]) return;
@@ -359,69 +371,105 @@
     >
       {#if modelDrill}
         {@const d = modelDrill}
-        <button type="button" onclick={backFromModels} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">
-          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          {[d.label, ...drillStack.map((x) => x.label)].join(" · ")}
-        </button>
-        <div class="border-t border-white-300 dark:border-navy-600"></div>
-        <!-- Filter box: worth showing once the list is long enough to scan. -->
-        {#if drillModels.length > 6 || modelSearch}
-          <div class="px-2 pt-2">
-            <input
-              type="text"
-              bind:this={modelSearchEl}
-              bind:value={modelSearch}
-              placeholder="Filter models…"
-              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500"
-            />
-          </div>
-        {/if}
+        {@const showDefaultRow = drillStack.length === 0 && !modelSearch.trim()}
+        <!-- Header, same as the chat picker's: back + icon + trail + an
+             always-visible search, with a reload when a loader is wired. -->
+        <div class="flex shrink-0 items-center gap-2 border-b border-white-300 dark:border-navy-600 px-2 py-2">
+          <button
+            type="button"
+            onclick={backFromModels}
+            aria-label={drillStack.length ? "Back to models" : "Back to providers"}
+            class="shrink-0 rounded-md p-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700"
+          >
+            <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <ProviderIcon value={d.value} class="h-4 w-4 shrink-0" />
+          <span class="max-w-[45%] shrink-0 truncate text-xs font-medium text-black-900 dark:text-white-100" title={[d.label, ...drillStack.map((x) => x.label)].join(" · ")}>
+            {[d.label, ...drillStack.map((x) => x.label)].join(" · ")}
+          </span>
+          <span class="shrink-0 text-black-400 dark:text-navy-500">·</span>
+          <input
+            type="text"
+            bind:this={modelSearchEl}
+            bind:value={modelSearch}
+            placeholder={`Search ${(drillStack.at(-1) ?? d).label}…`}
+            class="min-w-0 flex-1 bg-transparent text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
+          />
+          {#if loadingModels}
+            <svg class="h-3.5 w-3.5 shrink-0 animate-spin text-black-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/></svg>
+          {:else if loadModels}
+            <button type="button" onclick={refreshDrill} aria-label="Refresh models" title="Refresh models" class="shrink-0 rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">
+              <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          {/if}
+        </div>
         <!-- Flexes inside the menu's own cap rather than adding a second
              limit: two stacked max-heights produce a scrollbar inside a
              scrollbar. -->
         <div class="min-h-0 flex-1 overflow-y-auto py-1">
-          {#each drillModels as m (m.id)}
-            <!-- A live-set row is not selectable: it names a SET, so it opens
-                 one level deeper instead of committing. Inside a set, rows are
-                 vendor models and pack as "<entryID>@<vendorModelID>". -->
-            {@const live = isLiveSet(m)}
-            {@const pinned = `${d.value}::${drillStack.length ? encodePin(drillPath, m.id) : m.id}`}
-            {@const isSel = !live && (value === pinned || (value === d.value && m.default))}
+          <!-- "Use default" keeps the instance without a pinned model, so an
+               instance whose list is empty or unreachable is still pickable. -->
+          {#if showDefaultRow}
+            {@const isDefaultSel = value === d.value}
             <button
               type="button"
-              disabled={!live && !!m.unavailable}
-              onclick={() => { if (live) pushDrill(m); else if (!m.unavailable) pickModel(d, m.id); }}
-              class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} {m.unavailable && !live ? 'opacity-50 cursor-not-allowed' : ''} text-black-900 dark:text-white-100"
+              onclick={() => { onChange(d.value); close(); }}
+              class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm {isDefaultSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} text-black-900 dark:text-white-100"
             >
-              <span class="flex flex-col min-w-0">
-                <span class="flex items-center gap-2 text-sm">
-                  <span class="truncate">{m.label}</span>
-                  {#if live}{#if rawType(d.value) === "wick"}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
-                  {:else if m.unavailable}<span class="shrink-0 rounded-full bg-black-500/10 px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">unavailable</span>
-                  {:else if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
-                </span>
-                {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
-              </span>
-              {#if live}
-                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              {:else if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
+              <span class="truncate">Use {d.label} <span class="text-black-700 dark:text-black-600">(default model)</span></span>
+              {#if isDefaultSel}<span class="shrink-0 text-green-600 dark:text-green-400">✓</span>{/if}
             </button>
+            <div class="mx-3 my-1 border-t border-white-300 dark:border-navy-600"></div>
+          {/if}
+          {#each drillModels as m (m.id)}
+            <!-- At the instance's own level a live row names a SET, so it opens
+                 one level deeper instead of committing. Deeper live rows (an
+                 omp account, "Auto (rotation)") commit on click like the chat
+                 picker; the chevron still opens their model list. Inside a
+                 set, picks pack as "<entryID>@<vendorModelID>". -->
+            {@const live = isLiveSet(m)}
+            {@const opensSet = live && drillStack.length === 0}
+            {@const pinned = `${d.value}::${drillStack.length ? encodePin(drillPath, m.id) : m.id}`}
+            {@const isSel = !opensSet && (value === pinned || (value === d.value && m.default))}
+            <div class="flex w-full items-stretch {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} {m.unavailable && !live ? 'opacity-50' : ''}">
+              <button
+                type="button"
+                disabled={!live && !!m.unavailable}
+                onclick={() => { if (opensSet) pushDrill(m); else if (!m.unavailable) pickModel(d, m.id); }}
+                class="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-1.5 text-left {m.unavailable && !live ? 'cursor-not-allowed' : ''} text-black-900 dark:text-white-100"
+              >
+                <span class="flex flex-col min-w-0">
+                  <span class="flex items-center gap-2 text-sm">
+                    <span class="truncate">{m.label}</span>
+                    {#if m.unavailable && !live}<span class="shrink-0 rounded-full bg-black-500/10 px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">unavailable</span>
+                    {:else if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
+                    {#if opensSet}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
+                  </span>
+                  {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
+                </span>
+                {#if opensSet}
+                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {:else if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
+              </button>
+              {#if live && !opensSet}
+                <button
+                  type="button"
+                  onclick={() => pushDrill(m)}
+                  aria-label={`Models of ${m.label}`}
+                  title="Pick a model"
+                  class="shrink-0 px-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
+                >
+                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              {/if}
+            </div>
           {:else}
             <div class="px-3 py-3 text-xs text-black-700 dark:text-black-600">
               {#if loadingModels}Loading models…
-              {:else if modelSearch}No models match “{modelSearch}”.
+              {:else if modelSearch.trim()}No models match “{modelSearch}”.
+              {:else if showDefaultRow}No extra models — use the default above.
               {:else}No models available.{/if}
             </div>
-            <!-- Escape hatch: an instance whose loader yields nothing would
-                 otherwise be unselectable — the drill is forced whenever a
-                 loader is wired, and there is no model row to commit through. -->
-            {#if !loadingModels && !modelSearch && drillStack.length === 0}
-              <button
-                type="button"
-                onclick={() => { onChange(d.value); close(); }}
-                class="flex w-full items-center px-3 py-1.5 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700"
-              >Use default model</button>
-            {/if}
           {/each}
         </div>
         {#if drillMeta}
