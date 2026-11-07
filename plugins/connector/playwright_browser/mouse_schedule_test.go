@@ -18,3 +18,22 @@ func TestBehindSchedule(t *testing.T) {
 		t.Fatal("point 40 is due at ~656ms, 500ms in is not behind yet")
 	}
 }
+
+func TestGlobToRegexp(t *testing.T) {
+	cases := []struct {
+		glob, url string
+		want      bool
+	}{
+		{"**/contact", "https://example.com/id/contact", true},
+		{"**/contact", "https://example.com/id/contact/more", false},
+		{"https://example.com/id", "https://example.com/id", true},
+		{"https://example.com/id", "https://example.com/id/contact", false},
+		{"https://example.com/*", "https://example.com/id", true},
+		{"https://example.com/*", "https://example.com/id/x", false},
+	}
+	for _, c := range cases {
+		if got := globToRegexp(c.glob).MatchString(c.url); got != c.want {
+			t.Errorf("%q vs %q = %v, want %v", c.glob, c.url, got, c.want)
+		}
+	}
+}

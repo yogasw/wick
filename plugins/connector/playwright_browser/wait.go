@@ -511,3 +511,45 @@ func needsBaseline(actions []action) bool {
 	}
 	return false
 }
+
+// pollURL waits until the page address matches pattern: a glob the way
+// wait_for_url takes it (** any run, * any run without "/", ? one char)
+// or, without wildcards, the exact address. Used where the engine sends no
+// navigation events for Playwright to wait on.
+func pollURL(page playwright.Page, pattern string, timeout time.Duration) error {
+	re := globToRegexp(pattern)
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for {
+		if v, err := page.Evaluate(`location.href`); err == nil {
+			last, _ = v.(string)
+			if re.MatchString(last) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout: url %q not reached within %s (now %q)", pattern, timeout, last)
+		}
+		time.Sleep(pollEvery)
+	}
+}
+
+func globToRegexp(glob string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(glob); i++ {
+		switch c := glob[i]; {
+		case c == '*' && i+1 < len(glob) && glob[i+1] == '*':
+			b.WriteString(".*")
+			i++
+		case c == '*':
+			b.WriteString("[^/]*")
+		case c == '?':
+			b.WriteString(".")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
+}

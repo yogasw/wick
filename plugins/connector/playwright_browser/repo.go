@@ -587,6 +587,16 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	switch a.Action {
 	case "goto":
+		if env.moli {
+			// No load event from moli: go as far as commit, then read the
+			// document state (a slow page is not an error, wait_for_text
+			// covers the content).
+			if _, err := page.Goto(a.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateCommit}); err != nil {
+				return nil, fmt.Errorf("navigate to %s: %w", a.URL, err)
+			}
+			_, _ = page.WaitForFunction(`document.readyState === "complete"`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(15000)})
+			return nil, nil
+		}
 		if _, err := page.Goto(a.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateLoad}); err != nil {
 			return nil, fmt.Errorf("navigate to %s: %w", a.URL, err)
 		}
@@ -680,6 +690,15 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		return nil, err
 	case "wait_for_load_state":
 		st := loadState(a.State)
+		if env.moli && (st == nil || *st != *playwright.LoadStateNetworkidle) {
+			// No lifecycle events from moli: read the document state instead.
+			want := `document.readyState === "complete"`
+			if st != nil && *st == *playwright.LoadStateDomcontentloaded {
+				want = `document.readyState !== "loading"`
+			}
+			_, err := page.WaitForFunction(want, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(15000)})
+			return nil, err
+		}
 		if st == nil {
 			return nil, page.WaitForLoadState()
 		}
@@ -701,6 +720,12 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		}
 		return nil, page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: st})
 	case "wait_for_url":
+		if env.moli {
+			// Moli sends no navigation lifecycle, so Playwright's wait never
+			// resolves, not even for a page that is already there. Poll the
+			// address instead, then wait_for_text for the content.
+			return nil, pollURL(page, a.URL, waitTimeout(a.TimeoutMS))
+		}
 		return nil, page.WaitForURL(a.URL)
 
 	// ── interaction ─────────────────────────────────────────────────

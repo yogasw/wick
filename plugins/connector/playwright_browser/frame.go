@@ -487,8 +487,8 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 	// A handle, not a locator: a missed click often closes the menu the
 	// element sits in, and a visible-only locator would no longer find it.
 	var target playwright.ElementHandle
-	if env.hitCheck {
-		if h, herr := locateInFrame(f, a).ElementHandle(playwright.LocatorElementHandleOptions{Timeout: playwright.Float(500)}); herr == nil {
+	if env.moli {
+		if h := hitTarget(f, a); h != nil {
 			if _, aerr := h.Evaluate(armHitJS); aerr == nil {
 				target = h
 			}
@@ -503,6 +503,20 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 		res["fallback"] = "dom_click"
 	}
 	return res, err
+}
+
+// hitTarget is the element frame_click means, as a handle: the visible match,
+// else the first match at all (the same candidates findBox measures when
+// the visible one is not actionable in time).
+func hitTarget(f playwright.Frame, a action) playwright.ElementHandle {
+	opt := playwright.LocatorElementHandleOptions{Timeout: playwright.Float(1000)}
+	if h, err := locateInFrame(f, a).ElementHandle(opt); err == nil {
+		return h
+	}
+	if h, err := rawLocator(f, a).First().ElementHandle(opt); err == nil {
+		return h
+	}
+	return nil
 }
 
 // armHitJS marks the element so missedHit can tell whether the mouse click
