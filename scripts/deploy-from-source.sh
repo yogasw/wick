@@ -84,7 +84,13 @@ done
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '!! %s\n' "$*" >&2; exit 1; }
 run() { printf '   $ %s\n' "$*"; [ "$DRY" = 1 ] || "$@"; }
-SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
+# sudo only when not root and the machine has it: Termux and many containers have none, and
+# a `sudo` that is not there fails a step that never needed it.
+SUDO=""; [ "$(id -u)" = 0 ] || ! command -v sudo >/dev/null 2>&1 || SUDO="sudo"
+# priv TARGET: the sudo to use for replacing TARGET, empty when this user can write its
+# directory (Termux $PREFIX/bin, ~/.local/bin). Without it every update of a user-owned
+# install went through `sudo -n` and failed where sudo asks a password or does not exist.
+priv() { [ -w "$(dirname "$1")" ] || echo "$SUDO"; }
 # heavy runs a build/test through buildq when the host has one (a shared-host build
 # queue), else at low priority.
 heavy() { local label=$1; shift
@@ -292,7 +298,7 @@ mark_built() {
 # else the zero-downtime reload when the daemon supports it, else stop / swap / start.
 install_build() {
   # the build is named after wick.yml's name:, which --app (the installed command) may differ from
-  local installed=$1 name bin mode target
+  local installed=$1 name bin mode target sudo
   name="$(awk '/^name:/{print $2; exit}' wick.yml 2>/dev/null)"; bin="bin/${name:-$APP}-$OS-$ARCH"
   [ "$DRY" = 1 ] || [ -f "$bin" ] || die "build produced no $bin"
   if [ "$NOINSTALL" = 1 ]; then say "built $PWD/$bin (--no-install: nothing installed)"; return 0; fi
@@ -310,26 +316,27 @@ install_build() {
     return 0
   fi
   mode="$(daemon_mode)"; [ "$RESTART" = 1 ] && [ "$mode" != stopped ] && mode=running
-  target="$(command -v "$APP")"
+  target="$(command -v "$APP")"; sudo="$(priv "$target")"
   case "$mode" in
     graceful)
       say "swap + zero-downtime reload"
       # reload checks the candidate (wick module, app, arch, version direction), swaps it
       # in atomically, hands the socket over and rolls back if the successor never serves.
-      # --sudo only when not root: a root shell on a fresh server often has no sudo at all.
-      run "$APP" reload --binary "$PWD/$bin" ${SUDO:+--sudo} -y --wait || \
+      # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
+      # without it.
+      run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
         die "reload refused or failed — the running binary is unchanged (reason above)."
       mark_built
       ;;
     running)
       say "update with stop / swap / start (short downtime: $APP was started without graceful upgrade)"
       run "$APP" stop || true
-      run $SUDO install -m 755 "$PWD/$bin" "$target"; mark_built
+      run $sudo install -m 755 "$PWD/$bin" "$target"; mark_built
       start_app
       ;;
     stopped)
       say "update $target ($APP is not running)"
-      run $SUDO install -m 755 "$PWD/$bin" "$target"; mark_built
+      run $sudo install -m 755 "$PWD/$bin" "$target"; mark_built
       start_app
       ;;
   esac

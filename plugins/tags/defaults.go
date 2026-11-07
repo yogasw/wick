@@ -81,4 +81,16 @@ var (
 		IsGroup:     true,
 		SortOrder:   55,
 	}
+
+	// System marks maintenance plugins only admins should see or run (updating
+	// wick itself, say). Same spec as wick's built-in System tag: no user can be
+	// given it, so the access filter hides the item from every non-admin.
+	System = entity.DefaultTag{
+		Name:        "System",
+		Description: "Built-in maintenance items shipped with wick. Hidden from non-admin users.",
+		IsGroup:     true,
+		IsFilter:    true,
+		IsSystem:    true,
+		SortOrder:   1000,
+	}
 )
