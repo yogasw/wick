@@ -319,6 +319,17 @@ func locate(f playwright.Frame, a action, filter string) playwright.Locator {
 // the matching elements itself (see boxFromDOM) and clicks the first one that
 // is painted, so no coordinates have to be passed.
 func findBox(f playwright.Frame, a action) (*playwright.Rect, string, error) {
+	box, via, err := findBoxOnce(f, a)
+	// Moli now and then reports the page's script context destroyed without
+	// any navigation. The page is still there: look again.
+	for try := 0; err != nil && try < 2 && contextLost(err); try++ {
+		time.Sleep(500 * time.Millisecond)
+		box, via, err = findBoxOnce(f, a)
+	}
+	return box, via, err
+}
+
+func findBoxOnce(f playwright.Frame, a action) (*playwright.Rect, string, error) {
 	loc := locateInFrame(f, a)
 	_ = loc.ScrollIntoViewIfNeeded(playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(1000)})
 	box, err := settledBox(loc)
@@ -598,13 +609,13 @@ func currentURL(page playwright.Page) string {
 // clickTarget is one frame_click on f: find the box, click it like a hand,
 // and on moli finish a click that landed elsewhere.
 func clickTarget(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (map[string]any, error) {
-	box, via, err := findBox(f, a)
-	// Moli now and then reports the page's script context destroyed without
-	// any navigation. The page is still there: look again.
-	for try := 0; err != nil && try < 2 && contextLost(err); try++ {
-		time.Sleep(500 * time.Millisecond)
-		box, via, err = findBox(f, a)
+	if env.moli {
+		if res, err := moliClick(page, env, f, a); err == nil {
+			return res, nil
+		}
+		// No handle in time: fall through to the measured box and the mouse.
 	}
+	box, via, err := findBox(f, a)
 	if err != nil {
 		return nil, err
 	}
@@ -653,6 +664,62 @@ func within(d time.Duration, call func() (any, error)) (any, error) {
 func contextLost(err error) bool {
 	return strings.Contains(err.Error(), "Execution context was destroyed")
 }
+
+// moliClick is frame_click on moli. Moli hit-tests without stacking, so the
+// element's box is not enough: it asks the page for a point inside the
+// element that moli itself resolves to it, and clicks there with the real
+// mouse (trusted events, like a person). Only when no such point exists (a
+// dropdown moli places under the page) is the element clicked through the
+// DOM, reported as via=dom.
+func moliClick(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (map[string]any, error) {
+	h := hitTarget(f, a)
+	if h == nil {
+		return nil, fmt.Errorf("element not found")
+	}
+	defer func() { _ = h.Dispose() }()
+	v, err := within(2*time.Second, func() (any, error) { return h.Evaluate(moliPointJS) })
+	if err != nil {
+		return nil, err
+	}
+	p, _ := v.(map[string]any)
+	box := map[string]any{"x": p["x"], "y": p["y"], "w": p["w"], "h": p["h"]}
+	px, okx := p["px"].(float64)
+	py, oky := p["py"].(float64)
+	if okx && oky && f == page.MainFrame() {
+		pa := a
+		pa.X, pa.Y = &px, &py
+		out, err := humanClick(page, env, pa)
+		if err != nil {
+			return nil, err
+		}
+		res, _ := out.(map[string]any)
+		if res == nil {
+			res = map[string]any{}
+		}
+		res["box"] = box
+		return res, nil
+	}
+	if _, err := within(2*time.Second, func() (any, error) { return h.Evaluate(`el => el.click()`) }); err != nil {
+		return nil, err
+	}
+	return map[string]any{"box": box, "via": "dom"}, nil
+}
+
+// moliPointJS scrolls the element into view and looks for a point inside it
+// (centre first, then a grid) that elementFromPoint resolves to the element
+// or a child.
+const moliPointJS = `el => {
+  el.scrollIntoView({block: "center"});
+  const r = el.getBoundingClientRect();
+  const out = {x: r.x, y: r.y, w: r.width, h: r.height};
+  const hits = (x, y) => { const t = document.elementFromPoint(x, y); return !!t && (t === el || el.contains(t)); };
+  const fr = [[.5,.5],[.3,.5],[.7,.5],[.5,.3],[.5,.7],[.2,.2],[.8,.2],[.2,.8],[.8,.8]];
+  for (const [fx, fy] of fr) {
+    const x = r.x + r.width * fx, y = r.y + r.height * fy;
+    if (x >= 0 && y >= 0 && x < innerWidth && y < innerHeight && hits(x, y)) { out.px = x; out.py = y; break; }
+  }
+  return out;
+}`
 
 // hitTarget is the element frame_click means, as a handle: the visible match,
 // else the first match at all (the same candidates findBox measures when
