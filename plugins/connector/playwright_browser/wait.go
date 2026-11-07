@@ -521,7 +521,7 @@ func pollURL(page playwright.Page, pattern string, timeout time.Duration) error 
 	deadline := time.Now().Add(timeout)
 	last := ""
 	for {
-		if v, err := page.Evaluate(`location.href`); err == nil {
+		if v, err := within(2*time.Second, func() (any, error) { return page.Evaluate(`location.href`) }); err == nil {
 			last, _ = v.(string)
 			if re.MatchString(last) {
 				return nil

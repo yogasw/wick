@@ -534,25 +534,33 @@ func openMenu(page playwright.Page, env mouseEnv, f playwright.Frame, a action) 
 }
 
 // visibleBoxes returns every match of the action with its box ("" when
-// hidden or empty), so openMenu can tell which one the menu revealed.
+// hidden or empty), so openMenu can tell which one the menu revealed. One
+// evaluate for all matches: a per-element round trip is slow on moli and a
+// label like a product name can match dozens of elements.
 func visibleBoxes(f playwright.Frame, a action) ([]playwright.Locator, []string) {
 	q := a
 	q.Nth = nil
-	els, err := rawLocator(f, q).All()
+	loc := rawLocator(f, q)
+	v, err := loc.EvaluateAll(visibleBoxesJS)
 	if err != nil {
 		return nil, nil
 	}
-	out := make([]string, len(els))
-	for i, el := range els {
-		if v, _ := el.IsVisible(); !v {
-			continue
-		}
-		if b, err := el.BoundingBox(); err == nil && b != nil && b.Width >= 1 && b.Height >= 1 {
-			out[i] = fmt.Sprintf("%.0f,%.0f,%.0f,%.0f", b.X, b.Y, b.Width, b.Height)
-		}
+	raw, _ := v.([]any)
+	els := make([]playwright.Locator, len(raw))
+	out := make([]string, len(raw))
+	for i, r := range raw {
+		els[i] = loc.Nth(i)
+		out[i], _ = r.(string)
 	}
 	return els, out
 }
+
+const visibleBoxesJS = `els => els.map(el => {
+  const r = el.getBoundingClientRect();
+  const st = getComputedStyle(el);
+  if (r.width < 1 || r.height < 1 || st.visibility === "hidden" || st.display === "none" || Number(st.opacity) === 0) return "";
+  return [r.x, r.y, r.width, r.height].map(Math.round).join(",");
+})`
 
 // expectURL waits for the click to reach the address. When it does not, the
 // element is clicked once more through the DOM (a click the page swallowed)
@@ -567,7 +575,7 @@ func expectURL(page playwright.Page, f playwright.Frame, a action, res map[strin
 		return nil
 	}
 	if h, herr := rawLocator(f, a).First().ElementHandle(playwright.LocatorElementHandleOptions{Timeout: playwright.Float(1000)}); herr == nil {
-		_, _ = h.Evaluate(`el => el.click()`)
+		_, _ = within(2*time.Second, func() (any, error) { return h.Evaluate(`el => el.click()`) })
 		_ = h.Dispose()
 		res["retried"] = "dom_click"
 	}
@@ -579,7 +587,7 @@ func expectURL(page playwright.Page, f playwright.Frame, a action, res map[strin
 }
 
 func currentURL(page playwright.Page) string {
-	if v, err := page.Evaluate(`location.href`); err == nil {
+	if v, err := within(2*time.Second, func() (any, error) { return page.Evaluate(`location.href`) }); err == nil {
 		if s, ok := v.(string); ok {
 			return s
 		}
@@ -605,7 +613,7 @@ func clickTarget(page playwright.Page, env mouseEnv, f playwright.Frame, a actio
 	var target playwright.ElementHandle
 	if env.moli {
 		if h := hitTarget(f, a); h != nil {
-			if _, aerr := h.Evaluate(armHitJS); aerr == nil {
+			if _, aerr := within(2*time.Second, func() (any, error) { return h.Evaluate(armHitJS) }); aerr == nil {
 				target = h
 			}
 			defer func() { _ = h.Dispose() }()
@@ -619,6 +627,27 @@ func clickTarget(page playwright.Page, env mouseEnv, f playwright.Frame, a actio
 		res["fallback"] = "dom_click"
 	}
 	return res, err
+}
+
+// within runs a call into the page with a deadline. Calls on an element or
+// page carry no timeout of their own, and moli can leave one unanswered
+// when it drops the script context; the step must still move on.
+func within(d time.Duration, call func() (any, error)) (any, error) {
+	type out struct {
+		v   any
+		err error
+	}
+	ch := make(chan out, 1)
+	go func() {
+		v, err := call()
+		ch <- out{v, err}
+	}()
+	select {
+	case o := <-ch:
+		return o.v, o.err
+	case <-time.After(d):
+		return nil, fmt.Errorf("no answer from the page within %s", d)
+	}
 }
 
 func contextLost(err error) bool {
@@ -647,7 +676,9 @@ const armHitJS = `el => { el.__wickHit = false; el.addEventListener("click", () 
 // elsewhere, and reports whether it had to. A page that navigated or dropped
 // the element counts as reached: the click did something.
 func missedHit(target playwright.ElementHandle) bool {
-	v, err := target.Evaluate(`el => { if (el.__wickHit !== false) return false; el.click(); return true }`)
+	v, err := within(2*time.Second, func() (any, error) {
+		return target.Evaluate(`el => { if (el.__wickHit !== false) return false; el.click(); return true }`)
+	})
 	if err != nil {
 		return false
 	}
