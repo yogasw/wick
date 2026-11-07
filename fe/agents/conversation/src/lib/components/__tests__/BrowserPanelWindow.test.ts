@@ -33,6 +33,7 @@ vi.mock("../../api/browser.js", async (orig) => ({
 }));
 
 import BrowserPanel from "../BrowserPanel.svelte";
+import TwoBrowserPanels from "./TwoBrowserPanels.svelte";
 
 class FakeWS {
   static OPEN = 1;
@@ -70,7 +71,7 @@ describe("BrowserPanel session list and window modes", () => {
     expect(card.textContent).toContain("test-profile");
     expect(card.textContent).toContain("example.com");
     expect(card.textContent).toContain("idle 2 min");
-    expect(card.textContent).toContain("auto-close in 5 min");
+    expect(card.textContent).toContain("closes in 5 min");
     expect(screen.queryByTestId("browser-session")).toBeNull(); // no dropdown any more
   });
 
@@ -98,6 +99,28 @@ describe("BrowserPanel session list and window modes", () => {
     await fireEvent.click(screen.getByTestId("browser-dock"));
     expect(screen.queryByTestId("browser-overlay")).toBeNull();
     expect(screen.getByTestId("browser-back")).toBeTruthy();
+  });
+
+  test("the card opens on click and closes from its ⋯ menu", async () => {
+    render(BrowserPanel, { props: { onError: vi.fn() } });
+    await screen.findByTestId("browser-session-card");
+    expect(screen.queryByText("Open")).toBeNull(); // no separate Open button
+    await fireEvent.click(screen.getByTestId("browser-session-more"));
+    await fireEvent.click(screen.getByTestId("browser-session-close"));
+    await waitFor(() => expect(screen.queryByTestId("browser-session-card")).toBeNull());
+    expect(closed).toEqual(["s1"]);
+  });
+
+  test("a second panel without a session does not undo pop out or fullscreen", async () => {
+    render(TwoBrowserPanels);
+    const opens = await screen.findAllByTestId("browser-session-open");
+    await fireEvent.click(opens[0]);
+    await fireEvent.click(screen.getByTestId("browser-float"));
+    await waitFor(() => expect(screen.getByTestId("shared-view").textContent).toBe("float"));
+    expect(screen.getByTestId("browser-overlay")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("browser-max"));
+    await waitFor(() => expect(screen.getByTestId("shared-view").textContent).toBe("max"));
+    expect(screen.getByTestId("browser-overlay")).toBeTruthy();
   });
 
   test("closing the session from the floating window docks back to the list", async () => {

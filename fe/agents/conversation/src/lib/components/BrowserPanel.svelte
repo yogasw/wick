@@ -82,6 +82,8 @@
    * chrome:// shortcuts, copying the session id and closing the session. */
   let menuOpen = $state(false);
   let showAddress = $state(false);
+  // Session id whose card ⋯ menu is open ("" = none).
+  let cardMenu = $state("");
 
   /* The overlay is position:fixed and can render outside the app's themed
    * container, so Tailwind dark: variants aren't reliable there. Resolve the
@@ -186,10 +188,18 @@
   function sessionName(s: BrowserSession | undefined): string {
     return s?.profile || "anonymous";
   }
+  // What the first tab shows, in words: a host, or "new tab" / "blank page"
+  // rather than the raw chrome://new-tab-page / about:blank.
+  function pageLabel(url: string | undefined): string {
+    if (!url) return "no tab";
+    if (url.startsWith("chrome://new-tab-page") || url.startsWith("chrome://newtab")) return "new tab";
+    if (url === "about:blank") return "blank page";
+    return hostOf(url);
+  }
   function sessionMeta(s: BrowserSession): string {
-    const parts = [hostOf(s.tabs?.[0]?.url) || "no tab"];
+    const parts = [pageLabel(s.tabs?.[0]?.url)];
     if (s.idle_seconds !== undefined) parts.push(`idle ${fmtDur(s.idle_seconds)}`);
-    if (s.auto_close_in_seconds !== undefined) parts.push(`auto-close in ${fmtDur(s.auto_close_in_seconds)}`);
+    if (s.auto_close_in_seconds !== undefined) parts.push(`closes in ${fmtDur(s.auto_close_in_seconds)}`);
     return parts.join(" · ");
   }
 
@@ -259,10 +269,14 @@
       if (seq !== sessionsSeq || inst !== instanceId) return; // superseded
       sessions = res.sessions;
       maxTabs = res.maxTabs;
-      // Keep a valid selection.
+      // Keep a valid selection. A vanished session leaves nothing to float:
+      // dock back so the parent shows its panel again. Only the panel that
+      // held the session does this — the parent mounts one panel per layout
+      // and they share view, so a panel with no session must never reset it.
       if (sessionId && !sessions.some((s) => s.session_id === sessionId)) {
         disconnect();
         sessionId = "";
+        view = "docked";
       }
     } catch (e) {
       if (!quiet && seq === sessionsSeq) onError(`List sessions: ${errMsg(e)}`);
@@ -305,7 +319,11 @@
     if (busy) return;
     busy = true;
     try {
-      if (sid === sessionId) disconnect();
+      if (sid === sessionId) {
+        disconnect();
+        sessionId = "";
+        view = "docked";
+      }
       await run(closeSession(instanceId, sid).pipe(Effect.provide(WickClientLayer)));
       await loadSessions();
     } catch (e) {
@@ -952,12 +970,6 @@
     if (wantLive) reconnectNow();
   });
 
-  // A closed or vanished session leaves nothing to float: dock back so the
-  // parent shows its panel again.
-  $effect(() => {
-    if (!sessionId && view !== "docked") view = "docked";
-  });
-
   onDestroy(disconnect);
 </script>
 
@@ -1025,40 +1037,56 @@
           {#if sessions.length > 0}
             <ul class="space-y-2">
               {#each sessions as s (s.session_id)}
+                <!-- The whole card opens the session; ⋯ holds Close. -->
                 <li
-                  class={"flex items-center gap-2 rounded-xl border p-3 bg-white-200 dark:bg-navy-800 " +
-                    (s.session_id === sessionId ? "border-green-500" : "border-white-300 dark:border-navy-600")}
+                  class={"relative flex items-stretch rounded-xl border bg-white-200 dark:bg-navy-800 transition-colors " +
+                    (s.session_id === sessionId
+                      ? "border-green-500"
+                      : "border-white-300 dark:border-navy-600 hover:border-green-400")}
                   data-testid="browser-session-card"
                 >
-                  <div class="min-w-0 flex-1">
-                    <div class="flex min-w-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 flex-col items-start gap-0.5 py-2.5 pl-3 pr-1 text-left"
+                    title={`Open ${sessionName(s)} · ${s.session_id}`}
+                    onclick={() => openSession_(s.session_id)}
+                    data-testid="browser-session-open"
+                  >
+                    <span class="flex w-full min-w-0 items-center gap-1.5">
                       <span class={"h-2 w-2 shrink-0 rounded-full " + ((s.idle_seconds ?? 0) > 60 ? "bg-amber-500" : "bg-green-500")}></span>
                       <span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{sessionName(s)}</span>
                       <span class="shrink-0 rounded-md border border-white-400 dark:border-navy-600 px-1.5 text-[10px] text-black-700 dark:text-black-600">{s.browser}</span>
-                    </div>
-                    <p class="mt-0.5 truncate text-xs text-black-700 dark:text-black-600" title={s.session_id}>{sessionMeta(s)}</p>
-                  </div>
-                  {#if s.session_id === sessionId}
-                    <span class="shrink-0 rounded-md border border-green-500 px-1.5 text-[10px] text-green-600 dark:text-green-400">watching</span>
-                  {:else}
-                    <button
-                      type="button"
-                      class="shrink-0 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
-                      onclick={() => openSession_(s.session_id)}
-                      data-testid="browser-session-open"
-                    >Open</button>
-                  {/if}
+                      {#if s.session_id === sessionId}
+                        <span class="shrink-0 rounded-md border border-green-500 px-1.5 text-[10px] text-green-600 dark:text-green-400">watching</span>
+                      {/if}
+                    </span>
+                    <span class="w-full truncate text-xs text-black-700 dark:text-black-600">{sessionMeta(s)}</span>
+                  </button>
                   <button
                     type="button"
-                    title="Close session"
-                    aria-label="Close session"
-                    class="shrink-0 rounded-md p-1.5 text-neg-400 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors disabled:opacity-50"
-                    disabled={busy}
-                    onclick={() => kill(s.session_id)}
-                    data-testid="browser-session-close"
+                    title="More"
+                    aria-label="More actions"
+                    class="shrink-0 self-center mr-1.5 rounded-md p-1.5 text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors"
+                    onclick={() => (cardMenu = cardMenu === s.session_id ? "" : s.session_id)}
+                    data-testid="browser-session-more"
                   >
-                    <svg viewBox="0 0 16 16" class="h-3 w-3"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+                    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5"><path d="M8 3.5h.01M8 8h.01M8 12.5h.01" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
                   </button>
+                  {#if cardMenu === s.session_id}
+                    <div
+                      class="absolute right-2 top-full z-[70] mt-1 min-w-[160px] overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 py-1 text-[13px] shadow-2xl"
+                      role="menu"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        class="menu-item text-neg-400 disabled:opacity-50"
+                        disabled={busy}
+                        onclick={() => { cardMenu = ""; void kill(s.session_id); }}
+                        data-testid="browser-session-close"
+                      >Close session</button>
+                    </div>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -1114,9 +1142,14 @@
   </div>
 {/if}
 
-{#if menuOpen}
-  <!-- Outside click closes the ⋯ menu. -->
-  <div class="fixed inset-0 z-[65]" style="visibility:visible; pointer-events:auto" onclick={() => (menuOpen = false)} role="presentation"></div>
+{#if menuOpen || cardMenu}
+  <!-- Outside click closes the ⋯ menus. -->
+  <div
+    class="fixed inset-0 z-[65]"
+    style="visibility:visible; pointer-events:auto"
+    onclick={() => { menuOpen = false; cardMenu = ""; }}
+    role="presentation"
+  ></div>
 {/if}
 
 <!-- Right-click menu on the live view. Rendered at the top level so its fixed
