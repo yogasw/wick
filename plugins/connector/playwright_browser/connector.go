@@ -214,7 +214,8 @@ type runInput struct {
 // persist across sessions under that name) — empty means an anonymous,
 // swept-on-close session, the original behavior.
 type sessionOpenInput struct {
-	Profile string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty to use the instance's default profile, or a throwaway anonymous session when no default is configured."`
+	Profile    string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty to use the instance's default profile, or a throwaway anonymous session when no default is configured."`
+	LaunchArgs string `wick:"desc=Optional JSON array of extra Chromium flags for this browser (chromium and cloakbrowser engines, refused on moli), e.g. [\"--lang=id-ID\",\"--enable-features=X\"]. Use it for a flag the connector does not expose yet, values go as --flag=value. Flags the connector owns are refused: CDP/debugging, profile/user-data dir, sandbox, headless, extensions, proxy/network, certificate/TLS, logging, anything naming a path, dir, file or helper launcher. Ignored when an existing session is reused."`
 }
 
 // sessionListInput lists live sessions and their tabs. No arguments.
@@ -383,7 +384,7 @@ func Module() connector.Module {
 				connector.OpDestructive(
 					"session_open",
 					"Open Live Session",
-					"Launch a persistent browser and return its session_id. If the requested (or default) named profile already has a live browser, that session is returned with reused=true instead of opening a second one. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. Destructive because it holds an OS browser process open.",
+					"Launch a persistent browser and return its session_id. If the requested (or default) named profile already has a live browser, that session is returned with reused=true instead of opening a second one. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. launch_args adds Chromium flags the connector does not expose yet. Destructive because it holds an OS browser process open.",
 					sessionOpenInput{},
 					sessionOpen, wickdocs.Docs{},
 				),

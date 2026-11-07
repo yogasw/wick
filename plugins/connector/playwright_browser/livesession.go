@@ -206,7 +206,14 @@ func openSession(c *connector.Ctx) (any, error) {
 	if b != "" && b != defBrowser && !isCloakEngine(b) && !isMoliEngine(b) {
 		return nil, fmt.Errorf("live sessions require a CDP engine (chromium, cloakbrowser, cloakbrowser-pro, or moli); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
 	}
+	launchExtra, err := parseLaunchArgs(c.Input("launch_args"))
+	if err != nil {
+		return nil, err
+	}
 	if isMoliEngine(b) {
+		if len(launchExtra) > 0 {
+			return nil, fmt.Errorf("launch_args is for chromium/cloakbrowser; on moli use get_markdown extra_args or the run cdp action")
+		}
 		return openMoliSession(c, dir)
 	}
 
@@ -287,6 +294,9 @@ func openSession(c *connector.Ctx) (any, error) {
 		joined := strings.Join(exts, ",")
 		args = append(args, "--load-extension="+joined, "--disable-extensions-except="+joined)
 	}
+	// Caller flags go before the proxy so the connector's network setting
+	// is the last word on a flag both name.
+	args = append(args, launchExtra...)
 	if px := strings.TrimSpace(c.Cfg("proxy_server")); px != "" {
 		args = append(args, "--proxy-server="+px)
 	}

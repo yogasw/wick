@@ -122,6 +122,29 @@ project gets a clear "no project folder" error.
 - **Show progress** with the session `todo` (one item per stage or batch)
   when someone is watching.
 
+## An operation a connector does not have yet
+
+A connector op that is missing, or an engine feature it does not wrap, is
+usually reachable without waiting for a connector release:
+
+1. **Look for a raw pass-through first.** Many connectors expose one: a raw
+   request op, a `cdp`/`eval` action, an `extra_args`/`launch_args` field.
+   The op description and the connector doc say which and what is fenced.
+2. **Compose the operation in a script** that chains the ops that do exist
+   (open → act through the pass-through → read → close) and returns only the
+   shaped result. Save it as `codemode/scripts/<name>.ts`, take everything
+   that varies from `input`, and run it with `script_path`: it now behaves
+   like an op of its own.
+3. **Make it findable:** a header comment saying what it does and its
+   `input`, and a line under `## KEEP` in `AGENT.md`, so the next session or
+   agent reuses it instead of writing it again.
+4. **Promote it when it earns it.** A script that is run often, or is slow
+   because it chains many calls, is the signal to ask for a proper connector
+   op; until then the script is the op.
+
+A fence on a pass-through (a refused flag or method) is a limit, not a puzzle:
+do not route around it, ask for the connector to support the case.
+
 ## In a watch (kind=code)
 
 A code step reports what is NEW since the last fire. It gets

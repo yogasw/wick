@@ -308,7 +308,7 @@ Reading many pages (a docs site, a catalogue):
 
 ## Using what the connector does not wrap yet
 
-Engines move faster than this connector. Two pass-throughs let an agent use a new engine feature without waiting for a release:
+Engines move faster than this connector. These pass-throughs let an agent use a new engine feature without waiting for a release:
 
 | Need | Use | Engines |
 |---|---|---|
@@ -316,11 +316,15 @@ Engines move faster than this connector. Two pass-throughs let an agent use a ne
 | Logic inside the page | `eval` / `frame_eval` | all |
 | A DevTools protocol command the connector does not wrap | `run` action `cdp{method, params}` | chromium, cloak engines, moli |
 | A `moli fetch` flag the connector does not expose | `get_markdown` `extra_args` (JSON array) | moli |
+| A Chromium command-line flag the connector does not expose | `session_open` `launch_args` (JSON array of `--flag=value`) | chromium, cloak engines |
+| A whole operation the connector has no op for | a code-mode script in `codemode/scripts/` that chains `session_open` → `run` (`eval`/`cdp`) → `session_close` | all |
 
-Both are fenced:
+The raw ones are fenced:
 
 - **`cdp`** reaches the page only. The `Browser`, `Target`, `Storage`, `SystemInfo`, `Tethering` and `Memory` domains are refused, and so are single commands that read cookies or stored site data, turn off TLS checks, write downloads, or close/crash the tab. One command gets 10 s.
 - **`extra_args`** passes page-scoped flags only: `--eval`, the `--wait-*` family (a `--wait-*` flag moli adds later passes too), `--delay-ms`, `--redirect-wait-ms`, `--header`, `--strip-mode`, `--document-start-script`, `--with-frames`, `--with-base`, `--disable-js`, `--disable-css`, `--disable-subframes`, `--image`, `--font`, `--scrollbars`, `--timeout`, `--fail`, `--fail-with-body`. Flags that read host files (`*-file`, `--cookie-jar`, `--ca-cert`, `--client-*`) or change network, proxy, TLS, profile or output settings are refused. The connector's own network policy flags always come after the extras.
+
+- **`launch_args`** is a denylist, so a flag Chromium adds later passes: refused are the flags the connector owns (CDP/debugging port, user-data/profile dir, sandbox, headless, extensions), proxy/network and certificate/TLS flags, logging, and any flag naming a path, dir, file or helper launcher. Up to 20 flags, `--flag=value` form; the connector's proxy flag comes after them. Ignored when `session_open` hands back an already-live profile session. A flag reaches the browser process, but what the page sees can still be overridden: CloakBrowser's fingerprint sets language/locale and Playwright's emulation sets the colour scheme, so `--lang` or `--force-dark-mode` may not show in `navigator`/`matchMedia` there. Check the effect with `eval` before relying on it.
 
 A pass-through that turns out to be needed often is the signal to wrap it as a proper option.
 
