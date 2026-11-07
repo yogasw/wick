@@ -15,9 +15,12 @@
   } from "../api/browser.js";
 
   /* onError bubbles failures to the parent's toast (panels stay presentational
-   * about chrome but own their own WS lifecycle). */
-  type Props = { onError: (msg: string) => void };
-  let { onError }: Props = $props();
+   * about chrome but own their own WS lifecycle). view is bindable so the
+   * parent can hide its side panel while the browser floats or fills the
+   * screen, and dock it back from its own rail button. */
+  type ViewState = "docked" | "float" | "max";
+  type Props = { onError: (msg: string) => void; view?: ViewState };
+  let { onError, view = $bindable("docked") }: Props = $props();
 
   const run = <A,>(e: Effect.Effect<A, unknown, never>) => Effect.runPromise(e);
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -61,9 +64,24 @@
 
   /* ── expand / floating overlay ────────────────────────────────── */
   /* docked = inline in the rail panel; float = draggable+resizable overlay;
-   * max = fill the viewport (fullscreen-ish, still same-window). */
-  type ViewState = "docked" | "float" | "max";
-  let view = $state<ViewState>("docked");
+   * max = fill the viewport (fullscreen-ish, still same-window). Leaving max
+   * goes back to where it was opened from. */
+  let prevView: ViewState = "docked";
+  function setView(next: ViewState) {
+    if (next === view) return;
+    if (next === "max") prevView = view;
+    if (next === "float") seedFloat();
+    view = next;
+    menuOpen = false;
+  }
+  function exitMax() {
+    setView(prevView === "max" ? "docked" : prevView);
+  }
+
+  /* The ⋯ menu holds what the toolbar has no room for: the address bar,
+   * chrome:// shortcuts, copying the session id and closing the session. */
+  let menuOpen = $state(false);
+  let showAddress = $state(false);
 
   /* The overlay is position:fixed and can render outside the app's themed
    * container, so Tailwind dark: variants aren't reliable there. Resolve the
@@ -80,16 +98,37 @@
   const ovBorder = $derived(isDark ? "#2a3450" : "#d9dde6");
   const ovText = $derived(isDark ? "#f5f7fa" : "#0f1729");
   const ovSub = $derived(isDark ? "#8a93a6" : "#5b6472");
-  /* Floating window geometry (px). Seeded once when first floated. */
+  /* Floating window geometry (px). Seeded when floated: on a phone it spans
+   * the screen width under the app header (a 16:10 frame plus the title bar);
+   * on a desktop it keeps the last spot, pulled back inside a smaller window. */
   let fx = $state(120);
   let fy = $state(90);
   let fw = $state(900);
   let fh = $state(600);
+  const FLOAT_BAR_PX = 44;
+  function seedFloat() {
+    if (typeof window === "undefined") return;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    if (W < 640) {
+      fw = W - 16;
+      fh = Math.round(fw * 10 / 16) + FLOAT_BAR_PX;
+      fx = 8;
+      fy = 64;
+      return;
+    }
+    fw = Math.min(fw, W - 40);
+    fh = Math.min(fh, H - 40);
+    fx = Math.max(0, Math.min(fx, W - fw));
+    fy = Math.max(0, Math.min(fy, H - fh));
+  }
 
   type Drag = { kind: "move" | "resize"; startX: number; startY: number; ox: number; oy: number; ow: number; oh: number };
   let drag: Drag | null = null;
 
   function beginDrag(kind: "move" | "resize", ev: PointerEvent) {
+    // The title bar holds buttons too: a press on one is a click, not a drag.
+    if ((ev.target as HTMLElement).closest("button")) return;
     ev.preventDefault();
     (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
     drag = { kind, startX: ev.clientX, startY: ev.clientY, ox: fx, oy: fy, ow: fw, oh: fh };
@@ -99,7 +138,7 @@
     const dx = ev.clientX - drag.startX;
     const dy = ev.clientY - drag.startY;
     if (drag.kind === "move") {
-      fx = Math.max(0, Math.min(window.innerWidth - 120, drag.ox + dx));
+      fx = Math.max(0, Math.min(window.innerWidth - Math.min(fw, 120), drag.ox + dx));
       fy = Math.max(0, Math.min(window.innerHeight - 40, drag.oy + dy));
     } else {
       fw = Math.max(320, drag.ow + dx);
@@ -128,15 +167,75 @@
   // "+" is blocked when the session already holds the max tabs (0 = unlimited).
   const tabLimitReached = $derived(maxTabs > 0 && tabs.length >= maxTabs);
 
+  /* ── session cards ────────────────────────────────────────────── */
+  function fmtDur(sec: number | undefined): string {
+    if (sec === undefined || sec < 0) return "";
+    if (sec < 60) return sec < 10 ? "just now" : `${sec}s`;
+    const m = Math.round(sec / 60);
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
+  }
+  function hostOf(url: string | undefined): string {
+    if (!url) return "";
+    try {
+      const u = new URL(url);
+      return u.host || url;
+    } catch {
+      return url;
+    }
+  }
+  function sessionName(s: BrowserSession | undefined): string {
+    return s?.profile || "anonymous";
+  }
+  function sessionMeta(s: BrowserSession): string {
+    const parts = [hostOf(s.tabs?.[0]?.url) || "no tab"];
+    if (s.idle_seconds !== undefined) parts.push(`idle ${fmtDur(s.idle_seconds)}`);
+    if (s.auto_close_in_seconds !== undefined) parts.push(`auto-close in ${fmtDur(s.auto_close_in_seconds)}`);
+    return parts.join(" · ");
+  }
+
+  function openSession_(sid: string) {
+    sessionId = sid;
+    onSessionChange();
+  }
+  // Back to the session list: the view stops streaming, nothing is closed.
+  function backToList() {
+    disconnect();
+    sessionId = "";
+    menuOpen = false;
+    showAddress = false;
+    view = "docked";
+  }
+
+  async function copySessionId() {
+    menuOpen = false;
+    try {
+      await navigator.clipboard.writeText(sessionId);
+    } catch (e) {
+      onError(`Copy session id: ${errMsg(e)}`);
+    }
+  }
+
+  // The instance picked last time, so a panel with several instances opens
+  // straight on its session list.
+  const LAST_INSTANCE_KEY = "wick.browser.instance";
+  function readLastInstance(): string {
+    try {
+      return localStorage.getItem(LAST_INSTANCE_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  }
+
   /* ── loaders ──────────────────────────────────────────────────── */
   async function loadInstances() {
     loadingInstances = true;
     try {
       instances = await run(listInstances().pipe(Effect.provide(WickClientLayer)));
-      // Auto-pick when there's exactly one usable instance.
+      // Auto-pick the only usable instance, else the one picked last time.
       const usable = instances.filter((i) => !i.disabled);
-      if (!instanceId && usable.length === 1) {
-        instanceId = usable[0].id;
+      const last = usable.find((i) => i.id === readLastInstance());
+      if (!instanceId && (usable.length === 1 || last)) {
+        instanceId = (last ?? usable[0]).id;
         await loadSessions();
       }
     } catch (e) {
@@ -178,6 +277,9 @@
   function selectInstance(id: string) {
     disconnect();
     instanceId = id;
+    try {
+      localStorage.setItem(LAST_INSTANCE_KEY, id);
+    } catch { /* storage off: just not remembered */ }
     sessionId = "";
     sessions = [];
     void loadSessions();
@@ -850,126 +952,145 @@
     if (wantLive) reconnectNow();
   });
 
+  // A closed or vanished session leaves nothing to float: dock back so the
+  // parent shows its panel again.
+  $effect(() => {
+    if (!sessionId && view !== "docked") view = "docked";
+  });
+
   onDestroy(disconnect);
 </script>
 
-<div class="flex-1 overflow-y-auto p-3 space-y-3">
-  <!-- Instance + session controls -->
-  <div class="rounded-xl border border-white-300 dark:border-navy-600 p-3 space-y-2">
-    {#if loadingInstances}
-      <p class="text-xs text-black-700 dark:text-black-600">Loading…</p>
-    {:else if instances.length === 0}
-      <p class="text-xs text-black-700 dark:text-black-600">
-        No <span class="font-mono">playwright_browser</span> connector configured. Install the plugin and add an instance to use the live browser.
-      </p>
-    {:else}
-      <label class="block text-xs font-medium text-black-800 dark:text-white-200">Connector instance</label>
-      <select
-        class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
-        bind:value={instanceId}
-        onchange={(e) => selectInstance(e.currentTarget.value)}
-        data-testid="browser-instance"
-      >
-        <option value="">Select an instance…</option>
-        {#each instances as inst (inst.id)}
-          <option value={inst.id} disabled={inst.disabled}>{inst.label}{inst.disabled ? " (disabled)" : ""}</option>
-        {/each}
-      </select>
-
-      {#if instanceId}
-        <div class="flex items-center gap-2 pt-1">
-          <button
-            type="button"
-            class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors disabled:opacity-50"
-            disabled={busy}
-            onclick={spawn}
-            data-testid="browser-open"
-          >{busy ? "Working…" : "New session"}</button>
-          <button
-            type="button"
-            class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-700 dark:text-white-200 hover:border-green-400 transition-colors disabled:opacity-50"
-            disabled={loadingSessions}
-            onclick={() => loadSessions()}
-          >{loadingSessions ? "Loading…" : "Refresh"}</button>
+<div class="flex-1 min-h-0 overflow-y-auto" data-testid="browser-panel">
+  {#if sessionId && view === "docked"}
+    <!-- Watching a session: the viewer replaces the list; ← goes back. -->
+    <div class="flex flex-col">
+      {@render titleBar(false)}
+      {@render extras()}
+      <div class="p-2">
+        {@render screen("w-full aspect-[16/10]")}
+      </div>
+      {@render fullHint()}
+    </div>
+  {:else}
+    <div class="p-3 space-y-3">
+      {#if loadingInstances}
+        <p class="text-xs text-black-700 dark:text-black-600">Loading…</p>
+      {:else if instances.length === 0}
+        <p class="text-xs text-black-700 dark:text-black-600">
+          No <span class="font-mono">playwright_browser</span> connector configured. Install the plugin and add an instance to use the live browser.
+        </p>
+      {:else}
+        <div class="space-y-1.5">
+          <p class="text-[11px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Instance</p>
+          <div class="flex flex-wrap gap-1.5" data-testid="browser-instance">
+            {#each instances as inst (inst.id)}
+              <button
+                type="button"
+                class={"max-w-full truncate rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 " +
+                  (inst.id === instanceId
+                    ? "border-green-500 text-green-600 dark:text-green-400"
+                    : "border-white-400 dark:border-navy-600 text-black-800 dark:text-white-200 hover:border-green-400")}
+                disabled={inst.disabled}
+                onclick={() => selectInstance(inst.id)}
+                data-testid={`browser-instance-${inst.id}`}
+              >{inst.label}{inst.disabled ? " (disabled)" : ""}</button>
+            {/each}
+          </div>
         </div>
 
-        {#if sessions.length > 0}
-          <label class="block text-xs font-medium text-black-800 dark:text-white-200 pt-1">Live session</label>
-          <select
-            class="w-full max-w-full truncate rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-            bind:value={sessionId}
-            onchange={onSessionChange}
-            title={sessionId}
-            data-testid="browser-session"
-          >
-            <option value="">Select a session…</option>
-            {#each sessions as s (s.session_id)}
-              <option value={s.session_id} title={`${s.session_id} · ${s.browser}`}>{shortSid(s.session_id)} · {s.browser}</option>
-            {/each}
-          </select>
-        {:else if loadingSessions}
-          <p class="text-xs text-black-700 dark:text-black-600 pt-1" data-testid="browser-sessions-loading">Loading sessions…</p>
-        {:else}
-          <p class="text-xs text-black-700 dark:text-black-600 pt-1">No live sessions. Open one to start.</p>
+        {#if instanceId}
+          <div class="flex items-center gap-1.5">
+            <p class="text-[11px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Live sessions ({sessions.length})</p>
+            <button
+              type="button"
+              title="Refresh"
+              aria-label="Refresh sessions"
+              class="ml-auto rounded-lg border border-white-400 dark:border-navy-600 p-1.5 text-black-700 dark:text-white-200 hover:border-green-400 transition-colors disabled:opacity-50"
+              disabled={loadingSessions}
+              onclick={() => loadSessions()}
+              data-testid="browser-refresh"
+            >
+              <svg viewBox="0 0 16 16" class="h-3 w-3"><path d="M13 3v3h-3M3 13v-3h3M13 6a5 5 0 00-9-1M3 10a5 5 0 009 1" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors disabled:opacity-50"
+              disabled={busy}
+              onclick={spawn}
+              data-testid="browser-open"
+            >{busy ? "Working…" : "+ New session"}</button>
+          </div>
+
+          {#if sessions.length > 0}
+            <ul class="space-y-2">
+              {#each sessions as s (s.session_id)}
+                <li
+                  class={"flex items-center gap-2 rounded-xl border p-3 bg-white-200 dark:bg-navy-800 " +
+                    (s.session_id === sessionId ? "border-green-500" : "border-white-300 dark:border-navy-600")}
+                  data-testid="browser-session-card"
+                >
+                  <div class="min-w-0 flex-1">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <span class={"h-2 w-2 shrink-0 rounded-full " + ((s.idle_seconds ?? 0) > 60 ? "bg-amber-500" : "bg-green-500")}></span>
+                      <span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{sessionName(s)}</span>
+                      <span class="shrink-0 rounded-md border border-white-400 dark:border-navy-600 px-1.5 text-[10px] text-black-700 dark:text-black-600">{s.browser}</span>
+                    </div>
+                    <p class="mt-0.5 truncate text-xs text-black-700 dark:text-black-600" title={s.session_id}>{sessionMeta(s)}</p>
+                  </div>
+                  {#if s.session_id === sessionId}
+                    <span class="shrink-0 rounded-md border border-green-500 px-1.5 text-[10px] text-green-600 dark:text-green-400">watching</span>
+                  {:else}
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+                      onclick={() => openSession_(s.session_id)}
+                      data-testid="browser-session-open"
+                    >Open</button>
+                  {/if}
+                  <button
+                    type="button"
+                    title="Close session"
+                    aria-label="Close session"
+                    class="shrink-0 rounded-md p-1.5 text-neg-400 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors disabled:opacity-50"
+                    disabled={busy}
+                    onclick={() => kill(s.session_id)}
+                    data-testid="browser-session-close"
+                  >
+                    <svg viewBox="0 0 16 16" class="h-3 w-3"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else if loadingSessions}
+            <p class="text-xs text-black-700 dark:text-black-600" data-testid="browser-sessions-loading">Loading sessions…</p>
+          {:else}
+            <p class="text-xs text-black-700 dark:text-black-600">No live sessions. Open one, or wait for an agent to start one.</p>
+          {/if}
         {/if}
       {/if}
-    {/if}
-  </div>
-
-  <!-- Live view (only when docked; float/max render in the overlay below) -->
-  {#if sessionId && view === "docked"}
-    <div class="rounded-xl border border-white-300 dark:border-navy-600 p-3 space-y-2">
-      {@render toolbar()}
-      {@render addressBar()}
-      {@render tabSwitcher()}
-      {@render screen("h-[60vh]")}
-      {@render fullHint()}
     </div>
   {/if}
 </div>
 
-<!-- Floating / maximized overlay -->
+<!-- Floating / fullscreen overlay. visibility and pointer-events are set
+     explicitly: the parent hides its side panel (visibility:hidden) while the
+     browser is detached, and this window must stay on screen. -->
 {#if sessionId && view !== "docked"}
-  <!-- Backdrop only in fullscreen (max), where the browser view should own the
-       whole screen. In float mode there is NO backdrop, so the rest of the UI
-       (chat, rail, etc.) stays clickable behind the floating window. -->
   {#if view === "max"}
-    <div class="fixed inset-0 z-40 bg-black-900/60" aria-hidden="true"></div>
+    <div class="fixed inset-0 z-40 bg-black-900/60" style="visibility:visible" aria-hidden="true"></div>
   {/if}
   <div
     class={view === "max"
       ? "fixed inset-0 z-50 flex flex-col"
       : "fixed z-50 flex flex-col rounded-xl border shadow-2xl overflow-hidden"}
-    style={`background:${ovBg}; border-color:${ovBorder}; color:${ovText};` +
+    style={`background:${ovBg}; border-color:${ovBorder}; color:${ovText}; visibility:visible; pointer-events:auto;` +
       (view === "float" ? ` left:${fx}px; top:${fy}px; width:${fw}px; height:${fh}px;` : "")}
     data-testid="browser-overlay"
   >
-    <!-- Title bar — solid background so it clearly reads as a window chrome.
-         Draggable in float mode. Colors resolved from the live theme (inline,
-         not dark: variants) because a fixed overlay may sit outside the themed
-         container. -->
-    <div
-      class={"flex items-center gap-2.5 px-3 py-2.5 border-b " + (view === "float" ? "cursor-move select-none" : "")}
-      style={`background:${ovBar}; border-color:${ovBorder};`}
-      onpointerdown={view === "float" ? (e) => beginDrag("move", e) : undefined}
-      onpointermove={onDragMove}
-      onpointerup={endDrag}
-    >
-      <span class={"h-2 w-2 shrink-0 rounded-full " + (connected ? "bg-green-500" : "bg-black-500")}></span>
-      <span class="text-sm font-semibold shrink-0" style={`color:${ovText};`}>Live browser</span>
-      <span class="font-mono text-[11px] truncate" style={`color:${ovSub};`}>{sessionId}</span>
-      <div class="ml-auto flex items-center gap-1">
-        {@render viewBtn("docked", "Dock into panel", "M3 3h10v10H3z")}
-        {@render viewBtn("float", "Floating window", "M2 4h12v8H2z M2 4l4 3")}
-        {@render viewBtn("max", "Fullscreen", "M2 6V2h4 M14 6V2h-4 M2 10v4h4 M14 10v4h-4")}
-      </div>
-    </div>
-
-    <!-- Toolbar + screen fill the overlay body -->
-    <div class="flex-1 min-h-0 flex flex-col p-3 gap-2 overflow-hidden" style={`background:${ovBg}; color:${ovText};`}>
-      {@render toolbar()}
-      {@render addressBar()}
-      {@render tabSwitcher()}
+    {@render titleBar(true)}
+    <div class="flex-1 min-h-0 flex flex-col gap-1.5 p-1.5 overflow-hidden" style={`background:${ovBg}; color:${ovText};`}>
+      {@render extras()}
       <div class="flex-1 min-h-0">
         {@render screen("h-full")}
       </div>
@@ -980,6 +1101,8 @@
     {#if view === "float"}
       <div
         class="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
+        style="touch-action:none"
+        role="presentation"
         onpointerdown={(e) => beginDrag("resize", e)}
         onpointermove={onDragMove}
         onpointerup={endDrag}
@@ -989,6 +1112,11 @@
       </div>
     {/if}
   </div>
+{/if}
+
+{#if menuOpen}
+  <!-- Outside click closes the ⋯ menu. -->
+  <div class="fixed inset-0 z-[65]" style="visibility:visible; pointer-events:auto" onclick={() => (menuOpen = false)} role="presentation"></div>
 {/if}
 
 <!-- Right-click menu on the live view. Rendered at the top level so its fixed
@@ -1018,33 +1146,38 @@
 
 <!-- ── Reusable snippets ──────────────────────────────────────────── -->
 
-{#snippet toolbar()}
-  <div class="flex items-center gap-2 flex-wrap">
-    <div class="inline-flex rounded-lg border border-white-400 dark:border-navy-600 overflow-hidden text-xs font-medium">
-      <button
-        type="button"
-        title="Watch without touching the browser: no resize, no theme, no input. What you see is what the agent sees."
-        class={"px-3 py-1.5 transition-colors " + (mode === "view" ? "bg-green-500 text-white-100" : "bg-white-100 dark:bg-navy-800 text-black-700 dark:text-white-200")}
-        onclick={() => (mode = "view")}
-        data-testid="browser-mode-view"
-      >View only</button>
-      <button
-        type="button"
-        class={"px-3 py-1.5 transition-colors " + (mode === "full" ? "bg-green-500 text-white-100" : "bg-white-100 dark:bg-navy-800 text-black-700 dark:text-white-200")}
-        onclick={() => (mode = "full")}
-        data-testid="browser-mode-full"
-      >Full</button>
-    </div>
+{#snippet titleBar(overlay: boolean)}
+  <!-- One row: ← (docked) · status · name · View only/Full · window buttons · ⋯.
+       In the floating window it is also the drag handle (mouse or finger). -->
+  <div
+    class={"relative flex items-center gap-1.5 px-2.5 py-2 border-b " +
+      (overlay ? "" : "border-white-300 dark:border-navy-600 ") +
+      (overlay && view === "float" ? "cursor-move select-none" : "")}
+    style={overlay ? `background:${ovBar}; border-color:${ovBorder};` + (view === "float" ? " touch-action:none;" : "") : ""}
+    role="toolbar"
+    aria-label="Browser controls"
+    tabindex="-1"
+    onpointerdown={overlay && view === "float" ? (e) => beginDrag("move", e) : undefined}
+    onpointermove={overlay ? onDragMove : undefined}
+    onpointerup={overlay ? endDrag : undefined}
+  >
+    {#if !overlay}
+      {@render iconBtn("Back to sessions", "M10 3L5 8l5 5", backToList, "browser-back")}
+    {/if}
+    <span class={"h-2 w-2 shrink-0 rounded-full " + (connected ? "bg-green-500" : "bg-black-500")}></span>
+    <span
+      class={"min-w-0 flex-1 truncate text-sm font-semibold " + (overlay ? "" : "text-black-900 dark:text-white-100")}
+      style={overlay ? `color:${ovText};` : ""}
+      title={sessionId}
+    >{sessionName(selectedSession)}{hostOf(tabs.find((t) => t.index === tabIndex)?.url) ? ` · ${hostOf(tabs.find((t) => t.index === tabIndex)?.url)}` : ""}</span>
 
-    {#if connected || !sessionId}
-      <span class={"rounded-full px-2 py-0.5 text-[10px] font-medium " + (connected ? "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600")}>
-        {statusText || "idle"}
-      </span>
+    {#if connected}
+      <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300">{statusText || "live"}</span>
     {:else}
       <button
         type="button"
         title="Reconnect to the live browser"
-        class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 hover:bg-green-50 hover:text-green-700 dark:bg-navy-700 dark:text-black-600 dark:hover:bg-green-900 dark:hover:text-green-300"
+        class="shrink-0 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 hover:bg-green-50 hover:text-green-700 dark:bg-navy-700 dark:text-black-600 dark:hover:bg-green-900 dark:hover:text-green-300"
         onclick={reconnectNow}
         data-testid="browser-reconnect"
       >
@@ -1053,33 +1186,88 @@
       </button>
     {/if}
 
-    <!-- Expand controls: shown docked; the overlay has its own in the header. -->
-    {#if view === "docked"}
-      <div class="flex items-center gap-0.5 rounded-lg border border-white-400 dark:border-navy-600 p-0.5">
-        {@render viewBtn("float", "Pop out to window", "M2 4h12v8H2z M2 4l4 3")}
-        {@render viewBtn("max", "Fullscreen", "M2 6V2h4 M14 6V2h-4 M2 10v4h4 M14 10v4h-4")}
+    <div class="shrink-0 inline-flex rounded-lg border border-white-400 dark:border-navy-600 overflow-hidden text-[11px] font-medium">
+      <button
+        type="button"
+        title="Watch without touching the browser: no resize, no theme, no input. What you see is what the agent sees."
+        class={"px-2 py-1 transition-colors " + (mode === "view" ? "bg-green-500 text-white-100" : "bg-white-100 dark:bg-navy-800 text-black-700 dark:text-white-200")}
+        onclick={() => (mode = "view")}
+        data-testid="browser-mode-view"
+      >View only</button>
+      <button
+        type="button"
+        title="Click and type in the agent's browser"
+        class={"px-2 py-1 transition-colors " + (mode === "full" ? "bg-green-500 text-white-100" : "bg-white-100 dark:bg-navy-800 text-black-700 dark:text-white-200")}
+        onclick={() => (mode = "full")}
+        data-testid="browser-mode-full"
+      >Full</button>
+    </div>
+
+    {#if view === "float"}
+      {@render iconBtn("Dock to panel", "M3 3h10v10H3z M3 6h10", () => setView("docked"), "browser-dock")}
+      {@render iconBtn("Fullscreen", "M2 6V2h4 M14 6V2h-4 M2 10v4h4 M14 10v4h-4", () => setView("max"), "browser-max")}
+    {:else if view === "max"}
+      {@render iconBtn("Pop out", "M2 4h12v8H2z M2 4l4 3", () => setView("float"), "browser-float")}
+      {@render iconBtn("Exit fullscreen", "M4 4l8 8M12 4l-8 8", exitMax, "browser-exit-max")}
+    {:else}
+      {@render iconBtn("Pop out", "M2 4h12v8H2z M2 4l4 3", () => setView("float"), "browser-float")}
+      {@render iconBtn("Fullscreen", "M2 6V2h4 M14 6V2h-4 M2 10v4h4 M14 10v4h-4", () => setView("max"), "browser-max")}
+    {/if}
+    {@render iconBtn("More", "M4 8h.01M8 8h.01M12 8h.01", () => (menuOpen = !menuOpen), "browser-more")}
+
+    {#if menuOpen}
+      <div
+        class="absolute right-2 top-full z-[70] mt-1 min-w-[200px] overflow-hidden rounded-lg border py-1 text-[13px] shadow-2xl"
+        style={`background:${ovBg}; border-color:${ovBorder}; color:${ovText}; visibility:visible; pointer-events:auto;`}
+        role="menu"
+        data-testid="browser-menu"
+      >
+        <button type="button" role="menuitem" class="menu-item" onclick={() => { showAddress = !showAddress; menuOpen = false; }}>
+          {showAddress ? "Hide address bar" : "Address bar"}
+        </button>
+        {#each CHROME_PAGES as p (p.page)}
+          <button
+            type="button"
+            role="menuitem"
+            class="menu-item disabled:opacity-50"
+            disabled={!connected || mode !== "full"}
+            title={mode !== "full" ? "Switch to Full to navigate" : `Open chrome://${p.page}`}
+            onclick={() => { gotoChrome(p.page); menuOpen = false; }}
+          >chrome://{p.page}</button>
+        {/each}
+        <button type="button" role="menuitem" class="menu-item" onclick={copySessionId}>Copy session id</button>
+        <button
+          type="button"
+          role="menuitem"
+          class="menu-item text-neg-400"
+          onclick={() => { menuOpen = false; void kill(sessionId); }}
+          data-testid="browser-close"
+        >Close session</button>
       </div>
     {/if}
-
-    <button
-      type="button"
-      class="ml-auto text-[11px] font-medium text-neg-400 hover:underline"
-      onclick={() => kill(sessionId)}
-      data-testid="browser-close"
-    >Close session</button>
   </div>
 {/snippet}
 
-{#snippet viewBtn(target: ViewState, label: string, path: string)}
+{#snippet iconBtn(label: string, path: string, action: () => void, testid: string)}
   <button
     type="button"
     title={label}
     aria-label={label}
-    class={"rounded-md p-1.5 transition-colors " + (view === target ? "bg-green-500 text-white-100" : "text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700")}
-    onclick={() => (view = target)}
+    class="shrink-0 rounded-md p-1.5 text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors"
+    onclick={action}
+    data-testid={testid}
   >
-    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5"><path d={path} stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5"><path d={path} stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
+{/snippet}
+
+{#snippet extras()}
+  {#if showAddress || tabs.length > 1 || (tabs.length > 0 && !tabLimitReached)}
+    <div class="space-y-1.5 px-2 pt-2">
+      {#if showAddress}{@render addressBar()}{/if}
+      {@render tabSwitcher()}
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet addressBar()}
@@ -1107,32 +1295,6 @@
       >Go</button>
     </div>
 
-    <!-- Shortcuts: a toggle that reveals chrome:// chips inline (no floating
-         menu, so nothing can overflow/clip in the narrow docked panel). -->
-    <div>
-      <button
-        type="button"
-        class="inline-flex items-center gap-1 text-[11px] font-medium text-black-700 dark:text-black-500 hover:text-black-900 dark:hover:text-white-200 disabled:opacity-50"
-        disabled={!connected}
-        onclick={() => (shortcutsOpen = !shortcutsOpen)}
-        aria-expanded={shortcutsOpen}
-        data-testid="browser-shortcuts"
-      >
-        <svg viewBox="0 0 16 16" class={"h-3 w-3 transition-transform " + (shortcutsOpen ? "rotate-90" : "")}><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Shortcuts
-      </button>
-      {#if shortcutsOpen}
-        <div class="mt-1.5 flex flex-wrap gap-1.5">
-          {#each CHROME_PAGES as p (p.page)}
-            <button
-              type="button"
-              class="rounded-full border border-white-400 dark:border-navy-600 px-2.5 py-1 text-[11px] text-black-800 dark:text-white-200 hover:border-green-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
-              onclick={() => gotoChrome(p.page)}
-            >{p.label}</button>
-          {/each}
-        </div>
-      {/if}
-    </div>
   </div>
 {/snippet}
 
@@ -1233,9 +1395,8 @@
 
 {#snippet fullHint()}
   {#if mode === "full"}
-    <p class="text-[11px] text-black-700 dark:text-black-600">
-      Full mode: click and type directly on the view. Click the view first to capture keyboard.
-      Copy/paste works normally — your PC clipboard syncs with the browser as you click in and out.
+    <p class="mx-2 mb-2 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+      Full: your clicks and typing go to the agent's browser. Click the view first to capture the keyboard.
     </p>
   {/if}
 {/snippet}
@@ -1257,6 +1418,17 @@
   }
   .ctx-item:hover {
     background: var(--ctx-hover);
+  }
+  .menu-item {
+    display: block;
+    width: 100%;
+    padding: 0.375rem 0.75rem;
+    text-align: left;
+    background: transparent;
+    cursor: pointer;
+  }
+  .menu-item:hover:not(:disabled) {
+    background: var(--menu-hover, rgba(127, 127, 127, 0.15));
   }
   .ctx-key {
     font-size: 11px;

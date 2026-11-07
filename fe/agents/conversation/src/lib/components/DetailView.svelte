@@ -305,6 +305,14 @@
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
   let railTab = $state<RailTab | null>(null);
+  // The browser panel's window: docked in the side panel, floating, or
+  // fullscreen. While it is detached the side panel is hidden (not closed:
+  // closing it would unmount the panel and end the live view).
+  let browserView = $state<"docked" | "float" | "max">("docked");
+  const browserDetached = $derived(railTab === "browser" && browserView !== "docked");
+  $effect(() => {
+    if (railTab !== "browser" && browserView !== "docked") browserView = "docked";
+  });
   // Auto-open paths (todos, ?rail=subagents) must not reveal a tab the
   // agent's features hide.
   $effect(() => {
@@ -2690,6 +2698,12 @@
 
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
+    // The Browser button docks a floating/fullscreen browser back into the
+    // panel instead of closing it.
+    if (tab === "browser" && browserDetached) {
+      browserView = "docked";
+      return;
+    }
     railTab = railTab === tab ? null : tab;
     // Opening Config always re-reads it: a base connector edited in the
     // admin pages publishes nothing to this session.
@@ -3661,8 +3675,9 @@
     <div
       bind:this={scmSideEl}
       tabindex="-1"
-      class="relative hidden lg:flex flex-col outline-none shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden"
-      style={`width:${scmWidth}px; margin-right:${railWidth || RAIL_GUTTER_PX}px`}
+      class={"relative hidden lg:flex flex-col outline-none shrink-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden " +
+        (browserDetached ? "invisible border-l-0" : "border-l")}
+      style={`width:${browserDetached ? 0 : scmWidth}px; margin-right:${railWidth || RAIL_GUTTER_PX}px`}
     >
       <!-- One handle for the whole panel, whichever tab is in it. A diff and
            a long note both want to be widened, and a width that only the
@@ -3868,7 +3883,7 @@
           }}
         />
       {:else if railTab === "browser"}
-        <BrowserPanel onError={(m) => toastError(m)} />
+        <BrowserPanel onError={(m) => toastError(m)} bind:view={browserView} />
       {/if}
       {#if railHiddenNote}
         <p class="shrink-0 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-[11px] text-black-600 dark:text-black-700">{railHiddenNote}</p>
@@ -3877,7 +3892,7 @@
 
     <!-- Mobile slide-over for context/process/workspace (below lg) -->
     <div
-      class="lg:hidden fixed inset-0 z-40 flex"
+      class={"lg:hidden fixed inset-0 z-40 flex" + (browserDetached ? " invisible pointer-events-none" : "")}
     >
       <button
         type="button"
@@ -4100,7 +4115,7 @@
               }}
             />
           {:else if railTab === "browser"}
-            <BrowserPanel onError={(m) => toastError(m)} />
+            <BrowserPanel onError={(m) => toastError(m)} bind:view={browserView} />
           {/if}
         </div>
         {#if railHiddenNote}

@@ -50,9 +50,7 @@ class NoopObserver {
 
 async function openLive() {
   render(BrowserPanel, { props: { onError: vi.fn() } });
-  const sel = (await screen.findByTestId("browser-session")) as HTMLSelectElement;
-  sel.value = "s1";
-  await fireEvent.change(sel);
+  await fireEvent.click(await screen.findByTestId("browser-session-open"));
   await waitFor(() => expect(FakeWS.all.length).toBe(1));
   FakeWS.all[0].open();
   await waitFor(() => expect(document.body.textContent).toContain("live"));
