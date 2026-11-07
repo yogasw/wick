@@ -389,5 +389,33 @@
       "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.18/playwright_browser-0.14.18-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.18/playwright_browser-0.14.18-linux-arm64.zip"
     }
+  },
+  {
+    "key": "source_deploy",
+    "name": "Deploy from Source",
+    "description": "Update THIS wick from source — a branch (develop, a feature branch), a fork or a local checkout — without a release. Runs the deploy-from-source script (.sh on Linux/macOS/Termux, .ps1 on Windows) in the background, outside wick, so it survives the reload it performs. Save a profile once, then deploy with no input.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "System",
+        "Description": "Built-in maintenance items shipped with wick. Hidden from non-admin users.",
+        "IsGroup": true,
+        "IsFilter": true,
+        "IsSystem": true,
+        "SortOrder": 1000
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/source_deploy/v0.1.0/source_deploy-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/source_deploy/v0.1.0/source_deploy-0.1.0-linux-arm64.zip"
+    }
   }
 ]
