@@ -31,10 +31,24 @@ func TestBotItemsMarksWorkflowBotsAndListsAppsFirst(t *testing.T) {
 	}
 }
 
+// freshListingKey returns a cache key with no entry: the cache is
+// package-wide, so a -count=N rerun would find the last run's listing.
+func freshListingKey(t *testing.T) string {
+	key := t.Name()
+	drop := func() {
+		listingMu.Lock()
+		delete(listingCache, key)
+		listingMu.Unlock()
+	}
+	drop()
+	t.Cleanup(drop)
+	return key
+}
+
 // Typing fires one lookup per key; they must filter one shared listing, not
 // page Slack each time — that burst is what hit "rate limited".
 func TestCachedListingSharesOneFetch(t *testing.T) {
-	key := t.Name()
+	key := freshListingKey(t)
 	var calls atomic.Int32
 	release := make(chan struct{})
 	fetch := func() ([]string, error) {
@@ -66,7 +80,7 @@ func TestCachedListingSharesOneFetch(t *testing.T) {
 // Once a listing has answered, a failing refresh (rate limited) never
 // surfaces: the last response keeps answering and refreshes cool down.
 func TestCachedListingServesLastResponseOnError(t *testing.T) {
-	key := t.Name()
+	key := freshListingKey(t)
 	if _, err := cachedListing(key, func() ([]string, error) { return []string{"a"}, nil }); err != nil {
 		t.Fatal(err)
 	}
