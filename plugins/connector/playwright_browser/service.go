@@ -371,6 +371,9 @@ func validateActionArgs(i int, a action) error {
 		if err := cdpBlocked(a.Method); err != nil {
 			return fmt.Errorf("action[%d] cdp: %w", i, err)
 		}
+		if err := checkSaveDir(a.SaveDir); err != nil {
+			return fmt.Errorf("action[%d] cdp: %w", i, err)
+		}
 	case "set_viewport":
 		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {
 			return fmt.Errorf("action[%d] set_viewport: width and height must be between 200 and 7680x4320", i)

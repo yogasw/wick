@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -62,5 +64,23 @@ func TestMoliFetchArgsExtraBeforePolicy(t *testing.T) {
 	}
 	if args[len(args)-1] != "https://example.com" || strings.HasPrefix(args[len(args)-1], "-") {
 		t.Fatalf("url stays last: %v", args)
+	}
+}
+
+func TestSaveCDPData(t *testing.T) {
+	dir := t.TempDir()
+	got, err := saveCDPData(dir, "Page.printToPDF", base64.StdEncoding.EncodeToString([]byte("%PDF-1.7 test")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := got["path"].(string)
+	if !strings.HasSuffix(path, ".pdf") || got["bytes"] != 13 {
+		t.Fatalf("unexpected %v", got)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "%PDF-1.7 test" {
+		t.Fatalf("file content %q %v", b, err)
+	}
+	if _, err := saveCDPData(dir, "Page.printToPDF", "not base64!!"); err == nil {
+		t.Fatal("bad base64 is an error")
 	}
 }

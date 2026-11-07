@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -86,9 +90,48 @@ func runCDP(page playwright.Page, a action) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", a.Method, err)
 	}
+	// Binary payloads (Page.printToPDF, Page.captureScreenshot, …) come back
+	// as base64 in "data": with save_dir they go to a file instead.
+	if m, ok := res.(map[string]any); ok && a.SaveDir != "" {
+		if data, ok := m["data"].(string); ok && data != "" {
+			saved, err := saveCDPData(a.SaveDir, a.Method, data)
+			if err != nil {
+				return nil, err
+			}
+			m["data"] = saved
+		}
+	}
 	// Keep the payload within what a step may return.
 	if b, err := json.Marshal(res); err == nil && len(b) > maxOutputRune {
-		return map[string]any{"truncated": true, "json": clip(string(b))}, nil
+		return map[string]any{"truncated": true, "json": clip(string(b)),
+			"note": "the result is larger than a step may return: for base64 data (a PDF, an image) pass save_dir to get a file instead"}, nil
 	}
 	return res, nil
+}
+
+// saveCDPData decodes a base64 payload into save_dir and returns its path.
+// The extension follows the content: PDF, PNG, JPEG or .bin.
+func saveCDPData(dir, method, data string) (map[string]any, error) {
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: data is not base64, nothing saved: %w", method, err)
+	}
+	ext := ".bin"
+	switch {
+	case bytes.HasPrefix(raw, []byte("%PDF")):
+		ext = ".pdf"
+	case bytes.HasPrefix(raw, []byte("\x89PNG")):
+		ext = ".png"
+	case bytes.HasPrefix(raw, []byte{0xFF, 0xD8, 0xFF}):
+		ext = ".jpg"
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create save_dir: %w", err)
+	}
+	name := strings.ReplaceAll(method, ".", "-") + "-" + time.Now().Format("20060102-150405.000") + ext
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return nil, fmt.Errorf("save %s: %w", method, err)
+	}
+	return map[string]any{"path": path, "bytes": len(raw)}, nil
 }
