@@ -54,13 +54,17 @@ type mouseEnv struct {
 	ripple  bool      // flash a ring where a click lands
 	posFile string    // where the pointer position survives plugin restarts
 	run     *runState // per-run baselines for wait_for_text fresh
+	// hitCheck: confirm a frame_click reached its element. Moli hit-tests
+	// without z-index, so a click on a dropdown can land on the page below.
+	hitCheck bool
 }
 
 func newMouseEnv(c *connector.Ctx, sessionID string) mouseEnv {
 	env := mouseEnv{
-		key:    sessionID,
-		cursor: !strings.EqualFold(strings.TrimSpace(c.Cfg("show_cursor")), "false"),
-		ripple: c.CfgBool("cursor_click_ripple"),
+		key:      sessionID,
+		cursor:   !strings.EqualFold(strings.TrimSpace(c.Cfg("show_cursor")), "false"),
+		ripple:   c.CfgBool("cursor_click_ripple"),
+		hitCheck: isMoliEngine(c.Cfg("browser")),
 	}
 	if sessionID != "" {
 		env.posFile = pointerPath(sessionDir(c), sessionID)

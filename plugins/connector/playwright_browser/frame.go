@@ -484,11 +484,41 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A handle, not a locator: a missed click often closes the menu the
+	// element sits in, and a visible-only locator would no longer find it.
+	var target playwright.ElementHandle
+	if env.hitCheck {
+		if h, herr := locateInFrame(f, a).ElementHandle(playwright.LocatorElementHandleOptions{Timeout: playwright.Float(500)}); herr == nil {
+			if _, aerr := h.Evaluate(armHitJS); aerr == nil {
+				target = h
+			}
+			defer func() { _ = h.Dispose() }()
+		}
+	}
 	res, err := clickBox(page, env, a, box)
 	if err == nil && via != "" {
 		res["fallback"] = via
 	}
+	if err == nil && target != nil && missedHit(target) {
+		res["fallback"] = "dom_click"
+	}
 	return res, err
+}
+
+// armHitJS marks the element so missedHit can tell whether the mouse click
+// reached it (or a child). Capture on the element itself sees both.
+const armHitJS = `el => { el.__wickHit = false; el.addEventListener("click", () => { el.__wickHit = true }, { once: true, capture: true }) }`
+
+// missedHit clicks the element through the DOM when the mouse click landed
+// elsewhere, and reports whether it had to. A page that navigated or dropped
+// the element counts as reached: the click did something.
+func missedHit(target playwright.ElementHandle) bool {
+	v, err := target.Evaluate(`el => { if (el.__wickHit !== false) return false; el.click(); return true }`)
+	if err != nil {
+		return false
+	}
+	missed, _ := v.(bool)
+	return missed
 }
 
 // frameType clicks an input in the frame like a hand, then types value one

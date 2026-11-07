@@ -483,7 +483,9 @@ func listSessions(c *connector.Ctx) ([]sessionMeta, error) {
 	return out, nil
 }
 
-// sessionList is the session_list op: every live session plus its open tabs.
+// sessionList is the session_list op: this instance's live sessions plus their
+// open tabs. Sessions of other instances still count toward the shared cap;
+// others_live says how many there are so a full cap is not a mystery.
 func sessionList(c *connector.Ctx) (any, error) {
 	metas, err := listSessions(c)
 	if err != nil {
@@ -491,7 +493,12 @@ func sessionList(c *connector.Ctx) (any, error) {
 	}
 	now := sessionNow(c)
 	sessions := make([]map[string]any, 0, len(metas))
+	others := 0
 	for _, m := range metas {
+		if !ownsSession(c, m.ID) {
+			others++
+			continue
+		}
 		tabs := describeTabs(c, m.ID)
 		row := map[string]any{
 			"session_id": m.ID,
@@ -516,7 +523,7 @@ func sessionList(c *connector.Ctx) (any, error) {
 		sessions = append(sessions, row)
 	}
 	// max_tabs lets the UI disable "new tab" at the cap (0 = unlimited).
-	return map[string]any{"sessions": sessions, "count": len(sessions), "max_tabs": maxTabsPerSession(c)}, nil
+	return map[string]any{"sessions": sessions, "count": len(sessions), "others_live": others, "max_tabs": maxTabsPerSession(c)}, nil
 }
 
 // describeTabs lists a session's open pages (index, url, title). Best-effort:
