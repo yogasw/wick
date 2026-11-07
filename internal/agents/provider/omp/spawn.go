@@ -158,6 +158,26 @@ func envValue(env []string, key string) string {
 	return v
 }
 
+// baseEnv returns the host environment safe for starting the managed OMP
+// binary. Termux's glibc-runner is commonly launched with LD_PRELOAD or
+// LD_LIBRARY_PATH pointing at $PREFIX/glibc/lib. In particular libc.so in
+// that directory is a GNU ld linker script, not an ELF shared object; when
+// inherited by OMP's Bun runtime the loader can abort with "invalid ELF
+// header" before RPC becomes ready. The managed binary already has its ELF
+// interpreter prepared by managedbin, so neither variable is needed here.
+// Explicit per-instance ExtraEnv is appended afterwards and can still opt in.
+func baseEnv() []string {
+	env := envscrub.ScrubOSEnv()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "LD_PRELOAD=") || strings.HasPrefix(kv, "LD_LIBRARY_PATH=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // Spawn starts one omp run with opt.InitialMessage as the prompt.
 func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
 	bin := s.Binary
@@ -246,7 +266,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	execBin, execArgs, scopeUnit := opt.MemGuard.Wrap(bin, args, "omp", opt.SpawnSeq)
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(envscrub.ScrubOSEnv(), opt.ExtraEnv...)
+	cmd.Env = append(baseEnv(), opt.ExtraEnv...)
 	cmd.Env = append(cmd.Env, mcpVars...)
 	// omp turns ~/.claude on as an MCP/config source whenever
 	// CLAUDE_CONFIG_DIR is set (capability/index.ts isUserSourceEnabled),
