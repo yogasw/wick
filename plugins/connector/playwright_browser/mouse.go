@@ -321,6 +321,12 @@ func placeCursor(page playwright.Page, env mouseEnv, p point, down bool) {
 	_, _ = page.Evaluate(cursorJS, map[string]any{"x": p.X, "y": p.Y, "draw": env.cursor, "down": down, "ripple": env.ripple})
 }
 
+// behindSchedule reports whether point i of a path is already more than a
+// frame late against a ~60 Hz clock started at start.
+func behindSchedule(start time.Time, i int) bool {
+	return time.Since(start) > time.Duration(i+1)*frameMS*time.Millisecond
+}
+
 // humanMove glides the pointer to (x, y) along humanPath at ~60 Hz.
 func humanMove(page playwright.Page, env mouseEnv, x, y float64, steps int) (any, error) {
 	rng := newRNG()
@@ -329,21 +335,34 @@ func humanMove(page playwright.Page, env mouseEnv, x, y float64, steps int) (any
 	pts := humanPath(from, to, steps, rng)
 	mouse := page.Mouse()
 	start := time.Now()
-	for _, p := range pts {
+	sent := 0
+	for i, p := range pts {
+		// Keep to the planned clock: a browser slow to answer each event (moli
+		// while a viewer streams it) would otherwise stretch a long path to
+		// tens of seconds. Points we are already late for are skipped, the
+		// last one always goes out.
+		if i < len(pts)-1 && behindSchedule(start, i) {
+			continue
+		}
 		if err := mouse.Move(p.X, p.Y); err != nil {
 			return nil, err
 		}
+		sent++
 		if env.cursor {
 			placeCursor(page, env, p, false)
 		}
-		jitterSleep(rng, frameMS-3, 6)
+		// Sleep to the point's slot (plus a little jitter), not a fixed
+		// frame, so a fast browser never drifts behind and skips.
+		if d := time.Until(start.Add(time.Duration(i+1) * frameMS * time.Millisecond)); d > 0 {
+			time.Sleep(d + time.Duration(rng.Intn(3))*time.Millisecond)
+		}
 	}
 	placeCursor(page, env, to, false)
 	rememberPos(env, to)
 	return map[string]any{
 		"x": x, "y": y,
 		"from":   map[string]any{"x": from.X, "y": from.Y},
-		"points": len(pts), "ms": time.Since(start).Milliseconds(),
+		"points": len(pts), "sent": sent, "ms": time.Since(start).Milliseconds(),
 	}, nil
 }
 
