@@ -82,8 +82,37 @@
    * chrome:// shortcuts, copying the session id and closing the session. */
   let menuOpen = $state(false);
   let showAddress = $state(false);
-  // Session id whose card ⋯ menu is open ("" = none).
+  // Session id whose card ⋯ menu is open ("" = none), and where to draw it.
+  // The menu is position:fixed at the ⋯ button, so the scrolling list (or
+  // the side panel's overflow) cannot clip it; near the bottom it opens up.
   let cardMenu = $state("");
+  let cardMenuPos = $state({ right: 0, top: 0, up: false });
+  function toggleCardMenu(sid: string, ev: MouseEvent) {
+    if (cardMenu === sid) {
+      cardMenu = "";
+      return;
+    }
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    const up = r.bottom + 60 > window.innerHeight;
+    cardMenuPos = { right: window.innerWidth - r.right, top: up ? r.top - 4 : r.bottom + 4, up };
+    cardMenu = sid;
+  }
+  let rootEl = $state<HTMLDivElement | undefined>();
+
+  // A click anywhere outside an open ⋯ menu closes it. A covering backdrop
+  // did this before, but in the side panel it sat above the menu itself and
+  // swallowed the click on "Close session".
+  $effect(() => {
+    if (!menuOpen && !cardMenu) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("[data-menu], [data-menu-toggle]")) return;
+      menuOpen = false;
+      cardMenu = "";
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  });
 
   /* The overlay is position:fixed and can render outside the app's themed
    * container, so Tailwind dark: variants aren't reliable there. Resolve the
@@ -315,21 +344,27 @@
     }
   }
 
+  /* Closing answers at once: the card (or tab) goes away on the click and the
+   * slow part — the plugin closing the browser, then a fresh list — runs
+   * behind it. A failure brings the item back with the reason in a toast.
+   * Closing never waits on another action, so a click is never dropped. */
+  let closing = $state<string[]>([]);
   async function kill(sid: string) {
-    if (busy) return;
-    busy = true;
+    if (closing.includes(sid)) return;
+    closing = [...closing, sid];
+    if (sid === sessionId) {
+      disconnect();
+      sessionId = "";
+      view = "docked";
+    }
+    sessions = sessions.filter((s) => s.session_id !== sid);
     try {
-      if (sid === sessionId) {
-        disconnect();
-        sessionId = "";
-        view = "docked";
-      }
       await run(closeSession(instanceId, sid).pipe(Effect.provide(WickClientLayer)));
-      await loadSessions();
     } catch (e) {
       onError(`Close session: ${errMsg(e)}`);
     } finally {
-      busy = false;
+      closing = closing.filter((x) => x !== sid);
+      void loadSessions(true);
     }
   }
 
@@ -353,18 +388,28 @@
   }
 
   // Close a tab by index; reload the list and clamp the shown tab.
+  let closingTab = $state(false);
   async function removeTab(index: number) {
-    if (!sessionId || busy) return;
-    busy = true;
+    if (!sessionId || closingTab) return;
+    closingTab = true;
+    const sid = sessionId;
+    // Drop the tab from the list now and show its neighbour; the plugin
+    // renumbers tabs after a close, so later indices shift down by one.
+    sessions = sessions.map((s) =>
+      s.session_id !== sid
+        ? s
+        : { ...s, tabs: (s.tabs ?? []).filter((t) => t.index !== index).map((t, i) => ({ ...t, index: i })) },
+    );
+    tabIndex = Math.max(0, Math.min(index, tabs.length - 1));
     try {
-      await run(closeTab(instanceId, sessionId, index).pipe(Effect.provide(WickClientLayer)));
-      await loadSessions();
-      if (tabIndex >= tabs.length) tabIndex = Math.max(0, tabs.length - 1);
-      connect();
+      await run(closeTab(instanceId, sid, index).pipe(Effect.provide(WickClientLayer)));
     } catch (e) {
       onError(`Close tab: ${errMsg(e)}`);
     } finally {
-      busy = false;
+      closingTab = false;
+      await loadSessions(true);
+      if (tabIndex >= tabs.length) tabIndex = Math.max(0, tabs.length - 1);
+      if (sessionId === sid) connect();
     }
   }
 
@@ -933,8 +978,12 @@
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtxMenu(); };
     document.addEventListener("keydown", onKey);
     // Sessions opened elsewhere (an agent's tool call) appear without Refresh.
+    // Listing sessions makes the plugin connect to every browser, so it is
+    // not free: only a panel that is on screen polls. The conversation
+    // mounts one per layout and the other sits under display:none.
     const poll = setInterval(() => {
-      if (!document.hidden && instanceId && !busy && !loadingSessions) void loadSessions(true);
+      const onScreen = !!rootEl && rootEl.getClientRects().length > 0;
+      if (!document.hidden && onScreen && instanceId && !busy && !loadingSessions) void loadSessions(true);
     }, 5000);
     return () => {
       clearInterval(poll);
@@ -973,7 +1022,7 @@
   onDestroy(disconnect);
 </script>
 
-<div class="flex-1 min-h-0 overflow-y-auto" data-testid="browser-panel">
+<div class="flex-1 min-h-0 overflow-y-auto" bind:this={rootEl} data-testid="browser-panel">
   {#if sessionId && view === "docked"}
     <!-- Watching a session: the viewer replaces the list; ← goes back. -->
     <div class="flex flex-col">
@@ -1067,21 +1116,24 @@
                     title="More"
                     aria-label="More actions"
                     class="shrink-0 self-center mr-1.5 rounded-md p-1.5 text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors"
-                    onclick={() => (cardMenu = cardMenu === s.session_id ? "" : s.session_id)}
+                    onclick={(e) => toggleCardMenu(s.session_id, e)}
+                    data-menu-toggle
                     data-testid="browser-session-more"
                   >
                     <svg viewBox="0 0 16 16" class="h-3.5 w-3.5"><path d="M8 3.5h.01M8 8h.01M8 12.5h.01" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
                   </button>
                   {#if cardMenu === s.session_id}
                     <div
-                      class="absolute right-2 top-full z-[70] mt-1 min-w-[160px] overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 py-1 text-[13px] shadow-2xl"
+                      class="fixed z-[70] min-w-[160px] overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 py-1 text-[13px] shadow-2xl"
+                      style={`right:${cardMenuPos.right}px; top:${cardMenuPos.top}px;` + (cardMenuPos.up ? " transform:translateY(-100%);" : "")}
                       role="menu"
+                      data-menu
                     >
                       <button
                         type="button"
                         role="menuitem"
                         class="menu-item text-neg-400 disabled:opacity-50"
-                        disabled={busy}
+                        disabled={closing.includes(s.session_id)}
                         onclick={() => { cardMenu = ""; void kill(s.session_id); }}
                         data-testid="browser-session-close"
                       >Close session</button>
@@ -1142,15 +1194,6 @@
   </div>
 {/if}
 
-{#if menuOpen || cardMenu}
-  <!-- Outside click closes the ⋯ menus. -->
-  <div
-    class="fixed inset-0 z-[65]"
-    style="visibility:visible; pointer-events:auto"
-    onclick={() => { menuOpen = false; cardMenu = ""; }}
-    role="presentation"
-  ></div>
-{/if}
 
 <!-- Right-click menu on the live view. Rendered at the top level so its fixed
      position isn't clipped by the panel. A full-screen invisible backdrop closes
@@ -1253,6 +1296,7 @@
         class="absolute right-2 top-full z-[70] mt-1 min-w-[200px] overflow-hidden rounded-lg border py-1 text-[13px] shadow-2xl"
         style={`background:${ovBg}; border-color:${ovBorder}; color:${ovText}; visibility:visible; pointer-events:auto;`}
         role="menu"
+        data-menu
         data-testid="browser-menu"
       >
         <button type="button" role="menuitem" class="menu-item" onclick={() => { showAddress = !showAddress; menuOpen = false; }}>
@@ -1288,6 +1332,7 @@
     aria-label={label}
     class="shrink-0 rounded-md p-1.5 text-black-700 dark:text-white-200 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors"
     onclick={action}
+    data-menu-toggle={testid === "browser-more" ? "" : undefined}
     data-testid={testid}
   >
     <svg viewBox="0 0 16 16" class="h-3.5 w-3.5"><path d={path} stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1368,7 +1413,7 @@
           title="Close this tab"
           aria-label="Close tab"
           class="shrink-0 rounded-md border border-white-400 dark:border-navy-600 p-1 text-neg-400 hover:border-neg-400 transition-colors disabled:opacity-50"
-          disabled={busy}
+          disabled={closingTab}
           onclick={() => removeTab(tabIndex)}
           data-testid="browser-tab-close"
         >
