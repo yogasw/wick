@@ -265,24 +265,50 @@ Some operations exist to back the manager UI, not to be called by an agent. They
 |---|---|
 | `session_endpoints` | Raw CDP plumbing (`ws_debugger_url`) for the live-browser panel. An agent drives a session through `run` / `screenshot` instead. |
 | `extension_list`, `extension_install`, `extension_remove` | Installing an extension reconfigures *every* later session (headed, `--load-extension`) for everyone using the connector. |
-| `browser_status`, `browser_install`, `browser_update`, `browser_uninstall` | Engine management. `browser_status` returns HTML for the picker widget, and installs block on downloads that reach hundreds of megabytes. |
+| `browser_status`, `browser_install`, `browser_uninstall` | Engine management. `browser_status` returns HTML for the picker widget, and installs block on downloads that reach hundreds of megabytes. |
 
 Hiding them also keeps the agent's tool list focused: what remains is the set an agent actually drives — page tasks, scripted runs, live sessions, profiles, and recorded requests.
 
 ### Maintenance
 
-Backs the manager's browser picker. **Manager-only** — hidden from the MCP tool surface (see [Manager-only operations](#manager-only-operations)), so the LLM cannot call them.
+Backs the manager's browser picker. `browser_status`, `browser_install` and `browser_uninstall` are **manager-only** (see [Manager-only operations](#manager-only-operations)). `browser_update` is the exception: an engine that fell versions behind is a common cause of broken runs, so an agent can update it, as a destructive (confirmed) call.
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
 | `browser_status` | no | — | Reports which engines (`chromium`, `firefox`, `webkit`, `cloakbrowser`, `cloakbrowser-pro`) are installed and their versions. Returns HTML for the `html=` widget. |
 | `browser_install` | yes | `browser` | Downloads one engine's binary. Idempotent — installing an already-present engine returns fast. Chromium/Firefox/WebKit install synchronously; free CloakBrowser downloads in the background and reports progress back through `browser_status` (polled by the widget); CloakBrowser Pro installs synchronously via the `cloakbrowser` CLI (requires `CloakLicenseKey`). |
-| `browser_update` | — | `browser` | Re-fetches an engine's binary to the newest available build. Backs the picker's ⋮ **Update** menu item — see [Installing, updating, uninstalling](#installing-updating-uninstalling). |
+| `browser_update` | yes | `browser` | Updates an engine to the newest available build, agent-callable. For `moli` it returns the version before (`from`) and after (`version`). Live sessions keep the binary they started with: close and reopen them. Also backs the picker's ⋮ **Update** menu item — see [Installing, updating, uninstalling](#installing-updating-uninstalling). |
 | `browser_uninstall` | — | `browser` | Removes an engine's downloaded binary. Backs the picker's ⋮ **Uninstall** menu item. |
+
+## Choosing an engine and driving a site
+
+Pick the engine by what the task needs, not by habit:
+
+| Task | Engine | Why |
+|---|---|---|
+| A flow that should look like a person (sign-in, forms, menus, anti-bot pages), or someone watches it live | `cloakbrowser-pro` / `cloakbrowser` (or `chromium`) | Every click is a real mouse event the page receives as trusted (`isTrusted: true`), hit testing is exact, the live view is smooth |
+| Read many pages, pull text, check what a page says, low memory | `moli` | DOM-first, ~90 MB instead of ~700 MB. `get_markdown` returns a page as Markdown with no session at all |
+| A simple form on `moli` when nobody watches | `moli` works | Clicks use the real mouse where moli can resolve the point, the DOM otherwise (see [Moli](#moli)) |
+
+How to drive a site well, on any engine:
+
+- **Look once, then script.** Read the page with `frame_text` (`only_interactive`, `compact`) or `observe`, then write the whole known path as one `run`. Stopping between every click costs a model round trip each time.
+- **Menus and dropdowns:** `frame_click` with `menu` opens the menu and clicks the item it revealed, not a same-named label elsewhere on the page. Add `expect_url` when the click should change the page: the step waits for the address, retries once through the DOM, and otherwise fails saying where it is.
+- **Wait on what the page shows,** `wait_for_text` / `wait_for_url`, not a fixed `wait` before reading.
+- **One `run` has a 45 s budget.** Split a longer flow into several runs on the same live session, or chain them in one `wick_run_code` script so no model turn sits between them. A run that hits the budget names the step it was on.
+- **A link that will not navigate** (a redirect through another domain on `moli`): `goto` its address. Efficient beats human-like when nobody watches.
 
 ## Moli
 
 `moli` is a lightweight Rust headless browser ([lexmount/moli](https://github.com/lexmount/moli)) driven over CDP: fast and low-RAM, but headless only — no extensions, no WebGL/media. Pick it in the Browser card (it downloads like the cloak engine) or point `MoliExecutablePath` at an installed binary. The usual ops reach it over CDP; it additionally serves `get_markdown`, which skips CDP entirely and runs one `moli fetch`.
+
+Moli is DOM-first: layout is an on-demand snapshot and its live view is a low-frequency software paint. The connector adapts to it:
+
+- **Keep it current.** Releases move fast and fix protocol gaps: 1.1.17 sent no load events, so `goto` and `wait_for_url` hung until the deadline. Update with `browser_update` (`browser: moli`), then close and reopen sessions.
+- **Tabs are listed over HTTP.** Moli shares Playwright's utility world across CDP clients, so a listing that attached and detached Playwright (the live panel polls every 5 s) tore down the world a running step used: "Execution context was destroyed" and stuck clicks. `session_list` reads moli tabs from `/json/list` instead.
+- **Clicks.** `frame_click` waits up to 1.5 s for a point moli resolves to the element (or the link or button wrapping it) and clicks there with the real mouse. A menu item right after the menu opens can still resolve to the page under it; it is then clicked through the DOM and the step says `via: dom`. A DOM click reaches the page as untrusted (`isTrusted: false`), so use a cloak engine where that matters.
+- **Navigation waits** read the document state and poll the address, so they work whether or not the build reports lifecycle events.
+- **A session that turns odd** (slow input, errors on a page that did not change): close it and open a new one.
 
 ### Ops gated by engine (`VisibleWhen`)
 
