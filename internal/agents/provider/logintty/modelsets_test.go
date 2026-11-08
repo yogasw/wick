@@ -263,3 +263,28 @@ func TestOMPRunnersUseHelperGuard(t *testing.T) {
 		t.Fatalf("labels = %v", labels)
 	}
 }
+
+// An account row picked without a model ("<provider>@<account>") runs that
+// account on the provider's default model instead of being dropped (which
+// left a resumed session on its transcript's last model, any provider).
+func TestCLIModelSetsResolveAccountWithoutModel(t *testing.T) {
+	s, _ := provider.ModelSetsFor(provider.TypeOMP)
+	ins := liveIns
+	ins.LiveModelDefault = "acme/model-big"
+	sp, err := s.Resolve(ins, []string{"acme"}, "1")
+	if err != nil || sp != (provider.SpawnPin{Model: "acme/model-big", Provider: "acme", Account: "1"}) {
+		t.Fatalf("account pick: %+v %v", sp, err)
+	}
+	sp, err = s.Resolve(ins, []string{"acme"}, provider.AutoAccount)
+	if err != nil || sp.Model != "acme/model-big" || sp.Account != "" {
+		t.Fatalf("auto pick: %+v %v", sp, err)
+	}
+	args := provider.ModelArgs(provider.SpawnOptions{Instance: &ins, ModelID: "acme@1"}, nil)
+	if !reflect.DeepEqual(args, []string{"--model", "acme/model-big"}) {
+		t.Fatalf("ModelArgs: %q", args)
+	}
+	// No model known for the provider: refused, never another provider's.
+	if _, err := s.Resolve(ins, []string{"other"}, "1"); err == nil {
+		t.Fatal("a provider with no known model must be refused")
+	}
+}
