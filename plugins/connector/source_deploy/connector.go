@@ -164,7 +164,7 @@ func (h handlers) deploy(c *connector.Ctx) (any, error) {
 		"profile": r.Profile,
 		"script":  r.Script,
 		"args":    r.Args,
-		"note":    "running in the background, outside wick: follow it with status (run_id). To be told when it ends without polling, set a schedule watch on status until state is not running.",
+		"note":    "running in the background, outside wick: completion is published directly on source_deploy:run/<run_id>; status (run_id) remains available for details.",
 	}, nil
 }
 
