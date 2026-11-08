@@ -31,7 +31,8 @@ Commands
 
 Flags
   --ref REF        wick: branch or tag to build (default: master)
-  --src DIR        wick: source checkout (default: ~/wick-src)
+  --src DIR        wick: source checkout (default: ~/wick-src; run as ./scripts/deploy-from-source.sh
+                   inside a wick checkout: that checkout, its current branch, as it is)
   --dir DIR        app checkout (default: current dir if it has wick.yml, else ~/<repo name>;
                    wick: ~/wick-agent)
   --git URL        clone this repo into --dir when it is not there yet (https recommended;
@@ -59,12 +60,12 @@ EOF
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
 DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0
-FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=()
+FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=(); SRC_SET=0; REF_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
-    --ref) REF="$2"; shift 2 ;;
-    --src) SRC="$2"; shift 2 ;;
+    --ref) REF="$2"; REF_SET=1; shift 2 ;;
+    --src) SRC="$2"; SRC_SET=1; shift 2 ;;
     --git) GIT_URL="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --app) APP="$2"; shift 2 ;;
@@ -86,6 +87,17 @@ while [ $# -gt 0 ]; do
     *) KEYS+=("$1"); shift ;;
   esac
 done
+
+# Run from a wick checkout (./scripts/deploy-from-source.sh) with no --src / --ref: build
+# that checkout as it is, on whatever branch it has checked out — `git pull` there, then
+# run it. Piped from curl there is no script file, so the defaults above stay.
+if [ "$CMD" = wick ] && [ "$SRC_SET" = 0 ] && [ "$REF_SET" = 0 ] && [ -f "${BASH_SOURCE[0]:-}" ]; then
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+  if [ -n "$here" ] && [ -e "$here/.git" ] && grep -qx 'module github.com/yogasw/wick' "$here/go.mod" 2>/dev/null; then
+    SRC="$here"; PULL=0
+    REF="$(git -C "$here" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+  fi
+fi
 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '!! %s\n' "$*" >&2; exit 1; }
