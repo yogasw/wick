@@ -285,20 +285,20 @@ start_app() {
   else
     # no DISPLAY: on a server with a desktop session `start` would launch the tray app
     say "start $APP (daemon)"
-    # Termux has no systemd user unit, so explicitly enable graceful handover
-    # for the plain daemon. Without this env the reload command is a no-op.
-    run env -u DISPLAY -u WAYLAND_DISPLAY WICK_GRACEFUL_UPGRADE=1 "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
+    # Graceful handover is on by default; passing it keeps that explicit for the plain daemon
+    # (Termux has no systemd unit) while an operator's WICK_GRACEFUL_UPGRADE=0 still wins.
+    run env -u DISPLAY -u WAYLAND_DISPLAY WICK_GRACEFUL_UPGRADE="${WICK_GRACEFUL_UPGRADE:-1}" "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
   fi
 }
 
-# graceful: is the running daemon able to take a zero-downtime reload? Only one started with
-# WICK_GRACEFUL_UPGRADE=1 (the systemd unit) acts on it; a plain `<app> start` ignores it.
+# graceful: is the running daemon able to take a zero-downtime reload? Graceful handover is
+# on by default; only a daemon started with WICK_GRACEFUL_UPGRADE=0/false/no/off refuses it.
 # Prints running/graceful/stopped.
 daemon_mode() {
   local pid env; pid="$(pgrep -x "$APP" 2>/dev/null | head -1 || true)"
   [ -n "$pid" ] || { echo stopped; return; }
   env="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || $SUDO tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || true)"
-  if printf '%s\n' "$env" | grep -qx 'WICK_GRACEFUL_UPGRADE=1'; then echo graceful; else echo running; fi
+  if printf '%s\n' "$env" | grep -qiE '^WICK_GRACEFUL_UPGRADE=(0|false|no|off)$'; then echo running; else echo graceful; fi
 }
 
 # done_note: what to do once wick-agent is up — the questions a first run leaves.
@@ -356,7 +356,7 @@ install_build() {
       # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
       # without it.
       run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
-        die "reload refused or failed — the running binary is unchanged (reason above)."
+        die "reload refused or failed — the running binary is unchanged (reason above). A daemon from before graceful was on by default ignores reload: rerun with --restart once."
       mark_built
       ;;
     running)

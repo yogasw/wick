@@ -110,8 +110,8 @@ place:
 - `TimeoutStartSec=infinity` — **not `0`**. In systemd, `TimeoutStartSec=0` means *time out
   immediately*, and the unit fails the moment it starts.
 - `ExecReload` — makes `systemctl reload wick` the upgrade command.
-- `WICK_GRACEFUL_UPGRADE=1` — graceful upgrade is opt-in, since it changes how the process
-  exits.
+- `WICK_GRACEFUL_UPGRADE=1` — graceful upgrade is on by default; the line only makes it
+  explicit. Set it to `0` (or `false`) to turn the handover off.
 
 Leave them out and wick still runs; `reload` just reports that it is unavailable and you use
 `restart`.
