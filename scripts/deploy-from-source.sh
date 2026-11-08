@@ -50,13 +50,16 @@ Flags
                    possible (picked automatically when the daemon cannot reload)
   --no-install     build only: leave the result in bin/ and install nothing
   --force          wick: rebuild even when the installed build is already from the newest commit
+  --force-fe       rebuild every frontend workspace even when the FE source is unchanged
+  --force-fe-deps  rerun npm ci even when package-lock.json and node_modules are unchanged
   --dry-run        print what would run, change nothing
 EOF
 }
 
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
 DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""
-UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0; KEYS=()
+UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0
+FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
@@ -69,6 +72,8 @@ while [ $# -gt 0 ]; do
     --restart) RESTART=1; shift ;;
     --no-install) NOINSTALL=1; shift ;;
     --force) FORCE=1; shift ;;
+    --force-fe) FORCE_FE=1; shift ;;
+    --force-fe-deps) FORCE_FE_DEPS=1; shift ;;
     --no-upgrade) UPGRADE=0; shift ;;
     --no-pull) PULL=0; shift ;;
     --no-bump) BUMP=0; shift ;;
@@ -259,7 +264,9 @@ start_app() {
   else
     # no DISPLAY: on a server with a desktop session `start` would launch the tray app
     say "start $APP (daemon)"
-    run env -u DISPLAY -u WAYLAND_DISPLAY "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
+    # Termux has no systemd user unit, so explicitly enable graceful handover
+    # for the plain daemon. Without this env the reload command is a no-op.
+    run env -u DISPLAY -u WAYLAND_DISPLAY WICK_GRACEFUL_UPGRADE=1 "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
   fi
 }
 
@@ -374,8 +381,27 @@ prep_wick_source() {
     say "templ $tv: generate"
     run env GOWORK=off GOFLAGS= go install "github.com/a-h/templ/cmd/templ@$tv"
     heavy wick-templ templ generate ./...
-    say "FE build (fe/: npm ci + npm run build)"
-    (cd fe && heavy wick-fe-deps npm ci --no-audit --no-fund && heavy wick-fe-build env NODE_OPTIONS=--max-old-space-size=2048 npm run build)
+    local fe_key lock_key fe_stamp lock_stamp
+    fe_key="$(git rev-parse HEAD:fe 2>/dev/null || git rev-parse HEAD)"
+    lock_key="$(git hash-object fe/package-lock.json)"
+    fe_stamp="$SRC/.wick-fe-build-stamp"
+    lock_stamp="$SRC/fe/node_modules/.wick-lock-sha"
+
+    if [ "$FORCE_FE_DEPS" = 1 ] || [ ! -d fe/node_modules ] || [ "$(cat "$lock_stamp" 2>/dev/null || true)" != "$lock_key" ]; then
+      say "FE dependencies (package-lock changed or --force-fe-deps)"
+      (cd fe && heavy wick-fe-deps npm ci --no-audit --no-fund)
+      [ "$DRY" = 1 ] || printf '%s\n' "$lock_key" >"$lock_stamp"
+    else
+      say "FE dependencies unchanged — reuse node_modules"
+    fi
+
+    if [ "$FORCE_FE" = 1 ] || [ "$(cat "$fe_stamp" 2>/dev/null || true)" != "$fe_key" ]; then
+      say "FE build (source changed or --force-fe)"
+      (cd fe && heavy wick-fe-build env NODE_OPTIONS=--max-old-space-size=2048 npm run build)
+      [ "$DRY" = 1 ] || printf '%s\n' "$fe_key" >"$fe_stamp"
+    else
+      say "FE unchanged — reuse existing dist output (--force-fe to rebuild)"
+    fi
   )
 }
 
@@ -417,7 +443,13 @@ wick_self() {
   setup_node
   prep_wick_source
   say "wick CLI from source"
-  (cd "$SRC" 2>/dev/null || cd "$HOME"; heavy wick-cli env GOWORK=off GOFLAGS= go install .)
+  # Termux's Go toolchain reports GOOS=android even though uname reports Linux.
+  # The desktop tray dependency has no Android implementation, so a native
+  # `go install .` must use Wick's headless stub there.  Keep GOFLAGS empty on
+  # regular Linux/macOS so an inherited shell flag cannot change the build.
+  local cli_goflags=""
+  [ "$(go env GOOS)" = android ] && cli_goflags="-tags=headless"
+  (cd "$SRC" 2>/dev/null || cd "$HOME"; heavy wick-cli env GOWORK=off GOFLAGS="$cli_goflags" go install .)
   local installed=0 base ver
   command -v "$APP" >/dev/null 2>&1 && installed=1
   if [ ! -f "$DIR/wick.yml" ]; then
@@ -429,16 +461,50 @@ wick_self() {
   [ "$DRY" = 1 ] && [ ! -d "$DIR" ] && { echo "   (dry-run: $DIR is not scaffolded yet, nothing more to show)"; return 0; }
   cd "$DIR"
   run go mod edit -replace "github.com/yogasw/wick=$SRC"
+  # Keep the scaffold's templ runtime aligned with the generator installed from
+  # the Wick source checkout. A stale template/go.mod.tmpl otherwise lets templ
+  # rewrite generated files and the later go generate fails in readonly mode.
+  local templ_version
+  templ_version="$(cd "$SRC" && GOWORK=off GOFLAGS= go list -m -f '{{.Version}}' github.com/a-h/templ)"
+  run go mod edit -require "github.com/a-h/templ@$templ_version"
+  # `wick init` may scaffold with an older template (currently Tailwind 3.4.0),
+  # whose download URL is gone. Align the generated app config with the source
+  # checkout before running `wick setup`, so the next deploy does not fail at
+  # the missing tailwindcss binary.
+  local tw_version
+  tw_version="$(awk '/^[[:space:]]*TAILWIND_VERSION:/{print $2; exit}' "$SRC/wick.yml" 2>/dev/null || true)"
+  if [ -n "$tw_version" ] && grep -q '^[[:space:]]*TAILWIND_VERSION:' wick.yml; then
+    run sedi "s/^[[:space:]]*TAILWIND_VERSION:.*/  TAILWIND_VERSION: $tw_version/" wick.yml
+  fi
   say "setup (tailwind, templ, go mod tidy)"; heavy "$APP-setup" env GOFLAGS= wick setup
-  # Version: the source's VERSION, next patch, plus the build time as a 4th number
-  # (1.17.2.202610191010). reload compares versions numerically and ignores a -suffix, so
-  # this is what makes every source build newer than the release before it and than the
-  # previous source build.
+  # Some wick CLI versions resolve Tailwind to an npm shim. The scaffold has no
+  # package.json, so that shim cannot run on Termux. Replace it with the native
+  # release binary used by the source checkout.
+  local tw_asset=linux-x64
+  [ "$ARCH" = arm64 ] && tw_asset=linux-arm64
+  if [ "$DRY" = 0 ] && [ -f bin/tailwindcss ] && head -1 bin/tailwindcss 2>/dev/null | grep -q '^#!'; then
+    say "replace Tailwind npm shim with native $TARGET binary"
+    run curl -fsSL -o bin/tailwindcss "https://github.com/tailwindlabs/tailwindcss/releases/download/v${tw_version:-3.4.17}/tailwindcss-$tw_asset"
+    run chmod +x bin/tailwindcss
+  fi
+  # setup may regenerate Go sources, so tidy once more after generation before
+  # wick build invokes go generate with the module required to be clean.
+  heavy "$APP-tidy" env GOFLAGS= go mod tidy
+  # Version: preserve the source semver and add a numeric build stamp. Do not bump
+  # major/minor/patch on every local deploy; the fourth component makes the build
+  # newer for reload comparisons without turning 1.x into 2.x.
   base="$(tr -d '[:space:]' <"$SRC/VERSION" 2>/dev/null || echo 0.0.0)"
-  ver="$(echo "${base#v}" | awk -F. -v OFS=. '{$3=$3+1; print $1,$2,$3}').$(date +%Y%m%d%H%M)"
+  ver="$(echo "${base#v}" | awk -F. -v OFS=. '{print $1,$2,$3}').$(date +%Y%m%d%H%M%S)"
   say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
   run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
-  say "build ($TARGET)"; heavy "$APP-build" env GOFLAGS= wick build --target "$TARGET"
+  say "build ($TARGET)"
+  if [ "$(go env GOOS 2>/dev/null || true)" = android ]; then
+    # Termux's cgo headers are for Android and fail when Wick cross-builds a
+    # linux/arm64 binary. Wick has a pure-Go path, so disable cgo for this build.
+    heavy "$APP-build" env CGO_ENABLED=0 GOFLAGS= wick build --target "$TARGET"
+  else
+    heavy "$APP-build" env GOFLAGS= wick build --target "$TARGET"
+  fi
   install_build "$installed"
   [ "$NOINSTALL" = 1 ] || done_note "${BUILT_SHA:0:12}"
 }
