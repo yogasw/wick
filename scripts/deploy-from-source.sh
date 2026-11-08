@@ -31,8 +31,9 @@ Commands
 
 Flags
   --ref REF        wick: branch or tag to build (default: master)
-  --src DIR        wick: source checkout (default: ~/wick-src; run as ./scripts/deploy-from-source.sh
-                   inside a wick checkout: that checkout, its current branch, as it is)
+  --src DIR        wick: source checkout (default: ~/wick-src). Run as ./scripts/deploy-from-source.sh
+                   inside a wick checkout, or --src a checkout that is on a branch, with no --ref:
+                   that checkout on its current branch, pulled first when that is safe
   --dir DIR        app checkout (default: current dir if it has wick.yml, else ~/<repo name>;
                    wick: ~/wick-agent)
   --git URL        clone this repo into --dir when it is not there yet (https recommended;
@@ -92,9 +93,21 @@ done
 # that checkout, on whatever branch it has checked out. It is pulled first when that is safe
 # (see local_pull); otherwise, or with --no-pull, it is built as it is. Piped from curl
 # there is no script file, so the defaults above stay.
-if [ "$CMD" = wick ] && [ "$SRC_SET" = 0 ] && [ "$REF_SET" = 0 ] && [ -f "${BASH_SOURCE[0]:-}" ]; then
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
-  if [ -n "$here" ] && [ -e "$here/.git" ] && grep -qx 'module github.com/yogasw/wick' "$here/go.mod" 2>/dev/null; then
+# --src DIR with no --ref means the same for that checkout: a script fetched
+# from a URL (the deploy connector) can still build the operator's checkout.
+here=""
+if [ "$CMD" = wick ] && [ "$REF_SET" = 0 ]; then
+  if [ "$SRC_SET" = 1 ]; then
+    # Only a checkout on a branch: a detached build dir (~/wick-src after an
+    # earlier run) keeps the old meaning, fetch --ref (master) into it.
+    here="$(cd "$SRC" 2>/dev/null && pwd || true)"
+    git -C "$here" symbolic-ref -q HEAD >/dev/null 2>&1 || here=""
+  elif [ -f "${BASH_SOURCE[0]:-}" ]; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+  fi
+fi
+if [ -n "$here" ]; then
+  if [ -e "$here/.git" ] && grep -qx 'module github.com/yogasw/wick' "$here/go.mod" 2>/dev/null; then
     SRC="$here"; LOCAL=1
     REF="$(git -C "$here" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
   fi
@@ -457,11 +470,14 @@ local_pull() {
   if [ "$PULL" = 0 ]; then why="--no-pull"
   elif [ "$REF" = HEAD ]; then why="detached HEAD"
   elif [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then why="local changes"
-  elif ! git -C "$SRC" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then why="no upstream for $REF"
   else
-    printf '   $ git -C %s pull --ff-only\n' "$SRC"
+    # No upstream set (a branch made from FETCH_HEAD): pull the branch of the
+    # same name from origin, which is what the checkout came from.
+    local from=()
+    git -C "$SRC" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || from=(origin "$REF")
+    printf '   $ git -C %s pull --ff-only %s\n' "$SRC" "${from[*]:-}"
     [ "$DRY" = 1 ] && return 0
-    local out; if out="$(git -C "$SRC" pull --ff-only --quiet 2>&1)"; then return 0; fi
+    local out; if out="$(git -C "$SRC" pull --ff-only --quiet "${from[@]}" 2>&1)"; then return 0; fi
     why="pull failed: $(printf '%s' "$out" | tail -1)"
   fi
   echo "   not pulled ($why) — building it as it is"
