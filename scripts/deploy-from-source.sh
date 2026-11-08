@@ -58,7 +58,7 @@ EOF
 }
 
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
-DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""
+DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""; RELOAD_FORCE=""
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0
 FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=(); SRC_SET=0; REF_SET=0; LOCAL=0
 while [ $# -gt 0 ]; do
@@ -330,8 +330,9 @@ EOF
 # mark_built records the source commit the installed binary was built from (wick mode),
 # so a rerun on the same commit skips the build. Written once the binary is in place.
 mark_built() {
-  [ -n "$BUILT_SHA" ] && [ "$DRY" = 0 ] || return 0
-  mkdir -p "$HOME/.$APP" && echo "$BUILT_SHA" >"$HOME/.$APP/built-commit" || true
+  [ "$DRY" = 0 ] || return 0
+  mkdir -p "$HOME/.$APP" || return 0
+  [ -z "$BUILT_SHA" ] || echo "$BUILT_SHA" >"$HOME/.$APP/built-commit" || true
 }
 
 # install_build INSTALLED — put the build (cwd = the app) in place: a first install + start,
@@ -364,7 +365,7 @@ install_build() {
       # in atomically, hands the socket over and rolls back if the successor never serves.
       # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
       # without it.
-      run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
+      run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} ${RELOAD_FORCE:+--force} -y --wait || \
         die "reload refused or failed — the running binary is unchanged (reason above). A daemon from before graceful was on by default ignores reload: rerun with --restart once."
       mark_built
       ;;
@@ -548,7 +549,7 @@ wick_self() {
   # setup may regenerate Go sources, so tidy once more after generation before
   # wick build invokes go generate with the module required to be clean.
   heavy "$APP-tidy" env GOFLAGS= go mod tidy
-  # Version: preserve the source semver and add a numeric build stamp. Do not bump
+  # Version: preserve the source semver and add a build number. Do not bump
   # major/minor/patch on every local deploy; the fourth component makes the build
   # newer for reload comparisons without turning 1.x into 2.x.
   base="$(tr -d '[:space:]' <"$SRC/VERSION" 2>/dev/null || echo 0.0.0)"
@@ -567,7 +568,25 @@ wick_self() {
       base="$running_base"
     fi
   fi
-  ver="${base}.$(date +%Y%m%d%H%M%S)"
+  # The fourth part counts local builds of that semver, marked as local:
+  # 1.18.1.1-source-build, .2-source-build, … The running build says where to go
+  # on: a local build of the same semver gets +1, anything else (a release, a
+  # newer semver, the old date stamp) starts again at 1. reload compares only
+  # the numbers before "-", so the mark changes nothing there.
+  local cur_ver="" n=1
+  command -v "$APP" >/dev/null 2>&1 && \
+    cur_ver="$("$APP" version 2>/dev/null | awk -v app="$APP" '$1 == app && $2 == "version" {print $3; exit}' || true)"
+  case "$cur_ver" in
+    "$base".*-source-build)
+      local cur_n="${cur_ver#"$base".}"; cur_n="${cur_n%-source-build}"
+      case "$cur_n" in ''|*[!0-9]*) ;; *) n=$((cur_n + 1)) ;; esac ;;
+    "$base".*)
+      # A date-stamped build (1.18.1.20261108174539) is numerically above
+      # 1.18.1.1: a one-time step down the reload has to be told to accept.
+      RELOAD_FORCE=1
+      echo "   running $cur_ver predates build numbers: this reload is forced once" ;;
+  esac
+  ver="${base}.${n}-source-build"
   say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
   run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
   say "build ($TARGET)"
