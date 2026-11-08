@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -88,11 +89,19 @@ type Service struct {
 	mu  sync.Mutex
 	// Fetch downloads a script URL. Swappable for tests.
 	Fetch func(ctx context.Context, url string) ([]byte, error)
+	// publish delivers one finished run's event (publishRun). Swappable for tests.
+	publish func(id, exitFile, state string, code int) error
+	// flushing guards FlushNotifications against overlapping passes.
+	flushing atomic.Bool
 }
 
 // New returns a Service storing its files under dir.
 func New(dir string) *Service {
-	return &Service{dir: dir, Fetch: httpFetch}
+	s := &Service{dir: dir, Fetch: httpFetch, publish: publishRun}
+	// A plugin process started by a wick that just took over from the one
+	// that ran a deploy delivers that deploy's completion event.
+	go s.FlushNotifications()
+	return s
 }
 
 func (s *Service) runsDir() string      { return filepath.Join(s.dir, "runs") }
@@ -346,6 +355,7 @@ func (s *Service) Cancel(id string) (Run, error) {
 
 // Get returns one run with its stage and the last lines of its log. id empty = the newest.
 func (s *Service) Get(id string, lines int) (Status, error) {
+	go s.FlushNotifications()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, err := s.pickLocked(id)
@@ -611,6 +621,13 @@ func httpFetch(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }
 
+// notifyExe is the binary the wrapper runs with --notify-run once the script
+// ends: this plugin itself. Swappable for tests, whose binary is the test.
+var notifyExe = func() string {
+	exe, _ := os.Executable()
+	return exe
+}
+
 // childEnv is wick's environment minus what belongs to wick itself: systemd's socket
 // handover variables would make the script's own `<app> reload` think it was handed
 // wick's listener.
@@ -624,7 +641,7 @@ func childEnv(exitFile, runID string) []string {
 		}
 		env = append(env, kv)
 	}
-	exe, _ := os.Executable()
+	exe := notifyExe()
 	return append(env,
 		"WICK_DEPLOY_EXIT="+exitFile,
 		"WICK_DEPLOY_RUN_ID="+runID,
