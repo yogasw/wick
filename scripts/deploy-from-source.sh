@@ -500,7 +500,11 @@ wick_self() {
   # source while 1.18.2 is running), and wick correctly refuses that as a
   # downgrade. Keep the running semver as the floor, then add a build stamp.
   if command -v "$APP" >/dev/null 2>&1; then
-    running_base="$("$APP" version 2>/dev/null | awk '/wick-agent version/{split($3,a,"."); print a[1]"."a[2]"."a[3]; exit}')"
+    # Prefer the daemon status record: the installed executable may already be
+    # an older candidate while a newer process is still serving or is pending
+    # in auto_swap. Include all version fields and keep the greatest semver.
+    running_base="$("$APP" status --json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 || true)"
+    [ -n "$running_base" ] || running_base="$("$APP" version 2>/dev/null | awk '/wick-agent version/{split($3,a,"."); print a[1]"."a[2]"."a[3]; exit}' || true)"
     if [ -n "$running_base" ] && [ "$(printf '%s\n%s\n' "$base" "$running_base" | sort -V | tail -1)" = "$running_base" ]; then
       base="$running_base"
     fi
