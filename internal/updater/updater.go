@@ -427,6 +427,36 @@ func swapUnix(current, staged string) error {
 	return syscall.Exec(current, args, os.Environ())
 }
 
+// RestartInPlace re-execs this process from whatever binary is now at its
+// exec path: a newer build `install`ed there (deploy script, CLI) while this
+// process runs without graceful handover. The port closes for the restart,
+// like any stop/start. stops run first (the in-process server drain). On
+// success it does not return.
+func RestartInPlace(stops ...func()) error {
+	if runtime.GOOS == "windows" {
+		return errors.New("restart in place is not available on Windows — restart the app")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("os.Executable: %w", err)
+	}
+	// The running image was replaced on disk, so the link may read
+	// "<path> (deleted)"; the new file is at the plain path.
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	if _, err := os.Stat(exe); err != nil {
+		return fmt.Errorf("no binary at %s: %w", exe, err)
+	}
+	for _, s := range stops {
+		if s != nil {
+			s()
+		}
+	}
+	return syscall.Exec(exe, append([]string{exe}, os.Args[1:]...), os.Environ())
+}
+
 // installUnix puts the staged binary in place WITHOUT relaunching: chmod,
 // clear quarantine on macOS, keep the old binary as <exe>.old for rollback,
 // then rename. Split out of swapUnix so a graceful handover can swap the

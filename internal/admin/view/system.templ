@@ -493,6 +493,16 @@ templ runningNowCard(d SystemPageData) {
 					title="Hand over immediately and interrupt whatever is still running"
 					class="rounded-lg border border-neg-300 px-3 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-800"
 				>Force swap</button>
+			} else {
+				// Without a handover nothing applies this build on its own, and
+				// the card used to offer no control at all — a waiting update
+				// with no way to apply it. Restart is the honest option here.
+				<button
+					id="sys-restart-now"
+					type="button"
+					title="Restart this process from the installed build: the port closes briefly and running work is interrupted"
+					class="rounded-lg bg-green-500 px-3 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
+				>Apply &amp; restart</button>
 			}
 			<p id="sys-swap-msg" class="text-xs text-black-700 dark:text-black-600">
 				if d.Graceful {
@@ -1056,9 +1066,32 @@ templ systemUpdateScript() {
 					if (swapMsgEl) swapMsgEl.textContent = 'Could not start the handover — see the server log.';
 				});
 		}
+		function triggerRestart() {
+			if (swapMsgEl) swapMsgEl.textContent = 'Restarting on the installed build — the page reloads when it is back…';
+			applying = true;
+			fetch('/admin/advanced/software-update/restart', { method: 'POST' })
+				.then(function (r) { return r.json(); })
+				.then(function (d) {
+					if (!d || !d.ok) {
+						applying = false;
+						if (swapMsgEl) swapMsgEl.textContent = 'Could not restart: ' + ((d && d.error) || 'unknown error');
+					}
+					// On success the poll below reloads once a different pid answers.
+				})
+				.catch(function () {
+					// The process may already be gone mid-restart; the poll takes over.
+				});
+		}
 		document.addEventListener('click', function (e) {
 			var btn = e.target.closest ? e.target.closest('button') : null;
 			if (!btn) return;
+			if (btn.id === 'sys-restart-now') {
+				var cut = lastBusy.length
+					? 'This will interrupt:\n\n' + lastBusy.join('\n') + '\n\nWorkflow runs, cron jobs and connector calls cut off here lose their work; agent turns resume on the next message.'
+					: 'Nothing is running right now, so nothing gets interrupted.';
+				if (window.confirm('Restart on the installed build?\n\nThe port closes for a few seconds.\n\n' + cut)) triggerRestart();
+				return;
+			}
 			if (btn.id === 'sys-swap-force') {
 				if (btn.disabled) return;
 				var what = lastBusy.length
