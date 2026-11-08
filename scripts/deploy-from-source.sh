@@ -408,14 +408,63 @@ prep_wick_source() {
       say "FE dependencies unchanged — reuse node_modules"
     fi
 
-    if [ "$FORCE_FE" = 1 ] || [ "$(cat "$fe_stamp" 2>/dev/null || true)" != "$fe_key" ]; then
-      say "FE build (source changed or --force-fe)"
-      (cd fe && heavy wick-fe-build env NODE_OPTIONS=--max-old-space-size=2048 npm run build)
-      [ "$DRY" = 1 ] || printf '%s\n' "$fe_key" >"$fe_stamp"
+    # One stamp per workspace: only the SPAs whose source, or a workspace they depend on,
+    # changed are built again. A build from the old single-stamp script seeds them all.
+    local stamps="$SRC/.wick-fe-stamps" plan ws key todo=()
+    plan="$(fe_build_plan "$lock_key")" || die "FE: cannot read the workspace graph under fe/"
+    write_stamps() { [ "$DRY" = 1 ] && return; mkdir -p "$stamps"
+      while read -r ws key; do [ -z "$ws" ] || printf '%s\n' "$key" >"$stamps/${ws//\//_}"; done <<<"$plan"; }
+    if [ "$(cat "$fe_stamp" 2>/dev/null || true)" = "$fe_key" ]; then write_stamps; [ "$DRY" = 1 ] || rm -f "$fe_stamp"; fi
+    while read -r ws key; do
+      [ -n "$ws" ] || continue
+      if [ "$FORCE_FE" = 1 ] || [ "$(cat "$stamps/${ws//\//_}" 2>/dev/null || true)" != "$key" ]; then todo+=("$ws"); fi
+    done <<<"$plan"
+
+    if [ ${#todo[@]} -gt 0 ]; then
+      say "FE build: ${todo[*]} (source changed or --force-fe)"
+      (cd fe && heavy wick-fe-build env NODE_OPTIONS=--max-old-space-size=2048 npm run build "${todo[@]/#/--workspace=}")
+      write_stamps
     else
       say "FE unchanged — reuse existing dist output (--force-fe to rebuild)"
     fi
   )
+}
+
+# fe_build_plan LOCK_KEY prints "<dir> <key>" for every fe/ workspace with a build script.
+# The key hashes the workspace folder, each workspace it depends on (package.json, followed
+# transitively), the fe/ root files and the lockfile, so a change to a shared common/*
+# package rebuilds exactly the SPAs that bundle it. Runs in $SRC.
+fe_build_plan() {
+  node - "$1" <<'JS'
+const fs = require("fs"), path = require("path"), { execFileSync } = require("child_process");
+const git = (...a) => execFileSync("git", a, { encoding: "utf8" }).trim();
+const root = JSON.parse(fs.readFileSync("fe/package.json", "utf8"));
+const dirs = [], groups = new Set();
+for (const w of root.workspaces || []) {
+  const [base, star] = w.split("/");
+  groups.add(base);
+  if (star !== "*") { dirs.push(w); continue; }
+  for (const d of fs.readdirSync(path.join("fe", base)).sort()) dirs.push(base + "/" + d);
+}
+const pkgs = {}, byName = {};
+for (const d of dirs) {
+  const f = path.join("fe", d, "package.json");
+  if (!fs.existsSync(f)) continue;
+  const p = JSON.parse(fs.readFileSync(f, "utf8"));
+  pkgs[d] = p; byName[p.name] = d;
+}
+const deps = (d) => Object.keys({ ...pkgs[d].dependencies, ...pkgs[d].devDependencies, ...pkgs[d].peerDependencies })
+  .filter((n) => byName[n] && byName[n] !== d).map((n) => byName[n]);
+const tree = (p) => { try { return git("rev-parse", "HEAD:" + p); } catch { return "none"; } };
+const rootKey = git("ls-tree", "HEAD", "fe/").split("\n").filter((l) => !groups.has(l.split("\t")[1].slice(3))).join("\n");
+for (const d of Object.keys(pkgs)) {
+  if (!(pkgs[d].scripts || {}).build) continue;
+  const seen = new Set([d]), stack = [d];
+  while (stack.length) for (const n of deps(stack.pop())) if (!seen.has(n)) { seen.add(n); stack.push(n); }
+  const parts = [rootKey, process.argv[2], ...[...seen].sort().map((s) => s + " " + tree("fe/" + s))];
+  console.log(d, require("crypto").createHash("sha1").update(parts.join("\n")).digest("hex"));
+}
+JS
 }
 
 # wick-agent is what the release ships: `wick init wick-agent` from the wick CLI, built
