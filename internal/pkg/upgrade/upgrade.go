@@ -362,15 +362,17 @@ func upgradeTimeout() time.Duration {
 // "use my 1-minute default".
 const noHandoverLimit = 100 * 365 * 24 * time.Hour
 
-// Wanted reports whether the operator asked for graceful upgrades.
+// Wanted reports whether graceful upgrades are enabled.
 //
-// Opt-in (WICK_GRACEFUL_UPGRADE=1) rather than default-on: it changes how the
-// process exits, and a deployment that never sends SIGHUP gains nothing from
-// it. Set it in the unit / launchd plist once the handoff has been verified on
-// that host.
+// Graceful upgrades are enabled by default on supported platforms. Operators
+// can explicitly disable the handover with WICK_GRACEFUL_UPGRADE=0 (or false),
+// in which case callers must use the normal stop/start restart path.
 func Wanted() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("WICK_GRACEFUL_UPGRADE")))
-	return v == "1" || v == "true" || v == "yes"
+	if v == "0" || v == "false" || v == "no" || v == "off" {
+		return false
+	}
+	return true
 }
 
 // New builds an Upgrader. It never fails the caller: when graceful upgrade is
@@ -384,7 +386,7 @@ func New(baseDir string) (*Upgrader, string) {
 		stateDir.Store(&d)
 	}
 	if !Wanted() {
-		return u, "disabled (set WICK_GRACEFUL_UPGRADE=1 to enable)"
+		return u, "disabled (set WICK_GRACEFUL_UPGRADE=1 or unset it to enable)"
 	}
 	if !supported() {
 		return u, "unsupported on this platform"
