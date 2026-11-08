@@ -370,6 +370,13 @@ install_build() {
     return 0
   fi
   mode="$(daemon_mode)"; [ "$RESTART" = 1 ] && [ "$mode" != stopped ] && mode=running
+  # The first numbered build after a date-stamped one is numerically older.
+  # A handover successor refuses that even when the CLI is told --force, so
+  # this one step goes through stop / swap / start instead.
+  if [ "$RELOAD_FORCE" = 1 ] && [ "$mode" = graceful ]; then
+    echo "   switching from a date-stamped build: stop / swap / start this once (a few seconds down)"
+    mode=running
+  fi
   target="$(command -v "$APP")"; sudo="$(priv "$target")"
   case "$mode" in
     graceful)
@@ -378,7 +385,7 @@ install_build() {
       # in atomically, hands the socket over and rolls back if the successor never serves.
       # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
       # without it.
-      run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} ${RELOAD_FORCE:+--force} -y --wait || \
+      run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
         die "reload refused or failed — the running binary is unchanged (reason above). A daemon from before graceful was on by default ignores reload: rerun with --restart once."
       mark_built
       ;;
@@ -605,9 +612,9 @@ wick_self() {
       case "$cur_n" in ''|*[!0-9]*) ;; *) n=$((cur_n + 1)) ;; esac ;;
     "$base".*)
       # A date-stamped build (1.18.1.20261108174539) is numerically above
-      # 1.18.1.1: a one-time step down the reload has to be told to accept.
+      # 1.18.1.1: a one-time step down, installed with stop / swap / start.
       RELOAD_FORCE=1
-      echo "   running $cur_ver predates build numbers: this reload is forced once" ;;
+      echo "   running $cur_ver predates build numbers: this update restarts once" ;;
   esac
   ver="${base}.${n}-source-build"
   say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
