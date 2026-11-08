@@ -481,10 +481,19 @@ local_pull() {
     # edits to tracked files do. Name them, so the skip is not a mystery.
     why="local changes: $(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null | awk '{print $NF}' | head -3 | paste -sd, -)"
   else
-    # No upstream set (a branch made from FETCH_HEAD): pull the branch of the
-    # same name from origin, which is what the checkout came from.
-    local from=()
-    git -C "$SRC" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || from=(origin "$REF")
+    # Pull the branch of the same name from origin: that is where the
+    # checkout's commits come from. Not @{u}: a branch made from FETCH_HEAD has
+    # none, and a hand-set one can point at another branch ("Already up to
+    # date" while origin moved on). A local-only branch falls back to @{u}.
+    local from=(origin "$REF")
+    if ! git -C "$SRC" ls-remote --exit-code --heads origin "$REF" >/dev/null 2>&1; then
+      if git -C "$SRC" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        from=()
+      else
+        echo "   not pulled (origin has no branch $REF and none is set upstream) — building it as it is"
+        return 0
+      fi
+    fi
     printf '   $ git -C %s pull --ff-only %s\n' "$SRC" "${from[*]:-}"
     [ "$DRY" = 1 ] && return 0
     local out; if out="$(git -C "$SRC" pull --ff-only --quiet "${from[@]}" 2>&1)"; then return 0; fi
