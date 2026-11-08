@@ -151,6 +151,8 @@ func TestOpencodeAccountFoldersAndRotation(t *testing.T) {
 		return []provider.ModelSeed{{ID: "openai/gpt-5"}, {ID: "anthropic/claude-x"}}, nil
 	}
 	t.Cleanup(provider.SetModelStateDirForTest(t.TempDir()))
+	provider.ResetAccountExhaustionForTest()
+	t.Cleanup(provider.ResetAccountExhaustionForTest)
 	s, _ := provider.ModelSetsFor(provider.TypeOpencode)
 	acc, _ := s.Expand(context.Background(), ins, []string{"openai"})
 	if got := ids(acc); !reflect.DeepEqual(got, []string{"auto", "main", "a2"}) {
