@@ -234,6 +234,15 @@ core() {
   local cur new bin installed=0
   command -v "$APP" >/dev/null 2>&1 && installed=1
   cur="$(awk '/^version:/{print $2; exit}' wick.yml)"; [ -n "$cur" ] || die "no version: in wick.yml"
+  # Never build a candidate older than the installed daemon. Wick correctly
+  # blocks downgrades, but that left the UI stuck on an old pending swap.
+  if [ "$installed" = 1 ]; then
+    live_ver="$($APP version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+){2}([.-][0-9A-Za-z.-]+)?' | head -1 || true)"
+    if [ -n "$live_ver" ] && [ "$(printf '%s\n%s\n' "$cur" "$live_ver" | sort -V | tail -1)" != "$cur" ]; then
+      cur="$live_ver"
+      run sedi "s/^version:.*/version: $cur/" wick.yml
+    fi
+  fi
   if [ "$BUMP" = 1 ] && [ "$installed" = 1 ]; then
     new="$(echo "$cur" | awk -F. -v OFS=. '{$NF=$NF+1; print}')"
     say "version $cur -> $new"; run sedi "s/^version:.*/version: $new/" wick.yml
