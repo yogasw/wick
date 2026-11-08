@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // ErrSelfChatTicket refuses a message from an agent to another chat of
@@ -19,6 +20,13 @@ var ErrSelfChatTicket = errors.New("you can message another chat of yours only w
 // never a reason to open one.
 type SessionTargeter interface {
 	CanTarget(ctx context.Context, target Peer, callerSession, chat string) (ticket bool, err error)
+}
+
+// AskerChecker is optionally implemented by Turns: whether chat is the
+// session that sent callerSession a team message, as the sessions' own
+// pairing records it (survives a restart, unlike the task index).
+type AskerChecker interface {
+	AskedBy(callerSession, chat string) bool
 }
 
 // HoldChecker is optionally implemented by Turns: whether a person took
@@ -79,12 +87,24 @@ func (h *Hub) frameSelf(ctx context.Context, from Peer, callerSession, text stri
 	return fmt.Sprintf("Message from your own other chat (%s), as %s:\n%s", origin, from.Label(), text)
 }
 
+// isAsker is whether chat, a session of target, sent callerSession a
+// task: by the live task index or the sessions' pairing.
+func (h *Hub) isAsker(target Peer, callerSession, chat string) bool {
+	if h.askedFrom(target, callerSession, chat) {
+		return true
+	}
+	ac, ok := h.Turns.(AskerChecker)
+	return ok && ac.AskedBy(callerSession, chat)
+}
+
 // ReadableChat is whether callerAgentID, asking from callerSession (its
 // wick user sessionUser), may read chat — a session of the agent to
 // names — with the team read_chat op: exactly when a message to=to
 // chat=chat from there would be let in (Send's resolution and checks,
-// then chatAllowed). It reads nothing and pairs nothing; it returns the
-// target as resolved.
+// then chatAllowed), except the chat that sent the caller a task, which
+// it may answer but not read unless the caller is on that agent's
+// ReachAllow (an overseer). It reads nothing and pairs nothing; it
+// returns the target as resolved.
 func (h *Hub) ReadableChat(ctx context.Context, callerAgentID, callerSession, sessionUser, to, chat string) (Peer, error) {
 	if callerAgentID == "" {
 		return Peer{}, ErrNotTeamSession
@@ -116,6 +136,9 @@ func (h *Hub) ReadableChat(ctx context.Context, callerAgentID, callerSession, se
 	}
 	if !ok {
 		return Peer{}, ErrUnknownChat
+	}
+	if !self && !slices.Contains(rp.ReachAllow, caller.ID) && h.isAsker(rp, callerSession, chat) {
+		return Peer{}, ErrAskerChat
 	}
 	if _, err := h.chatAllowed(ctx, rp, callerSession, chat, self); err != nil {
 		return Peer{}, err

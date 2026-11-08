@@ -1245,7 +1245,7 @@ func (poolTurns) Link(_ context.Context, agent teamlink.Peer, chat, callerSessio
 		if want {
 			// Both sides of a Team pairing know the other (sessionlink):
 			// the asker sees the chat it messaged, not only the reverse.
-			if err := sessionlink.Link(globalLayout, s.ID, callerSession, "team message"); err == nil {
+			if err := sessionlink.LinkTeam(globalLayout, callerSession, s.ID); err == nil {
 				_ = globalMgr.RefreshSession(s.ID)
 				_ = globalMgr.RefreshSession(callerSession)
 			}
@@ -1308,6 +1308,20 @@ func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSessi
 		return false, nil
 	}
 	return false, teamlink.ErrUnknownChat
+}
+
+// AskedBy reports whether chat sent callerSession a team message, from
+// the sessions' pairing (teamlink.AskerChecker).
+func (poolTurns) AskedBy(callerSession, chat string) bool {
+	self, err := session.Load(globalLayout, callerSession)
+	if err != nil {
+		return false
+	}
+	peer, err := session.Load(globalLayout, chat)
+	if err != nil {
+		return false
+	}
+	return sessionlink.AskedBy(self, peer)
 }
 
 // isSlackThreadSession is whether a turn in the session m describes is

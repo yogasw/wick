@@ -152,3 +152,68 @@ func TestReadLastTurns(t *testing.T) {
 		t.Fatal("unexpected link")
 	}
 }
+
+// A Team pairing writes a reason per side, and a session of another
+// agent reads its asker through neither the pairing nor the link.
+func TestReadableAcrossTeamDirection(t *testing.T) {
+	l := newLayout(t)
+	mk(t, l, "S-asker", "Asker")
+	mk(t, l, "S-chat", "Chat")
+	mk(t, l, "S-ticket", "Ticket peer")
+	mk(t, l, "S-stranger", "Stranger")
+	if err := LinkTeam(l, "S-asker", "S-chat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Link(l, "S-chat", "S-ticket", "same ticket T-1"); err != nil {
+		t.Fatal(err)
+	}
+	load := func(id string) session.Session {
+		s, err := session.Load(l, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if w := load("S-asker").Meta.Links[0].Why; w != WhyTeamTo {
+		t.Fatalf("asker side why = %q", w)
+	}
+	if w := load("S-chat").Meta.Links[0].Why; w != WhyTeamFrom {
+		t.Fatalf("chat side why = %q", w)
+	}
+	cases := []struct {
+		self, peer string
+		want       bool
+	}{
+		{"S-chat", "S-asker", false},
+		{"S-asker", "S-chat", true},
+		{"S-chat", "S-ticket", true},
+		{"S-chat", "S-stranger", false},
+	}
+	for _, c := range cases {
+		if got := ReadableAcross(load(c.self), load(c.peer)); got != c.want {
+			t.Errorf("ReadableAcross(%s, %s) = %v, want %v", c.self, c.peer, got, c.want)
+		}
+	}
+
+	// A pre-split pairing: the chat that holds LinkedFromSession is the
+	// one asked, whatever the shared reason says.
+	mk(t, l, "S-old-asker", "Old asker")
+	mk(t, l, "S-old-chat", "Old chat")
+	if err := Link(l, "S-old-asker", "S-old-chat", WhyTeamLegacy); err != nil {
+		t.Fatal(err)
+	}
+	s := load("S-old-chat")
+	s.Meta.LinkedFromSession = "S-old-asker"
+	_ = session.SaveMeta(l, "S-old-chat", s.Meta)
+	if ReadableAcross(load("S-old-chat"), load("S-old-asker")) {
+		t.Error("legacy: chat read its asker")
+	}
+	if !ReadableAcross(load("S-old-asker"), load("S-old-chat")) {
+		t.Error("legacy: asker could not read the chat it messaged")
+	}
+	s.Meta.LinkedFromSession = ""
+	_ = session.SaveMeta(l, "S-old-chat", s.Meta)
+	if ReadableAcross(load("S-old-chat"), load("S-old-asker")) {
+		t.Error("legacy, pairing moved on: chat read its asker")
+	}
+}

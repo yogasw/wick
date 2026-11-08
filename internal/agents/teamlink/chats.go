@@ -17,6 +17,9 @@ var (
 	// ErrUnknownChat refuses a chat id that is not one of the target's
 	// chats with the caller's side.
 	ErrUnknownChat = errors.New("unknown chat — pass a session_id that team chats listed for this teammate, or omit chat")
+	// ErrAskerChat refuses reading the chat that sent the caller a task:
+	// the answer may go back there, its conversation stays the asker's.
+	ErrAskerChat = errors.New("that chat sent you a task — answer it, its conversation is not yours to read")
 	// ErrChatAndNewChat refuses chat and new_chat together.
 	ErrChatAndNewChat = errors.New("pass chat or new_chat, not both")
 )

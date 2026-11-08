@@ -98,6 +98,14 @@ func WickSessionLink(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp
 			rsp.ToolError(w, req.ID, "session not found or not linked: "+other, tool)
 			return
 		}
+		// A Team agent reads another agent's session only through a link,
+		// and never the session that messaged it (sessionlink.ReadableAcross).
+		if own.Meta.AgentID != "" {
+			if peer, err := session.Load(layout, other); err == nil && peer.Meta.AgentID != own.Meta.AgentID && !sessionlink.ReadableAcross(own, peer) {
+				rsp.ToolError(w, req.ID, "not readable from here: "+other+" is another agent's session that messaged this one, or is not linked to it", tool)
+				return
+			}
+		}
 		n := 6
 		if v, ok := args["n"].(float64); ok && v > 0 {
 			n = min(int(v), 20)

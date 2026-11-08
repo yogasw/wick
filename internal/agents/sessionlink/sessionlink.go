@@ -62,9 +62,28 @@ var ErrSelf = errors.New("a session cannot be linked to itself")
 // file within this process.
 var writeMu sync.Mutex
 
+// Reasons a Team pairing writes, one per side, so a read can tell the
+// asker from the chat it messaged. WhyTeamLegacy is what pairings wrote
+// before the split, the same on both sides.
+const (
+	WhyTeamTo     = "team message to that session"
+	WhyTeamFrom   = "team message from that session"
+	WhyTeamLegacy = "team message"
+)
+
 // Link ties a and b together, on both sides. Linking an existing pair
 // again only refreshes its reason.
 func Link(layout config.Layout, a, b, why string) error {
+	return link(layout, a, b, why, why)
+}
+
+// LinkTeam ties asker to chat, the teammate's session it messaged: the
+// asker's side reads WhyTeamTo, the chat's side WhyTeamFrom.
+func LinkTeam(layout config.Layout, asker, chat string) error {
+	return link(layout, asker, chat, WhyTeamTo, WhyTeamFrom)
+}
+
+func link(layout config.Layout, a, b, whyA, whyB string) error {
 	if a == "" || b == "" {
 		return errors.New("both session ids are required")
 	}
@@ -82,10 +101,10 @@ func Link(layout config.Layout, a, b, why string) error {
 		return fmt.Errorf("session %s: %w", b, err)
 	}
 	now := time.Now().UTC()
-	if err := session.SaveMeta(layout, a, withLink(sa.Meta, b, why, now)); err != nil {
+	if err := session.SaveMeta(layout, a, withLink(sa.Meta, b, whyA, now)); err != nil {
 		return err
 	}
-	return session.SaveMeta(layout, b, withLink(sb.Meta, a, why, now))
+	return session.SaveMeta(layout, b, withLink(sb.Meta, a, whyB, now))
 }
 
 func withLink(m session.Meta, other, why string, at time.Time) session.Meta {
@@ -240,7 +259,7 @@ func Peers(layout config.Layout, id string) ([]Peer, error) {
 	for _, l := range s.Meta.Links {
 		add(l.Session, l.Why)
 	}
-	add(s.Meta.LinkedFromSession, "team message from that session")
+	add(s.Meta.LinkedFromSession, WhyTeamFrom)
 
 	var out []Peer
 	for _, sid := range order {
@@ -330,6 +349,43 @@ func IsLinked(layout config.Layout, id, peer string) bool {
 	for _, p := range peers {
 		if p.Session == peer {
 			return true
+		}
+	}
+	return false
+}
+
+// ReadableAcross is whether self, a Team agent's session, may read peer,
+// a session of a different agent. Only through a link, and never toward
+// a session that sent self a team message: a teammate asked for work
+// gets the message, not the asker's whole conversation.
+func ReadableAcross(self, peer session.Session) bool {
+	if AskedBy(self, peer) {
+		return false
+	}
+	for _, l := range self.Meta.Links {
+		if l.Session == peer.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// AskedBy is whether peer sent self a team message: self is the chat
+// paired with it, or self's link to it says so. A pre-split link counts
+// unless peer is the chat self messaged.
+func AskedBy(self, peer session.Session) bool {
+	if self.Meta.LinkedFromSession == peer.ID {
+		return true
+	}
+	for _, l := range self.Meta.Links {
+		if l.Session != peer.ID {
+			continue
+		}
+		switch l.Why {
+		case WhyTeamFrom:
+			return true
+		case WhyTeamLegacy:
+			return peer.Meta.LinkedFromSession != self.ID
 		}
 	}
 	return false
