@@ -31,7 +31,10 @@ var inheritAllowed = map[string]string{
 	"internal/pkg/daemon/binary.go":           "probes the wick binary itself",
 	"internal/updater/updater.go":             "installs and restarts wick itself",
 	"internal/updater/asset_darwin.go":        "hdiutil/ditto on an update asset",
-	"internal/pkg/daemon/daemon.go":           "starts the wick daemon, which needs DATABASE_URL",
+	// The deploy script installs and starts wick, which needs DATABASE_URL.
+	// childEnv builds on os.Environ() and only drops systemd socket variables.
+	"plugins/connector/source_deploy/proc_unix.go":    "runs the deploy script that restarts wick",
+	"plugins/connector/source_deploy/proc_windows.go": "runs the deploy script that restarts wick",
 
 	// Fixed build/packaging tools with fixed arguments.
 	"internal/builder/gate.go":              "go list on a fixed module path",
