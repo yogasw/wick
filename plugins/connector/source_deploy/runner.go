@@ -289,7 +289,7 @@ func (s *Service) Start(ctx context.Context, o StartOptions) (Run, error) {
 	defer logf.Close()
 	fmt.Fprintf(logf, "== wick source deploy %s: profile %s, script %s (sha256 %s)\n   args: %s\n",
 		id, p.Name, r.Script, sum[:12], strings.Join(args, " "))
-	pid, err := launch(script, args, s.exitPath(id), logf)
+	pid, err := launch(script, args, s.exitPath(id), id, logf)
 	if err != nil {
 		return Run{}, fmt.Errorf("start script: %w", err)
 	}
@@ -614,7 +614,7 @@ func httpFetch(ctx context.Context, url string) ([]byte, error) {
 // childEnv is wick's environment minus what belongs to wick itself: systemd's socket
 // handover variables would make the script's own `<app> reload` think it was handed
 // wick's listener.
-func childEnv(exitFile string) []string {
+func childEnv(exitFile, runID string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
@@ -624,8 +624,11 @@ func childEnv(exitFile string) []string {
 		}
 		env = append(env, kv)
 	}
+	exe, _ := os.Executable()
 	return append(env,
 		"WICK_DEPLOY_EXIT="+exitFile,
+		"WICK_DEPLOY_RUN_ID="+runID,
+		"WICK_DEPLOY_NOTIFY_EXE="+exe,
 		"DEBIAN_FRONTEND=noninteractive",
 		"GIT_TERMINAL_PROMPT=0",
 	)

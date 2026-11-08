@@ -17,7 +17,7 @@ import (
 // launch starts the .ps1 detached from wick's console and process group: the script
 // stops wick to swap the .exe (Windows has no handover), and must outlive that. A small
 // wrapper next to the log writes the exit code for the wick that starts afterwards.
-func launch(script string, args []string, exitFile string, logf *os.File) (int, error) {
+func launch(script string, args []string, exitFile, runID string, logf *os.File) (int, error) {
 	if !strings.HasSuffix(strings.ToLower(script), ".ps1") {
 		return 0, errors.New("on Windows the deploy script must be a .ps1")
 	}
@@ -33,13 +33,15 @@ func launch(script string, args []string, exitFile string, logf *os.File) (int, 
 	}
 	body := "& " + psQuote(script) + " " + strings.Join(quoted, " ") + "\r\n" +
 		"$code = if ($?) { if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 } } else { if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }\r\n" +
-		"Set-Content -NoNewline -Path " + psQuote(exitFile) + " -Value $code\r\n"
+		"Set-Content -NoNewline -Path " + psQuote(exitFile) + " -Value $code\r\n" +
+		"& $env:WICK_DEPLOY_NOTIFY_EXE --notify-run\r\n" +
+		"exit $code\r\n"
 	wrap := filepath.Join(filepath.Dir(exitFile), strings.TrimSuffix(filepath.Base(exitFile), ".exit")+".wrap.ps1")
 	if err := os.WriteFile(wrap, []byte(body), 0o600); err != nil {
 		return 0, err
 	}
 	cmd := safeexec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrap)
-	cmd.Env = childEnv(exitFile)
+	cmd.Env = childEnv(exitFile, runID)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000008 | 0x00000200, HideWindow: true}
 	if dir, err := os.UserHomeDir(); err == nil {

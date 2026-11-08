@@ -5,11 +5,16 @@
 package main
 
 import (
+	"os"
+
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--notify-run" {
+		os.Exit(notifyRun())
+	}
 	// Runs and profiles live in the plugin's data dir.
-	wickplugin.DeclareHostAccess([]string{wickplugin.ScopeHostDatadir}, nil)
+	wickplugin.DeclareHostAccess([]string{wickplugin.ScopeHostDatadir, wickplugin.ScopeHostEventsPublish}, nil)
 	wickplugin.Serve(Module())
 }
