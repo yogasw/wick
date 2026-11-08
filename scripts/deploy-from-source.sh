@@ -494,7 +494,18 @@ wick_self() {
   # major/minor/patch on every local deploy; the fourth component makes the build
   # newer for reload comparisons without turning 1.x into 2.x.
   base="$(tr -d '[:space:]' <"$SRC/VERSION" 2>/dev/null || echo 0.0.0)"
-  ver="$(echo "${base#v}" | awk -F. -v OFS=. '{print $1,$2,$3}').$(date +%Y%m%d%H%M%S)"
+  base="$(echo "${base#v}" | awk -F. -v OFS=. '{print $1,$2,$3}')"
+  # Never generate a candidate older than the daemon that is currently running.
+  # A source checkout can lag behind an installed release (for example 1.18.1
+  # source while 1.18.2 is running), and wick correctly refuses that as a
+  # downgrade. Keep the running semver as the floor, then add a build stamp.
+  if command -v "$APP" >/dev/null 2>&1; then
+    running_base="$("$APP" version 2>/dev/null | awk '/wick-agent version/{split($3,a,"."); print a[1]"."a[2]"."a[3]; exit}')"
+    if [ -n "$running_base" ] && [ "$(printf '%s\n%s\n' "$base" "$running_base" | sort -V | tail -1)" = "$running_base" ]; then
+      base="$running_base"
+    fi
+  fi
+  ver="${base}.$(date +%Y%m%d%H%M%S)"
   say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
   run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
   say "build ($TARGET)"
