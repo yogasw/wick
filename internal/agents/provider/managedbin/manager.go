@@ -664,6 +664,19 @@ func (m *Manager) Prune(typ string) {
 	m.pruneLocked(typ)
 }
 
+// PruneIfIdle is Prune for read paths: it skips when the type is busy (a
+// download, activate or remove holds its lock). The status the page polls
+// every half second used to call Prune and so waited out a whole download,
+// which froze the progress bar on the job's first phase until it ended.
+func (m *Manager) PruneIfIdle(typ string) {
+	l := m.typeLock(typ)
+	if !l.TryLock() {
+		return
+	}
+	defer l.Unlock()
+	m.pruneLocked(typ)
+}
+
 // pruneLocked keeps current + the KeepVersions most recently installed
 // others; older ones go only when no process runs them (a later Prune
 // catches them once their process ends).
