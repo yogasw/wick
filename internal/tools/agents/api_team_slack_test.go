@@ -52,6 +52,11 @@ func withAgentSlackWorld(t *testing.T) {
 		agentSlackRuns.stopAll()
 		globalDB, slackAPIURL = prevDB, prevURL
 		srv.Close()
+		// The named in-memory DB lives while a connection is open: close
+		// it so a repeated run (-count=N) starts empty.
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
 	})
 }
 
