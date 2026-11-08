@@ -130,10 +130,11 @@ func TestPrepareBinaryRewritesInterpInPlace(t *testing.T) {
 			if got, err := os.Readlink(link); err != nil || got != loader {
 				t.Fatalf("link %q %v", got, err)
 			}
-			if got, _ := elfInterp(bin); got != link {
+			if got, _ := elfInterp(bin + ".real"); got != link {
 				t.Fatalf("interp %q", got)
 			}
-			after, _ := os.ReadFile(bin)
+			assertGuardLauncher(t, bin, "")
+			after, _ := os.ReadFile(bin + ".real")
 			if len(after) != len(before) {
 				t.Fatalf("size %d -> %d", len(before), len(after))
 			}
@@ -146,7 +147,7 @@ func TestPrepareBinaryRewritesInterpInPlace(t *testing.T) {
 			if want := link + strings.Repeat("\x00", filesz-len(link)); string(after[off:]) != want {
 				t.Fatalf("INTERP bytes %q", after[off:])
 			}
-			// the sha256 recorded after prepare is the rewritten file's
+			// the sha256 recorded after prepare is the launcher's
 			if sum, _ := fileSHA256(bin); sum == sumBefore {
 				t.Fatal("sha256 unchanged after rewrite")
 			}
@@ -156,7 +157,7 @@ func TestPrepareBinaryRewritesInterpInPlace(t *testing.T) {
 			if err := hp.prepareBinary(context.Background(), termux, again); err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := elfInterp(again); got != link {
+			if got, _ := elfInterp(again + ".real"); got != link {
 				t.Fatalf("second interp %q", got)
 			}
 		})
@@ -191,7 +192,7 @@ func TestPrepareBinary(t *testing.T) {
 	if got, _ := os.Readlink(link); got != loader {
 		t.Fatalf("stale link -> %q", got)
 	}
-	if got, _ := elfInterp(bin); got != link {
+	if got, _ := elfInterp(bin + ".real"); got != link {
 		t.Fatalf("interp %q", got)
 	}
 	// musl build: no runtime on Termux
@@ -202,6 +203,20 @@ func TestPrepareBinary(t *testing.T) {
 	noRunner, _, _ := termuxPrep(t, false)
 	if err := noRunner.prepareBinary(ctx, termux, writeELF(t, "/lib/ld-linux-aarch64.so.1")); !errors.Is(err, ErrMissingInterpreter) || !strings.Contains(err.Error(), "pkg install glibc-runner") {
 		t.Fatalf("no glibc-runner: %v", err)
+	}
+}
+
+// assertGuardLauncher checks bin is the Termux launcher: it clears the
+// loader variables before running bin.real (through loader when set).
+func assertGuardLauncher(t *testing.T, bin, loader string) {
+	t.Helper()
+	script, _ := os.ReadFile(bin)
+	run := `exec "${0%/*}/` + filepath.Base(bin) + `.real" "$@"`
+	if loader != "" {
+		run = "exec '" + loader + `' "${0%/*}/` + filepath.Base(bin) + `.real" "$@"`
+	}
+	if !strings.Contains(string(script), "\n"+loaderGuard+run+"\n") {
+		t.Fatalf("launcher %q", script)
 	}
 }
 
@@ -216,10 +231,7 @@ func TestPrepareBinaryLauncherFallback(t *testing.T) {
 		if real, _ := os.ReadFile(bin + ".real"); string(real) != string(orig) {
 			t.Fatal(".real is not the untouched download")
 		}
-		script, _ := os.ReadFile(bin)
-		if !strings.Contains(string(script), "exec '"+loader+"' \"${0%/*}/bin.real\" \"$@\"") {
-			t.Fatalf("launcher %q", script)
-		}
+		assertGuardLauncher(t, bin, loader)
 	}
 	t.Run("link path does not fit", func(t *testing.T) {
 		hp, _, loader := termuxPrep(t, true)

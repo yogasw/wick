@@ -31,7 +31,9 @@ Commands
 
 Flags
   --ref REF        wick: branch or tag to build (default: master)
-  --src DIR        wick: source checkout (default: ~/wick-src)
+  --src DIR        wick: source checkout (default: ~/wick-src). Run as ./scripts/deploy-from-source.sh
+                   inside a wick checkout, or --src a checkout that is on a branch, with no --ref:
+                   that checkout on its current branch, pulled first when that is safe
   --dir DIR        app checkout (default: current dir if it has wick.yml, else ~/<repo name>;
                    wick: ~/wick-agent)
   --git URL        clone this repo into --dir when it is not there yet (https recommended;
@@ -57,14 +59,14 @@ EOF
 }
 
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
-DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""
+DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""; RELOAD_FORCE=""
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0
-FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=()
+FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=(); SRC_SET=0; REF_SET=0; LOCAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
-    --ref) REF="$2"; shift 2 ;;
-    --src) SRC="$2"; shift 2 ;;
+    --ref) REF="$2"; REF_SET=1; shift 2 ;;
+    --src) SRC="$2"; SRC_SET=1; shift 2 ;;
     --git) GIT_URL="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --app) APP="$2"; shift 2 ;;
@@ -86,6 +88,30 @@ while [ $# -gt 0 ]; do
     *) KEYS+=("$1"); shift ;;
   esac
 done
+
+# Run from a wick checkout (./scripts/deploy-from-source.sh) with no --src / --ref: build
+# that checkout, on whatever branch it has checked out. It is pulled first when that is safe
+# (see local_pull); otherwise, or with --no-pull, it is built as it is. Piped from curl
+# there is no script file, so the defaults above stay.
+# --src DIR with no --ref means the same for that checkout: a script fetched
+# from a URL (the deploy connector) can still build the operator's checkout.
+here=""
+if [ "$CMD" = wick ] && [ "$REF_SET" = 0 ]; then
+  if [ "$SRC_SET" = 1 ]; then
+    # Only a checkout on a branch: a detached build dir (~/wick-src after an
+    # earlier run) keeps the old meaning, fetch --ref (master) into it.
+    here="$(cd "$SRC" 2>/dev/null && pwd || true)"
+    git -C "$here" symbolic-ref -q HEAD >/dev/null 2>&1 || here=""
+  elif [ -f "${BASH_SOURCE[0]:-}" ]; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+  fi
+fi
+if [ -n "$here" ]; then
+  if [ -e "$here/.git" ] && grep -qx 'module github.com/yogasw/wick' "$here/go.mod" 2>/dev/null; then
+    SRC="$here"; LOCAL=1
+    REF="$(git -C "$here" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+  fi
+fi
 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '!! %s\n' "$*" >&2; exit 1; }
@@ -273,32 +299,42 @@ start_app() {
   else
     # no DISPLAY: on a server with a desktop session `start` would launch the tray app
     say "start $APP (daemon)"
-    # Termux has no systemd user unit, so explicitly enable graceful handover
-    # for the plain daemon. Without this env the reload command is a no-op.
-    run env -u DISPLAY -u WAYLAND_DISPLAY WICK_GRACEFUL_UPGRADE=1 "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
+    # Graceful handover is on by default; passing it keeps that explicit for the plain daemon
+    # (Termux has no systemd unit) while an operator's WICK_GRACEFUL_UPGRADE=0 still wins.
+    run env -u DISPLAY -u WAYLAND_DISPLAY WICK_GRACEFUL_UPGRADE="${WICK_GRACEFUL_UPGRADE:-1}" "$APP" start || echo "   start failed — run '$APP all' to see it in the foreground"
   fi
 }
 
-# graceful: is the running daemon able to take a zero-downtime reload? Only one started with
-# WICK_GRACEFUL_UPGRADE=1 (the systemd unit) acts on it; a plain `<app> start` ignores it.
+# graceful: is the running daemon able to take a zero-downtime reload? Graceful handover is
+# on by default; only a daemon started with WICK_GRACEFUL_UPGRADE=0/false/no/off refuses it.
 # Prints running/graceful/stopped.
 daemon_mode() {
-  local pid env; pid="$(pgrep -x "$APP" 2>/dev/null | head -1 || true)"
+  local pid env pidfile="$HOME/.$APP/run.pid"
+  pid="$(pgrep -x "$APP" 2>/dev/null | head -1 || true)"
+  # Termux / Android: pgrep can miss the daemon (no procps, or a process name it does not
+  # match), which turned every update into "not running" + a second `start` next to the
+  # live daemon. The pid file `<app> start` writes is the fallback.
+  if [ -z "$pid" ] && [ -r "$pidfile" ]; then
+    pid="$(tr -dc '0-9' <"$pidfile")"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || pid=""
+  fi
   [ -n "$pid" ] || { echo stopped; return; }
   env="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || $SUDO tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || true)"
-  if printf '%s\n' "$env" | grep -qx 'WICK_GRACEFUL_UPGRADE=1'; then echo graceful; else echo running; fi
+  if printf '%s\n' "$env" | grep -qiE '^WICK_GRACEFUL_UPGRADE=(0|false|no|off)$'; then echo running; else echo graceful; fi
 }
 
 # done_note: what to do once wick-agent is up — the questions a first run leaves.
 done_note() {
-  local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  # Informational only, so it must never fail the run: Termux's hostname has no -I and
+  # exits 64 (argp usage error), which under `set -euo pipefail` ended a finished deploy.
+  local ip; ip="$( { hostname -I 2>/dev/null || ip -4 -o addr show scope global 2>/dev/null | awk '{sub(/\/.*/,"",$4); print $4}'; } | awk 'NF{print $1; exit}' || true)"
   cat <<EOF
 
 == done — $APP is installed${1:+ ($1)}
    open      http://${ip:-<this-host>}:9425   (first admin login: ~/.$APP/INITIAL_CREDENTIALS.txt)
    status    $APP status            logs: $APP status shows the daemon log tail
    stop/run  systemctl --user stop|start $APP   (or $APP stop|start without the service)
-   update    run this same command again — it skips the build when $REF has no new commit
+   update    run this same command again — it skips the build when nothing changed
    foreground  $APP all   (bare '$APP' is the desktop tray app, not the server)
    note      'wick' is the dev CLI (build/init); the server is '$APP'
 EOF
@@ -307,8 +343,9 @@ EOF
 # mark_built records the source commit the installed binary was built from (wick mode),
 # so a rerun on the same commit skips the build. Written once the binary is in place.
 mark_built() {
-  [ -n "$BUILT_SHA" ] && [ "$DRY" = 0 ] || return 0
-  mkdir -p "$HOME/.$APP" && echo "$BUILT_SHA" >"$HOME/.$APP/built-commit" || true
+  [ "$DRY" = 0 ] || return 0
+  mkdir -p "$HOME/.$APP" || return 0
+  [ -z "$BUILT_SHA" ] || echo "$BUILT_SHA" >"$HOME/.$APP/built-commit" || true
 }
 
 # install_build INSTALLED — put the build (cwd = the app) in place: a first install + start,
@@ -333,6 +370,13 @@ install_build() {
     return 0
   fi
   mode="$(daemon_mode)"; [ "$RESTART" = 1 ] && [ "$mode" != stopped ] && mode=running
+  # The first numbered build after a date-stamped one is numerically older.
+  # A handover successor refuses that even when the CLI is told --force, so
+  # this one step goes through stop / swap / start instead.
+  if [ "$RELOAD_FORCE" = 1 ] && [ "$mode" = graceful ]; then
+    echo "   switching from a date-stamped build: stop / swap / start this once (a few seconds down)"
+    mode=running
+  fi
   target="$(command -v "$APP")"; sudo="$(priv "$target")"
   case "$mode" in
     graceful)
@@ -342,7 +386,7 @@ install_build() {
       # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
       # without it.
       run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
-        die "reload refused or failed — the running binary is unchanged (reason above)."
+        die "reload refused or failed — the running binary is unchanged (reason above). A daemon from before graceful was on by default ignores reload: rerun with --restart once."
       mark_built
       ;;
     running)
@@ -470,13 +514,54 @@ JS
 # wick-agent is what the release ships: `wick init wick-agent` from the wick CLI, built
 # with `wick build`. From source the same app is scaffolded once and built against the
 # checkout at --ref, so a branch with unreleased commits installs like a release.
+# local_pull: fast-forward the checkout the script runs from to its upstream. It never fails
+# the run and never touches local work: a dirty tree, a detached HEAD, no upstream, no
+# network or a diverged branch all mean "build it as it is", said in one line.
+local_pull() {
+  local why=""
+  # The FE build rewrites these committed build outputs (web/embed.go) in place,
+  # so every build left the tree "dirty" and the next pull was skipped. They are
+  # regenerated from source on every build, so the committed copy goes back first.
+  git -C "$SRC" checkout -- web/public/css/app.css web/public/lib/wick-markdown.js 2>/dev/null || true
+  if [ "$PULL" = 0 ]; then why="--no-pull"
+  elif [ "$REF" = HEAD ]; then why="detached HEAD"
+  elif [ -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    # Untracked files (build stamps, notes) never block a fast-forward; only
+    # edits to tracked files do. Name them, so the skip is not a mystery.
+    why="local changes: $(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null | awk '{print $NF}' | head -3 | paste -sd, -)"
+  else
+    # Pull the branch of the same name from origin: that is where the
+    # checkout's commits come from. Not @{u}: a branch made from FETCH_HEAD has
+    # none, and a hand-set one can point at another branch ("Already up to
+    # date" while origin moved on). A local-only branch falls back to @{u}.
+    local from=(origin "$REF")
+    if ! git -C "$SRC" ls-remote --exit-code --heads origin "$REF" >/dev/null 2>&1; then
+      if git -C "$SRC" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        from=()
+      else
+        echo "   not pulled (origin has no branch $REF and none is set upstream) — building it as it is"
+        return 0
+      fi
+    fi
+    printf '   $ git -C %s pull --ff-only %s\n' "$SRC" "${from[*]:-}"
+    [ "$DRY" = 1 ] && return 0
+    local out; if out="$(git -C "$SRC" pull --ff-only --quiet "${from[@]}" 2>&1)"; then return 0; fi
+    why="pull failed: $(printf '%s' "$out" | tail -1)"
+  fi
+  echo "   not pulled ($why) — building it as it is"
+}
+
 wick_self() {
   DIR="${DIR:-$HOME/wick-agent}"; APP="${APP:-$(basename "$DIR")}"
   need_pkgs git curl tar
-  if [ "$PULL" = 0 ] && [ -d "$SRC/.git" ]; then
+  if [ "$LOCAL" = 1 ]; then
+    say "wick source: this checkout $SRC ($REF)"
+    local_pull
+    echo "   building $(git -C "$SRC" log -1 --format='%h %s' 2>/dev/null)"
+  elif [ "$PULL" = 0 ] && [ -e "$SRC/.git" ]; then
     # Locked by hand: whatever is checked out (and edited) in --src is what gets built.
     say "wick source $SRC as it is (--no-pull: no fetch, local changes kept)"
-  elif [ -d "$SRC/.git" ]; then
+  elif [ -e "$SRC/.git" ]; then
     say "wick source $SRC -> $REF"
     run git -C "$SRC" fetch --quiet origin "$REF"
     run git -C "$SRC" checkout --quiet --force --detach FETCH_HEAD   # a build dir: local edits are not kept
@@ -486,9 +571,9 @@ wick_self() {
   fi
   # Same commit as the installed build: nothing to rebuild, only make sure it runs.
   local sha="" stamp="$HOME/.$APP/built-commit"   # next to the app's own data (~/.wick-agent)
-  [ -d "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
+  [ -e "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
   # Uncommitted edits are not in the commit id: a dirty tree always rebuilds.
-  [ -n "$sha" ] && [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ] && sha=""
+  [ -n "$sha" ] && [ -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ] && sha=""
   if [ -n "$sha" ] && [ -z "$FORCE" ] && command -v "$APP" >/dev/null 2>&1 && \
      [ "$(cat "$stamp" 2>/dev/null)" = "$sha" ]; then
     say "$APP is already built from ${sha:0:12} ($REF) — nothing to rebuild (--force to rebuild anyway)"
@@ -552,7 +637,7 @@ wick_self() {
   # setup may regenerate Go sources, so tidy once more after generation before
   # wick build invokes go generate with the module required to be clean.
   heavy "$APP-tidy" env GOFLAGS= go mod tidy
-  # Version: preserve the source semver and add a numeric build stamp. Do not bump
+  # Version: preserve the source semver and add a build number. Do not bump
   # major/minor/patch on every local deploy; the fourth component makes the build
   # newer for reload comparisons without turning 1.x into 2.x.
   base="$(tr -d '[:space:]' <"$SRC/VERSION" 2>/dev/null || echo 0.0.0)"
@@ -571,7 +656,25 @@ wick_self() {
       base="$running_base"
     fi
   fi
-  ver="${base}.$(date +%Y%m%d%H%M%S)"
+  # The fourth part counts local builds of that semver, marked as local:
+  # 1.18.1.1-source-build, .2-source-build, … The running build says where to go
+  # on: a local build of the same semver gets +1, anything else (a release, a
+  # newer semver, the old date stamp) starts again at 1. reload compares only
+  # the numbers before "-", so the mark changes nothing there.
+  local cur_ver="" n=1
+  command -v "$APP" >/dev/null 2>&1 && \
+    cur_ver="$("$APP" version 2>/dev/null | awk -v app="$APP" '$1 == app && $2 == "version" {print $3; exit}' || true)"
+  case "$cur_ver" in
+    "$base".*-source-build)
+      local cur_n="${cur_ver#"$base".}"; cur_n="${cur_n%-source-build}"
+      case "$cur_n" in ''|*[!0-9]*) ;; *) n=$((cur_n + 1)) ;; esac ;;
+    "$base".*)
+      # A date-stamped build (1.18.1.20261108174539) is numerically above
+      # 1.18.1.1: a one-time step down, installed with stop / swap / start.
+      RELOAD_FORCE=1
+      echo "   running $cur_ver predates build numbers: this update restarts once" ;;
+  esac
+  ver="${base}.${n}-source-build"
   say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
   run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
   say "build ($TARGET)"

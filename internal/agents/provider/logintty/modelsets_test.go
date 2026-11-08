@@ -151,6 +151,8 @@ func TestOpencodeAccountFoldersAndRotation(t *testing.T) {
 		return []provider.ModelSeed{{ID: "openai/gpt-5"}, {ID: "anthropic/claude-x"}}, nil
 	}
 	t.Cleanup(provider.SetModelStateDirForTest(t.TempDir()))
+	provider.ResetAccountExhaustionForTest()
+	t.Cleanup(provider.ResetAccountExhaustionForTest)
 	s, _ := provider.ModelSetsFor(provider.TypeOpencode)
 	acc, _ := s.Expand(context.Background(), ins, []string{"openai"})
 	if got := ids(acc); !reflect.DeepEqual(got, []string{"auto", "main", "a2"}) {
@@ -261,5 +263,30 @@ func TestOMPRunnersUseHelperGuard(t *testing.T) {
 	_, _ = ompOAuthListRunner(context.Background(), env)
 	if len(labels) != 2 || labels[0] != "omp-usage" || labels[1] != "omp-auth-broker" {
 		t.Fatalf("labels = %v", labels)
+	}
+}
+
+// An account row picked without a model ("<provider>@<account>") runs that
+// account on the provider's default model instead of being dropped (which
+// left a resumed session on its transcript's last model, any provider).
+func TestCLIModelSetsResolveAccountWithoutModel(t *testing.T) {
+	s, _ := provider.ModelSetsFor(provider.TypeOMP)
+	ins := liveIns
+	ins.LiveModelDefault = "acme/model-big"
+	sp, err := s.Resolve(ins, []string{"acme"}, "1")
+	if err != nil || sp != (provider.SpawnPin{Model: "acme/model-big", Provider: "acme", Account: "1"}) {
+		t.Fatalf("account pick: %+v %v", sp, err)
+	}
+	sp, err = s.Resolve(ins, []string{"acme"}, provider.AutoAccount)
+	if err != nil || sp.Model != "acme/model-big" || sp.Account != "" {
+		t.Fatalf("auto pick: %+v %v", sp, err)
+	}
+	args := provider.ModelArgs(provider.SpawnOptions{Instance: &ins, ModelID: "acme@1"}, nil)
+	if !reflect.DeepEqual(args, []string{"--model", "acme/model-big"}) {
+		t.Fatalf("ModelArgs: %q", args)
+	}
+	// No model known for the provider: refused, never another provider's.
+	if _, err := s.Resolve(ins, []string{"other"}, "1"); err == nil {
+		t.Fatal("a provider with no known model must be refused")
 	}
 }

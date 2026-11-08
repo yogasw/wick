@@ -398,7 +398,7 @@ func (m *Manager) install(ctx context.Context, typ, tag string, j *JobInfo) erro
 	m.setJob(j, func(j *JobInfo) { j.Phase, j.Total = PhaseDownload, asset.Size })
 	dl := filepath.Join(partial, "download")
 	dlStart := time.Now()
-	got, err := m.client.download(ctx, asset.URL, dl, MaxDownloadBytes, func(done, total int64) {
+	got, err := m.client.downloadAsset(ctx, asset, dl, MaxDownloadBytes, func(done, total int64) {
 		m.setJob(j, func(j *JobInfo) {
 			j.Done = done
 			if total > 0 {
@@ -660,6 +660,19 @@ func (m *Manager) removeLocked(typ, ver string) error {
 func (m *Manager) Prune(typ string) {
 	l := m.typeLock(typ)
 	l.Lock()
+	defer l.Unlock()
+	m.pruneLocked(typ)
+}
+
+// PruneIfIdle is Prune for read paths: it skips when the type is busy (a
+// download, activate or remove holds its lock). The status the page polls
+// every half second used to call Prune and so waited out a whole download,
+// which froze the progress bar on the job's first phase until it ended.
+func (m *Manager) PruneIfIdle(typ string) {
+	l := m.typeLock(typ)
+	if !l.TryLock() {
+		return
+	}
 	defer l.Unlock()
 	m.pruneLocked(typ)
 }

@@ -179,6 +179,15 @@ func MarkAccountExhausted(ins Instance, prov, account string) {
 	exhaustedMu.Unlock()
 }
 
+// ResetAccountExhaustionForTest forgets every quota mark, so a test that
+// marks an account exhausted can run again in the same process (-count=N).
+// Tests only (other packages cannot reach the unexported map).
+func ResetAccountExhaustionForTest() {
+	exhaustedMu.Lock()
+	exhaustedAt = map[string]time.Time{}
+	exhaustedMu.Unlock()
+}
+
 // PickRotatingAccount is the account Auto uses for prov: the first one not
 // exhausted within accountExhaustedFor; when all are, the one exhausted
 // longest ago. "" when accounts is empty.

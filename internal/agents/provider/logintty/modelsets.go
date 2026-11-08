@@ -226,11 +226,22 @@ func autoDesc(t provider.Type) string {
 	return "wick rotates on quota errors"
 }
 
-func (cliModelSets) Resolve(_ provider.Instance, path []string, model string) (provider.SpawnPin, error) {
+func (cliModelSets) Resolve(ins provider.Instance, path []string, model string) (provider.SpawnPin, error) {
 	if len(path) == 0 || len(path) > 2 {
 		return provider.SpawnPin{}, fmt.Errorf("model pin: want provider[/account], got %d segments", len(path))
 	}
 	prov := path[0]
+	// "<provider>@<account>": an account (or Auto) row was picked without
+	// going down to a model. Without a model the pin used to be dropped,
+	// and a resumed session then kept the model its transcript last used —
+	// whatever provider that was — so switching accounts changed nothing.
+	// Take the account and that provider's default model instead.
+	if len(path) == 1 && model != "" && !strings.Contains(model, "/") {
+		path, model = []string{prov, model}, ""
+	}
+	if model == "" {
+		model = providerDefaultModel(ins, prov)
+	}
 	if model == "" || (prov != "" && !strings.HasPrefix(model, prov+"/")) {
 		return provider.SpawnPin{}, fmt.Errorf("model pin: %q is not a %s model", model, prov)
 	}
@@ -239,6 +250,24 @@ func (cliModelSets) Resolve(_ provider.Instance, path []string, model string) (p
 		sp.Account = path[1]
 	}
 	return sp, nil
+}
+
+// providerDefaultModel is the model a provider-level pick runs: the
+// instance's Default model when it belongs to prov, else prov's first
+// model in the cached live list. Reads the cache only, never the CLI.
+func providerDefaultModel(ins provider.Instance, prov string) string {
+	if prov == "" {
+		return ""
+	}
+	if d := ins.LiveModelDefault; strings.HasPrefix(d, prov+"/") {
+		return d
+	}
+	for _, m := range provider.PeekCLIModels(ins) {
+		if strings.HasPrefix(m.ID, prov+"/") {
+			return m.ID
+		}
+	}
+	return ""
 }
 
 // opencodeFolderAccounts lists opencode's accounts across its data folders:

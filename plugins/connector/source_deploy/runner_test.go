@@ -167,3 +167,11 @@ func TestParseArgs(t *testing.T) {
 		t.Fatal("bad JSON accepted")
 	}
 }
+
+// TestMain keeps the wrapper's completion callback out of the run logs the
+// tests read: by default it is this test binary, which would print its
+// usage there.
+func TestMain(m *testing.M) {
+	notifyExe = func() string { return "true" }
+	os.Exit(m.Run())
+}

@@ -31,8 +31,9 @@ type ManagedBinaryDTO struct {
 
 func managedDTO(t provider.Type) (ManagedBinaryDTO, error) {
 	// Retention for versions whose last process has ended since the last
-	// look — cheap (a /proc scan) and keeps the list honest.
-	managedbin.Default.Prune(string(t))
+	// look — cheap (a /proc scan) and keeps the list honest. Skipped while a
+	// download holds the type, or this poll would wait for the whole download.
+	managedbin.Default.PruneIfIdle(string(t))
 	st, err := managedbin.Default.Status(string(t))
 	if err != nil {
 		return ManagedBinaryDTO{}, err

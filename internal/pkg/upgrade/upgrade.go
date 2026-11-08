@@ -400,6 +400,11 @@ func New(baseDir string) (*Upgrader, string) {
 		return u, fmt.Sprintf("unavailable: %v", err)
 	}
 	u.flip = f
+	if f.HasParent() {
+		// Logged before the slow boot so a successor that dies early still
+		// leaves a trace next to the parent's "handing over" lines.
+		log.Info().Int("pid", os.Getpid()).Msg("upgrade: successor booting, parent still serving")
+	}
 	return u, ""
 }
 
