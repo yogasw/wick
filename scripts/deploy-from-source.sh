@@ -60,7 +60,7 @@ EOF
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
 DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0
-FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=(); SRC_SET=0; REF_SET=0
+FORCE_FE=0; FORCE_FE_DEPS=0; KEYS=(); SRC_SET=0; REF_SET=0; LOCAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
@@ -89,12 +89,13 @@ while [ $# -gt 0 ]; do
 done
 
 # Run from a wick checkout (./scripts/deploy-from-source.sh) with no --src / --ref: build
-# that checkout as it is, on whatever branch it has checked out — `git pull` there, then
-# run it. Piped from curl there is no script file, so the defaults above stay.
+# that checkout, on whatever branch it has checked out. It is pulled first when that is safe
+# (see local_pull); otherwise, or with --no-pull, it is built as it is. Piped from curl
+# there is no script file, so the defaults above stay.
 if [ "$CMD" = wick ] && [ "$SRC_SET" = 0 ] && [ "$REF_SET" = 0 ] && [ -f "${BASH_SOURCE[0]:-}" ]; then
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
   if [ -n "$here" ] && [ -e "$here/.git" ] && grep -qx 'module github.com/yogasw/wick' "$here/go.mod" 2>/dev/null; then
-    SRC="$here"; PULL=0
+    SRC="$here"; LOCAL=1
     REF="$(git -C "$here" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
   fi
 fi
@@ -435,13 +436,35 @@ prep_wick_source() {
 # wick-agent is what the release ships: `wick init wick-agent` from the wick CLI, built
 # with `wick build`. From source the same app is scaffolded once and built against the
 # checkout at --ref, so a branch with unreleased commits installs like a release.
+# local_pull: fast-forward the checkout the script runs from to its upstream. It never fails
+# the run and never touches local work: a dirty tree, a detached HEAD, no upstream, no
+# network or a diverged branch all mean "build it as it is", said in one line.
+local_pull() {
+  local why=""
+  if [ "$PULL" = 0 ]; then why="--no-pull"
+  elif [ "$REF" = HEAD ]; then why="detached HEAD"
+  elif [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then why="local changes"
+  elif ! git -C "$SRC" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then why="no upstream for $REF"
+  else
+    printf '   $ git -C %s pull --ff-only\n' "$SRC"
+    [ "$DRY" = 1 ] && return 0
+    local out; if out="$(git -C "$SRC" pull --ff-only --quiet 2>&1)"; then return 0; fi
+    why="pull failed: $(printf '%s' "$out" | tail -1)"
+  fi
+  echo "   not pulled ($why) — building it as it is"
+}
+
 wick_self() {
   DIR="${DIR:-$HOME/wick-agent}"; APP="${APP:-$(basename "$DIR")}"
   need_pkgs git curl tar
-  if [ "$PULL" = 0 ] && [ -d "$SRC/.git" ]; then
+  if [ "$LOCAL" = 1 ]; then
+    say "wick source: this checkout $SRC ($REF)"
+    local_pull
+    echo "   building $(git -C "$SRC" log -1 --format='%h %s' 2>/dev/null)"
+  elif [ "$PULL" = 0 ] && [ -e "$SRC/.git" ]; then
     # Locked by hand: whatever is checked out (and edited) in --src is what gets built.
     say "wick source $SRC as it is (--no-pull: no fetch, local changes kept)"
-  elif [ -d "$SRC/.git" ]; then
+  elif [ -e "$SRC/.git" ]; then
     say "wick source $SRC -> $REF"
     run git -C "$SRC" fetch --quiet origin "$REF"
     run git -C "$SRC" checkout --quiet --force --detach FETCH_HEAD   # a build dir: local edits are not kept
@@ -451,7 +474,7 @@ wick_self() {
   fi
   # Same commit as the installed build: nothing to rebuild, only make sure it runs.
   local sha="" stamp="$HOME/.$APP/built-commit"   # next to the app's own data (~/.wick-agent)
-  [ -d "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
+  [ -e "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
   # Uncommitted edits are not in the commit id: a dirty tree always rebuilds.
   [ -n "$sha" ] && [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ] && sha=""
   if [ -n "$sha" ] && [ -z "$FORCE" ] && command -v "$APP" >/dev/null 2>&1 && \
