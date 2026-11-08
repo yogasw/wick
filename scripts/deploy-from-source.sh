@@ -291,7 +291,9 @@ daemon_mode() {
 
 # done_note: what to do once wick-agent is up — the questions a first run leaves.
 done_note() {
-  local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  # Informational only, so it must never fail the run: Termux's hostname has no -I and
+  # exits 64 (argp usage error), which under `set -euo pipefail` ended a finished deploy.
+  local ip; ip="$( { hostname -I 2>/dev/null || ip -4 -o addr show scope global 2>/dev/null | awk '{sub(/\/.*/,"",$4); print $4}'; } | awk 'NF{print $1; exit}' || true)"
   cat <<EOF
 
 == done — $APP is installed${1:+ ($1)}
