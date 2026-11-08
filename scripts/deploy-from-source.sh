@@ -469,7 +469,10 @@ local_pull() {
   git -C "$SRC" checkout -- web/public/css/app.css web/public/lib/wick-markdown.js 2>/dev/null || true
   if [ "$PULL" = 0 ]; then why="--no-pull"
   elif [ "$REF" = HEAD ]; then why="detached HEAD"
-  elif [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then why="local changes"
+  elif [ -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    # Untracked files (build stamps, notes) never block a fast-forward; only
+    # edits to tracked files do. Name them, so the skip is not a mystery.
+    why="local changes: $(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null | awk '{print $NF}' | head -3 | paste -sd, -)"
   else
     # No upstream set (a branch made from FETCH_HEAD): pull the branch of the
     # same name from origin, which is what the checkout came from.
@@ -505,7 +508,7 @@ wick_self() {
   local sha="" stamp="$HOME/.$APP/built-commit"   # next to the app's own data (~/.wick-agent)
   [ -e "$SRC/.git" ] && sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
   # Uncommitted edits are not in the commit id: a dirty tree always rebuilds.
-  [ -n "$sha" ] && [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ] && sha=""
+  [ -n "$sha" ] && [ -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ] && sha=""
   if [ -n "$sha" ] && [ -z "$FORCE" ] && command -v "$APP" >/dev/null 2>&1 && \
      [ "$(cat "$stamp" 2>/dev/null)" = "$sha" ]; then
     say "$APP is already built from ${sha:0:12} ($REF) — nothing to rebuild (--force to rebuild anyway)"
