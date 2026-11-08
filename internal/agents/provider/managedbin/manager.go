@@ -398,7 +398,7 @@ func (m *Manager) install(ctx context.Context, typ, tag string, j *JobInfo) erro
 	m.setJob(j, func(j *JobInfo) { j.Phase, j.Total = PhaseDownload, asset.Size })
 	dl := filepath.Join(partial, "download")
 	dlStart := time.Now()
-	got, err := m.client.download(ctx, asset.URL, dl, MaxDownloadBytes, func(done, total int64) {
+	got, err := m.client.downloadAsset(ctx, asset, dl, MaxDownloadBytes, func(done, total int64) {
 		m.setJob(j, func(j *JobInfo) {
 			j.Done = done
 			if total > 0 {
