@@ -348,7 +348,11 @@ install_build() {
       start_app
       ;;
   esac
-  say "now running"; run "$APP" version
+  say "now running"
+  # Version is informational; a transient daemon status/verification error
+  # must not turn a completed build+install into exit 64. The next status
+  # check/callback reports the actual runtime state.
+  run "$APP" version || echo "   warning: version check failed; build/install completed"
 }
 
 # ---------------------------------------------------------------- wick itself
