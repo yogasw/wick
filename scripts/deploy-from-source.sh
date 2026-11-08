@@ -450,6 +450,10 @@ prep_wick_source() {
 # network or a diverged branch all mean "build it as it is", said in one line.
 local_pull() {
   local why=""
+  # The FE build rewrites these committed build outputs (web/embed.go) in place,
+  # so every build left the tree "dirty" and the next pull was skipped. They are
+  # regenerated from source on every build, so the committed copy goes back first.
+  git -C "$SRC" checkout -- web/public/css/app.css web/public/lib/wick-markdown.js 2>/dev/null || true
   if [ "$PULL" = 0 ]; then why="--no-pull"
   elif [ "$REF" = HEAD ]; then why="detached HEAD"
   elif [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then why="local changes"
