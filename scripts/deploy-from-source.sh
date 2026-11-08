@@ -296,7 +296,15 @@ start_app() {
 # on by default; only a daemon started with WICK_GRACEFUL_UPGRADE=0/false/no/off refuses it.
 # Prints running/graceful/stopped.
 daemon_mode() {
-  local pid env; pid="$(pgrep -x "$APP" 2>/dev/null | head -1 || true)"
+  local pid env pidfile="$HOME/.$APP/run.pid"
+  pid="$(pgrep -x "$APP" 2>/dev/null | head -1 || true)"
+  # Termux / Android: pgrep can miss the daemon (no procps, or a process name it does not
+  # match), which turned every update into "not running" + a second `start` next to the
+  # live daemon. The pid file `<app> start` writes is the fallback.
+  if [ -z "$pid" ] && [ -r "$pidfile" ]; then
+    pid="$(tr -dc '0-9' <"$pidfile")"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || pid=""
+  fi
   [ -n "$pid" ] || { echo stopped; return; }
   env="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || $SUDO tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || true)"
   if printf '%s\n' "$env" | grep -qiE '^WICK_GRACEFUL_UPGRADE=(0|false|no|off)$'; then echo running; else echo graceful; fi
@@ -313,7 +321,7 @@ done_note() {
    open      http://${ip:-<this-host>}:9425   (first admin login: ~/.$APP/INITIAL_CREDENTIALS.txt)
    status    $APP status            logs: $APP status shows the daemon log tail
    stop/run  systemctl --user stop|start $APP   (or $APP stop|start without the service)
-   update    run this same command again — it skips the build when $REF has no new commit
+   update    run this same command again — it skips the build when nothing changed
    foreground  $APP all   (bare '$APP' is the desktop tray app, not the server)
    note      'wick' is the dev CLI (build/init); the server is '$APP'
 EOF
