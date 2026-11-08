@@ -58,6 +58,9 @@ Flags
 EOF
 }
 
+# Kept for the restart after a pull replaced this script (see wick_self).
+ORIG_ARGS=("$@"); SELF="$(readlink -f "${BASH_SOURCE[0]:-}" 2>/dev/null || true)"
+SELF_SUM="$( [ -f "$SELF" ] && cksum <"$SELF" || true)"
 CMD=wick; case "${1:-}" in ""|-*) ;; *) CMD=$1; shift ;; esac
 DIR=""; GIT_URL=""; BRANCH=""; APP=""; WICK_DIR=""; REF=master; SRC="$HOME/wick-src"; FORCE=""; BUILT_SHA=""; RELOAD_FORCE=""
 UPGRADE=1; PULL=1; BUMP=1; TEST=1; ALL_PLUGINS=0; BUMP_PLUGINS=0; DRY=0; RESTART=0; NOINSTALL=0
@@ -557,6 +560,15 @@ wick_self() {
   if [ "$LOCAL" = 1 ]; then
     say "wick source: this checkout $SRC ($REF)"
     local_pull
+    # Run from inside this checkout, the pull may have just replaced this very
+    # script. Bash goes on with the copy it already read, so the old deploy
+    # logic would build the new source; start once more with the new script.
+    if [ "$DRY" = 0 ] && [ -z "${WICK_DEPLOY_REEXEC:-}" ] && [ -n "$SELF_SUM" ] && \
+       [ "$SELF" = "$(readlink -f "$SRC/scripts/deploy-from-source.sh" 2>/dev/null)" ] && \
+       [ "$(cksum <"$SELF" 2>/dev/null)" != "$SELF_SUM" ]; then
+      say "the pull updated this script — restarting with the new version"
+      WICK_DEPLOY_REEXEC=1 exec bash "$SELF" "${ORIG_ARGS[@]}"
+    fi
     echo "   building $(git -C "$SRC" log -1 --format='%h %s' 2>/dev/null)"
   elif [ "$PULL" = 0 ] && [ -e "$SRC/.git" ]; then
     # Locked by hand: whatever is checked out (and edited) in --src is what gets built.
