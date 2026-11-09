@@ -3804,19 +3804,15 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Unlock()
 		s.dropLiveReply(sessionKey, "")
 
-	case event.Compaction, event.Notice:
-		// Something happened TO the session rather than in the reply. The
-		// web UI has a row for it; a thread has nothing unless we post it,
-		// so /compact asked for from Slack would otherwise finish in
-		// silence. Posted as its own small message, not folded into the
-		// reply buffer: the turn's text belongs to the agent.
+	case event.Notice:
+		// wick's own notice about the session, not part of the reply.
+		// Posted as its own small message, not folded into the reply
+		// buffer: the turn's text belongs to the agent. A compaction
+		// boundary is deliberately not posted (see SystemNoticeText).
 		if text, ok := agentchannels.SystemNoticeText(ev); ok {
-			if ev.Type == event.Notice {
-				// wick's notice can quote a teammate's reply: plain text,
-				// never a <!channel> or <@U…> ping or a link.
-				text = escapeMrkdwn(text)
-			}
-			s.postSystemNotice(sessionKey, text)
+			// wick's notice can quote a teammate's reply: plain text,
+			// never a <!channel> or <@U…> ping or a link.
+			s.postSystemNotice(sessionKey, escapeMrkdwn(text))
 		}
 
 	case event.Done:
@@ -3953,8 +3949,8 @@ func escapeMrkdwn(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
-// postSystemNotice posts a session-level notice — a compaction boundary
-// today — into the thread the session is bound to.
+// postSystemNotice posts a session-level notice from wick into the thread
+// the session is bound to.
 //
 // It goes out as a muted context block, the same weight the web UI gives
 // these: visible, but plainly not the agent talking. And it is posted the
@@ -3964,8 +3960,8 @@ func escapeMrkdwn(s string) string {
 //
 // Posting does cost the loading bubble (Slack clears the status on any
 // message in the thread), but the status ticker re-asserts it within a
-// tick while the turn is still running, so a mid-turn auto-compaction
-// does not leave the thread looking finished.
+// tick while the turn is still running, so a mid-turn notice does not
+// leave the thread looking finished.
 //
 // No turn, no thread, no API: a session this instance never opened a
 // thread for belongs to another channel or to the web UI, and has nowhere

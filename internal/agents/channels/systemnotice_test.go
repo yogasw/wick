@@ -6,40 +6,24 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 )
 
-func TestSystemNoticeTextCompaction(t *testing.T) {
-	got, ok := SystemNoticeText(event.AgentEvent{
-		Type: event.Compaction,
-		Compaction: &event.CompactionInfo{
-			Trigger: "manual", PreTokens: 342500, PostTokens: 12500,
-		},
-	})
-	if !ok {
-		t.Fatal("a compaction boundary must be surfaced to channels")
-	}
-	want := "Context compacted (manual) — 342.5k → 12.5k tokens"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+// A compaction boundary is context-window bookkeeping: it shows in the web
+// UI, never as a line in a chat thread, whatever triggered it.
+func TestSystemNoticeTextSkipsCompaction(t *testing.T) {
+	for _, ev := range []event.AgentEvent{
+		{Type: event.Compaction, Compaction: &event.CompactionInfo{Trigger: "manual", PreTokens: 342500, PostTokens: 12500}},
+		{Type: event.Compaction, Compaction: &event.CompactionInfo{PreTokens: 180000, PostTokens: 9000}},
+		{Type: event.Compaction},
+	} {
+		if text, ok := SystemNoticeText(ev); ok {
+			t.Errorf("compaction produced a notice %q; it must stay out of chat channels", text)
+		}
 	}
 }
 
-// The trigger is only named for /compact, so an unnamed one is the window
-// limit — which is the case a reader most needs told apart from a manual one.
-func TestSystemNoticeTextCompactionDefaultsToAuto(t *testing.T) {
-	got, _ := SystemNoticeText(event.AgentEvent{
-		Type:       event.Compaction,
-		Compaction: &event.CompactionInfo{PreTokens: 180000, PostTokens: 9000},
-	})
-	want := "Context compacted (auto) — 180.0k → 9.0k tokens"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// A Compaction with no payload says nothing worth posting; a notice built
-// from zeros would read as a real compaction of nothing.
-func TestSystemNoticeTextCompactionWithoutPayload(t *testing.T) {
-	if _, ok := SystemNoticeText(event.AgentEvent{Type: event.Compaction}); ok {
-		t.Fatal("a compaction with no metadata must not produce a notice")
+func TestSystemNoticeTextNotice(t *testing.T) {
+	got, ok := SystemNoticeText(event.AgentEvent{Type: event.Notice, Text: "teammate replied"})
+	if !ok || got != "teammate replied" {
+		t.Errorf("got %q, %v; want the notice text", got, ok)
 	}
 }
 
