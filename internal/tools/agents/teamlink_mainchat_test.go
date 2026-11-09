@@ -259,3 +259,31 @@ func TestTeamChatHealsMissingProject(t *testing.T) {
 		t.Fatalf("new chat project = %q, want p1", got.Meta.ProjectID)
 	}
 }
+
+// A new chat is titled like a fresh chat of the agent, never with the
+// title the agent gave its main chat after some case.
+func TestTeamNewChatIgnoresMainTitle(t *testing.T) {
+	withTeamWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	p := seedTeamAgent(t, "u1", "atraxa", "p1")
+	seedAgentSession(t, p, "main-1", true)
+	main, ok := globalMgr.Registry().Session("main-1")
+	if !ok {
+		t.Fatal("main chat missing")
+	}
+	main.Meta.Label = "client A: some case"
+	main.Meta.TitleCustom = true
+	if err := session.SaveMeta(globalLayout, "main-1", main.Meta); err != nil {
+		t.Fatal(err)
+	}
+	_ = globalMgr.RefreshSession("main-1")
+	peer := teamlink.Peer{ID: p.ID, OwnerID: "u1", Handle: p.Handle}
+	id, err := poolTurns{}.NewChat(context.Background(), peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := globalMgr.Registry().Session(id)
+	if want := agentChatLabel("p1", p.Handle); got.Meta.Label != want || got.Meta.Label == "client A: some case" {
+		t.Fatalf("new chat label = %q, want %q", got.Meta.Label, want)
+	}
+}

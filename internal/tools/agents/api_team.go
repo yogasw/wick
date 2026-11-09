@@ -1963,15 +1963,10 @@ func createAgentChat(ctx context.Context, actor string, p entity.AgentPersona, m
 		prov, modelID = key, ""
 	}
 	presetName := "default"
-	label := p.Handle
+	label := agentChatLabel(projectID, p.Handle)
 	if projectID != "" {
-		if proj, ok := globalMgr.Registry().Project(projectID); ok {
-			if proj.Meta.Defaults.Preset != "" {
-				presetName = proj.Meta.Defaults.Preset
-			}
-			if proj.Meta.Name != "" {
-				label = proj.Meta.Name
-			}
+		if proj, ok := globalMgr.Registry().Project(projectID); ok && proj.Meta.Defaults.Preset != "" {
+			presetName = proj.Meta.Defaults.Preset
 		}
 	}
 	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
@@ -2010,6 +2005,18 @@ func createAgentChat(ctx context.Context, actor string, p entity.AgentPersona, m
 		}
 	}
 	return id, nil
+}
+
+// agentChatLabel is the title an agent's chat opens with: its project's
+// name, else its handle. Never another chat's title, which the agent may
+// have retitled after the case it was working on.
+func agentChatLabel(projectID, handle string) string {
+	if projectID != "" {
+		if proj, ok := globalMgr.Registry().Project(projectID); ok && proj.Meta.Name != "" {
+			return proj.Meta.Name
+		}
+	}
+	return handle
 }
 
 // projectHasProvider reports whether projectID names a default provider.

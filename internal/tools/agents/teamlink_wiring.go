@@ -1181,9 +1181,11 @@ func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, erro
 			}
 		}
 	}
-	// Titled like the main chat, so it reads as the agent's in every list.
+	// Titled like a fresh main chat, so it reads as the agent's in every
+	// list — not with the main chat's current title, which the agent may
+	// have set after a case and would make the new chat look like that one.
 	if sess, ok := globalMgr.Registry().Session(id); ok {
-		sess.Meta.Label = main.Meta.Label
+		sess.Meta.Label = agentChatLabel(projectID, agent.Handle)
 		sess.Meta.TitleCustom = true
 		if err := session.SaveMeta(globalLayout, id, sess.Meta); err == nil {
 			_ = globalMgr.RefreshSession(id)
