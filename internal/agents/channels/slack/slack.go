@@ -145,6 +145,11 @@ type turn struct {
 	// closing on a tool or a bare [silent] posts nothing instead of the
 	// narration it wrote before its last tools.
 	postedInThread bool
+	// untyped is set when the running turn was not started by a message
+	// in this thread: a teammate's task or result, a schedule, the web
+	// UI (ensureTurn, reopenTurn). Nobody here waits on its narration,
+	// so the thread gets only the text after its last tool call.
+	untyped bool
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -656,7 +661,7 @@ func (s *Channel) ensureTurn(sessionKey string) *turn {
 	}
 	t := &turn{
 		channelID: b.ChatID, threadTS: threadTS,
-		running: true, lastActivity: time.Now(),
+		running: true, lastActivity: time.Now(), untyped: true,
 	}
 	s.turns[sessionKey] = t
 	log.Info().Str("channel", "slack").Str("session", sessionKey).
@@ -3076,12 +3081,13 @@ func (t *turn) cutSegment() {
 // replyText is the turn's reply: the text after its last tool call, or
 // the last non-empty text before it when the turn ended on a tool and
 // did not already post into the thread through a tool (postedInThread).
+// An untyped turn has no fallback: its earlier text is narration.
 // Caller holds s.mu.
 func (t *turn) replyText() string {
 	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
 		return seg
 	}
-	if t.postedInThread {
+	if t.postedInThread || t.untyped {
 		return ""
 	}
 	return t.lastSeg
@@ -3681,6 +3687,7 @@ func (s *Channel) reopenTurn(sessionKey string) {
 		return
 	}
 	t.running = true
+	t.untyped = true
 	t.lastActivity = time.Now()
 	t.staleShown = false
 	t.statusLabel = ""

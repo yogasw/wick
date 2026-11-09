@@ -99,3 +99,34 @@ func TestReplyTextFallbackWithoutThreadPost(t *testing.T) {
 		}
 	}
 }
+
+// A turn nobody typed in the thread (a teammate's task waking the agent)
+// that closes on a lone [silent] posts nothing: the line it wrote before
+// its last tools is narration, not an answer.
+func TestReplyTextUntypedTurnHasNoFallback(t *testing.T) {
+	c := &Channel{turns: map[string]*turn{"slack-1": {channelID: "C01TESTCHAN", threadTS: "1.1"}}}
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.TextDelta, Text: "Now the docs."})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolUse, ToolName: "Edit"})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolResult, ToolName: "Edit"})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.TextDelta, Text: "\n\n[silent]"})
+
+	c.mu.Lock()
+	tr := c.turns["slack-1"]
+	untyped, got := tr.untyped, tr.replyText()
+	c.mu.Unlock()
+	if !untyped {
+		t.Fatal("reopened turn not marked untyped")
+	}
+	if got != "" {
+		t.Fatalf("replyText = %q, want nothing", got)
+	}
+
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.ToolUse, ToolName: "Bash"})
+	c.OnAgentEvent("slack-1", event.AgentEvent{Type: event.TextDelta, Text: "final answer"})
+	c.mu.Lock()
+	got = c.turns["slack-1"].replyText()
+	c.mu.Unlock()
+	if got != "final answer" {
+		t.Fatalf("replyText = %q, want the closing text", got)
+	}
+}
