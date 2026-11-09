@@ -31,7 +31,10 @@ import (
 // (ApplySwitch), and the pool stops the idle process at the chat's next
 // message and respawns it on the new provider (maybeFollowDefault). A
 // turn in flight finishes on the provider it started on.
-func init() { provider.AgentDefault = agentDefaultFor }
+func init() {
+	provider.AgentDefault = agentDefaultFor
+	provider.SessionDefault = sessionDefaultFor
+}
 
 // agentDefaultFor is provider.AgentDefault: a chat of an agent that locks
 // its provider runs on the agent's default; any other chat picks its own.
@@ -54,7 +57,9 @@ func agentDefaultFor(ctx context.Context, sessionID string) (string, string, boo
 				sess = fresh
 			}
 		}
-		if _, a, ok := sessionAgentEntry(sess); ok && onFailover(a) {
+		// A pinned chat (wick_session_model, session_init) keeps its pair
+		// until the pin is cleared; a stand-in belongs to its failover.
+		if _, a, ok := sessionAgentEntry(sess); ok && (a.Pinned || onFailover(a)) {
 			return "", "", false
 		}
 	} else {
@@ -62,6 +67,34 @@ func agentDefaultFor(ctx context.Context, sessionID string) (string, string, boo
 	}
 	prov, model := agentDefaultOf(p)
 	return prov, model, prov != ""
+}
+
+// sessionDefaultFor is provider.SessionDefault: where a chat goes when
+// its pin is cleared. Its Team agent's default, locked or not, else its
+// project's default; none = it stays put.
+func sessionDefaultFor(ctx context.Context, sessionID string) (string, string, bool) {
+	if globalMgr == nil {
+		return "", "", false
+	}
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok {
+		return "", "", false
+	}
+	if sess.Meta.AgentID != "" && globalTeam != nil {
+		if p, err := globalTeam.Get(ctx, sess.Meta.AgentID); err == nil {
+			if prov, model := agentDefaultOf(p); prov != "" {
+				return prov, model, true
+			}
+		}
+	}
+	if sess.Meta.ProjectID == "" {
+		return "", "", false
+	}
+	proj, ok := globalMgr.Registry().Project(sess.Meta.ProjectID)
+	if !ok || strings.TrimSpace(proj.Meta.Defaults.Provider) == "" {
+		return "", "", false
+	}
+	return normalizeProviderKey(strings.TrimSpace(proj.Meta.Defaults.Provider)), strings.TrimSpace(proj.Meta.Defaults.Model), true
 }
 
 // agentDefaultOf is agent p's default provider ("type/name") and model,
@@ -119,6 +152,8 @@ func followAgentDefault(ctx context.Context, p entity.AgentPersona, oldProv stri
 			home, homeModel = normalizeProviderKey(a.Failover.HomeProvider), a.Failover.HomeModelID
 		}
 		switch {
+		case a.Pinned:
+			continue // pinned for this chat: the pin wins until cleared
 		case forced && onFailover(a):
 			continue // on a stand-in: the failover owns it
 		case home == prov && homeModel == model:

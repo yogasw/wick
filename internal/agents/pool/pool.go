@@ -2255,6 +2255,13 @@ func (p *Pool) SetNodeProvider(sessionID, agentName, providerKey, modelID string
 	return session.SetNodeProvider(p.cfg.Layout, sessionID, agentName, providerKey, modelID)
 }
 
+// PinSession pins sessionID's primary agent to providerKey + modelID
+// (provider.PinSession): the agent's default no longer moves it until
+// the pin is cleared. Takes effect at the next spawn.
+func (p *Pool) PinSession(ctx context.Context, sessionID, providerKey, modelID string) (provider.PinResult, error) {
+	return provider.PinSession(ctx, p.cfg.Layout, sessionID, "", providerKey, modelID, provider.SwitchOptions{Source: "workflow"})
+}
+
 // SetModelID pins a model id on the session's agent entry (creating it if
 // missing) so the next spawn runs that model. Empty = unset (the
 // provider's own default). Used by a workflow agent node with a model.

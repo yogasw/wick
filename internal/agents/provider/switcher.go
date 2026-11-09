@@ -48,6 +48,10 @@ type SwitchOptions struct {
 	// still needs to persist + kill so the next spawn picks it up) even
 	// though the provider tag itself is unchanged.
 	ModelID string
+	// Pin, when set, writes the session pin (AgentEntry.Pinned) in the
+	// same agents.json write as the switch, so the agent's default never
+	// sees the new provider unpinned (or the old one still pinned).
+	Pin *bool
 	// Failover marks an automatic switch along the home's failover chain
 	// (PickTarget): the turn is a KindProviderFailover notice, the home is
 	// kept and the run's Tried/Hops advance. false = a manual switch,
@@ -335,6 +339,9 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 				// to their binary via --model. Empty clears any stale pin (so a
 				// switch back doesn't resurrect a foreign instance's choice).
 				loaded.Agents[i].ModelID = opts.ModelID
+				if opts.Pin != nil {
+					loaded.Agents[i].Pinned = *opts.Pin
+				}
 				switch {
 				case opts.Failover:
 					loaded.Agents[i].Failover = advanceFailover(a, fromKey, newKey, opts.MsgKey, now)

@@ -73,7 +73,7 @@ var PlatformTools = []string{
 	"wick_schedule_message", "todo", "ask_user", "wick_set_title",
 	"wick_session_info", "wick_context", "wick_usage", "wick_compact",
 	"wick_cli_token", "wick_session_workspace", "wick_slack_listen",
-	"wick_session_link",
+	"wick_session_link", "wick_session_model",
 }
 
 // IsPlatformTool reports whether name is one of PlatformTools.

@@ -50,6 +50,12 @@ type AgentEntry struct {
 	// (empty when none is asked for), so a later switch back doesn't
 	// resurrect a stale/foreign pin.
 	ModelID string `json:"model_id,omitempty"`
+	// Pinned marks Provider + ModelID as chosen for this one session
+	// (wick_session_model, a workflow's session_init): the agent's default
+	// no longer moves it, even when its Settings lock chats to the
+	// default, until the pin is cleared. Failover still runs, with the
+	// pinned pair as its home.
+	Pinned bool `json:"pinned,omitempty"`
 	// Failover is the agent's failover bookkeeping: the HOME provider the
 	// session belongs on and what an automatic failover already tried.
 	// nil on entries written before failover existed, and on agents that
@@ -365,6 +371,35 @@ func (a *AgentEntry) syncHomeModel() {
 	if a.Failover != nil && a.Failover.HomeProvider != "" && a.Failover.HomeProvider == a.Provider {
 		a.Failover.HomeModelID = a.ModelID
 	}
+}
+
+// SetPinned sets or clears the session pin on the named entry. No-op
+// when the entry does not exist: a pin belongs to an agent with a
+// provider.
+func SetPinned(layout config.Layout, id, name string, pinned bool) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
+	return updateAgent(layout, id, name, nil, func(a *AgentEntry) bool {
+		if a.Pinned == pinned {
+			return false
+		}
+		a.Pinned = pinned
+		return true
+	})
+}
+
+// PrimaryAgentName is the session's main agent: Meta.ActiveAgent, else
+// the first entry, else "default" (the name the pool and channels give a
+// session's first agent).
+func PrimaryAgentName(sess Session) string {
+	if sess.Meta.ActiveAgent != "" {
+		return sess.Meta.ActiveAgent
+	}
+	if len(sess.Agents) > 0 && sess.Agents[0].Name != "" {
+		return sess.Agents[0].Name
+	}
+	return "default"
 }
 
 // newIdleAgent is the entry the creating setters add for an unknown name.

@@ -451,6 +451,8 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSlackListen(w, r, hreq, rsp, h.layout, h.threadListen, args)
 	case "wick_session_link":
 		handlers.WickSessionLink(w, r, hreq, rsp, h.layout, h.refreshSession, args)
+	case "wick_session_model":
+		handlers.WickSessionModel(w, r, hreq, rsp, h.layout, args)
 	// Tickets, notes and the source-repo selection are connectors
 	// (internal/connectors/{tickets,notes,source}), not meta-tools: a
 	// connector is taggable and auditable per user, which a hard-coded
