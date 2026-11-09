@@ -3,14 +3,14 @@
 package processctl
 
 import (
+	"github.com/yogasw/wick/pkg/safeexec"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
 
 func TestQueryProcessSurvivesReplacedBinary(t *testing.T) {
-	src, err := exec.LookPath("sleep")
+	src, err := safeexec.LookPath("sleep")
 	if err != nil {
 		t.Skip("no sleep binary")
 	}
@@ -22,7 +22,7 @@ func TestQueryProcessSurvivesReplacedBinary(t *testing.T) {
 	if err := os.WriteFile(bin, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "30")
+	cmd := safeexec.Command(bin, "30")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

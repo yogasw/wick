@@ -4,8 +4,8 @@ package daemon
 
 import (
 	"context"
+	"github.com/yogasw/wick/pkg/safeexec"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,7 +65,7 @@ func TestRenderUnit_UsesAppName(t *testing.T) {
 // The Termux boot script restarts a daemon whose health keeps failing and
 // leaves a crash report behind.
 func TestTermuxBootScriptRestartsAndReports(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
+	if _, err := safeexec.LookPath("sh"); err != nil {
 		t.Skip("no sh")
 	}
 	dir := t.TempDir()
@@ -86,7 +86,7 @@ func TestTermuxBootScriptRestartsAndReports(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", script)
+	cmd := safeexec.CommandContext(ctx, "sh", script)
 	cmd.Env = append(os.Environ(), "WICK_WATCHDOG_INTERVAL=0.2")
 	_ = cmd.Run()
 
