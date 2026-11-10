@@ -1596,7 +1596,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		// contributes no model (it is a bare instance key).
 		prov := p.cfg.DefaultProvider
 		provModel := ""
-		if sess.Meta.ProjectID != "" {
+		// A pin written before this agent name existed (session_init pins
+		// before the first send, and channels and workflow nodes spawn
+		// under different names) carries over to the new entry.
+		pinned := false
+		if !hasEntry {
+			for _, a := range sess.Agents {
+				if a.Pinned && strings.TrimSpace(a.Provider) != "" {
+					prov, provModel, pinned = a.Provider, a.ModelID, true
+					break
+				}
+			}
+		}
+		if !pinned && sess.Meta.ProjectID != "" {
 			if proj, perr := project.Load(p.cfg.Layout, sess.Meta.ProjectID); perr == nil && proj.Meta.Defaults.Provider != "" {
 				prov = proj.Meta.Defaults.Provider
 				provModel = proj.Meta.Defaults.Model
@@ -1616,6 +1628,11 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		// provModel must not blank an existing pin.
 		if provModel != "" {
 			if err := session.SetModelIDIfEmpty(p.cfg.Layout, sessionID, agentName, provModel); err != nil {
+				return err
+			}
+		}
+		if pinned {
+			if err := session.SetPinned(p.cfg.Layout, sessionID, agentName, true); err != nil {
 				return err
 			}
 		}

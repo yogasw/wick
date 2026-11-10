@@ -390,8 +390,8 @@ func SetPinned(layout config.Layout, id, name string, pinned bool) error {
 }
 
 // PrimaryAgentName is the session's main agent: Meta.ActiveAgent, else
-// the first entry, else "default" (the name the pool and channels give a
-// session's first agent).
+// the first entry, else "main" (the name channels and the UI give a
+// session's first agent; the pool carries a pin over to other names).
 func PrimaryAgentName(sess Session) string {
 	if sess.Meta.ActiveAgent != "" {
 		return sess.Meta.ActiveAgent
@@ -399,7 +399,7 @@ func PrimaryAgentName(sess Session) string {
 	if len(sess.Agents) > 0 && sess.Agents[0].Name != "" {
 		return sess.Agents[0].Name
 	}
-	return "default"
+	return "main"
 }
 
 // newIdleAgent is the entry the creating setters add for an unknown name.

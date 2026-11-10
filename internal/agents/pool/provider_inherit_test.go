@@ -289,3 +289,55 @@ func TestResolvesAgainstTheRealOnDiskShape(t *testing.T) {
 		t.Fatal("resolved to the blank-named entry's provider")
 	}
 }
+
+// A pin written before the first send (a workflow's session_init) sits on
+// whatever name the pinner guessed; the channel then spawns under its own
+// name. The new entry must take the pin, not the project default.
+func TestSpawnCarriesPinToNewAgentName(t *testing.T) {
+	sp := &scriptedSpawner{Lines: okLines()}
+	p, layout := newPool(t, 2, sp)
+
+	if _, err := project.Create(layout, project.CreateOptions{
+		ID:       "proj-1",
+		Name:     "Proj",
+		Defaults: project.Defaults{Provider: "wick/x", Model: "small"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{
+		ID:        "S1",
+		Origin:    session.OriginUI,
+		ProjectID: "proj-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.AddAgent(layout, "S1", "default", "wick/y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetModelID(layout, "S1", "default", "big"); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetPinned(layout, "S1", "default", true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.Send(context.Background(), "S1", "main", "ui", "user", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return p.Active() == 0 }, 2*time.Second)
+
+	sess, err := session.Load(layout, "S1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range sess.Agents {
+		if a.Name != "main" {
+			continue
+		}
+		if a.Provider != "wick/y" || a.ModelID != "big" || !a.Pinned {
+			t.Fatalf("main = %s %s pinned=%v, want wick/y big pinned", a.Provider, a.ModelID, a.Pinned)
+		}
+		return
+	}
+	t.Fatal("no main entry after the send")
+}

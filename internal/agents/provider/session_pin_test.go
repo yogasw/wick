@@ -36,7 +36,7 @@ func TestPinSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		a := pinEntry(t, layout, "s-new")
-		if a.Name != "default" || a.Provider != "claude/alt" || a.ModelID != "big" || !a.Pinned {
+		if a.Name != "main" || a.Provider != "claude/alt" || a.ModelID != "big" || !a.Pinned {
 			t.Fatalf("entry = %+v", a)
 		}
 		if a.Failover == nil || a.Failover.HomeProvider != "claude/alt" || a.Failover.HomeModelID != "big" {
