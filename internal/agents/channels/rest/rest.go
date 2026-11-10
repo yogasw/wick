@@ -229,6 +229,9 @@ func (c *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	switch ev.Type {
 	case event.TextDelta:
 		tn.buf.WriteString(ev.Text)
+	case event.TextReplace:
+		tn.buf.Reset()
+		tn.buf.WriteString(ev.Text)
 	case event.Warning:
 		// A failover took the turn elsewhere: only the next provider's
 		// reply is the answer.

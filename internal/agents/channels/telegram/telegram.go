@@ -710,6 +710,15 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		}
 		t.mu.Unlock()
 
+	case event.TextReplace:
+		// The reply so far was taken back (a Stop hook refused it).
+		t.mu.Lock()
+		if tn := t.turns[sessionID]; tn != nil {
+			tn.buf.Reset()
+			tn.buf.WriteString(ev.Text)
+		}
+		t.mu.Unlock()
+
 	case event.Warning:
 		// A failover took the turn elsewhere: the failed provider's text
 		// is not sent, only the next provider's reply.

@@ -754,6 +754,21 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		return
 	}
 
+	// The reply so far was taken back (a Stop hook refused the text the
+	// turn ended on). Channels already shown it get the replace and stay
+	// shown, so the turn's Done still reaches them; text still held here
+	// goes, and the silent verdict waits for what follows.
+	if ev.Type == event.TextReplace && !(ts.decided && !ts.silent) {
+		ts.buf.Reset()
+		ts.pending = withoutText(ts.pending)
+		ts.decided, ts.silent = false, false
+		if ev.Text == "" {
+			r.mu.Unlock()
+			return
+		}
+		ev.Type = event.TextDelta
+	}
+
 	terminal := ev.Type == event.Done || ev.Type == event.Error
 
 	// Pre-decision: accumulate text, hold events, decide when we can.

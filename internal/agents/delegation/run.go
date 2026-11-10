@@ -1008,6 +1008,9 @@ func (s *Service) await(
 			switch ev.Type {
 			case event.TextDelta:
 				text.WriteString(ev.Text)
+			case event.TextReplace:
+				text.Reset()
+				text.WriteString(ev.Text)
 			case event.Warning:
 				// The failed provider's text never reaches the result;
 				// the next provider's answer follows on this stream.

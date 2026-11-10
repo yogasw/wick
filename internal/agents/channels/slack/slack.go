@@ -3753,6 +3753,26 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		// real change, so this is cheap on every delta.
 		s.setStatusLabel(sessionKey, statusLabelThinking)
 
+	case event.TextReplace:
+		// The reply so far was taken back (a Stop hook refused the text
+		// the turn ended on): only what follows is posted. A tool post
+		// into the thread already made stays counted.
+		s.mu.Lock()
+		t := s.turns[sessionKey]
+		if t == nil {
+			s.mu.Unlock()
+			return
+		}
+		posted := t.postedInThread
+		t.resetText()
+		t.postedInThread = posted
+		t.buf.WriteString(ev.Text)
+		live := t.liveTS != ""
+		s.mu.Unlock()
+		if live {
+			s.dropLiveReply(sessionKey, ev.Text)
+		}
+
 	case event.Thinking:
 		// Reasoning delta → "Thinking" phase (animated banner shows the dots).
 		s.setStatusLabel(sessionKey, statusLabelThinking)
