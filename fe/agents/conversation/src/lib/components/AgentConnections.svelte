@@ -20,7 +20,7 @@
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth, type SlackSecretKey,
   } from "../api/team.js";
   import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, showRotation, rotationLine, withoutCleared, botTakenByChannel, type TokenDraft, type BotTakenByChannel, TOKEN_HINTS } from "../slackConnection.js";
-  import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
+  import { getAgentSlackInstant, disableAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
   import { CONN_TABS, CONN_MARK, CONN_MARK_LABEL, connState, defaultConnTab, type ConnTab, type ConnState } from "../connectionTabs.js";
 
   /* tab: the `conn=` from the URL; null = the default (first connected,
@@ -191,6 +191,20 @@
     }
   }
 
+  /* Custom is blocked while Instant answers: turning it off here opens the
+     wizard without a trip back to the Instant card. */
+  async function turnOffInstant() {
+    busy = true;
+    try {
+      await runApi(disableAgentSlackInstant(base, agent.id));
+      instant = { ...(instant as AgentSlackInstantStatus), enabled: false, bound_channels: [], warnings: [] };
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   $effect(() => {
     void agent.id;
     picked = null;
@@ -253,6 +267,8 @@
       <SlackInstantCard {base} {agent} bind:status={instant} customConnected={!!status?.connected} />
     {:else if instant?.enabled}
       <p class="mt-3 text-xs text-neg-400" data-testid="custom-exclusive">@{agent.handle} answers in Slack as an Instant agent. Turn off Instant before connecting its own app — an agent answers through one Slack app at a time.</p>
+      <div class="mt-2"><Button size="sm" variant="secondary" disabled={busy} onclick={turnOffInstant}>Turn off Instant</Button></div>
+      {#if error}<p class="mt-1 text-xs text-neg-400" data-testid="instant-off-error">{error}</p>{/if}
     {:else}
     <p class="mt-1 {muted}">One Slack app per agent: its name and photo are the agent's own.</p>
 
