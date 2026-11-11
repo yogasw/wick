@@ -1859,7 +1859,8 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				// listen like a person's reply: it is often part of the
 				// information (a form, a status) or an answer meant for this
 				// agent without a mention, so the agent hears it and decides.
-				// queueListenMessage caps turns that only bots start.
+				// queueListenMessage caps turns that only bots start; an
+				// ignored bot or a bare notification never gets that far.
 				if ev.ThreadTimeStamp != "" && ev.ThreadTimeStamp != ev.TimeStamp {
 					sid := s.sessionKey(ev.ThreadTimeStamp)
 					if s.listening(sid, ev.Channel) {
@@ -1867,7 +1868,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 						if ev.Message != nil {
 							files = ev.Message.Files
 						}
-						s.queueListenMessage(ctx, sid, ev, files)
+						if !listenIgnoresBot(s.snapshot(), ev, files) {
+							s.queueListenMessage(ctx, sid, ev, files)
+						}
 					}
 				}
 				return

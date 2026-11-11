@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -115,4 +116,25 @@ func TestIgnoredBotNeverDispatches(t *testing.T) {
 	s.handleMessage(context.Background(), &slackevents.MessageEvent{
 		User: "UOTHER", BotID: "BOTHER", Text: "hi", Channel: "D1", ChannelType: "im", TimeStamp: "1.0",
 	}, nil)
+}
+
+func TestListenIgnoresBot(t *testing.T) {
+	cfg := agentconfig.SlackChannelConfig{ListenIgnoredBots: `[{"id":"BNOTIFY"}]`}
+	cases := []struct {
+		name  string
+		ev    slackevents.MessageEvent
+		files []slackgo.File
+		want  bool
+	}{
+		{"listed bot id", slackevents.MessageEvent{BotID: "BNOTIFY", Text: "ticket closed"}, nil, true},
+		{"listed bot user", slackevents.MessageEvent{User: "BNOTIFY", BotID: "BX", Text: "hi"}, nil, true},
+		{"attachment-only notification", slackevents.MessageEvent{BotID: "BOTHER", Text: "  "}, nil, true},
+		{"bot with text", slackevents.MessageEvent{BotID: "BOTHER", Text: "form submitted"}, nil, false},
+		{"bot with only a file", slackevents.MessageEvent{BotID: "BOTHER"}, []slackgo.File{{ID: "F1"}}, false},
+	}
+	for _, c := range cases {
+		if got := listenIgnoresBot(cfg, &c.ev, c.files); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
 }
