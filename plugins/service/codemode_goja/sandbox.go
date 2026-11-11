@@ -358,7 +358,7 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 		if !res.OK {
 			throw(toolID + ": " + res.Error)
 		}
-		return decode(res.Result)
+		return jsValue(vm, decode(res.Result))
 	}
 
 	w := vm.NewObject()
@@ -366,7 +366,7 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 	_ = w.Set("tool", func(toolID string) any {
 		return func(params any, opts map[string]any) any { return call(toolID, params, opts) }
 	})
-	_ = w.Set("callMany", func(list []map[string]any) []map[string]any {
+	_ = w.Set("callMany", func(list []map[string]any) goja.Value {
 		out := make([]map[string]any, len(list))
 		var wg sync.WaitGroup
 		for i, c := range list {
@@ -390,7 +390,7 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 			}(i, tid, c["params"], timeoutOpt(c))
 		}
 		wg.Wait()
-		return out
+		return jsValue(vm, out)
 	})
 	_ = w.Set("file", rn.fileAPI(ctx, vm, throw, files))
 	if err := vm.Set("wick", w); err != nil {
@@ -418,7 +418,34 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 	if in == nil {
 		in = map[string]any{}
 	}
-	return vm.Set("input", in)
+	return vm.Set("input", jsValue(vm, in))
+}
+
+// jsValue turns a decoded JSON value into native JS objects and arrays.
+// vm.ToValue would wrap Go maps and slices instead, and a nested wrapped
+// slice cannot grow: arr.push() on result.items silently kept the old length.
+func jsValue(vm *goja.Runtime, v any) goja.Value {
+	if v == nil {
+		return goja.Null()
+	}
+	switch v.(type) {
+	case map[string]any, []any, []map[string]any:
+	default:
+		return vm.ToValue(v)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return vm.ToValue(v)
+	}
+	parse, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+	if !ok {
+		return vm.ToValue(v)
+	}
+	out, err := parse(goja.Undefined(), vm.ToValue(string(b)))
+	if err != nil {
+		return vm.ToValue(v)
+	}
+	return out
 }
 
 func decode(raw json.RawMessage) any {
@@ -436,7 +463,7 @@ func decode(raw json.RawMessage) any {
 // relative to the project's codemode/ folder. Every op is a file event that
 // wick checks and performs; nothing here opens a file.
 func (rn *run) fileAPI(ctx context.Context, vm *goja.Runtime, throw func(string), files bool) *goja.Object {
-	do := func(op, path, data string) any {
+	do := func(op, path, data string) goja.Value {
 		if !files {
 			throw("wick.file." + op + ": this wick does not support wick.file yet (update wick)")
 		}
@@ -444,7 +471,7 @@ func (rn *run) fileAPI(ctx context.Context, vm *goja.Runtime, throw func(string)
 		if !res.OK {
 			throw("wick.file." + op + " " + path + ": " + res.Error)
 		}
-		return decode(res.Result)
+		return jsValue(vm, decode(res.Result))
 	}
 	text := func(op string, v goja.Value) string {
 		if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
@@ -453,15 +480,15 @@ func (rn *run) fileAPI(ctx context.Context, vm *goja.Runtime, throw func(string)
 		return v.String()
 	}
 	f := vm.NewObject()
-	_ = f.Set("read", func(path string) any { return do("read", path, "") })
-	_ = f.Set("write", func(path string, data goja.Value) any { return do("write", path, text("write", data)) })
-	_ = f.Set("readJSON", func(path string) any {
-		s, _ := do("read", path, "").(string)
+	_ = f.Set("read", func(path string) goja.Value { return do("read", path, "") })
+	_ = f.Set("write", func(path string, data goja.Value) goja.Value { return do("write", path, text("write", data)) })
+	_ = f.Set("readJSON", func(path string) goja.Value {
+		s, _ := do("read", path, "").Export().(string)
 		var v any
 		if err := json.Unmarshal([]byte(s), &v); err != nil {
 			throw("wick.file.readJSON " + path + ": not JSON: " + err.Error())
 		}
-		return v
+		return jsValue(vm, v)
 	})
 	_ = f.Set("writeJSON", func(path string, v goja.Value) any {
 		if v == nil || goja.IsUndefined(v) {
