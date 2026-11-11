@@ -112,3 +112,5 @@ vite.config.ts.timestamp-*
 # CodeGraph index — per-machine, rebuilt by `codegraph init`.
 .codegraph/
 .env*
+# Claude Code local settings (approved commands may hold credentials)
+.claude/settings.local.json
