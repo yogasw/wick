@@ -2231,6 +2231,10 @@ func (s *Channel) reactionThreadParent(channelID, itemTS string) (parentTS strin
 // greets the user instead of reacting to an empty turn.
 const pingFallbackText = "(The user greeted you with no message — greet them briefly and ask how you can help.)"
 
+// threadPingText stands in for an empty mention in a thread that already
+// holds messages: the mention points at the thread, not a greeting.
+const threadPingText = "(The user mentioned you with no message in a thread that already has messages — read the thread above, work out what they need from you and act on it; do not just greet.)"
+
 // listenEmptyText stands in for a heard reply that carries no text.
 const listenEmptyText = "(No text: only a bot card or attachments.)"
 
@@ -2813,6 +2817,17 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if hook := s.onSessionStart; hook != nil {
 			hook(sessionID, "slack", ctxText)
 		}
+		// A new session woken inside an existing thread (a reset, a provider
+		// failover) has never seen it: open with what was said so far, or an
+		// empty mention reads as a greeting.
+		if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS {
+			if block := s.threadHistory(sessionID, ev.Channel, threadTS, ev.TimeStamp); block != "" {
+				if userText == pingFallbackText {
+					userText = threadPingText
+				}
+				userText = block + "\n\n" + userText
+			}
+		}
 	} else if isListen && !dmMain {
 		// A listening turn always reads the thread, up to now: what was said
 		// before the reply AND during its delay (someone else's answer is
@@ -2829,6 +2844,9 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		// session gets buildSessionContext instead (thread metadata, not
 		// its messages) and no catch-up.
 		if block := s.threadCatchUp(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen); block != "" {
+			if userText == pingFallbackText {
+				userText = threadPingText
+			}
 			userText = block + "\n\n" + userText
 		}
 	}
