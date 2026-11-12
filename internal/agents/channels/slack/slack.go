@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 	slackgo "github.com/slack-go/slack"
@@ -150,6 +151,11 @@ type turn struct {
 	// UI (ensureTurn, reopenTurn). Nobody here waits on its narration,
 	// so the thread gets only the text after its last tool call.
 	untyped bool
+	// human is set when a person's mention or DM in this thread started
+	// the running turn (not a listen reply, a workflow brief or anything
+	// untyped). Its reply always posts, [silent] stripped wherever it
+	// sits, unless quiet: that person asked for no reply.
+	human, quiet bool
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -406,6 +412,9 @@ type Channel struct {
 	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
 	// heldFn records where a held reply stands for the web UI (SetHeldFn).
 	heldFn HeldFn
+	// replyHeldFn is told about a reply finalReply held: [silent] after
+	// real text in a turn nobody typed (SetReplyHeldFn).
+	replyHeldFn func(sessionID, text string)
 	// heardFn records each reply a listening thread hears (SetHeardFn).
 	heardFn HeldFn
 	// heardNames caches the display names heardName looked up (guarded by
@@ -2665,10 +2674,17 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp,
 		running: true, lastActivity: time.Now(), mentionFrom: mentionFrom,
 	}
+	t.human = !isListen
+	t.quiet = t.human && asksQuiet(routedText)
 	if old != nil {
 		t.carryOver(old)
 		if mentionFrom == "" && old.running {
 			t.mentionFrom = old.mentionFrom
+		}
+		if old.running && old.human {
+			// A listen reply joining a person's turn: that person still
+			// waits on the answer.
+			t.human, t.quiet = true, old.quiet || t.quiet
 		}
 		listenT.pendingMention = t.mentionFrom
 		// A new turn supersedes the old one: stop its status heartbeat so the
@@ -3114,6 +3130,87 @@ func (t *turn) replyText() string {
 	return t.lastSeg
 }
 
+// closingReply is what a turn that is not a person's own would post: the
+// text after its last tool call, else the last text before it (unless a
+// tool already wrote into the thread). Unlike replyText it ignores
+// untyped, so the held check sees the report an untyped turn wrote
+// before its last tools. Caller holds s.mu.
+func (t *turn) closingReply() string {
+	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
+		return seg
+	}
+	if t.postedInThread {
+		return ""
+	}
+	return t.lastSeg
+}
+
+// finalReply decides what the turn posts at its Done and what it holds.
+//
+// The registry already dropped a turn that OPENS with [silent], unless a
+// person started it (HumanTurn). Here:
+//   - a person's turn posts its reply, markers stripped, unless that
+//     person asked for no reply and the agent wrote [silent] anywhere;
+//   - any other turn that wrote [silent] after real text is ambiguous: a
+//     report (not a one-line narration) is held, neither posted nor
+//     lost, and a narration closing on [silent] posts nothing (6a14faef);
+//   - everything else is replyText, as before.
+//
+// Caller holds s.mu.
+func (t *turn) finalReply() (text, held string) {
+	// The text after the last tool is checked on its own too: the buffer
+	// joins it to the text before with no line break ("…done.[silent]").
+	full := t.buf.String()
+	marked := hasSilentMarker(full) || hasSilentMarker(full[t.segStart:])
+	if t.human {
+		if t.quiet && marked {
+			return "", ""
+		}
+		return t.replyText(), ""
+	}
+	if !marked {
+		return t.replyText(), ""
+	}
+	if c := strings.TrimSpace(stripSilentMarker(t.closingReply())); c != "" && !isNarration(c) {
+		return "", c
+	}
+	return "", ""
+}
+
+// HumanTurn reports whether sessionKey's running turn answers a person
+// who wrote in the thread, and whether that person asked for no reply.
+// The registry reads it before taking a leading [silent] as silent.
+func (s *Channel) HumanTurn(sessionKey string) (human, quiet bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.turns[sessionKey]
+	if t == nil || !t.running {
+		return false, false
+	}
+	return t.human, t.quiet
+}
+
+// quietAsk matches a person asking the agent not to answer in the thread.
+var quietAsk = regexp.MustCompile(`(?i)silent|diam aja|jangan (di)?balas|(ga|gak|nggak|ngga|tidak|tak) (usah|perlu) (di)?balas|don'?t reply|no reply`)
+
+// asksQuiet reports whether a person's message asks for no reply.
+func asksQuiet(text string) bool { return quietAsk.MatchString(text) }
+
+// hasSilentMarker reports whether text uses the [silent] marker anywhere
+// stripSilentMarker would take it out.
+func hasSilentMarker(text string) bool { return stripSilentMarker(text) != text }
+
+// narrationMaxLen is the longest single line still read as narration.
+const narrationMaxLen = 160
+
+// isNarration reports whether seg reads as an in-between line rather
+// than an answer: one short line. Several lines or a long line is an
+// answer, whatever tools ran after it.
+func isNarration(seg string) bool {
+	seg = strings.TrimSpace(stripSilentMarker(seg))
+	return !strings.Contains(seg, "\n") && utf8.RuneCountInString(seg) <= narrationMaxLen
+}
+
 // threadWriteOp matches a tool input that writes a Slack message: the
 // connector's send/update/upload ops or a raw chat.postMessage/update.
 var threadWriteOp = regexp.MustCompile(`(send_message|update_message|upload_file|chat\.postMessage|chat\.update)`)
@@ -3203,7 +3300,11 @@ var silentMarkerPrefix = regexp.MustCompile(`(?i)^\s*\[silent\]\s*`)
 // Only spaces/tabs are allowed before it so the paragraph break ahead of it
 // survives, and a marker mid-sentence is left alone — that one is the agent
 // talking ABOUT the marker, not using it.
-var silentMarkerLine = regexp.MustCompile(`(?im)^[ \t]*\[silent\][ \t]*`)
+var silentMarkerLine = regexp.MustCompile(`(?im)^[ \t]*[*_~]*\[silent\][*_~]*[ \t]*`)
+
+// silentMarkerEmph matches an emphasized marker (**[silent]**, _[silent]_)
+// anywhere: nobody bolds a word they are only talking about.
+var silentMarkerEmph = regexp.MustCompile(`(?i)[ \t]*[*_~]+\[silent\][*_~]+`)
 
 // stripSilentMarker removes [silent] markers from reply text.
 //
@@ -3222,7 +3323,8 @@ var silentMarkerLine = regexp.MustCompile(`(?im)^[ \t]*\[silent\][ \t]*`)
 // it rather than inventing separate rules for the two surfaces.
 func stripSilentMarker(text string) string {
 	out := silentMarkerPrefix.ReplaceAllString(text, "")
-	return silentMarkerLine.ReplaceAllString(out, "")
+	out = silentMarkerLine.ReplaceAllString(out, "")
+	return silentMarkerEmph.ReplaceAllString(out, "")
 }
 
 // flushLiveMessage posts (first call) or edits (subsequent calls) the live
@@ -3709,6 +3811,7 @@ func (s *Channel) reopenTurn(sessionKey string) {
 	}
 	t.running = true
 	t.untyped = true
+	t.human, t.quiet = false, false
 	t.lastActivity = time.Now()
 	t.staleShown = false
 	t.statusLabel = ""
@@ -3869,9 +3972,11 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.stopEditTicker(t)
 		defer s.clearWorking(sessionKey)
 		text = t.buf.String()
+		var held string
 		if !liveStreamText {
-			text = t.replyText()
+			text, held = t.finalReply()
 		}
+		heldFn := s.replyHeldFn
 		t.resetText()
 		t.hasStarted = false
 		t.running = false
@@ -3879,6 +3984,15 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		t.interim = agentchannels.InterimTurn{}
 		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
+		if held != "" {
+			// Neither posted nor dropped unseen: the session records it
+			// and someone decides (finalReply).
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).
+				Int("len", len(held)).Msg("slack: reply held, [silent] after text in a turn nobody typed")
+			if heldFn != nil {
+				go heldFn(sessionKey, held)
+			}
+		}
 		// The lead's in-between line while a teammate of the turn still
 		// works stays out of the thread: the banner says who works, the
 		// answer comes in a later turn. A live message that showed part

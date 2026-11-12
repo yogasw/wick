@@ -158,6 +158,29 @@ func (r *Registry) WasLastTurnSilent(sessionID string) bool {
 	return r.silentLast[sessionID]
 }
 
+// HumanTurnReporter is a channel that knows whether a session's running
+// turn answers a person who wrote on it (a mention, a DM) and whether
+// that person asked for no reply. Such a turn is not silenced by a
+// leading [silent] unless the person asked (quiet); the channel itself
+// strips the marker and decides the rest at the turn's end.
+type HumanTurnReporter interface {
+	HumanTurn(sessionID string) (human, quiet bool)
+}
+
+// humanLoud reports whether a channel says sessionID's running turn
+// answers a person who did not ask for silence. Called without r.mu: a
+// channel's lock is never taken under it.
+func (r *Registry) humanLoud(sessionID string) bool {
+	for _, c := range r.Channels() {
+		if h, ok := c.(HumanTurnReporter); ok {
+			if human, quiet := h.HumanTurn(sessionID); human && !quiet {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // looksSilent reports whether accumulated reply text opens with SilentMarker,
 // ignoring leading whitespace and case.
 func looksSilent(s string) bool {
@@ -727,6 +750,10 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 		return
 	}
 
+	// Read before r.mu: only text and a turn's end can decide.
+	loud := (ev.Type == event.TextDelta || ev.Type == event.TextReplace ||
+		ev.Type == event.Done || ev.Type == event.Error) && r.humanLoud(sessionID)
+
 	r.mu.Lock()
 	ts := r.turns[sessionID]
 	if ts == nil {
@@ -785,7 +812,7 @@ func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.
 			return // keep buffering
 		}
 		ts.decided = true
-		ts.silent = looksSilent(text)
+		ts.silent = looksSilent(text) && !loud
 		held := ts.pending
 		ts.pending = nil
 		silent := ts.silent

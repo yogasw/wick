@@ -19,21 +19,25 @@ does nothing by itself; the marker must appear in the text you emit.
 push notification. It still records to the conversation — the web session
 shows it with a muted-bell chip, marker stripped — so the trace survives.
 
-## The marker is a prefix test
+## Who started the turn decides (Slack)
 
-Checked against the start of the whole reply. Case ignored, leading
-whitespace and newlines tolerated. Anything else in front breaks it:
+Put the marker first, case ignored, leading whitespace tolerated. What
+happens to a marker anywhere else depends on who started the turn:
 
-| Reply starts with | Result |
-|---|---|
-| `[silent] …` or `[SILENT] …` | silent ✅ |
-| `Checked the endpoint. [silent]` | ❌ marker mid-text |
-| any opener, marker on a later line | ❌ whole turn hits Slack — with `[silent]` leaked into it |
-| `**[silent]**` or `` `[silent]` `` | ❌ decorated ≠ literal |
+| Turn started by | Reply | Result |
+|---|---|---|
+| a person (mention, DM) | anything, marker anywhere or none | posted, every `[silent]` stripped |
+| a person who asked for no reply ("silent", "diam aja", "jangan dibalas") | uses `[silent]` anywhere | stays out of Slack |
+| a teammate's result, a schedule, a watch, the web UI | `[silent] …` first | silent ✅ |
+| same | real answer, then `[silent]` (same block or after tools) | **held**: not posted, not lost; shown in the session as "Held, not sent to Slack" and sent to the `held_reply_notify` handle to decide |
+| same | a one-line narration, then `[silent]` | nothing posted |
+| a listen reply without a mention | `[silent]` first | silent ✅ |
 
-The opener case is the one that actually happens: even "Okay, checking…"
-before the marker defeats it. No preamble, no bold, no backticks — plain
-`[silent]`, first characters.
+So a person waiting in the thread always gets the answer, and a turn nobody
+typed never leaks half a report: the ambiguous case waits for a human. Still
+put the marker first and nowhere else: a held reply needs someone to act on
+it. A marker written mid-sentence (talking about it) is plain text; a bold
+one (`**[silent]**`) counts as a marker and is stripped.
 
 ## Go silent when
 
@@ -67,7 +71,9 @@ useful trace, `[silent] ok` is not.
   result, or the status if it is not done yet (`still running: X done, Y
   waiting on the build`); `[silent]` there hands it an empty answer
 
-Never go silent on a turn a person started. When in doubt, reply normally.
+Never go silent on a turn a person started (on Slack wick posts it anyway,
+marker stripped, unless that person asked for no reply). When in doubt,
+reply normally.
 Silence is for turns you or a timer started, and for FYIs that ask nothing.
 
 ## Shared work threads: still answer what you were asked

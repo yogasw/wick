@@ -75,6 +75,11 @@ registerSystemEvent("access_changed", { icon: "key" });
 registerSystemEvent("access_change_declined", { icon: "ban", tone: "warn" });
 registerSystemEvent("persona_changed", { icon: "info" });
 registerSystemEvent("hop_limit", { icon: "stop", tone: "warn" });
+registerSystemEvent("reply_held", {
+  icon: "stop",
+  tone: "warn",
+  parts: (t) => [`Held, not sent to Slack: ${t.text ?? ""}`],
+});
 registerSystemEvent("mention_refused", { icon: "ban", tone: "warn" });
 registerSystemEvent("group_member_added", { icon: "user-plus" });
 registerSystemEvent("group_member_removed", { icon: "ban" });

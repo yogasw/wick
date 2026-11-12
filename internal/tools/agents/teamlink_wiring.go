@@ -1733,6 +1733,35 @@ func teamMentionCaller(ctx context.Context, sessionID string, human bool) string
 	return teamAgentOfSession(ctx, sessionID)
 }
 
+// NotifyHeldReply records a Slack reply held at its Done (KindReplyHeld)
+// and tells the held_reply_notify handle, when set, so a person or an
+// agent decides whether it goes out. Best effort: the record stays even
+// when the message cannot be sent.
+func NotifyHeldReply(sessionID, text string) {
+	EmitSystemEvent(sessionID, store.KindReplyHeld, text, nil)
+	if globalConfigs == nil || globalTeamHub == nil || InTicketRoom(sessionID) {
+		return
+	}
+	to := strings.TrimSpace(globalConfigs.GetOwned("agents", "held_reply_notify"))
+	h := globalTeamHub()
+	if to == "" || h == nil {
+		return
+	}
+	if !strings.HasPrefix(to, "@") {
+		to = "@" + to
+	}
+	ctx := context.Background()
+	body := "A Slack reply was held, not posted: the turn was not started by a person in the thread and ended with [silent] after this text.\n" +
+		"session_id: " + sessionID + "\n\n" + text
+	if _, err := h.Send(ctx, teamlink.SendInput{
+		CallerSession: sessionID, CallerAgentID: teamAgentOfSession(ctx, sessionID),
+		SessionUser: sessionUserOf(sessionID),
+		To:          to, Text: body, Wait: -1, Group: teamlink.GroupNone,
+	}); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Str("to", to).Msg("held reply: notify failed")
+	}
+}
+
 // TeamHandlesFor is TeamHandles for a person's line (human) or the
 // agent's own (delegation.TeamHumanRouter).
 func (r TeamMentionRouter) TeamHandlesFor(ctx context.Context, sessionID string, human bool) []string {

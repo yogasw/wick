@@ -2350,6 +2350,9 @@ func NewServer() *Server {
 			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
 			})
+			// A reply held at its end ([silent] after text in a turn nobody
+			// typed) shows in its session and goes to whoever decides.
+			slackCh.SetReplyHeldFn(agentstool.NotifyHeldReply)
 			// Each reply a listening thread hears lands in its session at once.
 			slackCh.SetHeardFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindThreadHeard, text, extras)

@@ -108,7 +108,16 @@ notification, but is still recorded, dimmed, in the web UI:
 person, nor to answer a request or a question, including one from another
 agent: those always get a visible reply, even if only a status. When
 something matters (final result, a failure), reply normally without it.
-In doubt, reply normally. Only a leading marker counts.
+In doubt, reply normally.
+
+On Slack, who started the turn decides, not where the marker sits:
+- A person's mention or DM: the reply is always posted, `[silent]` stripped
+  wherever it is, unless that person asked for no reply ("silent", "diam
+  aja", "jangan dibalas"); then any `[silent]` keeps it out.
+- Anything else (a teammate's result, a schedule, a watch): a leading
+  `[silent]` keeps it out. Real text followed by `[silent]` is neither
+  posted nor dropped: it is HELD in the session for someone to decide. Put
+  the marker first or leave it out; never add it at the end.
 
 One exception: a message that opens with `[listen mode]` comes from a Slack
 thread you listen to without being mentioned. If it is not a question or

@@ -298,6 +298,11 @@ const KindRemoteQueue = "remote_queue"
 // arrives instead of only once it reaches the agent.
 const KindListenHeld = "listen_held"
 
+// KindReplyHeld: a Slack reply held at its turn's end instead of posted:
+// a turn nobody typed wrote [silent] after a real answer (text = that
+// answer). Someone decides whether it goes out.
+const KindReplyHeld = "reply_held"
+
 // KindThreadHeard: one reply a listening Slack thread heard, recorded the
 // moment it arrives (text = the reply; extras: hold_id, msg_ts, user, name,
 // files). A record only: it never reaches the provider — the agent reads
