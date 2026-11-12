@@ -2679,7 +2679,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp,
 		running: true, lastActivity: time.Now(), mentionFrom: mentionFrom,
 	}
-	t.human = !isListen
+	t.human = personTurn(isListen, listenT)
 	t.quiet = t.human && asksQuiet(routedText)
 	if old != nil {
 		t.carryOver(old)
@@ -3199,6 +3199,11 @@ func (s *Channel) HumanTurn(sessionKey string) (human, quiet bool) {
 	}
 	return t.human, t.quiet
 }
+
+// personTurn reports whether a message starts a person's turn: a
+// mention or DM, or a reply in a thread set to auto-reply (answered as a
+// mention, never [silent]). A plain listen reply is not.
+func personTurn(isListen bool, lt listenTurn) bool { return !isListen || lt.auto }
 
 // quietAsk matches a person asking the agent not to answer in the thread.
 var quietAsk = regexp.MustCompile(`(?i)silent|diam aja|jangan (di)?balas|(ga|gak|nggak|ngga|tidak|tak) (usah|perlu) (di)?balas|don'?t reply|no reply`)

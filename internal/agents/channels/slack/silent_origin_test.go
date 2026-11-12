@@ -226,3 +226,17 @@ func TestStripEmphasizedSilentMarker(t *testing.T) {
 		}
 	}
 }
+
+// An auto-reply thread answers like a mention: a person's turn. A plain
+// listen reply is not.
+func TestPersonTurn(t *testing.T) {
+	if !personTurn(false, listenTurn{}) {
+		t.Error("mention: not a person's turn")
+	}
+	if !personTurn(true, listenTurn{auto: true}) {
+		t.Error("auto-reply: not a person's turn")
+	}
+	if personTurn(true, listenTurn{}) {
+		t.Error("listen reply: counted as a person's turn")
+	}
+}
