@@ -33,6 +33,11 @@ func playOrigin(t *testing.T, tr turn, parts ...string) silentRun {
 			id := string(rune('a' + i))
 			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: `{"command":"ls"}`, ToolUseID: id})
 			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: id, Text: "ok"})
+		case "!upload", "!send":
+			op := map[string]string{"!upload": "upload_file", "!send": "send_message"}[p]
+			in := `{"tool_id":"conn:x/` + op + `","params":{"channel":"C1","thread_ts":"1700000000.000100"}}`
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "mcp__wick__wick_execute", ToolInput: in, ToolUseID: p})
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: p, Text: "ok"})
 		case "!failover":
 			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.Warning, ErrorMsg: "a stopped", FailedOver: true})
 		default:
@@ -80,6 +85,33 @@ func TestSilentHumanTurnAlwaysPosts(t *testing.T) {
 		if !strings.Contains(got.posted, want) {
 			t.Errorf("%s: posted %q, want it to hold %q", name, got.posted, want)
 		}
+	}
+
+	// Nothing left to show once the marker is gone: the person still gets
+	// a line, never silence. Narration between tools is not the answer.
+	for name, parts := range map[string][]string{
+		"marker only":               {"[silent]"},
+		"empty after tool":          {"", ""},
+		"files, then marker":        {"Account format: op@id.", "!upload", "!upload", "\n\n[silent]"},
+		"after failover, bare mark": {"partial\n", "!failover", "", "[silent]"},
+	} {
+		got := playOrigin(t, humanTurn, parts...)
+		if !strings.Contains(got.posted, emptyHumanReply) || strings.Contains(got.posted, "Account format") || got.held != "" {
+			t.Errorf("%s: posted %q held %q, want the empty-reply line", name, got.posted, got.held)
+		}
+	}
+	// A typed turn closing on a tool keeps its last text (as without the
+	// marker, TestTurnEndingOnToolPostsLastText): not lost either.
+	if got := playOrigin(t, humanTurn, "Account format: op@id.", "", "\n\n[silent]"); !strings.Contains(got.posted, "Account format") || strings.Contains(got.posted, "[silent]") {
+		t.Errorf("last text: posted %q", got.posted)
+	}
+	// Answered through a message tool: no extra line.
+	if got := playOrigin(t, humanTurn, "Posting.", "!send", "[silent]"); got.posted != "" {
+		t.Errorf("answered by tool: posted %q", got.posted)
+	}
+	// Asked for silence: still nothing.
+	if got := playOrigin(t, quietTurn, "", "[silent]"); got.posted != "" {
+		t.Errorf("quiet: posted %q", got.posted)
 	}
 }
 

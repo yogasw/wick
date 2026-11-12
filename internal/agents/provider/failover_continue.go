@@ -1,12 +1,15 @@
 package provider
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 )
 
@@ -26,6 +29,9 @@ const (
 	ContinueToolInputMax = 80
 	// ContinueMax caps the whole continue message.
 	ContinueMax = 4000
+	// ContinueOpeningMax caps the session's opening context a fresh
+	// target is given again.
+	ContinueOpeningMax = 1200
 )
 
 // Tool statuses in a ToolBrief.
@@ -137,6 +143,9 @@ type ContinueInput struct {
 	Produced       bool
 	PartialText    string
 	Tools          []ToolBrief
+	// Opening is the context the session opened with (OpeningContext):
+	// a target that starts fresh never saw it, so it is given again.
+	Opening string
 }
 
 // ContinueInputFrom fills a ContinueInput from the switch that moved the
@@ -161,11 +170,26 @@ func ContinueInputFrom(res SwitchResult, reason event.ErrKind, resetAt time.Time
 //     the tail of the text already produced.
 //
 // Capped at ContinueMax characters; the user's message is cut first.
+//
+// A target that starts fresh also gets the session's opening context
+// (Opening) again, and a continue opens with the user's "[from: …]" line
+// so who is speaking stays where every turn has it.
 func ContinueMessage(in ContinueInput) string {
+	opening := ""
+	if !in.HistoryCarries && strings.TrimSpace(in.Opening) != "" {
+		opening = "\n\nThis session opened with:\n" + capRunes(strings.TrimSpace(in.Opening), ContinueOpeningMax)
+	}
 	if !in.Produced {
-		return in.UserMsg
+		if opening == "" {
+			return in.UserMsg
+		}
+		note := "\n\n[wick] You are now on " + in.To + ". Your conversation history did not carry over." + opening
+		return capRunes(in.UserMsg, max(ContinueMax-runeLen(note), 0)) + note
 	}
 	var head strings.Builder
+	if from := senderLine(in.UserMsg); from != "" {
+		head.WriteString(from + "\n")
+	}
 	head.WriteString("[wick] The previous provider (" + in.From + ") stopped mid-turn: " + FailoverReason(in.Reason, in.ResetAt) + ". ")
 	if in.HistoryCarries {
 		head.WriteString("You are now on " + in.To + " with the same conversation. ")
@@ -179,14 +203,50 @@ func ContinueMessage(in ContinueInput) string {
 		return capRunes(head.String()+"\n\n"+tools, ContinueMax)
 	}
 
-	summary := ""
+	summary := opening
 	if tail := summarizeTail(in.PartialText, ContinueTailMax); tail != "" {
-		summary = "\n\nOutput already produced this turn (summary): \"\"\"" + tail + "\"\"\""
+		summary += "\n\nOutput already produced this turn (summary): \"\"\"" + tail + "\"\"\""
 	}
 	const userOpen, userClose = "\n\nLast user message: \"\"\"", "\"\"\""
 	fixed := runeLen(head.String()) + runeLen(userOpen) + runeLen(userClose) + runeLen(summary) + 2 + runeLen(tools)
 	user := capRunes(in.UserMsg, max(ContinueMax-fixed, 0))
 	return capRunes(head.String()+userOpen+user+userClose+summary+"\n\n"+tools, ContinueMax)
+}
+
+// senderLine is msg's opening "[from: …]" line, or "".
+func senderLine(msg string) string {
+	first, _, _ := strings.Cut(strings.TrimLeft(msg, " \t\r\n"), "\n")
+	if first = strings.TrimSpace(first); strings.HasPrefix(first, "[from:") && strings.HasSuffix(first, "]") {
+		return first
+	}
+	return ""
+}
+
+// openingMarker ends the first line of the context block a channel opens
+// a session with ("[Slack thread context — injected by wick]").
+const openingMarker = "— injected by wick"
+
+// OpeningContext is the context block sessionID opened with: the first
+// conversation turn holding a "[… — injected by wick]" block, from that
+// line to the first blank line (the member directory after it is left
+// out). "" when the session has none.
+func OpeningContext(layout config.Layout, sessionID string) string {
+	out := ""
+	_ = storage.ReadJSONL(layout.SessionConversation(sessionID), func(line []byte) bool {
+		var t store.ConversationTurn
+		if json.Unmarshal(line, &t) != nil {
+			return true
+		}
+		i := strings.Index(t.Text, openingMarker)
+		if i < 0 {
+			return true
+		}
+		start := strings.LastIndex(t.Text[:i], "\n") + 1
+		block, _, _ := strings.Cut(t.Text[start:], "\n\n")
+		out = strings.TrimSpace(block)
+		return false
+	})
+	return out
 }
 
 // toolsSection lists tools (the last ContinueToolsMax, the most recent

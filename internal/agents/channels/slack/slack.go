@@ -146,6 +146,10 @@ type turn struct {
 	// closing on a tool or a bare [silent] posts nothing instead of the
 	// narration it wrote before its last tools.
 	postedInThread bool
+	// postedTextInThread: one of those tool writes was a message (send
+	// or update), not only a file. A person's turn that posted its answer
+	// that way needs no closing line (emptyHumanReply).
+	postedTextInThread bool
 	// untyped is set when the running turn was not started by a message
 	// in this thread: a teammate's task or result, a schedule, the web
 	// UI (ensureTurn, reopenTurn). Nobody here waits on its narration,
@@ -260,6 +264,7 @@ func (t *turn) carryOver(old *turn) {
 	t.hasStarted = old.hasStarted
 	t.segStart, t.lastSeg = old.segStart, old.lastSeg
 	t.postedInThread = old.postedInThread
+	t.postedTextInThread = old.postedTextInThread
 	// Keep pointing at the live message: dropping these makes finalizeReply
 	// post a fresh message and strand the streamed one mid-word.
 	t.liveTS = old.liveTS
@@ -3151,6 +3156,7 @@ func (t *turn) closingReply() string {
 // person started it (HumanTurn). Here:
 //   - a person's turn posts its reply, markers stripped, unless that
 //     person asked for no reply and the agent wrote [silent] anywhere;
+//     one that ends with nothing to show posts emptyHumanReply;
 //   - any other turn that wrote [silent] after real text is ambiguous: a
 //     report (not a one-line narration) is held, neither posted nor
 //     lost, and a narration closing on [silent] posts nothing (6a14faef);
@@ -3166,7 +3172,11 @@ func (t *turn) finalReply() (text, held string) {
 		if t.quiet && marked {
 			return "", ""
 		}
-		return t.replyText(), ""
+		text := t.replyText()
+		if strings.TrimSpace(stripSilentMarker(text)) == "" && !t.postedTextInThread && !t.quiet {
+			return emptyHumanReply, ""
+		}
+		return text, ""
 	}
 	if !marked {
 		return t.replyText(), ""
@@ -3215,6 +3225,14 @@ func isNarration(seg string) bool {
 // connector's send/update/upload ops or a raw chat.postMessage/update.
 var threadWriteOp = regexp.MustCompile(`(send_message|update_message|upload_file|chat\.postMessage|chat\.update)`)
 
+// threadTextOp is the part of threadWriteOp that writes a message, not a file.
+var threadTextOp = regexp.MustCompile(`(send_message|update_message|chat\.postMessage|chat\.update)`)
+
+// emptyHumanReply is posted for a person's turn that ended with nothing
+// to show (only [silent], or narration before its last tools) and did not
+// answer through a tool message: they asked, so the thread says something.
+const emptyHumanReply = "Sudah diproses, tapi balasannya kosong. Detailnya ada di sesi."
+
 // postsToThread reports whether a tool input writes a message into the
 // thread channelID/threadTS. A read of the same thread names both too,
 // so the op must be a write.
@@ -3237,7 +3255,7 @@ func blankSegment(seg string) bool {
 func (t *turn) resetText() {
 	t.buf.Reset()
 	t.segStart, t.lastSeg = 0, ""
-	t.postedInThread = false
+	t.postedInThread, t.postedTextInThread = false, false
 }
 
 // startEditTicker launches a goroutine that flushes the accumulated text
@@ -3887,9 +3905,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.mu.Unlock()
 			return
 		}
-		posted := t.postedInThread
+		posted, postedText := t.postedInThread, t.postedTextInThread
 		t.resetText()
-		t.postedInThread = posted
+		t.postedInThread, t.postedTextInThread = posted, postedText
 		t.buf.WriteString(ev.Text)
 		live := t.liveTS != ""
 		s.mu.Unlock()
@@ -3915,6 +3933,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			t.cutSegment()
 			if postsToThread(ev.ToolInput, t.channelID, t.threadTS) {
 				t.postedInThread = true
+				if threadTextOp.MatchString(ev.ToolInput) {
+					t.postedTextInThread = true
+				}
 			}
 		}
 		s.mu.Unlock()
