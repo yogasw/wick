@@ -160,6 +160,11 @@ type turn struct {
 	// untyped). Its reply always posts, [silent] stripped wherever it
 	// sits, unless quiet: that person asked for no reply.
 	human, quiet bool
+	// answered is set once any reply of the agent reached the thread
+	// since the person's message (a Done with text, or a message tool).
+	// A later Done with nothing (a queued event's empty result) is not
+	// that person's unanswered turn: no emptyHumanReply then.
+	answered bool
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -3159,7 +3164,9 @@ func (t *turn) closingReply() string {
 // person started it (HumanTurn). Here:
 //   - a person's turn posts its reply, markers stripped, unless that
 //     person asked for no reply and the agent wrote [silent] anywhere;
-//     one that ends with nothing to show posts emptyHumanReply;
+//     one that ends with nothing to show posts emptyHumanReply, once,
+//     and only while nothing of the agent reached the thread since
+//     that person's message (answered);
 //   - any other turn that wrote [silent] after real text is ambiguous: a
 //     report (not a one-line narration) is held, neither posted nor
 //     lost, and a narration closing on [silent] posts nothing (6a14faef);
@@ -3176,7 +3183,7 @@ func (t *turn) finalReply() (text, held string) {
 			return "", ""
 		}
 		text := t.replyText()
-		if strings.TrimSpace(stripSilentMarker(text)) == "" && !t.postedTextInThread && !t.quiet {
+		if strings.TrimSpace(stripSilentMarker(text)) == "" && !t.postedTextInThread && !t.quiet && t.running && !t.answered {
 			return emptyHumanReply, ""
 		}
 		return text, ""
@@ -4005,6 +4012,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		var held string
 		if !liveStreamText {
 			text, held = t.finalReply()
+		}
+		if strings.TrimSpace(text) != "" || t.postedTextInThread {
+			t.answered = true
 		}
 		heldFn := s.replyHeldFn
 		t.resetText()

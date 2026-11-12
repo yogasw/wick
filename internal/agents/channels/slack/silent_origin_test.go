@@ -298,3 +298,37 @@ func TestDirectListenReplyAnswered(t *testing.T) {
 		t.Fatalf("listen reply: posted %q", got.posted)
 	}
 }
+
+// The empty-reply line answers a person who got nothing, never a turn
+// that already answered: a queued event's empty result after the answer,
+// or an event turn nobody typed, posts nothing.
+func TestEmptyReplyLineOnlyWhenUnanswered(t *testing.T) {
+	f := newFakeSlack(t)
+	tr := turn{human: true, channelID: "C1", threadTS: "1700000000.000100", running: true}
+	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
+	reg := agentchannels.NewRegistry()
+	reg.Add(c, nil)
+	done := event.AgentEvent{Type: event.Done}
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Queued six songs for you."})
+	reg.DispatchAgentEvent("slack-t1", done)
+	// A queued event's result: no text at all, then [silent] only.
+	reg.DispatchAgentEvent("slack-t1", done)
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg.DispatchAgentEvent("slack-t1", done)
+	got := postedText(f)
+	if !strings.Contains(got, "Queued six songs") || strings.Contains(got, emptyHumanReply) {
+		t.Fatalf("posted %q", got)
+	}
+
+	// An event turn nobody typed (reopened) that closes on [silent].
+	f2 := newFakeSlack(t)
+	c2 := &Channel{api: f2.client(), turns: map[string]*turn{"slack-t1": {human: true, answered: true, channelID: "C1", threadTS: "1700000000.000100"}}}
+	reg2 := agentchannels.NewRegistry()
+	reg2.Add(c2, nil)
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: `{}`, ToolUseID: "a"})
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg2.DispatchAgentEvent("slack-t1", done)
+	if got := postedText(f2); got != "" {
+		t.Fatalf("event turn posted %q", got)
+	}
+}
