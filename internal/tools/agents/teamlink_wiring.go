@@ -108,13 +108,16 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	}
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
+	// The base dir is read once: the orphan watcher calls this from its
+	// own goroutine, which must not read the global as it changes.
 	hub.SelfDraining = upgrade.Draining
+	baseDir := globalLayout.BaseDir
 	hub.PredecessorBusy = func(chat string) bool {
 		if chat == "" {
-			_, draining := upgrade.ReadDrainState(globalLayout.BaseDir)
+			_, draining := upgrade.ReadDrainState(baseDir)
 			return draining
 		}
-		return upgrade.PredecessorHolds(globalLayout.BaseDir, chat)
+		return upgrade.PredecessorHolds(baseDir, chat)
 	}
 	// Tasks are kept on disk, so get_task, list_tasks and late replies
 	// survive a restart.

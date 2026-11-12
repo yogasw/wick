@@ -85,11 +85,18 @@ const waitPublishEvery = 5 * time.Second
 
 var waitPublisherOnce sync.Once
 
+// waitPublisherOff keeps the publisher from starting: the package's tests
+// swap globalPool and globalBcast, which its goroutine reads unlocked.
+var waitPublisherOff bool
+
 // startWaitPublisher keeps every waiting session's wait_state current:
 // queued, spawning, or working (a silent turn on a stalled host is the
 // case the page could not explain). Only a changed state is sent. Started
 // by the first stream snapshot, so a wick with no open page runs nothing.
 func startWaitPublisher() {
+	if waitPublisherOff {
+		return
+	}
 	waitPublisherOnce.Do(func() {
 		go func() {
 			last := map[string]string{}
