@@ -348,12 +348,15 @@ type Channel struct {
 	bgKeepAlive time.Duration
 	bgTick      time.Duration
 
-	cfgMu          sync.Mutex
-	cfg            agentconfig.SlackChannelConfig
-	pubURL         string
-	api            *slackgo.Client
-	socket         *socketmode.Client
-	botUserID      string           // Slack user ID of the bot itself (U...), resolved via auth.test
+	cfgMu     sync.Mutex
+	cfg       agentconfig.SlackChannelConfig
+	pubURL    string
+	api       *slackgo.Client
+	socket    *socketmode.Client
+	botUserID string // Slack user ID of the bot itself (U...), resolved via auth.test
+	// threadStarters caches who opened each thread ("C…/ts" → U…), for
+	// directListenReply.
+	threadStarters sync.Map
 	botUserName    string           // Slack handle of the bot (resp.User)
 	teamName       string           // Workspace display name (resp.Team)
 	teamDomain     string           // Workspace subdomain extracted from resp.URL
@@ -3201,9 +3204,10 @@ func (s *Channel) HumanTurn(sessionKey string) (human, quiet bool) {
 }
 
 // personTurn reports whether a message starts a person's turn: a
-// mention or DM, or a reply in a thread set to auto-reply (answered as a
-// mention, never [silent]). A plain listen reply is not.
-func personTurn(isListen bool, lt listenTurn) bool { return !isListen || lt.auto }
+// mention or DM, a reply in a thread set to auto-reply, or a direct
+// listen reply (directListenReply) — all answered as a mention, never
+// [silent]. Any other listen reply is not.
+func personTurn(isListen bool, lt listenTurn) bool { return !isListen || lt.auto || lt.direct }
 
 // quietAsk matches a person asking the agent not to answer in the thread.
 var quietAsk = regexp.MustCompile(`(?i)silent|diam aja|jangan (di)?balas|(ga|gak|nggak|ngga|tidak|tak) (usah|perlu) (di)?balas|don'?t reply|no reply`)

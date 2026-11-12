@@ -111,7 +111,8 @@ something matters (final result, a failure), reply normally without it.
 In doubt, reply normally.
 
 On Slack, who started the turn decides, not where the marker sits:
-- A person's mention or DM: the reply is always posted, `[silent]` stripped
+- A person's mention or DM (or an auto-reply thread, or a
+  `[listen mode · direct]` reply): the reply is always posted, `[silent]` stripped
   wherever it is, unless that person asked for no reply ("silent", "diam
   aja", "jangan dibalas"); then any `[silent]` keeps it out.
 - Anything else (a teammate's result, a schedule, a watch): a leading

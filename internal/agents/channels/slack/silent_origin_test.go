@@ -239,4 +239,62 @@ func TestPersonTurn(t *testing.T) {
 	if personTurn(true, listenTurn{}) {
 		t.Error("listen reply: counted as a person's turn")
 	}
+	if !personTurn(true, listenTurn{direct: true}) {
+		t.Error("direct listen reply: not a person's turn")
+	}
+}
+
+// A listen reply from the person who opened the thread with the agent,
+// naming no one else, is meant for the agent; anyone else's, or one that
+// names someone else, is not.
+func TestDirectListenReply(t *testing.T) {
+	const bot, starter = "UBOT", "UOPENER"
+	cases := []struct {
+		name     string
+		text     string
+		sender   string
+		topLevel bool
+		want     bool
+	}{
+		{"opener, a link, no mention", "play this <https://example.com/v|example.com/v>", starter, false, true},
+		{"opener mentions the agent", "<@UBOT> next one", starter, false, true},
+		{"opener names someone else", "your turn <@UOTHER>", starter, false, false},
+		{"opener pings the channel", "<!here> lunch", starter, false, false},
+		{"someone else, no mention", "nice song", "UOTHER", false, false},
+		{"someone else names a third person", "go play it <@U09TEST>", "UOTHER", false, false},
+		{"new top-level message", "play this", starter, true, false},
+		{"starter unknown", "play this", starter, false, false},
+	}
+	for _, tc := range cases {
+		st := starter
+		if tc.name == "starter unknown" {
+			st = ""
+		}
+		if got := directListenReply(tc.text, tc.sender, st, bot, tc.topLevel); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A direct listen reply tells the agent to answer, never [silent], and
+// then follows a person's rules: an empty answer still posts a line.
+func TestDirectListenReplyAnswered(t *testing.T) {
+	note := listenNote(listenTurn{direct: true, waited: 6 * time.Second})
+	if !strings.HasPrefix(note, "[listen mode · direct · held 6s]") || !strings.Contains(note, "never [silent]") {
+		t.Fatalf("note = %q", note)
+	}
+	if plain := listenNote(listenTurn{}); strings.Contains(plain, "direct") || !strings.Contains(plain, "else [silent]") {
+		t.Fatalf("plain listen note changed: %q", plain)
+	}
+	direct := turn{human: personTurn(true, listenTurn{direct: true})}
+	if got := playOrigin(t, direct, "[silent]"); !strings.Contains(got.posted, emptyHumanReply) {
+		t.Fatalf("direct reply closing on [silent]: posted %q", got.posted)
+	}
+	if got := playOrigin(t, direct, "The video is over an hour, the limit; send a title instead."); !strings.Contains(got.posted, "over an hour") {
+		t.Fatalf("direct reply answer: posted %q", got.posted)
+	}
+	// A plain listen reply may still stay out.
+	if got := playOrigin(t, listenReply, "[silent]"); got.posted != "" {
+		t.Fatalf("listen reply: posted %q", got.posted)
+	}
 }

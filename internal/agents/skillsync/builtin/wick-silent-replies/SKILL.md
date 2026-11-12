@@ -26,12 +26,12 @@ happens to a marker anywhere else depends on who started the turn:
 
 | Turn started by | Reply | Result |
 |---|---|---|
-| a person (mention, DM) | anything, marker anywhere or none | posted, every `[silent]` stripped |
+| a person (mention, DM, an auto-reply thread, or a `[listen mode · direct]` reply: the person who opened the thread with you, naming no one else) | anything, marker anywhere or none | posted, every `[silent]` stripped; nothing left → a short "reply came back empty" line |
 | a person who asked for no reply ("silent", "diam aja", "jangan dibalas") | uses `[silent]` anywhere | stays out of Slack |
 | a teammate's result, a schedule, a watch, the web UI | `[silent] …` first | silent ✅ |
 | same | real answer, then `[silent]` (same block or after tools) | **held**: not posted, not lost; shown in the session as "Held, not sent to Slack" and sent to the `held_reply_notify` handle to decide |
 | same | a one-line narration, then `[silent]` | nothing posted |
-| a listen reply without a mention | `[silent]` first | silent ✅ |
+| any other listen reply without a mention (someone else's chatter, or naming someone else) | `[silent]` first | silent ✅ |
 
 So a person waiting in the thread always gets the answer, and a turn nobody
 typed never leaks half a report: the ambiguous case waits for a human. Still
