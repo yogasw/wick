@@ -996,3 +996,43 @@ export const putSessionOptions = (base: string, id: string, sessionId: string, o
     it once an "image" avatar is saved. */
 export const uploadAvatarImage = (base: string, id: string, data: string) =>
   apiPostE<{ v: string; aspect: number; width: number; height: number }>(`${base}/api/team/agents/${enc(id)}/avatar/image`, { data });
+
+/* ── Access & roles: effective preview and lend trail ── */
+
+/** One connector as a caller gets it through an agent, computed by the
+    server with the same scope and lend rules a run uses. */
+export type EffectiveRow = {
+  connector_id: string;
+  label: string;
+  key: string;
+  level: "all" | "read" | "pick" | "off";
+  ops: string[];
+  runs_as: "self" | "owner" | "none";
+  lent: boolean;
+  account?: string;
+  account_owner?: string;
+  account_status?: "" | "connected" | "other_user" | "missing";
+};
+
+export const getAccessEffective = (base: string, id: string, as: "owner" | "user" | "guest", userId = "") =>
+  apiGetE<{ as: string; user_id: string; items: EffectiveRow[] | null }>(
+    `${base}/api/team/agents/${enc(id)}/access/effective?as=${enc(as)}${userId ? `&user_id=${enc(userId)}` : ""}`,
+  );
+
+/** One run that went out on a lend: who asked, on whose behalf. */
+export type AccessTrailItem = {
+  run_id: string;
+  connector_id: string;
+  connector_label: string;
+  operation: string;
+  status: string;
+  caller_id: string;
+  caller_name: string;
+  on_behalf_of_id: string;
+  on_behalf_of_name: string;
+  session_id: string;
+  at: string;
+};
+
+export const getAccessTrail = (base: string, id: string, limit = 20) =>
+  apiGetE<{ items: AccessTrailItem[] | null }>(`${base}/api/team/agents/${enc(id)}/access/trail?limit=${limit}`);

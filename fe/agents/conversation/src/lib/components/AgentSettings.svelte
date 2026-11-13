@@ -32,6 +32,7 @@
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, AUTO_APPROVE_OPTIONS, AUTO_APPROVE_NOTE, FOLDERS_NOTE, captainCanOf, captainPolicyOf, captainBlock } from "../captainSettings.js";
   import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
+  import AccessRoles from "./AccessRoles.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
   import AgentSessionTab from "./AgentSessionTab.svelte";
@@ -483,6 +484,7 @@
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
+    { id: "roles", label: "Akses & peran (baru)" },
     { id: "tools", label: "Tools & features" },
     { id: "skills", label: "Skills" },
     { id: "mention", label: "Mention" },
@@ -705,6 +707,17 @@
     {/if}
     {#key agent.id}
       <AccessHistory {base} agentId={agent.id} />
+    {/key}
+  {:else if view === "roles"}
+    {#key agent.id}
+      <AccessRoles
+        {base}
+        agentId={agent.id}
+        {catalog}
+        savedGrants={agent.allowed_connectors ?? []}
+        savedMode={normalizeAccessMode(agent.access_mode)}
+        onApply={(g, m) => { draft.grants = g; draft.access_mode = m; }}
+      />
     {/key}
   {:else if view === "tools"}
     <div>
