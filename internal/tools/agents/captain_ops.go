@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -535,6 +536,55 @@ func applyAccessChange(ctx context.Context, p entity.AgentPersona, ch team.Acces
 // applied without a card.
 const autoApprovedBy = "auto-approve (Captain policy)"
 
+// requestedByOwner reports whether the Captain turn filing a proposal
+// comes from owner, so the owner's auto-approve rule may apply it. The
+// Captain session must be the owner's, and the latest user turn must not
+// come from anyone else the channel knows (a shared Slack thread, a
+// sender with no wick account). A turn with no recorded sender (the
+// owner's web chat, a schedule) counts as the session owner's. Anything
+// unreadable is false: the proposal then waits for the owner's card.
+func requestedByOwner(sessionID, owner string) bool {
+	if globalMgr == nil || owner == "" {
+		return false
+	}
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok || sess.Meta.UserID != owner {
+		return false
+	}
+	sender, err := lastUserSender(globalLayout.SessionConversation(sessionID))
+	if err != nil {
+		return false
+	}
+	return sender == nil || sender.WickUserID == owner
+}
+
+// lastUserSender is the sender of the latest user turn in a
+// conversation.jsonl, nil when that turn (or the file) records none.
+func lastUserSender(path string) (*store.Sender, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var last *store.Sender
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+	for sc.Scan() {
+		var turn struct {
+			Role   string        `json:"role"`
+			Sender *store.Sender `json:"sender"`
+		}
+		if json.Unmarshal(sc.Bytes(), &turn) != nil || turn.Role != "user" {
+			continue
+		}
+		last = turn.Sender
+	}
+	return last, sc.Err()
+}
+
 // propose checks the proposal against the OWNER's own catalog (the same
 // check as Settings › Access) and records it. It then posts the approval
 // card in the manager's chat, or applies it at once when the owner's
@@ -569,7 +619,7 @@ func (o CaptainOps) propose(ctx context.Context, sessionID string, mgr, p entity
 		return nil, err
 	}
 	reason := prop.Reason
-	if team.DecodeCaptainPolicy(mgr.CaptainPolicy).AutoApproves(prop.Created) {
+	if team.DecodeCaptainPolicy(mgr.CaptainPolicy).AutoApproves(prop.Created) && requestedByOwner(sessionID, p.OwnerUserID) {
 		if err := globalTeam.SettleAccess(ctx, h.ID, team.AccessApplied, autoApprovedBy); err != nil {
 			return nil, err
 		}
