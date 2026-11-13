@@ -488,7 +488,7 @@ type Channel struct {
 
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
-	runWg     sync.WaitGroup
+	runWg     runTracker
 	runGen    uint64 // bumped per run, so a stale watchdog cannot restart a newer run
 
 	// reloadMu serializes Reload: a config save and a health-check
@@ -1028,11 +1028,11 @@ func (s *Channel) beginRun(ctx context.Context) (context.Context, uint64, func()
 	s.runCancel = runCancel
 	s.runGen++
 	gen := s.runGen
-	s.runWg.Add(1)
+	s.runWg.add()
 	s.runMu.Unlock()
 	return runCtx, gen, func() {
 		runCancel()
-		s.runWg.Done()
+		s.runWg.done()
 	}
 }
 

@@ -58,14 +58,57 @@ var (
 	eventQueueSize = 256
 )
 
-// waitRuns waits for wg up to d and reports whether it finished.
-func waitRuns(wg *sync.WaitGroup, d time.Duration) bool {
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
+// runTracker counts an instance's live runs so Reload can wait for the old
+// one to end. A sync.WaitGroup does not fit: Start registers a run (Add)
+// while a concurrent Reload may be waiting (Wait), and WaitGroup forbids an
+// Add from zero racing a Wait — the race detector flags exactly that when a
+// connect and a rollback overlap. Here both sides take one mutex.
+type runTracker struct {
+	mu   sync.Mutex
+	n    int
+	idle chan struct{} // closed when n drops to 0; nil while no run ever began
+}
+
+// add registers one run.
+func (r *runTracker) add() {
+	r.mu.Lock()
+	if r.n == 0 {
+		r.idle = make(chan struct{})
+	}
+	r.n++
+	r.mu.Unlock()
+}
+
+// done ends one run.
+func (r *runTracker) done() {
+	r.mu.Lock()
+	r.n--
+	if r.n == 0 {
+		close(r.idle)
+	}
+	r.mu.Unlock()
+}
+
+// idleCh is closed once no run is live (already closed / nil-safe: a
+// tracker with no live run returns a closed channel).
+func (r *runTracker) idleCh() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.n == 0 {
+		c := make(chan struct{})
+		close(c)
+		return c
+	}
+	return r.idle
+}
+
+// waitRuns waits for every live run in r to end, up to d, and reports
+// whether they did.
+func waitRuns(r *runTracker, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
-	case <-done:
+	case <-r.idleCh():
 		return true
 	case <-t.C:
 		return false
