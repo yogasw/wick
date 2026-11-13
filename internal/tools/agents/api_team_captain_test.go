@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,39 +52,46 @@ func withTeamWorld(t *testing.T) {
 	globalPool = pool.New(pool.PoolConfig{Layout: layout})
 	globalTeam = team.NewService(db, layout)
 	t.Cleanup(func() { globalMgr, globalLayout, globalPool, globalTeam = prevMgr, prevLayout, prevPool, prevTeam })
-	// Cleanups run last-in first-out: this one runs BEFORE the restore
-	// above, so no ticket-room run this test started is still reading the
-	// globals when they are swapped back.
-	t.Cleanup(func() { drainRoomRuns(t) })
+	// Every room run this test starts is tracked, and cleanups run
+	// last-in first-out: this one runs BEFORE the restore above, so no run
+	// is still reading the globals when they are swapped back.
+	var runs sync.WaitGroup
+	prevGo := goRoomRun
+	goRoomRun = func(f func()) {
+		runs.Add(1)
+		go func() {
+			defer runs.Done()
+			f()
+		}()
+	}
+	t.Cleanup(func() {
+		drainRoomRuns(t, &runs)
+		goRoomRun = prevGo
+	})
 }
 
 // drainRoomRuns cancels every ticket-room run still playing and waits for
-// each to release its slot. A room run outlives the request that started
-// it (it is a background goroutine by design), so a test must stop it
-// before tearing down the globals it reads.
-func drainRoomRuns(t *testing.T) {
+// the goroutines in runs to return. A room run outlives the request that
+// started it (a background goroutine by design), and its slot can be
+// dropped while it plays (forgetRoom), so the goroutines themselves are
+// what is waited on.
+func drainRoomRuns(t *testing.T, runs *sync.WaitGroup) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		live := 0
-		roomRunSlots.Range(func(_, v any) bool {
-			s := v.(*roomRunSlot)
-			s.mu.Lock()
-			for _, e := range s.runs {
-				e.cancel()
-				live++
-			}
-			s.mu.Unlock()
-			return true
-		})
-		if live == 0 {
-			return
+	roomRunSlots.Range(func(_, v any) bool {
+		s := v.(*roomRunSlot)
+		s.mu.Lock()
+		for _, e := range s.runs {
+			e.cancel()
 		}
-		if time.Now().After(deadline) {
-			t.Errorf("%d ticket-room runs still live after the test", live)
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+		s.mu.Unlock()
+		return true
+	})
+	done := make(chan struct{})
+	go func() { runs.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Error("ticket-room runs still playing 10s after the test")
 	}
 }
 
