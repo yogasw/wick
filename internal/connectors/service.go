@@ -2524,6 +2524,18 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	if err := s.repo.CreateRun(ctx, run); err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
 	}
+	if lent {
+		// The run row names the lender; this names who actually asked.
+		// Best effort: the run itself is already recorded, and refusing a
+		// call because its audit side-row failed would break the lend.
+		l := &entity.ConnectorRunLend{
+			RunID: run.ID, OnBehalfOf: p.UserID, CallerUserID: s.effectiveCaller(requester, sessionID, false),
+			AgentID: agentIDOf(ctx), SessionID: sessionID,
+		}
+		if err := s.repo.CreateRunLend(ctx, l); err != nil {
+			log.Warn().Err(err).Str("run", run.ID).Msg("connectors: record lend of run failed")
+		}
+	}
 
 	// Make the op's context cancelable AND time-bounded, then register it under
 	// its session. Two guarantees flow from this:
@@ -2781,6 +2793,11 @@ func (s *Service) Retry(ctx context.Context, originalRunID, userID, ipAddr, user
 
 // GetRun loads a single ConnectorRun by ID. Backs the test page's
 // prefill flow when a Retry link is followed from the history view.
+// RunLends returns who asked for each lent run in runIDs, keyed by run id.
+func (s *Service) RunLends(ctx context.Context, runIDs []string) (map[string]entity.ConnectorRunLend, error) {
+	return s.repo.RunLends(ctx, runIDs)
+}
+
 func (s *Service) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
 	return s.repo.GetRun(ctx, runID)
 }

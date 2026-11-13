@@ -680,6 +680,32 @@ func (r *Repo) FinishRun(ctx context.Context, runID string, status entity.Connec
 
 // GetRun loads a single run, used by the retry handler to replay the
 // stored RequestJSON against the current Connector.Configs.
+// CreateRunLend records who asked for a lent run (see
+// entity.ConnectorRunLend).
+func (r *Repo) CreateRunLend(ctx context.Context, l *entity.ConnectorRunLend) error {
+	if l.CreatedAt.IsZero() {
+		l.CreatedAt = time.Now()
+	}
+	return r.db.WithContext(ctx).Create(l).Error
+}
+
+// RunLends returns the lend record of each run in runIDs that was lent,
+// keyed by run id. Runs that were not lent are absent.
+func (r *Repo) RunLends(ctx context.Context, runIDs []string) (map[string]entity.ConnectorRunLend, error) {
+	out := map[string]entity.ConnectorRunLend{}
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	var rows []entity.ConnectorRunLend
+	if err := r.db.WithContext(ctx).Where("run_id IN ?", runIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, l := range rows {
+		out[l.RunID] = l
+	}
+	return out, nil
+}
+
 func (r *Repo) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
 	var run entity.ConnectorRun
 	err := r.db.WithContext(ctx).Where("id = ?", runID).First(&run).Error

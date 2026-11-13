@@ -140,6 +140,15 @@ type unlentFeatureScope struct {
 func (u unlentFeatureScope) AllowKey(key string) bool   { return u.fs.AllowKey(key) }
 func (u unlentFeatureScope) AllowTool(name string) bool { return u.fs.AllowTool(name) }
 
+// agentIDOf is the Team agent behind the scope on ctx, "" when the scope
+// does not name one.
+func agentIDOf(ctx context.Context) string {
+	if a, ok := AgentScopeFrom(ctx).(interface{ AgentID() string }); ok {
+		return a.AgentID()
+	}
+	return ""
+}
+
 // AgentScopeFrom returns the scope on ctx, or nil when the caller is not
 // an agent.
 func AgentScopeFrom(ctx context.Context) AgentScope {
