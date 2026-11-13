@@ -94,3 +94,20 @@ func TestLentConnectorRunsAsLender(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+// The caller an op sees: the session's owner normally, the lender when the
+// connector is lent (the owner must not win back after the swap).
+func TestEffectiveCaller(t *testing.T) {
+	svc := &Service{}
+	svc.SetSessionOwnerUserResolver(func(sid string) (string, bool) {
+		if sid == "sess-1" {
+			return "u-owner", true
+		}
+		return "", false
+	})
+
+	assert.Equal(t, "u-owner", svc.effectiveCaller("u-principal", "sess-1", false), "session owner is the caller")
+	assert.Equal(t, "u-lender", svc.effectiveCaller("u-lender", "sess-1", true), "a lent call keeps the lender")
+	assert.Equal(t, "u-principal", svc.effectiveCaller("u-principal", "", false), "no session keeps the principal")
+	assert.Equal(t, "u-principal", svc.effectiveCaller("u-principal", "sess-x", false), "unknown session keeps the principal")
+}

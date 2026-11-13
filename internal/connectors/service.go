@@ -239,6 +239,19 @@ func (s *Service) SetSessionOwnerBotResolver(fn func(sessionID string) (string, 
 	s.sessionOwnerBot = fn
 }
 
+// effectiveCaller is the user id an op sees as its caller. An agent turn
+// authenticates with a shared principal, so the session's owner is the
+// real person; a lent connector overrides that and keeps the lender.
+func (s *Service) effectiveCaller(userID, sessionID string, lent bool) string {
+	if lent || s.sessionOwnerUser == nil || sessionID == "" {
+		return userID
+	}
+	if uid, ok := s.sessionOwnerUser(sessionID); ok && uid != "" {
+		return uid
+	}
+	return userID
+}
+
 // SetSessionOwnerUserResolver wires the hook that maps an agent session id to
 // the wick user id that owns it. Called once at boot from the API server where
 // the agents registry is available. Lets per-owner connector ops (data tables)
@@ -2561,13 +2574,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// token (a synthetic admin, NOT the human), so the SESSION's owner — not
 	// p.UserID — is the true principal. Fall back to p.UserID for direct PAT
 	// calls with no session. Empty result → unrestricted (internal/system).
-	callerUID := p.UserID
-	if s.sessionOwnerUser != nil && sessionID != "" {
-		if uid, ok := s.sessionOwnerUser(sessionID); ok && uid != "" {
-			callerUID = uid
-		}
-	}
-	cctx.SetCallerUserID(callerUID)
+	// A lent connector already runs as its lender (p.UserID was swapped
+	// above): the session owner must not win back here, or the lender's
+	// own account is looked up under the owner's id and never found.
+	cctx.SetCallerUserID(s.effectiveCaller(p.UserID, sessionID, lent))
 	if acct != nil {
 		cctx.SetAccountID(acct.ID)
 	}
