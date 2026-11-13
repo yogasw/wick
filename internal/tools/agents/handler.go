@@ -417,6 +417,8 @@ func Register(r tool.Router) {
 	r.PATCH("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareUpdate)
 	r.GET("/api/team/share-users", apiTeamShareUsers)
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
+	r.GET("/api/team/agents/{id}/access/effective", apiTeamAgentAccessEffective)
+	r.GET("/api/team/agents/{id}/access/trail", apiTeamAgentAccessTrail)
 	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
 	r.GET("/api/team/agents/{id}/slack/manifest", apiTeamAgentSlackManifest)
 	r.GET("/api/team/agents/{id}/slack", apiTeamAgentSlackGet)

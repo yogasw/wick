@@ -706,6 +706,29 @@ func (r *Repo) RunLends(ctx context.Context, runIDs []string) (map[string]entity
 	return out, nil
 }
 
+// RunLendView is one lent run with the run's own op, connector, status
+// and time, for an agent's "who used what on whose behalf" trail.
+type RunLendView struct {
+	entity.ConnectorRunLend
+	ConnectorID  string                    `json:"connector_id"`
+	OperationKey string                    `json:"operation_key"`
+	Status       entity.ConnectorRunStatus `json:"status"`
+	StartedAt    time.Time                 `json:"started_at"`
+}
+
+// RecentRunLendsByAgent returns the latest lent runs of agentID, newest
+// first, at most limit.
+func (r *Repo) RecentRunLendsByAgent(ctx context.Context, agentID string, limit int) ([]RunLendView, error) {
+	var rows []RunLendView
+	err := r.db.WithContext(ctx).Table("connector_run_lends AS l").
+		Select("l.*, r.connector_id, r.operation_key, r.status, r.started_at").
+		Joins("JOIN connector_runs AS r ON r.id = l.run_id").
+		Where("l.agent_id = ?", agentID).
+		Order("l.created_at DESC").Limit(limit).
+		Scan(&rows).Error
+	return rows, err
+}
+
 func (r *Repo) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
 	var run entity.ConnectorRun
 	err := r.db.WithContext(ctx).Where("id = ?", runID).First(&run).Error

@@ -2811,6 +2811,11 @@ func (s *Service) Retry(ctx context.Context, originalRunID, userID, ipAddr, user
 
 // GetRun loads a single ConnectorRun by ID. Backs the test page's
 // prefill flow when a Retry link is followed from the history view.
+// RecentRunLendsByAgent returns the latest lent runs of a Team agent.
+func (s *Service) RecentRunLendsByAgent(ctx context.Context, agentID string, limit int) ([]RunLendView, error) {
+	return s.repo.RecentRunLendsByAgent(ctx, agentID, limit)
+}
+
 // RunLends returns who asked for each lent run in runIDs, keyed by run id.
 func (s *Service) RunLends(ctx context.Context, runIDs []string) (map[string]entity.ConnectorRunLend, error) {
 	return s.repo.RunLends(ctx, runIDs)

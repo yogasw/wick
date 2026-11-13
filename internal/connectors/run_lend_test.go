@@ -59,6 +59,15 @@ func TestLentRunRecordsRequester(t *testing.T) {
 	_, ownLent := lends[ownID]
 	assert.False(t, ownLent, "a run that was not lent records no lend")
 
+	trail, err := svc.RecentRunLendsByAgent(bg, "agent-1", 10)
+	require.NoError(t, err)
+	require.Len(t, trail, 2, "both lent runs, the unlent one excluded")
+	for _, v := range trail {
+		assert.Equal(t, row.ID, v.ConnectorID)
+		assert.Equal(t, "whoami", v.OperationKey)
+		assert.False(t, v.StartedAt.IsZero())
+	}
+
 	got, err := svc.GetRun(bg, lentID)
 	require.NoError(t, err)
 	assert.Equal(t, "u-lender", got.UserID, "the run row keeps the lender as before")
