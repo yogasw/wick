@@ -64,6 +64,28 @@ type LendingScope interface {
 	LentIDs() []string
 }
 
+// LentAccountScope is the optional part of a LendingScope that names the
+// one account a lend runs as. A lend that lists exactly one account
+// (not the instance's own identity) runs as it, instead of guessing
+// the account from whoever is calling.
+type LentAccountScope interface {
+	LentAccount(connectorID string) (accountID string, ok bool)
+}
+
+// lentAccountID is the account a lent connector runs as, "" when the
+// scope names none.
+func lentAccountID(ctx context.Context, connectorID string) string {
+	ls, ok := AgentScopeFrom(ctx).(LentAccountScope)
+	if !ok {
+		return ""
+	}
+	id, ok := ls.LentAccount(connectorID)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 type agentScopeKey struct{}
 
 // WithAgentScope attaches scope to ctx. A nil scope leaves ctx unchanged.

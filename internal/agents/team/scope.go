@@ -234,6 +234,20 @@ func (s *Scope) LentBy(connectorID string) (string, bool) {
 	return s.ownerID, true
 }
 
+// LentAccount implements connectors.LentAccountScope: a lend that lists
+// exactly one named account runs as it. No list, several, or only the
+// instance's own identity ("") leaves the choice to the caller.
+func (s *Scope) LentAccount(connectorID string) (string, bool) {
+	if _, ok := s.LentBy(connectorID); !ok {
+		return "", false
+	}
+	g := s.grants[connectorID]
+	if len(g.Accounts) != 1 || g.Accounts[0] == "" {
+		return "", false
+	}
+	return g.Accounts[0], true
+}
+
 // LentIDs implements connectors.LendingScope.
 func (s *Scope) LentIDs() []string {
 	var out []string

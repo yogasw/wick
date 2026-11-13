@@ -111,3 +111,24 @@ func TestEffectiveCaller(t *testing.T) {
 	assert.Equal(t, "u-principal", svc.effectiveCaller("u-principal", "", false), "no session keeps the principal")
 	assert.Equal(t, "u-principal", svc.effectiveCaller("u-principal", "sess-x", false), "unknown session keeps the principal")
 }
+
+type lendAccountScope struct {
+	lendScope
+	account string
+}
+
+func (s lendAccountScope) LentAccount(id string) (string, bool) {
+	return s.account, id == s.conn && s.account != ""
+}
+
+// A lend that names its account hands it to the call; one that names none
+// leaves the account to the caller.
+func TestLentAccountID(t *testing.T) {
+	bg := context.Background()
+	named := WithAgentScope(bg, lendAccountScope{lendScope: lendScope{conn: "c1", lender: "u1"}, account: "acc-1"})
+	assert.Equal(t, "acc-1", lentAccountID(named, "c1"))
+	assert.Equal(t, "", lentAccountID(named, "other"), "another connector is not that lend")
+	assert.Equal(t, "", lentAccountID(bg, "c1"), "no scope names nothing")
+	plain := WithAgentScope(bg, lendScope{conn: "c1", lender: "u1"})
+	assert.Equal(t, "", lentAccountID(plain, "c1"), "a scope without accounts names nothing")
+}

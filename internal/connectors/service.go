@@ -2171,6 +2171,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if lender, tags, ok := s.lendIdentity(ctx, c.ID, p.UserID, p.TagIDs, p.IsAdmin); ok {
 			p.UserID, p.IsAdmin, p.TagIDs = lender.ID, lender.IsAdmin(), tags
 			lent = true
+			if p.AccountID == "" {
+				p.AccountID = lentAccountID(ctx, c.ID)
+			}
 		}
 		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
 			return nil, err
