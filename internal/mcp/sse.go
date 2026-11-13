@@ -325,7 +325,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 
 	// Session-workspace instance: run against the ephemeral instance's
 	// own config; the session is the authorization scope, no DB row.
-	sessionTarget, isSession, err := handlers.SessionInstanceForID(h.layout, handlers.CallSession(r, args), connectorID)
+	sessionTarget, isSession, err := handlers.SessionInstanceForCaller(r.Context(), h.layout, handlers.CallSession(r, args), connectorID)
 	if err != nil {
 		sseWriteToolError(sess, req, err.Error(), toolID)
 		return
@@ -371,6 +371,9 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		// Same precedence as executeOneCtx: the per-spawn header wins,
 		// the argument is the fallback.
 		sid := handlers.CallSession(r, args)
+		if !handlers.SessionTrusted(r.Context(), sid) {
+			sid = ""
+		}
 		res, err := h.connectors.Execute(execCtx, connectors.ExecuteParams{
 			ConnectorID:     connectorID,
 			OperationKey:    opKey,

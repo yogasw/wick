@@ -106,6 +106,40 @@ func WithoutAgentScope(ctx context.Context) context.Context {
 	return context.WithValue(ctx, agentScopeKey{}, nil)
 }
 
+// WithoutLending returns scope with its lending half removed: the same
+// checklist and feature switches, but nothing lent. For a caller that
+// named a session it may not use — the checklist still narrows them, the
+// owner's lend must not widen them. nil stays nil.
+func WithoutLending(scope AgentScope) AgentScope {
+	if scope == nil {
+		return nil
+	}
+	if fs, ok := scope.(AgentFeatureScope); ok {
+		return unlentFeatureScope{unlentScope{scope}, fs}
+	}
+	return unlentScope{scope}
+}
+
+// unlentScope forwards only the AgentScope methods, so a type assertion
+// to LendingScope or LentAccountScope fails on it.
+type unlentScope struct{ s AgentScope }
+
+func (u unlentScope) AllowConnector(id string) bool { return u.s.AllowConnector(id) }
+func (u unlentScope) AllowAccount(id, accountID string) bool {
+	return u.s.AllowAccount(id, accountID)
+}
+func (u unlentScope) AllowOp(id, opKey string, destructive bool) bool {
+	return u.s.AllowOp(id, opKey, destructive)
+}
+
+type unlentFeatureScope struct {
+	unlentScope
+	fs AgentFeatureScope
+}
+
+func (u unlentFeatureScope) AllowKey(key string) bool   { return u.fs.AllowKey(key) }
+func (u unlentFeatureScope) AllowTool(name string) bool { return u.fs.AllowTool(name) }
+
 // AgentScopeFrom returns the scope on ctx, or nil when the caller is not
 // an agent.
 func AgentScopeFrom(ctx context.Context) AgentScope {

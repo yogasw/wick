@@ -1946,7 +1946,7 @@ func NewServer() *Server {
 	// so per-owner connector ops (data tables) attribute create/access to the
 	// human behind the session — agent spawns authenticate with a shared
 	// internal token, so the token's principal is not the real owner.
-	connectorsSvc.SetSessionOwnerUserResolver(func(sessionID string) (string, bool) {
+	sessionOwner := func(sessionID string) (string, bool) {
 		if sessionID == "" {
 			return "", false
 		}
@@ -1954,7 +1954,11 @@ func NewServer() *Server {
 			return sess.Meta.UserID, true
 		}
 		return "", false
-	})
+	}
+	connectorsSvc.SetSessionOwnerUserResolver(sessionOwner)
+	// The same owner decides whether an MCP caller that names a session by
+	// header or session_id argument may use what that session lends.
+	mcphandlers.SetSessionOwnerResolver(sessionOwner)
 
 	// Name people to the model instead of handing it a uuid. The id stays the
 	// stored value (a name freezes at write time and goes stale on a rename);

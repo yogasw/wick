@@ -10,6 +10,8 @@ import (
 	"os"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/mcp/handlers"
 )
 
 // ServeStdio runs the MCP JSON-RPC server over r/w for local clients
@@ -20,6 +22,9 @@ import (
 // login.WithUser (typically a synthetic local admin) before calling.
 // Logs go to stderr so the protocol stream stays clean.
 func (h *Handler) ServeStdio(ctx context.Context, r io.Reader, w io.Writer) {
+	// The stdio peer is a local process that already holds the host, so
+	// any session it names is its own.
+	ctx = handlers.WithSessionTrustAll(ctx)
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -70,6 +75,6 @@ type lineResponseWriter struct {
 	status int
 }
 
-func (w *lineResponseWriter) Header() http.Header        { return w.header }
-func (w *lineResponseWriter) WriteHeader(status int)     { w.status = status }
+func (w *lineResponseWriter) Header() http.Header         { return w.header }
+func (w *lineResponseWriter) WriteHeader(status int)      { w.status = status }
 func (w *lineResponseWriter) Write(b []byte) (int, error) { return w.buf.Write(b) }

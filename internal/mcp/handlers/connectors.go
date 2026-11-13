@@ -374,7 +374,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	selector := firstNonEmpty(args, "selector", "category", "op_key")
 	// Session-workspace instance: resolve from the session file and render
 	// the base module's category list / op list / op schema, no DB row involved.
-	if target, ok, err := SessionInstanceForID(layout, CallSession(r, args), connectorID); err != nil {
+	if target, ok, err := SessionInstanceForCaller(r.Context(), layout, CallSession(r, args), connectorID); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
 	} else if ok {
@@ -779,9 +779,15 @@ func executeOneFrom(ctx context.Context, r *http.Request, svc *connectors.Servic
 	// Session-workspace instance: run against the ephemeral instance's own
 	// config (no DB row, no tag visibility — the session itself is the
 	// authorization scope).
-	sessionTarget, isSession, err := SessionInstanceForID(layout, sessionID, connectorID)
+	sessionTarget, isSession, err := SessionInstanceForCaller(ctx, layout, sessionID, connectorID)
 	if err != nil {
 		return "", err
+	}
+	// A session the caller may not use is not stamped on the run: it would
+	// pick that session owner's connected account and file the run under
+	// somebody else's conversation.
+	if !SessionTrusted(ctx, sessionID) {
+		sessionID = ""
 	}
 	if !isSession {
 		allowed, verr := svc.IsVisibleTo(ctx, connectorID, callerIDFromCtx(ctx), tagIDs, user.IsAdmin())

@@ -167,7 +167,7 @@ func checkToolAccess(ctx context.Context, svc *connectors.Service, layout agentc
 	if err != nil {
 		return err
 	}
-	_, isSession, err := SessionInstanceForID(layout, sessionID, connectorID)
+	_, isSession, err := SessionInstanceForCaller(ctx, layout, sessionID, connectorID)
 	if err != nil {
 		return err
 	}
