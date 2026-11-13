@@ -375,13 +375,31 @@ type IdentityLookup func(ctx context.Context, userID string) (*entity.User, []st
 // (see LendingScope). Set once at boot.
 func (s *Service) SetIdentityLookup(f IdentityLookup) { s.identity = f }
 
+// internalAgentUserID mirrors mcp.InternalAgentUserID (not imported here to
+// keep connectors free of the mcp package): the synthetic principal of
+// wick's own internal token, which is nobody in particular.
+const internalAgentUserID = "wick-agent-internal"
+
+// lendRequester is who really asked for a lent call. The token principal
+// (the caller before the lend swapped in the lender) is that person: a
+// per-sender spawn's token is minted for whoever triggered it, so in a
+// shared thread it names the person who spoke, not the session owner.
+// Only when the principal is wick itself (or absent) does the session
+// owner stand in.
+func (s *Service) lendRequester(principal, sessionID string) string {
+	if principal != "" && principal != internalAgentUserID {
+		return principal
+	}
+	return s.effectiveCaller(principal, sessionID, false)
+}
+
 // callDetails describes a refused call for its error message: the
 // effective caller, the lend if any, and the account with its owner.
 func (s *Service) callDetails(c entity.Connector, p ExecuteParams, lent bool, requester string, acc *entity.ConnectorAccount) connector.CallDetails {
 	d := connector.CallDetails{ConnectorLabel: c.Label, ConnectorID: c.ID, CallerID: p.UserID, AccountID: p.AccountID}
 	if lent {
 		d.LenderID = p.UserID
-		d.RequesterID = s.effectiveCaller(requester, p.SessionID, false)
+		d.RequesterID = s.lendRequester(requester, p.SessionID)
 	}
 	if acc != nil {
 		d.AccountOwnerID = acc.WickUserID
@@ -2529,7 +2547,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		// Best effort: the run itself is already recorded, and refusing a
 		// call because its audit side-row failed would break the lend.
 		l := &entity.ConnectorRunLend{
-			RunID: run.ID, OnBehalfOf: p.UserID, CallerUserID: s.effectiveCaller(requester, sessionID, false),
+			RunID: run.ID, OnBehalfOf: p.UserID, CallerUserID: s.lendRequester(requester, sessionID),
 			AgentID: agentIDOf(ctx), SessionID: sessionID,
 		}
 		if err := s.repo.CreateRunLend(ctx, l); err != nil {
@@ -2614,7 +2632,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// own account is looked up under the owner's id and never found.
 	cctx.SetCallerUserID(s.effectiveCaller(p.UserID, sessionID, lent))
 	if lent {
-		cctx.SetLend(p.UserID, s.effectiveCaller(requester, sessionID, false))
+		cctx.SetLend(p.UserID, s.lendRequester(requester, sessionID))
 	}
 	if acct != nil {
 		cctx.SetAccountID(acct.ID)

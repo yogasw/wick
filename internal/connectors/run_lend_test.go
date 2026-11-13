@@ -41,15 +41,19 @@ func TestLentRunRecordsRequester(t *testing.T) {
 		require.NotNil(t, res, "execute: %v", err)
 		return res.RunID
 	}
+	// A shared thread: the session belongs to u-asker, but u-stranger's
+	// token made the call.
 	lentID := run(ctx, "u-stranger", "sess-1")
+	internalID := run(ctx, internalAgentUserID, "sess-1")
 	ownID := run(bg, "u-lender", "")
 
-	lends, err := svc.RunLends(bg, []string{lentID, ownID})
+	lends, err := svc.RunLends(bg, []string{lentID, internalID, ownID})
 	require.NoError(t, err)
 	l, ok := lends[lentID]
 	require.True(t, ok, "the lent run must have a lend record")
 	assert.Equal(t, "u-lender", l.OnBehalfOf)
-	assert.Equal(t, "u-asker", l.CallerUserID, "the session owner is who asked")
+	assert.Equal(t, "u-stranger", l.CallerUserID, "the token principal is who asked, not the session owner")
+	assert.Equal(t, "u-asker", lends[internalID].CallerUserID, "wick's internal principal falls back to the session owner")
 	assert.Equal(t, "agent-1", l.AgentID)
 	assert.Equal(t, "sess-1", l.SessionID)
 	_, ownLent := lends[ownID]
