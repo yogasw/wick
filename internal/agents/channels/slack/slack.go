@@ -34,6 +34,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/imagecard"
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/slackmd"
@@ -3599,6 +3600,17 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	text, cards := actioncard.Split(text, cardPointer)
 	if len(cards) > 0 {
 		defer s.postCards(channelID, threadTS, sessionKey, cards)
+	}
+	// Images (imagecard fences, markdown image lines) go out as image
+	// blocks right after the text, before any card.
+	text, images := imagecard.Split(text)
+	if len(images) > 0 {
+		defer s.postImages(channelID, threadTS, images)
+		if text == "" && liveTS != "" {
+			// The reply was only images: the live message still shows
+			// the raw fence streamed so far, so drop it.
+			s.deleteMessage(channelID, liveTS)
+		}
 	}
 	defer func() {
 		s.mu.Lock()
