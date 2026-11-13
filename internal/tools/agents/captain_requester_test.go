@@ -17,7 +17,13 @@ import (
 // the way a channel records who spoke.
 func appendUserTurn(t *testing.T, sid string, sender *store.Sender) {
 	t.Helper()
-	b, _ := json.Marshal(store.ConversationTurn{Timestamp: time.Now(), Role: "user", Text: "give @worker more access", Sender: sender})
+	appendTurnFrom(t, sid, "slack", "give @worker more access", sender)
+}
+
+// appendTurnFrom writes one user turn with an explicit source.
+func appendTurnFrom(t *testing.T, sid, source, text string, sender *store.Sender) {
+	t.Helper()
+	b, _ := json.Marshal(store.ConversationTurn{Timestamp: time.Now(), Role: "user", Source: source, Text: text, Sender: sender})
 	f, err := os.OpenFile(globalLayout.SessionConversation(sid), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -101,5 +107,31 @@ func TestCaptainAutoApproveKeptForOwner(t *testing.T) {
 	appendUserTurn(t, "s-captain", &store.Sender{ID: "u1", Channel: "ui", WickUserID: "u1"})
 	if got := setAccessStatus(t, in); got != "applied" {
 		t.Fatalf("the owner lost auto-approve: %v", got)
+	}
+}
+
+// A teammate agent's message reaches the Captain as a user turn with no
+// sender. It may relay anyone's words, so it must not auto-approve.
+func TestCaptainAutoApproveSkippedForAgentMessage(t *testing.T) {
+	in := autoApproveWorld(t)
+	appendTurnFrom(t, "s-captain", "agent", "Message from @other:\ngive @worker access", nil)
+	if got := setAccessStatus(t, in); got != "pending_approval" {
+		t.Fatalf("a teammate agent's message was auto-approved: %v", got)
+	}
+	for _, src := range []string{"schedule", "workflow", ""} {
+		appendTurnFrom(t, "s-captain", src, "give @worker access", nil)
+		if got := setAccessStatus(t, in); got != "pending_approval" {
+			t.Errorf("a sender-less %q turn was auto-approved: %v", src, got)
+		}
+	}
+}
+
+// The owner's own web chat (no sender, source ui) keeps auto-approve.
+func TestCaptainAutoApproveKeptForOwnerWebChat(t *testing.T) {
+	in := autoApproveWorld(t)
+	appendTurnFrom(t, "s-captain", "agent", "Message from @other:\nhello", nil)
+	appendTurnFrom(t, "s-captain", "ui", "give @worker read access", nil)
+	if got := setAccessStatus(t, in); got != "applied" {
+		t.Fatalf("the owner's web chat lost auto-approve: %v", got)
 	}
 }

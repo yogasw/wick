@@ -538,11 +538,12 @@ const autoApprovedBy = "auto-approve (Captain policy)"
 
 // requestedByOwner reports whether the Captain turn filing a proposal
 // comes from owner, so the owner's auto-approve rule may apply it. The
-// Captain session must be the owner's, and the latest user turn must not
-// come from anyone else the channel knows (a shared Slack thread, a
-// sender with no wick account). A turn with no recorded sender (the
-// owner's web chat, a schedule) counts as the session owner's. Anything
-// unreadable is false: the proposal then waits for the owner's card.
+// Captain session must be the owner's, and the latest user turn must be
+// the owner's: a channel sender mapped to owner, or a web-chat turn in the
+// owner's own session. A turn with no sender from anywhere else — a
+// teammate agent's message, a schedule, a workflow, a listen-mode post —
+// may carry someone else's words, so it gets the card. Anything
+// unreadable is false too.
 func requestedByOwner(sessionID, owner string) bool {
 	if globalMgr == nil || owner == "" {
 		return false
@@ -551,38 +552,51 @@ func requestedByOwner(sessionID, owner string) bool {
 	if !ok || sess.Meta.UserID != owner {
 		return false
 	}
-	sender, err := lastUserSender(globalLayout.SessionConversation(sessionID))
+	turn, found, err := lastUserTurn(globalLayout.SessionConversation(sessionID))
 	if err != nil {
 		return false
 	}
-	return sender == nil || sender.WickUserID == owner
+	switch {
+	case !found:
+		// No user turn at all: nobody but the session (the owner's) asked.
+		return true
+	case turn.Sender != nil:
+		return turn.Sender.WickUserID == owner
+	default:
+		return turn.Source == "ui"
+	}
 }
 
-// lastUserSender is the sender of the latest user turn in a
-// conversation.jsonl, nil when that turn (or the file) records none.
-func lastUserSender(path string) (*store.Sender, error) {
+// userTurnOrigin is who and where a user turn came from.
+type userTurnOrigin struct {
+	Role   string        `json:"role"`
+	Source string        `json:"source"`
+	Sender *store.Sender `json:"sender"`
+}
+
+// lastUserTurn is the origin of the latest user turn in a
+// conversation.jsonl; found is false when there is none (or no file).
+func lastUserTurn(path string) (userTurnOrigin, bool, error) {
+	var last userTurnOrigin
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return last, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return last, false, err
 	}
 	defer f.Close()
-	var last *store.Sender
+	found := false
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
 	for sc.Scan() {
-		var turn struct {
-			Role   string        `json:"role"`
-			Sender *store.Sender `json:"sender"`
-		}
+		var turn userTurnOrigin
 		if json.Unmarshal(sc.Bytes(), &turn) != nil || turn.Role != "user" {
 			continue
 		}
-		last = turn.Sender
+		last, found = turn, true
 	}
-	return last, sc.Err()
+	return last, found, sc.Err()
 }
 
 // propose checks the proposal against the OWNER's own catalog (the same
