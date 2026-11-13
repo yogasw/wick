@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -50,6 +51,40 @@ func withTeamWorld(t *testing.T) {
 	globalPool = pool.New(pool.PoolConfig{Layout: layout})
 	globalTeam = team.NewService(db, layout)
 	t.Cleanup(func() { globalMgr, globalLayout, globalPool, globalTeam = prevMgr, prevLayout, prevPool, prevTeam })
+	// Cleanups run last-in first-out: this one runs BEFORE the restore
+	// above, so no ticket-room run this test started is still reading the
+	// globals when they are swapped back.
+	t.Cleanup(func() { drainRoomRuns(t) })
+}
+
+// drainRoomRuns cancels every ticket-room run still playing and waits for
+// each to release its slot. A room run outlives the request that started
+// it (it is a background goroutine by design), so a test must stop it
+// before tearing down the globals it reads.
+func drainRoomRuns(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		live := 0
+		roomRunSlots.Range(func(_, v any) bool {
+			s := v.(*roomRunSlot)
+			s.mu.Lock()
+			for _, e := range s.runs {
+				e.cancel()
+				live++
+			}
+			s.mu.Unlock()
+			return true
+		})
+		if live == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("%d ticket-room runs still live after the test", live)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // seedTeamProject creates a project owned by owner.
