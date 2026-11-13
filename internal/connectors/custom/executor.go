@@ -670,7 +670,7 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 			// fallback to someone else's.
 			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
 			if err != nil {
-				return nil, perUserAccountError(err, *inst, c.AccountID(), "token")
+				return nil, perUserAccountError(err, *inst, c.AccountID(), "token", s.callDetails(c, *inst))
 			}
 			if err := s.applyUserToken(&srv, acc); err != nil {
 				return nil, err
@@ -693,7 +693,7 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 			// account — never a fallback to someone else's.
 			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
 			if err != nil {
-				return nil, perUserAccountError(err, *inst, c.AccountID(), "account")
+				return nil, perUserAccountError(err, *inst, c.AccountID(), "account", s.callDetails(c, *inst))
 			}
 			tok, err := s.accountAccessToken(c.Context(), &meta, acc)
 			if err != nil {
@@ -781,21 +781,50 @@ func coerceArgs(fields []DefField, c *connector.Ctx) map[string]any {
 	return out
 }
 
+// callDetails is who a per-user call on inst ran as, for the refusal
+// message: the effective caller, the lend if any, and the picked account
+// with its owner. No credential is read into it.
+func (s *Service) callDetails(c *connector.Ctx, inst entity.Connector) connector.CallDetails {
+	d := connector.CallDetails{
+		ConnectorLabel: inst.Label, ConnectorID: inst.ID,
+		CallerID: c.CallerUserID(), LenderID: c.LentBy(), RequesterID: c.LendRequester(),
+		AccountID: c.AccountID(), Name: c.UserName,
+	}
+	if d.AccountID != "" {
+		if accs, err := s.conns.ListAccounts(c.Context(), inst.ID); err == nil {
+			for _, a := range accs {
+				if a.ID == d.AccountID {
+					d.AccountOwnerID = a.WickUserID
+					break
+				}
+			}
+		}
+	}
+	return d
+}
+
 // perUserAccountError turns a callerAccount miss into the message the
-// agent relays: where the user connects their own account. what names
-// the credential ("account" for oauth, "token" for the token schemes).
-func perUserAccountError(err error, inst entity.Connector, accountID, what string) error {
+// agent relays: a short sentence saying what to do and who must do it,
+// then the technical details (see connector.CallDetails). what names the
+// credential ("account" for oauth, "token" for the token schemes).
+func perUserAccountError(err error, inst entity.Connector, accountID, what string, d connector.CallDetails) error {
 	page := "/manager/connectors/" + inst.Key + "/" + inst.ID
 	switch err {
 	case ErrNoOAuthAccount:
-		if what == "token" {
-			return fmt.Errorf("you have not added your own %s token yet — open %s, click Connect my account and enter your token, then retry", inst.Label, page)
+		if d.LenderID != "" {
+			// The asker cannot fix this: the call runs as the lender, and
+			// it is the lender's own credential that is missing.
+			return fmt.Errorf("%s is lent to %s by %s, but %s has not connected their own %s %s yet — ask them to open %s and connect it, then retry %s",
+				inst.Label, d.Who(d.RequesterID), d.Who(d.LenderID), d.Who(d.LenderID), inst.Label, what, page, d)
 		}
-		return fmt.Errorf("you have not connected your own %s account yet — open %s and click Connect to link it, then retry", inst.Label, page)
+		if what == "token" {
+			return fmt.Errorf("you have not added your own %s token yet — open %s, click Connect my account and enter your token, then retry %s", inst.Label, page, d)
+		}
+		return fmt.Errorf("you have not connected your own %s account yet — open %s and click Connect to link it, then retry %s", inst.Label, page, d)
 	case ErrOAuthAccountNotYours:
-		return fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at %s", accountID, inst.Label, page)
+		return fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at %s %s", accountID, inst.Label, page, d)
 	case ErrOAuthAccountGone:
-		return fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at %s", accountID, inst.Label, page)
+		return fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at %s %s", accountID, inst.Label, page, d)
 	}
 	return err
 }

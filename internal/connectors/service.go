@@ -375,6 +375,23 @@ type IdentityLookup func(ctx context.Context, userID string) (*entity.User, []st
 // (see LendingScope). Set once at boot.
 func (s *Service) SetIdentityLookup(f IdentityLookup) { s.identity = f }
 
+// callDetails describes a refused call for its error message: the
+// effective caller, the lend if any, and the account with its owner.
+func (s *Service) callDetails(c entity.Connector, p ExecuteParams, lent bool, requester string, acc *entity.ConnectorAccount) connector.CallDetails {
+	d := connector.CallDetails{ConnectorLabel: c.Label, ConnectorID: c.ID, CallerID: p.UserID, AccountID: p.AccountID}
+	if lent {
+		d.LenderID = p.UserID
+		d.RequesterID = s.effectiveCaller(requester, p.SessionID, false)
+	}
+	if acc != nil {
+		d.AccountOwnerID = acc.WickUserID
+	}
+	if s.userName != nil {
+		d.Name = func(id string) string { n, _ := s.userName(id); return n }
+	}
+	return d
+}
+
 // lendIdentity is who a call on connectorID runs as when the agent scope
 // on ctx lends it and the caller cannot reach it on their own: the
 // lender, with their tags. false keeps the caller — nothing is lent, the
@@ -2146,6 +2163,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// lent: the call runs as the lender (see lendIdentity), so the
 	// session's own human never picks the account below.
 	lent := false
+	// requester is who asked for this call, kept before a lend swaps the
+	// identity to the lender (see lendIdentity).
+	requester := p.UserID
 	if virtual {
 		// Session-workspace instance: clone the base module, no DB row.
 		m, ok := s.Module(p.SessionInstance.BaseKey)
@@ -2238,7 +2258,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
 			}
 			if !AccountVisibleTo(*c, *acc, accTags[acc.ID], caller) {
-				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
+				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private %s", p.AccountID, s.callDetails(*c, p, lent, requester, acc))
 			}
 			acct = acc
 		}
@@ -2581,6 +2601,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// above): the session owner must not win back here, or the lender's
 	// own account is looked up under the owner's id and never found.
 	cctx.SetCallerUserID(s.effectiveCaller(p.UserID, sessionID, lent))
+	if lent {
+		cctx.SetLend(p.UserID, s.effectiveCaller(requester, sessionID, false))
+	}
 	if acct != nil {
 		cctx.SetAccountID(acct.ID)
 	}
