@@ -2330,7 +2330,7 @@ func (s *Channel) resolveSender(userID string) *store.Sender {
 	// Distinct from the ID above: it is what the turn RUNS as, while the
 	// Slack fields are who the agent is talking to. They differ for a Slack
 	// user with no wick account, whose turns run as the channel owner.
-	if wickID, ok := s.resolveSessionOwner(userID); ok {
+	if wickID, ok, _ := s.resolveSessionOwner(userID); ok {
 		sender.WickUserID = wickID
 	}
 
@@ -2817,9 +2817,22 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	callerUserID := ""
 	// A bot is never resolved (that could auto-register it as a wick user):
 	// it falls through to the channel owner, or is refused when there is none.
-	wickUserID, resolved := "", false
+	wickUserID, resolved, lookupFailed := "", false, false
 	if !fromBot {
-		wickUserID, resolved = s.resolveSessionOwner(ev.User)
+		wickUserID, resolved, lookupFailed = s.resolveSessionOwner(ev.User)
+	}
+	if lookupFailed {
+		// The gate above passed, but users.info failed on this second
+		// lookup: the sender is unknown again, and falling back to the
+		// channel owner would run the turn with someone else's access.
+		log.Warn().Str("channel", "slack").
+			Str("user", ev.User).
+			Str("session", sessionID).
+			Msg("users.info failed, refusing message instead of running as the channel owner")
+		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
+		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+		s.postReply(ev.Channel, threadTS, identityLookupFailedMessage)
+		return
 	}
 	if resolved {
 		callerUserID = wickUserID

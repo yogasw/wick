@@ -117,8 +117,11 @@ func identityErrorMessage(err error, autoRegister bool) string {
 // that actually scopes access; the OAuth-connect mapping (wickUserIDFn) is a
 // narrower fallback that only covers senders who already linked an account.
 // Returning ok=false leaves the caller to fall back to the channel owner,
-// which is the pre-existing shared-identity behaviour.
-func (s *Channel) resolveSessionOwner(slackUserID string) (string, bool) {
+// which is the pre-existing shared-identity behaviour — except when
+// lookupFailed is true: users.info failed and nothing else knows the
+// sender, so who they are is unknown and the caller must refuse rather
+// than run the turn as the channel owner.
+func (s *Channel) resolveSessionOwner(slackUserID string) (id string, ok bool, lookupFailed bool) {
 	s.cfgMu.Lock()
 	users := s.users
 	byOAuth := s.wickUserIDFn
@@ -130,6 +133,7 @@ func (s *Channel) resolveSessionOwner(slackUserID string) (string, bool) {
 
 	if users != nil && api != nil {
 		u, err := api.GetUserInfo(slackUserID)
+		lookupFailed = err != nil
 		if err == nil {
 			su := slackUserFrom(u)
 			id, rerr := agentchannels.ResolveWickUser(context.Background(), users, senderIdentityFrom(su, slackUserID), autoRegister, "slack", instanceKey)
@@ -138,22 +142,26 @@ func (s *Channel) resolveSessionOwner(slackUserID string) (string, bool) {
 				// refused account does not leave a connection an admin could
 				// mistake for working access.
 				users.RecordIdentity(context.Background(), id, slackUserID, su.Name, su.Email)
-				return id, true
+				return id, true, false
 			}
 			// A refusal is deliberate and must not silently fall through to a
 			// shared identity: the caller reports it to the sender instead.
 			if rerr != nil {
-				return "", false
+				return "", false, false
 			}
 		}
 	}
 	if byOAuth != nil {
 		if id, ok := byOAuth(context.Background(), slackUserID); ok {
-			return id, true
+			return id, true, false
 		}
 	}
-	return "", false
+	return "", false, lookupFailed
 }
+
+// identityLookupFailedMessage is the reply when Slack could not tell us who
+// the sender is. Nothing ran, so retrying is safe.
+const identityLookupFailedMessage = ":warning: I could not look up your Slack profile just now, so I did not run this. Please try again in a moment."
 
 // checkSenderIdentity resolves the sender and returns the reply to post when
 // they cannot be mapped to a wick account. Empty string = allowed.
@@ -175,10 +183,19 @@ func (s *Channel) checkSenderIdentity(slackUserID string) string {
 	}
 	u, err := api.GetUserInfo(slackUserID)
 	if err != nil {
-		// Slack itself failed. Not the sender's fault and not a policy
-		// decision, so let the message through on the legacy path rather
-		// than blocking work on a transient API error.
-		return ""
+		// Slack itself failed, so the sender is unknown. Letting the message
+		// through would run it as the channel owner — someone else's access.
+		// A sender already linked through OAuth is still known; anyone else
+		// is asked to retry.
+		s.cfgMu.Lock()
+		byOAuth := s.wickUserIDFn
+		s.cfgMu.Unlock()
+		if byOAuth != nil {
+			if _, ok := byOAuth(context.Background(), slackUserID); ok {
+				return ""
+			}
+		}
+		return identityLookupFailedMessage
 	}
 	if _, rerr := agentchannels.ResolveWickUser(context.Background(), users, senderIdentityFrom(slackUserFrom(u), slackUserID), autoRegister, "slack", instanceKey); rerr != nil {
 		return identityErrorMessage(rerr, autoRegister)
