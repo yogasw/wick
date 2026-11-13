@@ -846,7 +846,7 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	teamName, teamDomain := s.teamName, s.teamDomain
 	s.cfgMu.Unlock()
 
-	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
+	api := newBotAPI(cfg.BotToken, cfg.AppToken)
 	socket := newSocketClient(api)
 
 	// The identity is CACHED — seeded from the channel row at boot and
@@ -1086,6 +1086,12 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	s.socketCycled.Store(false)
 
 	go s.watchStart(runCtx, gen)
+	go s.watchConnected(runCtx, gen)
+
+	// Events API events are handled by a worker off the socket loop, so a
+	// handler stuck on a slow Slack call never stalls the connection.
+	events, stopEvents := s.startEventWorker(ctx)
+	defer stopEvents()
 
 	// A rotating app token with no known expiry (freshly pasted) is
 	// refreshed before connecting so its expiry becomes known; then the
@@ -1130,7 +1136,7 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 		s.cfgMu.Lock()
 		s.socketCancel = sockCancel
 		s.cfgMu.Unlock()
-		err := s.runSocket(ctx, sockCtx, socket)
+		err := s.runSocket(ctx, sockCtx, socket, events)
 		sockCancel()
 		s.cfgMu.Lock()
 		s.socketCancel = nil
@@ -1200,7 +1206,7 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 // runSocket runs one socket client until it stops for good, handling its
 // events meanwhile. Events still buffered when it stops are handled too,
 // so a request Slack already delivered is not dropped.
-func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Client) error {
+func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Client, events chan<- slackevents.EventsAPIEvent) error {
 	done := make(chan error, 1)
 	go func() { done <- socketRunner(runCtx, socket) }()
 	for {
@@ -1217,7 +1223,7 @@ func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Clie
 			for {
 				select {
 				case evt := <-socket.Events:
-					s.handleSocketEvent(ctx, evt)
+					s.dispatchSocketEvent(ctx, evt, events)
 				default:
 					return err
 				}
@@ -1226,7 +1232,7 @@ func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Clie
 			if !ok {
 				return <-done
 			}
-			s.handleSocketEvent(ctx, evt)
+			s.dispatchSocketEvent(ctx, evt, events)
 		}
 	}
 }
@@ -1657,7 +1663,12 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	s.stopRun()
-	s.runWg.Wait()
+	if !waitRuns(&s.runWg, reloadWaitTimeout) {
+		// The old run is cancelled but stuck (a handler or a dial); it ends
+		// on its own once unblocked. Waiting for it kept the bot offline.
+		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Dur("waited", reloadWaitTimeout).
+			Msg("reload: previous run still stopping, starting the new one anyway")
+	}
 
 	s.applyConfig(cfg, pubURL)
 
