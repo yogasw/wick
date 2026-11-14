@@ -36,11 +36,11 @@ import { connTabOf, type ConnTab } from "./connectionTabs.js";
                                          own Team, not one agent) */
 
 /* "remote" is the A2A remote agent's own tab (remoteAgent.ts). */
-export type SettingsTab = "persona" | "access" | "roles" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced" | "remote" | "sharing";
-export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "roles", "tools", "skills", "mention", "captain", "session", "avatar", "advanced", "remote", "sharing"];
+export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced" | "remote" | "sharing";
+export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "session", "avatar", "advanced", "remote", "sharing"];
 
 /** Old tab names that still open the right tab from a bookmark. */
-const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools" };
+const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools", roles: "access" };
 
 /** settingsTabOf resolves a `tab=` value; unknown → persona. */
 export function settingsTabOf(t: string | null): SettingsTab {

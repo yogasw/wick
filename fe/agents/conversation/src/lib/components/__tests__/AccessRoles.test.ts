@@ -48,17 +48,17 @@ describe("AccessRoles", () => {
     expect(screen.getByTestId("access-mode-borrow").getAttribute("aria-checked")).toBe("true");
     expect(screen.getByTestId("access-mode-open").hasAttribute("disabled")).toBe(true);
     expect(screen.queryByTestId("access-diff")).toBeNull();
-    await waitFor(() => expect(screen.getByText("tersambung")).toBeTruthy());
-    await waitFor(() => expect(screen.getByText(/atas nama User A/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("connected")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/on behalf of User A/)).toBeTruthy());
     expect(onApply).not.toHaveBeenCalled();
     expect(calls.every((c) => c === "users" || c === "trail" || c.startsWith("effective:"))).toBe(true);
   });
 
-  it("applies a mode only after Simpan and the confirmation", async () => {
+  it("applies a mode only after Save and the confirmation", async () => {
     const onApply = vi.fn();
     render(AccessRoles, { base: "", agentId: "a1", catalog, savedGrants: lentDocs, savedMode: "choose", onApply });
     await fireEvent.click(screen.getByTestId("access-mode-team"));
-    expect(screen.getByTestId("access-diff").textContent).toContain("Docs: tidak dipinjamkan lagi");
+    expect(screen.getByTestId("access-diff").textContent).toContain("Docs: no longer lent");
     expect(onApply).not.toHaveBeenCalled();
     await fireEvent.click(screen.getByTestId("access-save"));
     expect(onApply).not.toHaveBeenCalled();
@@ -71,5 +71,14 @@ describe("AccessRoles", () => {
     expect(screen.getByTestId("access-mode-team").getAttribute("aria-checked")).toBe("true");
     await fireEvent.click(screen.getByTestId("access-roles-tab-raw"));
     expect(screen.getByTestId("access-raw").textContent).toContain('"access_mode": "owner"');
+  });
+});
+
+describe("AccessRoles with reactive props", () => {
+  it("opens when the saved grants arrive as a proxy (state from the parent)", () => {
+    // A parent's $state hands down a Proxy; structuredClone throws on it.
+    const proxied = new Proxy(lentDocs.map((g) => ({ ...g })), {});
+    render(AccessRoles, { base: "", agentId: "a1", catalog, savedGrants: proxied, savedMode: "choose", onApply: () => {} });
+    expect(screen.getByTestId("access-roles")).toBeTruthy();
   });
 });

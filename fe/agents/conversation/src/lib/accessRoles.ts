@@ -3,18 +3,18 @@
    (access_mode choose/owner, each grant's level and lend). Nothing here
    invents a permission the server does not have: per-person tiers
    (a guest treated differently from a teammate, write approval, custom
-   tiers) are shown as "segera" (coming soon) until the backend has them. */
+   tiers) are shown as "soon" until the backend has them. */
 import type { ConnectorGrant } from "./api/team.js";
 
 export type AccessMode = "choose" | "owner";
 export type AccessPreset = "private" | "team" | "borrow" | "open" | "custom";
 
 export const PRESETS: { id: AccessPreset; name: string; hint: string; soon?: string }[] = [
-  { id: "private", name: "Pribadi", hint: "Hanya connector yang dipilih, tiap orang memakai aksesnya sendiri." },
-  { id: "team", name: "Tim", hint: "Semua connector milikmu; tiap orang memakai aksesnya sendiri." },
-  { id: "borrow", name: "Pinjam", hint: "Yang tanpa akses memakai akunmu, hanya baca." },
-  { id: "open", name: "Terbuka", hint: "Siapa saja memakai akun bersama, daftar sempit.", soon: "butuh tier guest" },
-  { id: "custom", name: "Kustom", hint: "Atur sendiri per connector di tabel." },
+  { id: "private", name: "Private", hint: "Only the selected connectors; everyone uses their own access." },
+  { id: "team", name: "Team", hint: "All your connectors; everyone uses their own access." },
+  { id: "borrow", name: "Lend", hint: "People without access use your account, read only." },
+  { id: "open", name: "Open", hint: "Anyone uses a shared account, narrow list.", soon: "needs a guest tier" },
+  { id: "custom", name: "Custom", hint: "Set each connector yourself in the table." },
 ];
 
 /** detectPreset names the mode a stored access matches; anything that is
@@ -45,7 +45,7 @@ export function applyPreset(p: AccessPreset, mode: AccessMode, grants: Connector
   return { mode, grants: copy };
 }
 
-const LEVEL_NAME: Record<string, string> = { off: "mati", read: "baca", pick: "pilihan op", all: "semua" };
+const LEVEL_NAME: Record<string, string> = { off: "off", read: "read", pick: "selected ops", all: "all" };
 export const levelName = (lv: string) => LEVEL_NAME[lv] ?? lv;
 
 /** effectiveLevel is the level the draft gives a connector, the way the
@@ -62,9 +62,9 @@ export function effectiveLevel(mode: AccessMode, g: ConnectorGrant | undefined):
 export function cellFor(who: "owner" | "mate" | "guest", mode: AccessMode, g: ConnectorGrant | undefined): { level: string; as: string } {
   const level = effectiveLevel(mode, g);
   if (level === "off") return { level, as: "" };
-  if (who === "owner") return { level, as: "sebagai kamu" };
-  if (g?.lend) return { level, as: who === "mate" ? "aksesnya sendiri, tanpa akses: akunmu" : "akunmu (dipinjam)" };
-  return who === "mate" ? { level, as: "aksesnya sendiri" } : { level: "off", as: "tidak ada" };
+  if (who === "owner") return { level, as: "as you" };
+  if (g?.lend) return { level, as: who === "mate" ? "their own access; without it: your account" : "your account (lent)" };
+  return who === "mate" ? { level, as: "their own access" } : { level: "off", as: "none" };
 }
 
 /** accessDiff lists, in words, what saving would change. */
@@ -74,14 +74,14 @@ export function accessDiff(
   label: (id: string) => string,
 ): string[] {
   const out: string[] = [];
-  if (before.mode !== after.mode) out.push(`Mode akses: ${before.mode === "owner" ? "semua (All)" : "pilihan (Selected)"} → ${after.mode === "owner" ? "semua (All)" : "pilihan (Selected)"}`);
+  if (before.mode !== after.mode) out.push(`Access mode: ${before.mode === "owner" ? "All" : "Selected"} → ${after.mode === "owner" ? "All" : "Selected"}`);
   const b = new Map(before.grants.map((g) => [g.connector_id, g]));
   const a = new Map(after.grants.map((g) => [g.connector_id, g]));
   for (const id of new Set([...b.keys(), ...a.keys()])) {
     const x = b.get(id), y = a.get(id);
     const lx = effectiveLevel(before.mode, x), ly = effectiveLevel(after.mode, y);
     if (lx !== ly) out.push(`${label(id)}: ${levelName(lx)} → ${levelName(ly)}`);
-    if (!!x?.lend !== !!y?.lend) out.push(`${label(id)}: ${y?.lend ? "dipinjamkan" : "tidak dipinjamkan lagi"}`);
+    if (!!x?.lend !== !!y?.lend) out.push(`${label(id)}: ${y?.lend ? "lent" : "no longer lent"}`);
   }
   return out;
 }

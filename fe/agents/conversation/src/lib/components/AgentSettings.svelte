@@ -484,7 +484,6 @@
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
-    { id: "roles", label: "Akses & peran (baru)" },
     { id: "tools", label: "Tools & features" },
     { id: "skills", label: "Skills" },
     { id: "mention", label: "Mention" },
@@ -693,6 +692,16 @@
         {/each}
       </div>
     {:else}
+      {#key agent.id}
+        <AccessRoles
+          {base}
+          agentId={agent.id}
+          {catalog}
+          savedGrants={agent.allowed_connectors ?? []}
+          savedMode={normalizeAccessMode(agent.access_mode)}
+          onApply={(g, m) => { draft.grants = g; draft.access_mode = m; }}
+        />
+      {/key}
       <ConnectorChecklist
         {catalog}
         loading={catalogLoading}
@@ -707,17 +716,6 @@
     {/if}
     {#key agent.id}
       <AccessHistory {base} agentId={agent.id} />
-    {/key}
-  {:else if view === "roles"}
-    {#key agent.id}
-      <AccessRoles
-        {base}
-        agentId={agent.id}
-        {catalog}
-        savedGrants={agent.allowed_connectors ?? []}
-        savedMode={normalizeAccessMode(agent.access_mode)}
-        onApply={(g, m) => { draft.grants = g; draft.access_mode = m; }}
-      />
     {/key}
   {:else if view === "tools"}
     <div>

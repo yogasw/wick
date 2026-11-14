@@ -36,10 +36,10 @@ describe("applyPreset", () => {
 
 describe("cellFor", () => {
   it("says who a call runs as", () => {
-    expect(cellFor("owner", "choose", g("a", "read"))).toEqual({ level: "read", as: "sebagai kamu" });
-    expect(cellFor("guest", "choose", g("a", "read"))).toEqual({ level: "off", as: "tidak ada" });
-    expect(cellFor("guest", "choose", g("a", "read", true)).as).toBe("akunmu (dipinjam)");
-    expect(cellFor("mate", "owner", undefined)).toEqual({ level: "all", as: "aksesnya sendiri" });
+    expect(cellFor("owner", "choose", g("a", "read"))).toEqual({ level: "read", as: "as you" });
+    expect(cellFor("guest", "choose", g("a", "read"))).toEqual({ level: "off", as: "none" });
+    expect(cellFor("guest", "choose", g("a", "read", true)).as).toBe("your account (lent)");
+    expect(cellFor("mate", "owner", undefined)).toEqual({ level: "all", as: "their own access" });
     expect(cellFor("owner", "choose", undefined)).toEqual({ level: "off", as: "" });
   });
 });
@@ -49,8 +49,8 @@ describe("accessDiff and setRow", () => {
     const before = { mode: "choose" as const, grants: [g("a", "read")] };
     expect(accessDiff(before, before, (id) => id)).toEqual([]);
     const after = { mode: "choose" as const, grants: setRow(before.grants, "a", "read", true) };
-    expect(accessDiff(before, after, (id) => id.toUpperCase())).toEqual(["A: dipinjamkan"]);
+    expect(accessDiff(before, after, (id) => id.toUpperCase())).toEqual(["A: lent"]);
     const added = setRow(before.grants, "b", "all", false);
-    expect(accessDiff(before, { mode: "owner", grants: added }, (id) => id)).toContain("b: mati → semua");
+    expect(accessDiff(before, { mode: "owner", grants: added }, (id) => id)).toContain("b: off → all");
   });
 });

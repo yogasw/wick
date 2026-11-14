@@ -1,10 +1,10 @@
 <!--
-  AccessRoles — the "Akses & peran" tab: one screen for "who may use what,
+  AccessRoles — the access & roles section: one screen for "who may use what,
   running as whom". A mode is a shortcut that writes the grants the agent
   already stores; the table edits them per connector. Opening the tab
-  changes nothing: edits stay local until the owner presses Simpan, after
+  changes nothing: edits stay local until the owner presses Save, after
   a summary of what will change. Per-person tiers the server does not
-  have yet are shown disabled as "segera".
+  have yet are shown disabled as "soon".
 -->
 <script lang="ts">
   import { untrack } from "svelte";
@@ -26,7 +26,7 @@
   let { base, agentId, catalog, savedGrants, savedMode, onApply }: Props = $props();
 
   let view = $state<"roles" | "raw">("roles");
-  let grants = $state<ConnectorGrant[]>(untrack(() => structuredClone(savedGrants)));
+  let grants = $state<ConnectorGrant[]>(untrack(() => $state.snapshot(savedGrants) as ConnectorGrant[]));
   let mode = $state<AccessMode>(untrack(() => savedMode));
   let confirming = $state(false);
 
@@ -45,12 +45,12 @@
     grants = setRow(grants, id, level, lend);
   }
   function reset() {
-    grants = structuredClone(savedGrants);
+    grants = $state.snapshot(savedGrants) as ConnectorGrant[];
     mode = savedMode;
     confirming = false;
   }
   function save() {
-    onApply(structuredClone($state.snapshot(grants)) as ConnectorGrant[], mode);
+    onApply($state.snapshot(grants) as ConnectorGrant[], mode);
     confirming = false;
   }
 
@@ -79,11 +79,11 @@
   const lentStatus = (r: EffectiveRow | undefined) => {
     if (!r || !r.lent) return { text: "—", cls: "text-black-700 dark:text-black-600" };
     switch (r.account_status) {
-      case "connected": return { text: "tersambung", cls: "text-green-600 dark:text-green-400" };
-      case "other_user": return { text: "milik user lain", cls: "text-neg-400" };
-      case "missing": return { text: "belum tersambung", cls: "text-cau-500" };
+      case "connected": return { text: "connected", cls: "text-green-600 dark:text-green-400" };
+      case "other_user": return { text: "belongs to another user", cls: "text-neg-400" };
+      case "missing": return { text: "not connected", cls: "text-cau-500" };
     }
-    return { text: "akun pilihan pemanggil", cls: "text-black-800 dark:text-black-600" };
+    return { text: "caller's chosen account", cls: "text-black-800 dark:text-black-600" };
   };
   let ownerView = $state<EffectiveRow[]>([]);
   $effect(() => {
@@ -102,7 +102,7 @@
 
 <div class="space-y-4" data-testid="access-roles">
   <div class="flex gap-1.5 border-b border-white-300 dark:border-navy-600" role="tablist">
-    {#each [["roles", "Akses & peran"], ["raw", "Raw"]] as [id, name] (id)}
+    {#each [["roles", "Access & roles"], ["raw", "Raw"]] as [id, name] (id)}
       <button type="button" role="tab" aria-selected={view === id} data-testid={`access-roles-tab-${id}`}
         class="rounded-t-lg px-3 py-1.5 text-sm {view === id ? 'border border-b-0 border-white-300 bg-white-100 text-black-900 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100' : 'text-black-800 dark:text-black-600'}"
         onclick={() => (view = id as "roles" | "raw")}>{name}</button>
@@ -111,20 +111,20 @@
 
   {#if view === "raw"}
     <section class={card} data-testid="access-raw">
-      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Grants tersimpan (read-only)</p>
-      <p class={hint}>Persis yang tersimpan di agent ini; yang dipakai saat agent berjalan.</p>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Saved grants (read-only)</p>
+      <p class={hint}>Exactly what this agent stores; what it uses when it runs.</p>
       <pre class="mt-2 overflow-auto rounded-lg border border-white-300 p-2 text-xs dark:border-navy-600 dark:bg-navy-800">{JSON.stringify({ access_mode: savedMode, grants: savedGrants }, null, 2)}</pre>
     </section>
   {:else}
     <section class={card}>
-      <p class="text-sm font-semibold text-black-900 dark:text-white-100">1. Pilih mode</p>
-      <p class={hint}>Mode hanya jalan pintas ke pengaturan di tabel bawah. Pengecualian per connector diatur di tabel.</p>
-      <div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5" role="radiogroup" aria-label="Mode akses">
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">1. Pick a mode</p>
+      <p class={hint}>A mode is only a shortcut to the table below. Per-connector exceptions are set in the table.</p>
+      <div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5" role="radiogroup" aria-label="Access mode">
         {#each PRESETS as p (p.id)}
           <button type="button" role="radio" aria-checked={preset === p.id} disabled={!!p.soon} data-testid={`access-mode-${p.id}`}
             class="rounded-xl border p-2.5 text-left disabled:cursor-not-allowed disabled:opacity-60 {preset === p.id ? 'border-green-500 ring-1 ring-inset ring-green-500' : 'border-white-300 dark:border-navy-600'}"
             onclick={() => pick(p.id)}>
-            <b class="block text-sm text-black-900 dark:text-white-100">{p.name}{#if p.soon}<span class="ml-1 text-[10px] font-normal text-cau-500">segera</span>{/if}</b>
+            <b class="block text-sm text-black-900 dark:text-white-100">{p.name}{#if p.soon}<span class="ml-1 text-[10px] font-normal text-cau-500">soon</span>{/if}</b>
             <span class="text-xs text-black-800 dark:text-black-600">{p.hint}</span>
           </button>
         {/each}
@@ -132,17 +132,17 @@
     </section>
 
     <section class={card}>
-      <p class="text-sm font-semibold text-black-900 dark:text-white-100">2. Siapa dapat apa</p>
-      <p class={hint}>Baris = connector. Kolom = siapa yang memanggil. Isi = boleh apa, dan jalan sebagai siapa.</p>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">2. Who gets what</p>
+      <p class={hint}>Rows = connectors. Columns = who is calling. Cells = what they may do, and who the call runs as.</p>
       <div class="mt-2 overflow-x-auto">
         <table class="w-full border-collapse text-sm" data-testid="access-roles-table">
           <thead>
             <tr class="text-left text-xs uppercase tracking-wide text-black-800 dark:text-black-600">
               <th class="py-2 pr-2 font-medium">Connector</th>
-              <th class="py-2 pr-2 font-medium">Kamu (pemilik)</th>
-              <th class="py-2 pr-2 font-medium">Teman tim</th>
-              <th class="py-2 pr-2 font-medium">Siapa saja / guest</th>
-              <th class="py-2 pr-2 font-medium">Akun dipinjam</th>
+              <th class="py-2 pr-2 font-medium">You (owner)</th>
+              <th class="py-2 pr-2 font-medium">Teammates</th>
+              <th class="py-2 pr-2 font-medium">Anyone / guest</th>
+              <th class="py-2 pr-2 font-medium">Lent account</th>
             </tr>
           </thead>
           <tbody>
@@ -159,42 +159,42 @@
                     <select class={select} aria-label={`Level ${c.label}`} value={g?.level ?? (mode === "owner" ? "all" : "off")}
                       disabled={g?.level === "pick"}
                       onchange={(e) => editRow(c.id, (e.currentTarget as HTMLSelectElement).value as ConnectorGrant["level"], !!g?.lend)}>
-                      <option value="off">mati</option><option value="read">baca</option><option value="all">semua</option>
-                      {#if g?.level === "pick"}<option value="pick">pilihan op</option>{/if}
+                      <option value="off">off</option><option value="read">read</option><option value="all">all</option>
+                      {#if g?.level === "pick"}<option value="pick">selected ops</option>{/if}
                     </select>
                     <label class="flex items-center gap-1 text-xs text-black-800 dark:text-black-600">
                       <input type="checkbox" checked={!!g?.lend} disabled={own.level === "off"} data-testid={`access-lend-${c.id}`}
                         onchange={(e) => editRow(c.id, (g?.level ?? (mode === "owner" ? "all" : "read")) as ConnectorGrant["level"], (e.currentTarget as HTMLInputElement).checked)} />
-                      pinjamkan
+                      lend
                     </label>
                   </div>
                 </td>
                 <td class="py-2 pr-2"><span class="{pill} {lvCls(own.level)}">{levelName(own.level)}</span><small class="mt-1 block text-xs text-black-800 dark:text-black-600">{own.as}</small></td>
                 <td class="py-2 pr-2"><span class="{pill} {lvCls(mate.level)}">{levelName(mate.level)}</span><small class="mt-1 block text-xs text-black-800 dark:text-black-600">{mate.as}</small>
-                  <small class="mt-1 block text-[11px] text-black-700 dark:text-black-700">tulis minta persetujuan · <span class="text-cau-500">segera</span></small></td>
+                  <small class="mt-1 block text-[11px] text-black-700 dark:text-black-700">writes need approval · <span class="text-cau-500">soon</span></small></td>
                 <td class="py-2 pr-2"><span class="{pill} {lvCls(guest.level)}">{levelName(guest.level)}</span><small class="mt-1 block text-xs text-black-800 dark:text-black-600">{guest.as}</small></td>
                 <td class="py-2 pr-2 text-xs {st.cls}">{st.text}</td>
               </tr>
             {:else}
-              <tr><td colspan="5" class="py-3 {hint}">Belum ada connector milikmu untuk diatur.</td></tr>
+              <tr><td colspan="5" class="py-3 {hint}">You have no connectors to set up yet.</td></tr>
             {/each}
           </tbody>
         </table>
       </div>
-      <p class="mt-2 border-l-2 border-green-500 pl-2 {hint}">Guest berbeda dari teman tim, tier kustom, dan approval tulis butuh tier per orang di server · <span class="text-cau-500">segera</span>. Sampai itu ada, teman tim dan guest sama-sama memakai pinjaman bila tidak punya akses sendiri.</p>
+      <p class="mt-2 border-l-2 border-green-500 pl-2 {hint}">Treating guests differently from teammates, custom tiers and write approval need per-person tiers on the server · <span class="text-cau-500">soon</span>. Until then, teammates and guests both use the lend when they have no access of their own.</p>
     </section>
 
     {#if diff.length > 0}
       <section class="{card} border-green-500" data-testid="access-diff">
-        <p class="text-sm font-semibold text-black-900 dark:text-white-100">Perubahan belum disimpan</p>
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">Unsaved changes</p>
         <ul class="mt-1 list-disc pl-5 text-xs text-black-900 dark:text-white-100">{#each diff as d (d)}<li>{d}</li>{/each}</ul>
         <div class="mt-3 flex gap-2">
           {#if confirming}
-            <button type="button" class="rounded-lg bg-green-600 px-3 py-1.5 text-sm text-white-100" data-testid="access-save-confirm" onclick={save}>Ya, simpan {diff.length} perubahan</button>
-            <button type="button" class="rounded-lg px-3 py-1.5 text-sm text-black-800 dark:text-black-600" onclick={() => (confirming = false)}>Kembali</button>
+            <button type="button" class="rounded-lg bg-green-600 px-3 py-1.5 text-sm text-white-100" data-testid="access-save-confirm" onclick={save}>Yes, save {diff.length} change{diff.length === 1 ? "" : "s"}</button>
+            <button type="button" class="rounded-lg px-3 py-1.5 text-sm text-black-800 dark:text-black-600" onclick={() => (confirming = false)}>Back</button>
           {:else}
-            <button type="button" class="rounded-lg bg-green-600 px-3 py-1.5 text-sm text-white-100" data-testid="access-save" onclick={() => (confirming = true)}>Simpan</button>
-            <button type="button" class="rounded-lg px-3 py-1.5 text-sm text-black-800 dark:text-black-600" onclick={reset}>Batal</button>
+            <button type="button" class="rounded-lg bg-green-600 px-3 py-1.5 text-sm text-white-100" data-testid="access-save" onclick={() => (confirming = true)}>Save</button>
+            <button type="button" class="rounded-lg px-3 py-1.5 text-sm text-black-800 dark:text-black-600" onclick={reset}>Cancel</button>
           {/if}
         </div>
       </section>
@@ -202,11 +202,11 @@
 
     <div class="grid gap-4 md:grid-cols-2">
       <section class={card} data-testid="access-preview">
-        <p class="text-sm font-semibold text-black-900 dark:text-white-100">3. Pratinjau sebagai…</p>
-        <p class={hint}>Persis yang dilihat agent untuk orang itu, dari pengaturan yang tersimpan.</p>
-        <select class="{select} mt-2" bind:value={previewAs} aria-label="Pratinjau sebagai">
-          <option value="owner">Kamu (pemilik)</option>
-          <option value="guest">Siapa saja / guest</option>
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">3. Preview as…</p>
+        <p class={hint}>Exactly what the agent sees for that person, from the saved settings.</p>
+        <select class="{select} mt-2" bind:value={previewAs} aria-label="Preview as">
+          <option value="owner">You (owner)</option>
+          <option value="guest">Anyone / guest</option>
           {#each users as u (u.id)}<option value={`user:${u.id}`}>{u.name || u.id}</option>{/each}
         </select>
         {#if previewError}<p class="mt-2 text-xs text-neg-400">{previewError}</p>{/if}
@@ -214,7 +214,7 @@
           {#each preview ?? [] as r (r.connector_id)}
             <li class={r.runs_as === "none" ? "text-black-700 line-through dark:text-black-600" : "text-black-900 dark:text-white-100"}>
               <b>{r.label}</b> · {levelName(r.runs_as === "none" ? "off" : r.level)}
-              {#if r.runs_as === "self"} · aksesnya sendiri{:else if r.runs_as === "owner"} · akun pemilik{r.account ? ` (${r.account})` : ""}{/if}
+              {#if r.runs_as === "self"} · their own access{:else if r.runs_as === "owner"} · owner's account{r.account ? ` (${r.account})` : ""}{/if}
               {#if r.ops.length > 0}<span class="text-black-800 dark:text-black-600"> — {r.ops.join(", ")}</span>{/if}
             </li>
           {/each}
@@ -222,8 +222,8 @@
       </section>
 
       <section class={card} data-testid="access-trail">
-        <p class="text-sm font-semibold text-black-900 dark:text-white-100">4. Jejak: siapa memakai atas nama siapa</p>
-        <p class={hint}>Panggilan terakhir yang jalan lewat pinjaman.</p>
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">4. Trail: who used it on whose behalf</p>
+        <p class={hint}>Latest calls that ran on a lend.</p>
         {#if trail && trail.length > 0}
           <table class="mt-2 w-full text-xs">
             <tbody>
@@ -232,13 +232,13 @@
                   <td class="py-1.5 pr-2 text-black-800 dark:text-black-600">{new Date(t.at).toLocaleString()}</td>
                   <td class="py-1.5 pr-2 text-black-900 dark:text-white-100">{t.caller_name || t.caller_id}</td>
                   <td class="py-1.5 pr-2 text-black-900 dark:text-white-100">{t.connector_label || t.connector_id} · {t.operation}</td>
-                  <td class="py-1.5 text-black-800 dark:text-black-600">atas nama {t.on_behalf_of_name || t.on_behalf_of_id}</td>
+                  <td class="py-1.5 text-black-800 dark:text-black-600">on behalf of {t.on_behalf_of_name || t.on_behalf_of_id}</td>
                 </tr>
               {/each}
             </tbody>
           </table>
         {:else}
-          <p class="mt-2 {hint}">{trail === null ? "Memuat…" : "Belum ada panggilan lewat pinjaman."}</p>
+          <p class="mt-2 {hint}">{trail === null ? "Loading…" : "No calls on a lend yet."}</p>
         {/if}
       </section>
     </div>
