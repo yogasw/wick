@@ -725,8 +725,13 @@ func (s *Service) persistInstanceTokens(ctx context.Context, instanceID string, 
 	if account != "" {
 		values[cfgOAuthAccount] = account
 	}
-	for k, v := range values {
-		if k == cfgOAuthRefresh && v == "" {
+	// Fixed order, expiry LAST: instanceAccessToken reads expiry before
+	// the access token without the refresh lock, so a reader that sees the
+	// new expiry is sure to see the new token (map order once let it pair
+	// a fresh expiry with the old, expired token).
+	for _, k := range []string{cfgOAuthRefresh, cfgOAuthAccess, cfgOAuthError, cfgOAuthAccount, cfgOAuthExpiry} {
+		v, ok := values[k]
+		if !ok || (k == cfgOAuthRefresh && v == "") {
 			continue
 		}
 		if err := s.keys.SetOwned(ctx, owner, k, v); err != nil {
@@ -1043,18 +1048,22 @@ func identityFromClaims(raw []byte) string {
 // row has no connected account.
 func (s *Service) instanceAccessToken(ctx context.Context, meta *oauthClientMeta, instanceID string) (string, error) {
 	owner := "connector:" + instanceID
+	// Expiry is read BEFORE the token: persistInstanceTokens writes it
+	// last, so a live expiry always comes with the token it belongs to.
+	live := instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry))
 	access := s.keys.GetOwned(owner, cfgOAuthAccess)
 	if access == "" {
 		return "", nil
 	}
-	if instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry)) {
+	if live {
 		return access, nil
 	}
 	// Serialized like accountAccessToken; re-read after the wait so the
 	// loser of a race uses the winner's token instead of a spent refresh.
 	defer s.lockRefresh("instance:" + instanceID)()
+	live = instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry))
 	access = s.keys.GetOwned(owner, cfgOAuthAccess)
-	if instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry)) {
+	if live {
 		return access, nil
 	}
 	refresh := s.keys.GetOwned(owner, cfgOAuthRefresh)
