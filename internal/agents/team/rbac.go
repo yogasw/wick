@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,6 +55,45 @@ type RBACDoc struct {
 	// at its own default (RBACRole.Lend). A connector missing from Lend is
 	// not lent to anyone.
 	Lend map[string]map[string]RBACLevel `json:"lend"`
+	// Tools is, per role (owner and guest included), the native tools a
+	// person in that role may use on the agent (Bash, Write, WebSearch…):
+	// a role listed here gets only these. A role not listed keeps every
+	// tool the agent has, except guest, which by default loses
+	// GuestDeniedTools. Names are the Tools & features switches
+	// (NativeTools). MCP tools are never limited here: connectors are
+	// governed by Lend.
+	Tools map[string][]string `json:"tools,omitempty"`
+}
+
+// GuestDeniedTools are the switches a guest loses when the document does
+// not list guest under Tools: anything that runs commands or changes files.
+var GuestDeniedTools = []string{"Bash", "Edit", "Write"}
+
+func isNativeTool(name string) bool { return slices.Contains(NativeTools, name) }
+
+// DeniedTools are the provider tool names role may not use, sorted; nil
+// means no limit. Switches (NativeTools) expand to every tool they cover
+// (Edit also stops MultiEdit, Bash also PowerShell). See RBACDoc.Tools.
+func (d RBACDoc) DeniedTools(role string) []string {
+	var off []string
+	if allowed, listed := d.Tools[role]; listed {
+		for _, t := range NativeTools {
+			if !slices.Contains(allowed, t) {
+				off = append(off, t)
+			}
+		}
+	} else if role == RoleGuest {
+		off = GuestDeniedTools
+	}
+	var out []string
+	for _, sw := range off {
+		out = append(out, claudeToolNames[sw]...)
+		if sw == "Bash" {
+			out = append(out, "PowerShell")
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RBACRole is one role's settings.
@@ -183,6 +223,16 @@ func (d RBACDoc) Validate() error {
 				}
 			default:
 				errs = append(errs, fmt.Sprintf("lend %s/%s: level must be off, read, all or pick", cid, role))
+			}
+		}
+	}
+	for role, tools := range d.Tools {
+		if _, ok := d.Roles[role]; !ok && role != RoleGuest && role != RoleOwner {
+			errs = append(errs, fmt.Sprintf("tools: unknown role %q", role))
+		}
+		for _, t := range tools {
+			if !isNativeTool(t) {
+				errs = append(errs, fmt.Sprintf("tools %s: unknown tool %q (one of %s)", role, t, strings.Join(NativeTools, ", ")))
 			}
 		}
 	}

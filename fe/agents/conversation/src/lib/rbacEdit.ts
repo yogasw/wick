@@ -47,6 +47,7 @@ export function setRole(doc: RBACDoc, name: string, patch: { rank?: number; lend
 export function removeRole(doc: RBACDoc, name: string): RBACDoc {
   const d = clone(doc);
   delete d.roles[name];
+  if (d.tools) delete d.tools[name];
   d.rules = (d.rules ?? []).filter((r) => r.role !== name);
   for (const row of Object.values(d.lend ?? {})) delete row[name];
   return d;
@@ -115,4 +116,41 @@ export function cellValue(doc: RBACDoc, role: string, connectorID: string): Cell
   if (lv === undefined) return "default";
   if (typeof lv === "object") return "pick";
   return lv;
+}
+
+/** The Tools & features switches a role can be limited to (same names and
+    order as team.NativeTools on the server). */
+export const TOOL_SWITCHES = ["Read", "Grep", "Glob", "WebFetch", "WebSearch", "Bash", "Edit", "Write"] as const;
+
+/** What guest loses when the document does not list guest. */
+export const GUEST_DENIED = ["Bash", "Edit", "Write"];
+
+/** toolsLimited reports whether the document lists role under tools. */
+export const toolsLimited = (doc: RBACDoc, role: string): boolean => !!doc.tools && role in doc.tools;
+
+/** toolsOf is what role may use: its list, or the default when unlisted
+    (every switch; guest without Bash, Edit and Write). */
+export function toolsOf(doc: RBACDoc, role: string): string[] {
+  if (toolsLimited(doc, role)) return TOOL_SWITCHES.filter((t) => doc.tools![role].includes(t));
+  return TOOL_SWITCHES.filter((t) => role !== "guest" || !GUEST_DENIED.includes(t));
+}
+
+/** setTool turns one tool on or off for role, listing the role from its
+    current tools first. */
+export function setTool(doc: RBACDoc, role: string, tool: string, on: boolean): RBACDoc {
+  const d = clone(doc);
+  const cur = toolsOf(d, role).filter((t) => t !== tool);
+  if (on) cur.push(tool);
+  d.tools = { ...(d.tools ?? {}), [role]: TOOL_SWITCHES.filter((t) => cur.includes(t)) };
+  return d;
+}
+
+/** resetTools drops role's list so the default applies again. */
+export function resetTools(doc: RBACDoc, role: string): RBACDoc {
+  const d = clone(doc);
+  if (d.tools) {
+    delete d.tools[role];
+    if (Object.keys(d.tools).length === 0) delete d.tools;
+  }
+  return d;
 }

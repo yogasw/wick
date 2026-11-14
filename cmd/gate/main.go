@@ -401,6 +401,14 @@ func run() int {
 		return 0
 	}
 
+	// By role: the person chatting may be barred from some native tools
+	// (a guest without Bash or Write).
+	if reason := roleDenial(app, in.ToolName); reason != "" {
+		logTerminalEntry(requestID, in.ToolName, "", in.CWD, "blocked", "role_tools", reason)
+		emitDeny(reason, false)
+		return 0
+	}
+
 	// Route on what the call DOES, not on the tool's name. Any tool
 	// carrying shell text is gated as a command — PowerShell used to fall
 	// through to the path gate, where it had no path, so every call
@@ -829,6 +837,25 @@ func pathFromInput(in hookInput) string {
 	return ""
 }
 
+// roleDenial says why the person chatting in this spawn's wick session may
+// not use tool (By role), "" when they may. wick names the session in the
+// env and rewrites that session's limits on every message; an unreadable
+// limits file refuses rather than lifting the limit.
+func roleDenial(app, tool string) string {
+	sid := os.Getenv(gate.SessionEnv)
+	if sid == "" || tool == "" {
+		return ""
+	}
+	sr, ok, err := gate.LoadSessionRole(app, sid)
+	if err != nil {
+		return "role limits unreadable, refusing: " + err.Error()
+	}
+	if ok && sr.Denies(tool) {
+		return fmt.Sprintf("the person chatting has role %q on this agent, which may not use %s. Do the task without it, or say it needs someone with more access.", sr.Role, tool)
+	}
+	return ""
+}
+
 // runPathGuard is the path guard hook: exit 2 (claude blocks the call and
 // shows stderr to the agent) when the tool call reaches into another
 // agent's project or session, 0 otherwise. A spec it cannot read blocks
@@ -845,10 +872,17 @@ func runPathGuard(args []string, stdin io.Reader, stderr io.Writer) int {
 	}
 	var in struct {
 		CWD       string         `json:"cwd"`
+		ToolName  string         `json:"tool_name"`
 		ToolInput map[string]any `json:"tool_input"`
 	}
 	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
 		fmt.Fprintf(stderr, "path guard: unreadable hook input (%v); blocking\n", err)
+		return 2
+	}
+	// The path guard is installed on every claude spawn, approvals on or
+	// off, so the per-person tool limits (By role) hold here too.
+	if reason := roleDenial(gate.AppName(), in.ToolName); reason != "" {
+		fmt.Fprintln(stderr, reason)
 		return 2
 	}
 	if p := gate.CheckPathGuard(spec, gate.PathGuardInput{CWD: in.CWD, ToolInput: in.ToolInput}); p != "" {

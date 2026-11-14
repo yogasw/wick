@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RBACDoc } from "../api/team.js";
 import {
-  addRole, addRule, cellValue, lendConnector, moveRule, removeRole, removeRule, roleNameError,
-  setCell, setRole, setRuleRole, unlendConnector,
+  addRole, addRule, cellValue, lendConnector, moveRule, removeRole, removeRule, resetTools, roleNameError,
+  setCell, setRole, setRuleRole, setTool, toolsLimited, toolsOf, unlendConnector,
 } from "../rbacEdit.js";
 import { whoIs } from "../rbacView.js";
 
@@ -69,5 +69,21 @@ describe("rbacEdit", () => {
   it("names tag rules in Who is who", () => {
     const d = addRule(base(), { match: "tag", value: "t1", role: "trusted" });
     expect(whoIs(d, (id) => id, (id) => (id === "t1" ? "Support" : id)).trusted).toEqual(["everyone tagged Support"]);
+  });
+
+  it("limits native tools per role; guest defaults without Bash, Edit and Write", () => {
+    const d0 = base();
+    expect(toolsOf(d0, "member")).toContain("Bash");
+    expect(toolsOf(d0, "guest")).toEqual(["Read", "Grep", "Glob", "WebFetch", "WebSearch"]);
+    let d = setTool(d0, "guest", "Grep", false);
+    expect(d.tools?.guest).toEqual(["Read", "Glob", "WebFetch", "WebSearch"]);
+    d = setTool(d, "member", "Write", false);
+    expect(toolsLimited(d, "member")).toBe(true);
+    expect(toolsOf(d, "member")).not.toContain("Write");
+    d = removeRole(d, "member");
+    expect(d.tools?.member).toBeUndefined();
+    d = resetTools(d, "guest");
+    expect(d.tools).toBeUndefined();
+    expect(d0.tools).toBeUndefined();
   });
 });

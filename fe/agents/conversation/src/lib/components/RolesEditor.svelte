@@ -1,7 +1,8 @@
 <!--
   RolesEditor — the owner's manual editor for an agent's role document
   (Settings › Access › Roles › Edit). It edits a draft copy: people and
-  tags to roles, the owner's roles, and the lend table (guest included).
+  tags to roles, the owner's roles, the lend table (guest included), and
+  the native tools each role may use.
   Nothing is saved until Save, which asks first and writes a new
   revision from the rev it was read at (a change made meanwhile, e.g. by
   chatting, answers 409 instead of being overwritten).
@@ -10,8 +11,8 @@
   import type { AgentConnector, RBACDoc, RBACRule, RoleTag, ShareUser } from "../api/team.js";
   import { putRBAC, runApi } from "../api/team.js";
   import {
-    addRole, addRule, cellValue, lendConnector, moveRule, removeRole, removeRule, roleNameError,
-    setCell, setRole, setRuleRole, unlendConnector, type CellLevel,
+    addRole, addRule, cellValue, lendConnector, moveRule, removeRole, removeRule, resetTools, roleNameError,
+    setCell, setRole, setRuleRole, setTool, TOOL_SWITCHES, toolsLimited, toolsOf, unlendConnector, type CellLevel,
   } from "../rbacEdit.js";
   import { roleOrder, roleTitle } from "../rbacView.js";
 
@@ -201,6 +202,40 @@
         <button type="button" class={btn} disabled={!newLent} onclick={() => { draft = lendConnector(draft, newLent); newLent = ""; }}>+ Lend</button>
       </div>
     {/if}
+  </div>
+
+  <div>
+    <p class="text-xs font-medium text-black-900 dark:text-white-100">Native tools per role</p>
+    <p class={muted}>What a person in each role may use on this agent. Only narrows: a tool switched off in Tools &amp; features stays off for everyone. Guest starts without Bash, Edit and Write.</p>
+    <div class="mt-2 overflow-x-auto rounded-lg border border-white-300 dark:border-navy-600">
+      <table class="w-max min-w-full border-collapse text-xs" data-testid="tools-table">
+        <thead>
+          <tr class="text-left text-[11px] text-black-800 dark:text-black-600">
+            <th class="sticky left-0 z-10 bg-white-100 px-2 py-2 font-medium dark:bg-navy-700">Role</th>
+            {#each TOOL_SWITCHES as t (t)}<th class="whitespace-nowrap px-2 py-2 font-medium">{t}</th>{/each}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each roles as r (r)}
+            {@const on = toolsOf(draft, r)}
+            <tr class="border-t border-white-300 dark:border-navy-600" data-testid="tools-row">
+              <th scope="row" class="sticky left-0 z-10 bg-white-100 px-2 py-2 text-left font-medium text-black-900 dark:bg-navy-700 dark:text-white-100">{roleTitle(r)}</th>
+              {#each TOOL_SWITCHES as t (t)}
+                <td class="px-2 py-1.5 text-center">
+                  <input type="checkbox" checked={on.includes(t)} aria-label={`${roleTitle(r)} may use ${t}`} onchange={(e) => (draft = setTool(draft, r, t, (e.currentTarget as HTMLInputElement).checked))} />
+                </td>
+              {/each}
+              <td class="px-2">
+                {#if toolsLimited(draft, r)}
+                  <button type="button" class={x} title="Back to the default" onclick={() => (draft = resetTools(draft, r))}>Default</button>
+                {:else}<span class={muted}>default</span>{/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   </div>
 
   {#if error}<p class="text-xs text-neg-400" role="alert">{error}</p>{/if}

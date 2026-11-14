@@ -12,6 +12,7 @@
   import { getAccessEffective, getAccessTrail, getRBAC, listRoleTags, listShareUsers, runApi } from "../api/team.js";
   import RolesEditor from "./RolesEditor.svelte";
   import { cellOf, roleOrder, roleTitle, whoIs } from "../rbacView.js";
+  import { TOOL_SWITCHES, toolsLimited, toolsOf } from "../rbacEdit.js";
   import { timeAgo } from "../timeFormat.js";
 
   type Props = { base: string; agentId: string; catalog: AgentConnector[]; grants?: ConnectorGrant[]; captainHandle?: string };
@@ -174,6 +175,21 @@
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div data-testid="roles-tools">
+        <p class="text-xs font-medium text-black-900 dark:text-white-100">Native tools per role</p>
+        <p class={muted}>On top of Tools &amp; features: a role only loses tools here, never gains one.</p>
+        <ul class="mt-2 space-y-1 text-xs">
+          {#each roles as r (r)}
+            {@const on = toolsOf(doc, r)}
+            <li class="flex flex-wrap gap-1.5">
+              <span class="w-20 shrink-0 font-medium text-black-900 dark:text-white-100">{roleTitle(r)}</span>
+              <span class="text-black-900 dark:text-white-100">{on.length === TOOL_SWITCHES.length ? "All" : on.length ? on.join(", ") : "None"}</span>
+              {#if !toolsLimited(doc, r)}<span class={muted}>(default)</span>{/if}
+            </li>
+          {/each}
+        </ul>
       </div>
 
       <div data-testid="roles-preview">

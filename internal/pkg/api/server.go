@@ -1105,6 +1105,9 @@ func NewServer() *Server {
 			}
 			return nil
 		},
+		// By role: the native tools the sender's role may not use, written
+		// where the gate hook reads them, before the message is delivered.
+		TurnRole: agentstool.SessionTurnRole,
 		// Read live so the operator can dial sender detail up or down without
 		// a restart, matching how the other agents settings behave.
 		SenderVisibilityLoader: func() string {

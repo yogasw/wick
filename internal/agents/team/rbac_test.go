@@ -332,3 +332,41 @@ func TestEffectiveAppliesRole(t *testing.T) {
 		}
 	}
 }
+
+func TestRBACDeniedTools(t *testing.T) {
+	d := DefaultRBACDoc()
+	if got := d.DeniedTools("member"); got != nil {
+		t.Fatalf("an unlisted role keeps every tool, got %v", got)
+	}
+	if got := d.DeniedTools(RoleOwner); got != nil {
+		t.Fatalf("owner unlisted keeps every tool, got %v", got)
+	}
+	want := "Bash,BashOutput,Edit,KillShell,MultiEdit,NotebookEdit,PowerShell,Write"
+	if got := strings.Join(d.DeniedTools(RoleGuest), ","); got != want {
+		t.Fatalf("guest default: got %v", got)
+	}
+	d.Tools = map[string][]string{RoleGuest: {"WebSearch", "WebFetch", "Read"}, "member": {}}
+	denied := strings.Join(d.DeniedTools(RoleGuest), ",")
+	for _, tool := range []string{"Bash", "Write", "Grep", "MultiEdit"} {
+		if !strings.Contains(denied, tool) {
+			t.Fatalf("a listed guest must lose %s: %v", tool, denied)
+		}
+	}
+	for _, tool := range []string{"WebSearch", "WebFetch", "Read"} {
+		if strings.Contains(","+denied+",", ","+tool+",") {
+			t.Fatalf("a listed guest keeps %s: %v", tool, denied)
+		}
+	}
+	if got := d.DeniedTools("member"); len(got) < len(NativeTools) {
+		t.Fatalf("an empty list denies every native tool, got %v", got)
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("valid doc refused: %v", err)
+	}
+	d.Tools["nobody"] = []string{"Bash"}
+	d.Tools["member"] = []string{"Telnet"}
+	err := d.Validate()
+	if err == nil || !strings.Contains(err.Error(), `unknown role "nobody"`) || !strings.Contains(err.Error(), `unknown tool "Telnet"`) {
+		t.Fatalf("bad tools must be refused, got %v", err)
+	}
+}

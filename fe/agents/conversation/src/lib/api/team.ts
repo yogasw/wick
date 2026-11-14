@@ -1050,6 +1050,9 @@ export type RBACDoc = {
   roles: Record<string, { rank: number; lend: "off" | "read" | "all"; write_needs_approval?: boolean }>;
   rules: RBACRule[];
   lend: Record<string, Record<string, RBACLevel>>;
+  /** Native tools each role may use; a role not listed keeps them all,
+      except guest, which by default loses Bash, Edit and Write. */
+  tools?: Record<string, string[]>;
 };
 
 export type RBACRevision = { rev: number; doc: RBACDoc; updated_by: string; reason: string; at: string };

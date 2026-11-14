@@ -213,6 +213,13 @@ type PoolConfig struct {
 	// existed.
 	SenderFrom func(ctx context.Context) *store.Sender
 
+	// TurnRole is told, before a person's message reaches the agent, who
+	// sent it (sender nil = unknown) and whether the agent is mid-turn.
+	// It sets that person's native-tool limits for the session (By role):
+	// mid-turn it may only add limits, since the running turn now carries
+	// both people's words. nil = no per-person tool limits.
+	TurnRole func(ctx context.Context, sessionID string, sender *store.Sender, working bool)
+
 	// SenderVisibilityLoader reports how much of the sender to write into the
 	// text handed to the model: SenderOff / SenderName / SenderNameID /
 	// SenderFull. nil or an empty result means SenderName.
@@ -1050,6 +1057,12 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		}
 		alive = false
 		entry = nil
+	}
+
+	// Per-person tool limits follow whoever sent this message.
+	if role == "user" && p.cfg.TurnRole != nil {
+		working := alive && entry != nil && entry.state != nil && entry.state.Lifecycle() == state.LifecycleWorking
+		p.cfg.TurnRole(ctx, sessionID, sender, working)
 	}
 
 	// A session whose agent's default moved follows it, and one on a
