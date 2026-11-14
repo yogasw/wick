@@ -5,13 +5,14 @@
 import type { AgentConnector, ConnectorGrant } from "./api/team.js";
 import { setLevelFor, setOverride, tierDefault, tierOf } from "./accessTiers.js";
 
-/** "choose" = the checklist; "owner" = "All" (team.AccessOwner). */
-export type AccessMode = "choose" | "owner";
+/** "choose" = the checklist; "owner" = "All" (team.AccessOwner);
+    "roles" = "By role" (team.AccessRoles): All's reach, lends per role. */
+export type AccessMode = "choose" | "owner" | "roles";
 export type AccessFilter = "all" | "granted" | "not_granted";
 export type BulkAction = "read" | "all" | "off" | "default";
 export type SelectState = "none" | "some" | "all";
 
-export const normalizeAccessMode = (v: string | undefined | null): AccessMode => (v === "owner" ? "owner" : "choose");
+export const normalizeAccessMode = (v: string | undefined | null): AccessMode => (v === "owner" || v === "roles" ? v : "choose");
 
 /** effectiveLevel is what a row ends up with: its grant, else the tier
     default (Connectors rows default to off). */

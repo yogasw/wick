@@ -41,6 +41,8 @@
     showIncludeNew?: boolean;
     /** The Captain's System rows default to Write; everyone else's to Off. */
     isCaptain?: boolean;
+    /** Ask before switching All / Selected / By role (Settings saves at once). */
+    confirmMode?: boolean;
   };
   let {
     catalog,
@@ -54,7 +56,20 @@
     showRunAs = true,
     showIncludeNew = true,
     isCaptain = false,
+    confirmMode = false,
   }: Props = $props();
+  // A mode switch waiting for the confirm dialog.
+  let pendingMode = $state<AccessMode | null>(null);
+  const MODE_CONFIRM: Record<AccessMode, { title: string; lines: string[] }> = {
+    owner: { title: "Switch to All?", lines: ["Everyone who chats uses every connector they have themselves.", "Your Turned off list applies.", "Roles stop applying; they are kept for later."] },
+    choose: { title: "Switch to Selected?", lines: ["Only the connectors you pick work, for everyone.", "Everything not picked turns off for this agent.", "Roles stop applying; they are kept for later."] },
+    roles: { title: "Switch to By role?", lines: ["Each person gets what their role allows: everyone this agent is shared with is a member, you stay the owner.", "Anyone else, bots and unknown callers get nothing (guest).", "Lend from me stops applying: what each role borrows is set in Roles."] },
+  };
+  function pickMode(m: AccessMode) {
+    if (m === accessMode) return;
+    if (confirmMode) pendingMode = m;
+    else accessMode = m;
+  }
 
   let tier = $state<Tier>("connectors");
   let query = $state("");
@@ -98,7 +113,7 @@
   const sel = $derived(selectState(selected, shown));
   // Selected rows of this tier, hidden ones included: the bulk bar acts on them.
   const selCount = $derived(added.filter((c) => selected.has(c.id)).length);
-  const sameAsMe = $derived(tier === "connectors" && accessMode === "owner");
+  const sameAsMe = $derived(tier === "connectors" && accessMode !== "choose");
   // All mode: connectors switched off by an explicit off grant, and the
   // ones still on that the Turn off picker offers.
   const isOff = (c: AgentConnector) => grantOf(c.id)?.level === "off";
@@ -119,7 +134,7 @@
   });
   const previewText = $derived.by(() => {
     if (runAs === "owner") return preview === "me" ? "everything set here" : "everything set here, as you";
-    const on = accessMode === "owner";
+    const on = accessMode !== "choose";
     if (preview === "me") return on ? `every connector you have, new ones included${offRows.length ? `, minus ${offRows.length} turned off` : ""}` : `the ${added.length} picked`;
     if (preview === "mate") return on ? "every connector they have themselves, new ones included" : "the picked ones they also have themselves";
     return lentRows.length ? "none of their own" : "none";
@@ -237,17 +252,34 @@
 
 <div>
   <p class="mb-2 text-sm font-semibold text-black-900 dark:text-white-100" id="cc-mode-label">Which connectors?</p>
-  <div class="grid grid-cols-2 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" role="radiogroup" aria-labelledby="cc-mode-label">
-    {#each [["owner", "All", "Each person uses everything they have. New ones included."], ["choose", "Selected", "Only the ones you pick, for a focused agent."]] as [m, name, hint], i (m)}
-      <button type="button" role="radio" aria-checked={accessMode === m} aria-label={name}
-        class="flex flex-col gap-0.5 px-4 py-2.5 text-left {i === 1 ? 'border-l border-white-300 dark:border-navy-600' : ''} {accessMode === m ? 'bg-green-50 ring-2 ring-inset ring-green-500 dark:bg-green-900/20' : 'hover:bg-white-200 dark:hover:bg-navy-600'}"
-        onclick={() => (accessMode = m as AccessMode)}>
+  <div class="grid grid-cols-3 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" role="radiogroup" aria-labelledby="cc-mode-label">
+    {#each [["owner", "All", "Each person uses everything they have."], ["choose", "Selected", "Only the ones you pick."], ["roles", "By role", "Different access per person."]] as [m, name, hint], i (m)}
+      <button type="button" role="radio" aria-checked={accessMode === m} aria-label={name} data-testid={`access-mode-${m}`}
+        class="flex flex-col gap-0.5 px-4 py-2.5 text-left {i > 0 ? 'border-l border-white-300 dark:border-navy-600' : ''} {accessMode === m ? 'bg-green-50 ring-2 ring-inset ring-green-500 dark:bg-green-900/20' : 'hover:bg-white-200 dark:hover:bg-navy-600'}"
+        onclick={() => pickMode(m as AccessMode)}>
         <span class="text-sm font-semibold text-black-900 dark:text-white-100">{accessMode === m ? "●" : "○"} {name}</span>
         <span class="text-xs text-black-800 dark:text-black-600">{hint}</span>
       </button>
     {/each}
   </div>
 </div>
+
+{#if pendingMode}
+  {@const c = MODE_CONFIRM[pendingMode]}
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black-900/50 p-4" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) pendingMode = null; }}>
+    <div class="w-full max-w-md rounded-xl border border-white-300 bg-white-100 p-5 shadow-2xl dark:border-navy-600 dark:bg-navy-700" role="dialog" aria-modal="true" aria-labelledby="cc-mode-confirm-title" data-testid="access-mode-confirm">
+      <p id="cc-mode-confirm-title" class="text-base font-semibold text-black-900 dark:text-white-100">{c.title}</p>
+      <ul class="mt-2 list-disc space-y-1 pl-5 text-xs text-black-900 dark:text-white-100">
+        {#each c.lines as l (l)}<li>{l}</li>{/each}
+      </ul>
+      <p class="mt-3 text-xs text-black-800 dark:text-black-600">This saves right away. You can switch back any time; History keeps the change.</p>
+      <div class="mt-4 flex justify-end gap-2">
+        <button type="button" class="px-3 py-1.5 text-sm text-black-800 dark:text-black-600" onclick={() => (pendingMode = null)}>Cancel</button>
+        <button type="button" class="rounded-lg bg-green-600 px-4 py-1.5 text-sm text-white-100 hover:bg-green-700" data-testid="access-mode-confirm-ok" onclick={() => { if (pendingMode) accessMode = pendingMode; pendingMode = null; }}>Switch</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if loading}
   <p class="text-sm text-black-800 dark:text-black-600">Loading connectors…</p>
@@ -479,6 +511,7 @@
 {/if}
 
 {#if tier === "connectors" && !adding}
+  {#if accessMode !== "roles"}
   <section class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" aria-label="Lend from me" data-testid="lend">
     <div class="flex flex-wrap items-center justify-between gap-2 bg-white-200 px-3 py-2 dark:bg-navy-800">
       <div class="min-w-0">
@@ -558,6 +591,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 
   <details class="rounded-xl border border-white-300 dark:border-navy-600" data-testid="built-in">
     <summary class="flex cursor-pointer select-none items-center justify-between gap-2 px-4 py-2.5 text-sm text-black-900 dark:text-white-100">
@@ -585,6 +619,7 @@
     </ul>
   </details>
 
+  {#if accessMode !== "roles"}
   <section class="rounded-xl border border-white-300 px-4 py-3 text-xs dark:border-navy-600" aria-label="Who gets what" data-testid="who-gets-what">
     <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">Who gets what</p>
@@ -606,13 +641,14 @@
       <dt class="text-black-800 dark:text-black-600">Schedules & cron</dt>
       <dd>run as you</dd>
     </dl>
-    {#if accessMode === "owner" && runAs !== "owner" && preview === "mate"}
+    {#if accessMode !== "choose" && runAs !== "owner" && preview === "mate"}
       <p class="mt-2 rounded-lg border border-cau-300 bg-cau-100 px-3 py-1.5 text-black-900 dark:bg-navy-800 dark:text-cau-300">What they look up stays in this agent's chat and memory, which you can read.</p>
     {/if}
   </section>
+  {/if}
 {/if}
 
-{#if showIncludeNew && tier === "connectors" && accessMode !== "owner" && !adding}
+{#if showIncludeNew && tier === "connectors" && accessMode === "choose" && !adding}
   <div class="flex items-start gap-3">
     <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Open other connectors read-only" describedBy="cc-incl-hint" />
     <span class="min-w-0">
@@ -622,7 +658,7 @@
   </div>
 {/if}
 
-{#if tier === "connectors" && accessMode !== "owner" && !adding && writes.length > 0}
+{#if tier === "connectors" && accessMode === "choose" && !adding && writes.length > 0}
   <details class="rounded-xl border border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
     <summary class="cursor-pointer select-none font-medium text-black-900 dark:text-white-100">Write operations allowed ({writes.length})</summary>
     <ul class="mt-2 space-y-0.5">
@@ -633,7 +669,7 @@
 
 {#if showRunAs && runAs === "owner"}
   <div class="rounded-xl border border-cau-300 bg-cau-100 px-4 py-2 text-xs text-black-900 dark:bg-navy-800 dark:text-cau-300" role="alert">
-    {#if accessMode === "owner"}
+    {#if accessMode !== "choose"}
       ⚠️ Anyone who chats with this agent uses <b>your</b> access — including <b>write</b> access to every connector you have.
     {:else}
       ⚠️ Anyone who chats with this agent uses <b>your</b> access, up to the checklist{#if writeConns.length > 0}

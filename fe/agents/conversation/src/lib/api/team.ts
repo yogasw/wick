@@ -1036,3 +1036,20 @@ export type AccessTrailItem = {
 
 export const getAccessTrail = (base: string, id: string, limit = 20) =>
   apiGetE<{ items: AccessTrailItem[] | null }>(`${base}/api/team/agents/${enc(id)}/access/trail?limit=${limit}`);
+
+/* ── By role access (RBAC): the role document ── */
+
+/** A lend level: a plain level, or picked ops. */
+export type RBACLevel = "off" | "read" | "all" | { level: "pick"; ops: string[] };
+
+export type RBACDoc = {
+  roles: Record<string, { rank: number; lend: "off" | "read" | "all"; write_needs_approval?: boolean }>;
+  rules: { match: "user" | "shared"; value?: string; role: string }[];
+  lend: Record<string, Record<string, RBACLevel>>;
+};
+
+export type RBACRevision = { rev: number; doc: RBACDoc; updated_by: string; reason: string; at: string };
+
+/** getRBAC reads an agent's role document (owner only). */
+export const getRBAC = (base: string, id: string) =>
+  apiGetE<{ enabled: boolean; rev: number; doc: RBACDoc; history: RBACRevision[] | null }>(`${base}/api/team/agents/${enc(id)}/rbac`);

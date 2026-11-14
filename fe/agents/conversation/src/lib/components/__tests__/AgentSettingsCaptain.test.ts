@@ -127,6 +127,8 @@ describe("AgentSettings › Captain", () => {
     const p = props(worker, "access");
     const { rerender } = render(AgentSettings, { props: p });
     await fireEvent.click(await screen.findByRole("radio", { name: "All" }));
+    // Settings asks before switching the access mode.
+    await fireEvent.click(await screen.findByTestId("access-mode-confirm-ok"));
     await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ access_mode: "owner" })));
     await rerender({ ...p, tab: "captain" });
     const btn = screen.getByRole("button", { name: "Make Captain" });

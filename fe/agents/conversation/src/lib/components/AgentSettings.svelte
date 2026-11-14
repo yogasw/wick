@@ -32,7 +32,7 @@
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, AUTO_APPROVE_OPTIONS, AUTO_APPROVE_NOTE, FOLDERS_NOTE, captainCanOf, captainPolicyOf, captainBlock } from "../captainSettings.js";
   import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
-  import AccessRoles from "./AccessRoles.svelte";
+  import RolesViewer from "./RolesViewer.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
   import AgentSessionTab from "./AgentSessionTab.svelte";
@@ -692,16 +692,6 @@
         {/each}
       </div>
     {:else}
-      {#key agent.id}
-        <AccessRoles
-          {base}
-          agentId={agent.id}
-          {catalog}
-          savedGrants={agent.allowed_connectors ?? []}
-          savedMode={normalizeAccessMode(agent.access_mode)}
-          onApply={(g, m) => { draft.grants = g; draft.access_mode = m; }}
-        />
-      {/key}
       <ConnectorChecklist
         {catalog}
         loading={catalogLoading}
@@ -712,9 +702,13 @@
         bind:accessMode={draft.access_mode}
         errors={grantErrors}
         isCaptain={agent.is_captain}
+        confirmMode
       />
     {/if}
     {#key agent.id}
+      {#if draft.access_mode === "roles"}
+        <RolesViewer {base} agentId={agent.id} {catalog} captainHandle={agents.find((a) => a.is_captain)?.handle ?? "captain"} />
+      {/if}
       <AccessHistory {base} agentId={agent.id} />
     {/key}
   {:else if view === "tools"}

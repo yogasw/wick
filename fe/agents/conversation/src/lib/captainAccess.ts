@@ -19,6 +19,7 @@ export const hasOwnerAccess = (a: Pick<AgentItem, "run_as" | "access_mode">) => 
 export function accessToday(a: Pick<AgentItem, "run_as" | "access_mode" | "allowed_connectors">): string {
   const runAs = a.run_as === "owner" ? "Owner" : "Caller";
   if (a.access_mode === "owner") return `${runAs} · All`;
+  if (a.access_mode === "roles") return `${runAs} · By role`;
   const n = (a.allowed_connectors ?? []).filter((g) => g.level !== "off").length;
   return `${runAs} · Selected · ${n}`;
 }
