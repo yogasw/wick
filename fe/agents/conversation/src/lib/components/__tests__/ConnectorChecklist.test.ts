@@ -219,7 +219,7 @@ describe("ConnectorChecklist", () => {
     expect(screen.queryByTestId("runs-as-owner")).toBeNull();
   });
 
-  test("By role: a mode switch asks first in Settings, then hides Lend from me", async () => {
+  test("By role: a mode switch asks first in Settings, then shows the picked list without Lend from me", async () => {
     const r = render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner", confirmMode: true } });
     expect(screen.getByTestId("lend")).toBeTruthy();
     await fireEvent.click(screen.getByTestId("access-mode-roles"));
@@ -233,7 +233,9 @@ describe("ConnectorChecklist", () => {
     expect(screen.getByTestId("access-mode-roles").getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByTestId("lend")).toBeNull();
     expect(screen.queryByTestId("who-gets-what")).toBeNull();
-    expect(screen.getByTestId("turned-off")).toBeTruthy();
+    // The picked list is the ceiling, as in Selected: no All-style Turned off.
+    expect(screen.queryByTestId("turned-off")).toBeNull();
+    expect(screen.getByTestId("access-empty")).toBeTruthy();
     r.unmount();
   });
 

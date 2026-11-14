@@ -113,7 +113,7 @@
   const sel = $derived(selectState(selected, shown));
   // Selected rows of this tier, hidden ones included: the bulk bar acts on them.
   const selCount = $derived(added.filter((c) => selected.has(c.id)).length);
-  const sameAsMe = $derived(tier === "connectors" && accessMode !== "choose");
+  const sameAsMe = $derived(tier === "connectors" && accessMode === "owner");
   // All mode: connectors switched off by an explicit off grant, and the
   // ones still on that the Turn off picker offers.
   const isOff = (c: AgentConnector) => grantOf(c.id)?.level === "off";
@@ -134,7 +134,7 @@
   });
   const previewText = $derived.by(() => {
     if (runAs === "owner") return preview === "me" ? "everything set here" : "everything set here, as you";
-    const on = accessMode !== "choose";
+    const on = accessMode === "owner";
     if (preview === "me") return on ? `every connector you have, new ones included${offRows.length ? `, minus ${offRows.length} turned off` : ""}` : `the ${added.length} picked`;
     if (preview === "mate") return on ? "every connector they have themselves, new ones included" : "the picked ones they also have themselves";
     return lentRows.length ? "none of their own" : "none";
@@ -253,7 +253,7 @@
 <div>
   <p class="mb-2 text-sm font-semibold text-black-900 dark:text-white-100" id="cc-mode-label">Which connectors?</p>
   <div class="grid grid-cols-3 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600" role="radiogroup" aria-labelledby="cc-mode-label">
-    {#each [["owner", "All", "Each person uses everything they have."], ["choose", "Selected", "Only the ones you pick."], ["roles", "By role", "Different access per person."]] as [m, name, hint], i (m)}
+    {#each [["owner", "All", "Each person uses everything they have."], ["choose", "Selected", "Only the ones you pick."], ["roles", "By role", "The ones you pick, per person."]] as [m, name, hint], i (m)}
       <button type="button" role="radio" aria-checked={accessMode === m} aria-label={name} data-testid={`access-mode-${m}`}
         class="flex flex-col gap-0.5 px-4 py-2.5 text-left {i > 0 ? 'border-l border-white-300 dark:border-navy-600' : ''} {accessMode === m ? 'bg-green-50 ring-2 ring-inset ring-green-500 dark:bg-green-900/20' : 'hover:bg-white-200 dark:hover:bg-navy-600'}"
         onclick={() => pickMode(m as AccessMode)}>
@@ -641,14 +641,14 @@
       <dt class="text-black-800 dark:text-black-600">Schedules & cron</dt>
       <dd>run as you</dd>
     </dl>
-    {#if accessMode !== "choose" && runAs !== "owner" && preview === "mate"}
+    {#if accessMode === "owner" && runAs !== "owner" && preview === "mate"}
       <p class="mt-2 rounded-lg border border-cau-300 bg-cau-100 px-3 py-1.5 text-black-900 dark:bg-navy-800 dark:text-cau-300">What they look up stays in this agent's chat and memory, which you can read.</p>
     {/if}
   </section>
   {/if}
 {/if}
 
-{#if showIncludeNew && tier === "connectors" && accessMode === "choose" && !adding}
+{#if showIncludeNew && tier === "connectors" && accessMode !== "owner" && !adding}
   <div class="flex items-start gap-3">
     <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Open other connectors read-only" describedBy="cc-incl-hint" />
     <span class="min-w-0">
@@ -658,7 +658,7 @@
   </div>
 {/if}
 
-{#if tier === "connectors" && accessMode === "choose" && !adding && writes.length > 0}
+{#if tier === "connectors" && accessMode !== "owner" && !adding && writes.length > 0}
   <details class="rounded-xl border border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
     <summary class="cursor-pointer select-none font-medium text-black-900 dark:text-white-100">Write operations allowed ({writes.length})</summary>
     <ul class="mt-2 space-y-0.5">
@@ -669,7 +669,7 @@
 
 {#if showRunAs && runAs === "owner"}
   <div class="rounded-xl border border-cau-300 bg-cau-100 px-4 py-2 text-xs text-black-900 dark:bg-navy-800 dark:text-cau-300" role="alert">
-    {#if accessMode !== "choose"}
+    {#if accessMode === "owner"}
       ⚠️ Anyone who chats with this agent uses <b>your</b> access — including <b>write</b> access to every connector you have.
     {:else}
       ⚠️ Anyone who chats with this agent uses <b>your</b> access, up to the checklist{#if writeConns.length > 0}

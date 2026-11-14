@@ -174,7 +174,7 @@ func TestRBACStoreRevisions(t *testing.T) {
 
 func rolesScope(doc RBACDoc, sharedWith ...string) *Scope {
 	p := entity.AgentPersona{ID: "agent-1", OwnerUserID: "user-owner", AccessMode: AccessRoles,
-		AllowedConnectors: EncodeGrants([]ConnectorGrant{{ConnectorID: "chat", Level: LevelAll, Lend: true}})}
+		AllowedConnectors: EncodeGrants([]ConnectorGrant{{ConnectorID: "chat", Level: LevelAll, Lend: true}, {ConnectorID: "docs", Level: LevelAll}, {ConnectorID: "tickets", Level: LevelAll}})}
 	shared := map[string]bool{}
 	for _, u := range sharedWith {
 		shared[u] = true
@@ -197,7 +197,7 @@ func TestRolesScopeLendsFromDocument(t *testing.T) {
 	if got := s.LentIDs(); strings.Join(got, ",") != "docs,tickets" {
 		t.Fatalf("LentIDs = %v", got)
 	}
-	// Every connector stays open on the agent: owner-mode reach.
+	// Picked connectors keep their checklist level.
 	if s.Level("chat") != LevelAll {
 		t.Fatalf("chat level = %s", s.Level("chat"))
 	}
@@ -230,6 +230,27 @@ func TestRolesScopeLendsFromDocument(t *testing.T) {
 	lv, _, why := s.CallerLevel(ctx, "user-m", "docs", true)
 	if lv != LevelRead || !strings.Contains(why, "approval") {
 		t.Fatalf("approval role = %s (%s)", lv, why)
+	}
+}
+
+// By role keeps the checklist as the agent's ceiling: a connector the
+// owner has but the agent does not list is off for everyone, the owner and
+// a co-owner included, and is never lent.
+func TestRolesScopeCappedAtChecklist(t *testing.T) {
+	p := entity.AgentPersona{ID: "agent-1", OwnerUserID: "user-owner", AccessMode: AccessRoles,
+		AllowedConnectors: EncodeGrants([]ConnectorGrant{{ConnectorID: "music", Level: LevelAll}})}
+	d := DefaultRBACDoc()
+	d.Rules = append([]RBACRule{{Match: MatchUser, Value: "user-a", Role: RoleOwner}}, d.Rules...)
+	d.Lend["repo"] = map[string]RBACLevel{RoleGuest: {Level: LevelAll}}
+	s := ScopeOf(p, reachOf("music", "repo")).WithRoles(d, nil)
+	if s.Level("music") != LevelAll || s.Level("repo") != LevelOff {
+		t.Fatalf("music %s, repo %s", s.Level("music"), s.Level("repo"))
+	}
+	if _, lent := s.LentBy("repo"); lent {
+		t.Fatal("a connector outside the checklist was lent")
+	}
+	if got := s.LentIDs(); strings.Join(got, ",") != "music" {
+		t.Fatalf("LentIDs = %v", got)
 	}
 }
 

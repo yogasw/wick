@@ -7,13 +7,13 @@
 -->
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { AgentConnector, AccessTrailItem, EffectiveRow, RBACDoc, RBACRevision, ShareUser } from "../api/team.js";
+  import type { AgentConnector, AccessTrailItem, ConnectorGrant, EffectiveRow, RBACDoc, RBACRevision, ShareUser } from "../api/team.js";
   import { getAccessEffective, getAccessTrail, getRBAC, listShareUsers, runApi } from "../api/team.js";
   import { cellOf, roleOrder, roleTitle, whoIs } from "../rbacView.js";
   import { timeAgo } from "../timeFormat.js";
 
-  type Props = { base: string; agentId: string; catalog: AgentConnector[]; captainHandle?: string };
-  let { base, agentId, catalog, captainHandle = "captain" }: Props = $props();
+  type Props = { base: string; agentId: string; catalog: AgentConnector[]; grants?: ConnectorGrant[]; captainHandle?: string };
+  let { base, agentId, catalog, grants = [], captainHandle = "captain" }: Props = $props();
 
   let doc = $state<RBACDoc | null>(null);
   let rev = $state(0);
@@ -37,8 +37,12 @@
   const labelOf = (id: string) => catalog.find((c) => c.id === id)?.label ?? id;
   const roles = $derived(doc ? roleOrder(doc) : []);
   const who = $derived(doc ? whoIs(doc, nameOf) : {});
-  const lentIDs = $derived(doc ? Object.keys(doc.lend ?? {}).sort((a, b) => labelOf(a).localeCompare(labelOf(b))) : []);
-  const others = $derived(Math.max(0, catalog.filter((c) => !c.tool && (c.tier ?? "") === "").length - lentIDs.length));
+  /* The agent's picked connectors are the ceiling: a lend outside them
+     reaches nobody, so the table lists only what the agent can touch. */
+  const onAgent = $derived(new Set(grants.filter((g) => g.level !== "off").map((g) => g.connector_id)));
+  const isConnector = (id: string) => catalog.some((c) => c.id === id && !c.tool && (c.tier ?? "") === "");
+  const lentIDs = $derived(doc ? Object.keys(doc.lend ?? {}).filter((id) => onAgent.has(id)).sort((a, b) => labelOf(a).localeCompare(labelOf(b))) : []);
+  const others = $derived([...onAgent].filter((id) => isConnector(id) && !lentIDs.includes(id)).length);
 
   /* Preview as one person: the server applies the same role rules a run
      does. Nothing is asked until someone is picked: a preview walks every
@@ -134,9 +138,9 @@
                 </tr>
               {/each}
               <tr class="border-t border-white-300 dark:border-navy-600">
-                <th scope="row" class="sticky left-0 z-10 bg-white-100 px-3 py-2 text-left font-normal {muted} dark:bg-navy-700">{lentIDs.length ? `${others} other connectors` : "Every connector"}</th>
+                <th scope="row" class="sticky left-0 z-10 bg-white-100 px-3 py-2 text-left font-normal {muted} dark:bg-navy-700">{others} other connector{others === 1 ? "" : "s"} on this agent</th>
                 <td class="px-3 py-2"><span class={pill("on")}>Write</span></td>
-                <td colspan={roles.length - 1} class="px-3 py-2 {muted}">not lent — own access only</td>
+                <td colspan={roles.length - 1} class="px-3 py-2 {muted}">not lent: others only with their own access</td>
               </tr>
             </tbody>
           </table>

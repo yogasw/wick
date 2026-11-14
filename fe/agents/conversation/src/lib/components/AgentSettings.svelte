@@ -707,7 +707,7 @@
     {/if}
     {#key agent.id}
       {#if draft.access_mode === "roles"}
-        <RolesViewer {base} agentId={agent.id} {catalog} captainHandle={agents.find((a) => a.is_captain)?.handle ?? "captain"} />
+        <RolesViewer {base} agentId={agent.id} {catalog} grants={draft.grants} captainHandle={agents.find((a) => a.is_captain)?.handle ?? "captain"} />
       {/if}
       <AccessHistory {base} agentId={agent.id} />
     {/key}

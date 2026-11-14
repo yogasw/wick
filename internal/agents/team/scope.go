@@ -145,9 +145,10 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	s.agentID, s.ownerID = p.ID, p.OwnerUserID
 	s.manageAgents = ManagesAgents(p)
 	mode := NormalizeAccessMode(p.AccessMode)
-	s.sameAsOwner = mode == AccessOwner || mode == AccessRoles
+	s.sameAsOwner = mode == AccessOwner
 	if mode == AccessRoles {
-		// Lends come from the role document (WithRoles), not the grants.
+		// The checklist stays the ceiling, as in AccessChoose. Lends come
+		// from the role document (WithRoles), not the grants.
 		for id, g := range s.grants {
 			g.Lend = false
 			s.grants[id] = g

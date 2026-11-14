@@ -59,10 +59,11 @@ const (
 	// owner reaches, new ones included, with write ops. Platform and System
 	// rows still follow their tier defaults and overrides.
 	AccessOwner = "owner"
-	// AccessRoles ("By role") is AccessOwner's reach for the agent, with
-	// what each caller may borrow of the owner's connectors decided by
-	// their role (RBACDoc). A guest gets nothing. Grants' Lend flags do
-	// not apply in this mode; the role document's lend table does.
+	// AccessRoles ("By role") is AccessChoose's checklist as the agent's
+	// ceiling (a music bot reaches its music connector, not the owner's
+	// whole catalog), with what each caller may borrow of those connectors
+	// decided by their role (RBACDoc). Grants' Lend flags do not apply in
+	// this mode; the role document's lend table does.
 	AccessRoles = "roles"
 )
 

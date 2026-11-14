@@ -41,7 +41,7 @@ An agent from the Team page inherits its OWNER's connector access, narrowed by i
 
 ### By role
 
-Settings › Access › "Which connectors?" has three modes: All, Selected, By role. Switching asks for a confirmation because it saves at once. In By role the agent sees everything its owner sees, and who is chatting decides what they may borrow of the owner's connectors:
+Settings › Access › "Which connectors?" has three modes: All, Selected, By role. Switching asks for a confirmation because it saves at once. In By role the agent's picked connectors (the same list as Selected) are its ceiling: a music bot reaches its music connector, not the owner's whole catalog, for everyone including the owner. Within that list, who is chatting decides what they may borrow of the owner's connectors:
 
 - **owner**: the agent's owner, everything. A rule can make another person owner too (a co-owner): they borrow every connector of the agent, but only the real owner changes roles.
 - **guest**: anyone no rule names, plus bots and unknown callers (a rule can also make a person guest). Nothing of their own; only the connectors the lend table lends to `guest` by name, e.g. `"lend": {"<huddle connector id>": {"guest": "all"}}`. Guest has no default level.

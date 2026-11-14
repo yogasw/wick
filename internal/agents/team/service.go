@@ -106,7 +106,7 @@ func (s *Service) SetConnectorTiers(f ConnectorTiersFunc) {
 // through; nil for any other agent, or when the lookup fails (the agent
 // then stays capped at its owner's catalog).
 func (s *Service) tiersOf(ctx context.Context, p entity.AgentPersona) map[string]string {
-	if m := NormalizeAccessMode(p.AccessMode); m != AccessOwner && m != AccessRoles {
+	if NormalizeAccessMode(p.AccessMode) != AccessOwner {
 		return nil
 	}
 	s.mu.Lock()

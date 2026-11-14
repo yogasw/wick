@@ -6,7 +6,8 @@ import type { AgentConnector, ConnectorGrant } from "./api/team.js";
 import { setLevelFor, setOverride, tierDefault, tierOf } from "./accessTiers.js";
 
 /** "choose" = the checklist; "owner" = "All" (team.AccessOwner);
-    "roles" = "By role" (team.AccessRoles): All's reach, lends per role. */
+    "roles" = "By role" (team.AccessRoles): Selected's checklist as the
+    ceiling, lends per role. */
 export type AccessMode = "choose" | "owner" | "roles";
 export type AccessFilter = "all" | "granted" | "not_granted";
 export type BulkAction = "read" | "all" | "off" | "default";
