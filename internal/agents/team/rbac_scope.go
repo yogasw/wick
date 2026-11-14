@@ -13,11 +13,15 @@ var _ connectors.RoleScope = (*Scope)(nil)
 // SharedCheck answers whether agentID is shared with userID.
 type SharedCheck func(ctx context.Context, agentID, userID string) bool
 
+// TagCheck answers whether userID carries the wick tag tagID.
+type TagCheck func(ctx context.Context, userID, tagID string) bool
+
 // roleScope is the "By role" half of a Scope: the document in force and
 // how to tell whether the agent is shared with a caller.
 type roleScope struct {
 	doc    RBACDoc
 	shared SharedCheck
+	tagged TagCheck
 
 	mu    sync.Mutex
 	roles map[string]string // caller id -> role, for the scope's short life
@@ -30,6 +34,15 @@ func (s *Scope) WithRoles(doc RBACDoc, shared SharedCheck) *Scope {
 		return s
 	}
 	s.roles = &roleScope{doc: doc, shared: shared}
+	return s
+}
+
+// WithRoleTags sets the tag lookup a tag rule needs; without it no tag
+// rule matches.
+func (s *Scope) WithRoleTags(tagged TagCheck) *Scope {
+	if s.roles != nil {
+		s.roles.tagged = tagged
+	}
 	return s
 }
 
@@ -51,6 +64,8 @@ func (s *Scope) RoleOf(ctx context.Context, callerID string) string {
 	r.mu.Unlock()
 	role := r.doc.RoleFor(s.ownerID, callerID, func() bool {
 		return r.shared != nil && r.shared(ctx, s.agentID, callerID)
+	}, func(tagID string) bool {
+		return r.tagged != nil && r.tagged(ctx, callerID, tagID)
 	})
 	r.mu.Lock()
 	if r.roles == nil {

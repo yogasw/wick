@@ -25,7 +25,7 @@ var (
 
 const rolesDocDesc = "The WHOLE new role document as JSON, edited from wick_roles: " +
 	`{"roles":{"<name>":{"rank":1-99,"lend":"off|read|all","write_needs_approval":bool}},` +
-	`"rules":[{"match":"user|shared","value":"<wick user id>","role":"<role>"}],` +
+	`"rules":[{"match":"user|shared|tag","value":"<wick user id or tag id>","role":"<role>"}],` +
 	`"lend":{"<connector_id>":{"<role or guest>":"off|read|all" or {"level":"pick","ops":[...]}}}}. ` +
 	"owner and guest are built in and never defined under roles. A rule may give role owner (a co-owner, " +
 	"borrows every connector of the agent) or guest. guest has no default: it borrows only where a lend row names guest."

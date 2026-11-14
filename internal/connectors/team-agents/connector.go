@@ -228,7 +228,7 @@ type rolesGetInput struct {
 
 type rolesSetInput struct {
 	Agent   string `wick:"required;desc=The agent's @handle or id."`
-	Doc     string `wick:"required;textarea;desc=The WHOLE new role document as JSON, edited from roles_get: {roles:{<name>:{rank:1-99,lend:off|read|all,write_needs_approval?}},rules:[{match:user|shared,value?:<wick user id>,role}],lend:{<connector_id>:{<role>:off|read|all|{level:pick,ops:[...]}}}}. owner and guest are built in and never defined under roles. A rule may give role owner (a co-owner) or guest, and a lend row may name guest (guest borrows only there)."`
+	Doc     string `wick:"required;textarea;desc=The WHOLE new role document as JSON, edited from roles_get: {roles:{<name>:{rank:1-99,lend:off|read|all,write_needs_approval?}},rules:[{match:user|shared|tag,value?:<wick user id or tag id>,role}],lend:{<connector_id>:{<role>:off|read|all|{level:pick,ops:[...]}}}}. owner and guest are built in and never defined under roles. A rule may give role owner (a co-owner) or guest, and a lend row may name guest (guest borrows only there)."`
 	BaseRev int    `wick:"required;desc=The rev roles_get returned. A save made from an older rev is refused so nobody's change is overwritten."`
 	Reason  string `wick:"desc=Why, kept in the role history."`
 }

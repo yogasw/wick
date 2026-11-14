@@ -68,7 +68,7 @@ export type AgentItem = {
   include_new_connectors: boolean;
   /** "owner" = All (every connector the session's identity has, write included);
       older servers omit it, which reads as "choose". */
-  access_mode?: "choose" | "owner";
+  access_mode?: "choose" | "owner" | "roles";
   /** Whose access a turn runs with; rows older than the field read "caller". */
   run_as?: "caller" | "owner";
   disabled: boolean;
@@ -271,7 +271,7 @@ export type AgentWrite = Partial<{
   features: AgentFeatures;
   allowed_connectors: ConnectorGrant[];
   include_new_connectors: boolean;
-  access_mode: "choose" | "owner";
+  access_mode: "choose" | "owner" | "roles";
   run_as: "caller" | "owner";
   disabled: boolean;
   allow_provider_switch: boolean;
@@ -1042,13 +1042,28 @@ export const getAccessTrail = (base: string, id: string, limit = 20) =>
 /** A lend level: a plain level, or picked ops. */
 export type RBACLevel = "off" | "read" | "all" | { level: "pick"; ops: string[] };
 
+/** A rule: a wick user by id, anyone the agent is shared with, or anyone
+    carrying a wick tag (value = tag id). First match wins. */
+export type RBACRule = { match: "user" | "shared" | "tag"; value?: string; role: string };
+
 export type RBACDoc = {
   roles: Record<string, { rank: number; lend: "off" | "read" | "all"; write_needs_approval?: boolean }>;
-  rules: { match: "user" | "shared"; value?: string; role: string }[];
+  rules: RBACRule[];
   lend: Record<string, Record<string, RBACLevel>>;
 };
 
 export type RBACRevision = { rev: number; doc: RBACDoc; updated_by: string; reason: string; at: string };
+
+/** putRBAC saves an edited role document as a new revision (owner only).
+    base_rev is the rev it was read at: a stale one answers 409. */
+export const putRBAC = (base: string, id: string, doc: RBACDoc, baseRev: number, reason: string) =>
+  apiPutE<{ rev: number }>(`${base}/api/team/agents/${enc(id)}/rbac`, { doc, base_rev: baseRev, reason });
+
+/** RoleTag is a wick tag a tag rule can name. */
+export type RoleTag = { id: string; name: string };
+
+/** listRoleTags lists the wick tags for the roles editor. */
+export const listRoleTags = (base: string) => apiGetE<{ tags: RoleTag[] | null }>(`${base}/api/team/role-tags`);
 
 /** getRBAC reads an agent's role document (owner only). */
 export const getRBAC = (base: string, id: string) =>

@@ -1,14 +1,16 @@
 <!--
-  RolesViewer — Settings › Access when "By role" is on: the role document,
-  read-only. Who lands in which role, what each role borrows of the owner's
+  RolesViewer — Settings › Access when "By role" is on: the role document.
+  Who lands in which role, what each role borrows of the owner's
   connectors (one table, connector column pinned, roles scroll sideways),
-  a preview as one person computed by the server, and how to change it:
-  by chatting (agents.roles_set). Activity, Raw and History fold away.
+  a preview as one person computed by the server, and two ways to change
+  it: Edit (RolesEditor, the owner's manual editor) or chatting
+  (wick_roles_set). Activity, Raw and History fold away.
 -->
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { AgentConnector, AccessTrailItem, ConnectorGrant, EffectiveRow, RBACDoc, RBACRevision, ShareUser } from "../api/team.js";
-  import { getAccessEffective, getAccessTrail, getRBAC, listShareUsers, runApi } from "../api/team.js";
+  import type { AgentConnector, AccessTrailItem, ConnectorGrant, EffectiveRow, RBACDoc, RBACRevision, RoleTag, ShareUser } from "../api/team.js";
+  import { getAccessEffective, getAccessTrail, getRBAC, listRoleTags, listShareUsers, runApi } from "../api/team.js";
+  import RolesEditor from "./RolesEditor.svelte";
   import { cellOf, roleOrder, roleTitle, whoIs } from "../rbacView.js";
   import { timeAgo } from "../timeFormat.js";
 
@@ -20,9 +22,9 @@
   let history = $state<RBACRevision[]>([]);
   let error = $state("");
   let users = $state<ShareUser[]>([]);
-  $effect(() => {
-    const id = agentId;
-    error = "";
+  let tags = $state<RoleTag[]>([]);
+  let editing = $state(false);
+  const loadDoc = (id: string) =>
     runApi(getRBAC(base, id))
       .then((r) => {
         doc = r.doc;
@@ -30,13 +32,29 @@
         history = r.history ?? [];
       })
       .catch((e) => (error = e instanceof Error ? e.message : String(e)));
-    void runApi(listShareUsers(base)).then((r) => (users = r.users ?? [])).catch(() => (users = []));
+  $effect(() => {
+    const id = agentId;
+    error = "";
+    editing = false;
+    untrack(() => {
+      void loadDoc(id);
+      void runApi(listShareUsers(base)).then((r) => (users = r.users ?? [])).catch(() => (users = []));
+      void runApi(listRoleTags(base)).then((r) => (tags = r.tags ?? [])).catch(() => (tags = []));
+    });
   });
+  function saved() {
+    editing = false;
+    previewKey = "";
+    const p = previewAs;
+    previewAs = "";
+    void loadDoc(agentId).then(() => (previewAs = p));
+  }
 
   const nameOf = (id: string) => users.find((u) => u.id === id)?.name || id;
   const labelOf = (id: string) => catalog.find((c) => c.id === id)?.label ?? id;
   const roles = $derived(doc ? roleOrder(doc) : []);
-  const who = $derived(doc ? whoIs(doc, nameOf) : {});
+  const tagOf = (id: string) => tags.find((t) => t.id === id)?.name || id;
+  const who = $derived(doc ? whoIs(doc, nameOf, tagOf) : {});
   /* The agent's picked connectors are the ceiling: a lend outside them
      reaches nobody, so the table lists only what the agent can touch. */
   const onAgent = $derived(new Set(grants.filter((g) => g.level !== "off").map((g) => g.connector_id)));
@@ -98,13 +116,20 @@
 <section class="{card} border-green-500 dark:border-green-700" data-testid="roles-viewer">
   <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
     <p class="text-sm font-semibold text-black-900 dark:text-white-100">Roles</p>
-    <span class={muted}>view only · change it by chatting{rev ? ` · rev ${rev}` : ""}</span>
+    <div class="flex items-center gap-2">
+      <span class={muted}>{editing ? "editing" : "change it here or by chatting"}{rev ? ` · rev ${rev}` : ""}</span>
+      {#if doc && !editing && !error}
+        <button type="button" class="rounded-md border border-white-300 px-2 py-0.5 text-xs text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-600" data-testid="roles-edit" onclick={() => (editing = true)}>Edit</button>
+      {/if}
+    </div>
   </div>
   <div class="space-y-4 border-t border-white-300 px-4 py-4 dark:border-navy-600">
     {#if error}
       <p class="text-xs text-neg-400">{error}</p>
     {:else if !doc}
       <p class={muted}>Loading roles…</p>
+    {:else if editing}
+      <RolesEditor {base} {agentId} {doc} {rev} {users} {tags} {catalog} {onAgent} onSaved={saved} onCancel={() => (editing = false)} />
     {:else}
       <div>
         <p class="text-xs font-medium text-black-900 dark:text-white-100">Who is who</p>

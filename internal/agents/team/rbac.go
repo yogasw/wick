@@ -34,10 +34,12 @@ const (
 	RoleGuest = "guest"
 )
 
-// Rule matches: a wick user by id, or anyone the agent is shared with.
+// Rule matches: a wick user by id, anyone the agent is shared with, or
+// anyone carrying a wick tag (a whole team in one rule).
 const (
 	MatchUser   = "user"
 	MatchShared = "shared"
+	MatchTag    = "tag"
 )
 
 // RBACDoc is an agent's role document. The newest revision in agent_rbac
@@ -69,8 +71,9 @@ type RBACRole struct {
 
 // RBACRule maps callers to a role.
 type RBACRule struct {
-	// Match is MatchUser (Value = wick user id) or MatchShared (anyone the
-	// agent is shared with; Value unused).
+	// Match is MatchUser (Value = wick user id), MatchShared (anyone the
+	// agent is shared with; Value unused) or MatchTag (Value = wick tag
+	// id: anyone carrying that tag).
 	Match string `json:"match"`
 	Value string `json:"value,omitempty"`
 	Role  string `json:"role"`
@@ -152,9 +155,13 @@ func (d RBACDoc) Validate() error {
 			if strings.TrimSpace(r.Value) == "" {
 				errs = append(errs, fmt.Sprintf("rule %d: a user rule needs the user id in value", i+1))
 			}
+		case MatchTag:
+			if strings.TrimSpace(r.Value) == "" {
+				errs = append(errs, fmt.Sprintf("rule %d: a tag rule needs the tag id in value", i+1))
+			}
 		case MatchShared:
 		default:
-			errs = append(errs, fmt.Sprintf("rule %d: match must be user or shared", i+1))
+			errs = append(errs, fmt.Sprintf("rule %d: match must be user, shared or tag", i+1))
 		}
 		if !known(r.Role) {
 			errs = append(errs, fmt.Sprintf("rule %d: unknown role %q", i+1, r.Role))
@@ -188,10 +195,11 @@ func (d RBACDoc) Validate() error {
 
 // RoleFor is the role a caller gets: owner for the agent's owner, else
 // the first rule that matches, else guest. shared says whether the agent
-// is shared with the caller; it is only asked when a shared rule is
-// reached. An empty caller (unknown, or wick's own internal principal) is
-// a guest: failing to know who is asking must never widen access.
-func (d RBACDoc) RoleFor(ownerID, callerID string, shared func() bool) string {
+// is shared with the caller, hasTag whether they carry a tag; each is only
+// asked when a rule of its kind is reached, and nil answers no. An empty
+// caller (unknown, or wick's own internal principal) is a guest: failing
+// to know who is asking must never widen access.
+func (d RBACDoc) RoleFor(ownerID, callerID string, shared func() bool, hasTag func(tagID string) bool) string {
 	if callerID == "" || callerID == internalPrincipal {
 		return RoleGuest
 	}
@@ -206,6 +214,10 @@ func (d RBACDoc) RoleFor(ownerID, callerID string, shared func() bool) string {
 			}
 		case MatchShared:
 			if shared != nil && shared() {
+				return d.knownRole(r.Role)
+			}
+		case MatchTag:
+			if hasTag != nil && hasTag(r.Value) {
 				return d.knownRole(r.Role)
 			}
 		}
@@ -282,6 +294,32 @@ func (d RBACDoc) HasCoOwner() bool {
 // internalPrincipal mirrors mcp.InternalAgentUserID (not imported here):
 // wick's own internal token, which is nobody in particular.
 const internalPrincipal = "wick-agent-internal"
+
+// UserHasTag reports whether userID carries tagID. A lookup error is a
+// no: a tag rule must never widen access on a failed read.
+func (s *Store) UserHasTag(ctx context.Context, userID, tagID string) bool {
+	if userID == "" || tagID == "" {
+		return false
+	}
+	var n int64
+	if err := s.db.WithContext(ctx).Table("user_tags").Where("user_id = ? AND tag_id = ?", userID, tagID).Count(&n).Error; err != nil {
+		return false
+	}
+	return n > 0
+}
+
+// RoleTag is a wick tag a tag rule can name.
+type RoleTag struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// RoleTags lists the wick tags, for picking one in a tag rule.
+func (s *Store) RoleTags(ctx context.Context) ([]RoleTag, error) {
+	var out []RoleTag
+	err := s.db.WithContext(ctx).Table("tags").Select("id, name").Order("sort_order, name").Scan(&out).Error
+	return out, err
+}
 
 // RBACRevision is one saved revision, newest first in RBACHistory.
 type RBACRevision struct {

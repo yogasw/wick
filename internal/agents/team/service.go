@@ -271,5 +271,5 @@ func (s *Service) scopeWithRoles(ctx context.Context, p entity.AgentPersona, sc 
 	return sc.WithRoles(doc, func(ctx context.Context, agentID, userID string) bool {
 		_, err := s.ShareOf(ctx, agentID, userID)
 		return err == nil
-	}), nil
+	}).WithRoleTags(s.UserHasTag), nil
 }

@@ -38,6 +38,23 @@ func apiTeamAgentRBAC(c *tool.Ctx) {
 	})
 }
 
+// apiTeamRoleTags handles GET /api/team/role-tags: the wick tags a tag
+// rule can name, for the roles editor.
+func apiTeamRoleTags(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	tags, err := globalTeam.RoleTags(c.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "could not load tags"})
+		return
+	}
+	if tags == nil {
+		tags = []team.RoleTag{}
+	}
+	c.JSON(http.StatusOK, map[string]any{"tags": tags})
+}
+
 // rbacWriteReq is PUT /rbac's body: the whole document, the revision it
 // was edited from, and why.
 type rbacWriteReq struct {

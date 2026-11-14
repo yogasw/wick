@@ -13,11 +13,12 @@ export function roleOrder(doc: RBACDoc): string[] {
 
 export const roleTitle = (r: string) => r.charAt(0).toUpperCase() + r.slice(1);
 
-/** whoIs lists, per role, who lands in it, in words. name maps a user id. */
-export function whoIs(doc: RBACDoc, name: (id: string) => string): Record<string, string[]> {
+/** whoIs lists, per role, who lands in it, in words. name maps a user id,
+    tag a tag id (a tag rule reads "everyone tagged <name>"). */
+export function whoIs(doc: RBACDoc, name: (id: string) => string, tag: (id: string) => string = (id) => id): Record<string, string[]> {
   const out: Record<string, string[]> = { owner: ["You"] };
   for (const r of doc.rules ?? []) {
-    const who = r.match === "shared" ? "everyone it's shared with" : name(r.value ?? "");
+    const who = r.match === "shared" ? "everyone it's shared with" : r.match === "tag" ? `everyone tagged ${tag(r.value ?? "")}` : name(r.value ?? "");
     (out[r.role] ??= []).push(who);
   }
   (out.guest ??= []).push("everyone else", "bots", "unknown callers");

@@ -81,7 +81,7 @@ func SessionRolesGet(ctx context.Context, sessionID string) (any, error) {
 	role := doc.RoleFor(p.OwnerUserID, asker, func() bool {
 		_, err := globalTeam.ShareOf(ctx, p.ID, asker)
 		return err == nil
-	})
+	}, func(tagID string) bool { return globalTeam.UserHasTag(ctx, asker, tagID) })
 	enabled := team.NormalizeAccessMode(p.AccessMode) == team.AccessRoles
 	if !enabled {
 		// Outside By role every caller runs with the agent's normal access.

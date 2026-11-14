@@ -32,7 +32,7 @@ func TestRBACDocValidate(t *testing.T) {
 	if err == nil {
 		t.Fatal("bad doc accepted")
 	}
-	for _, want := range []string{"built in", "rank must be 1-99", "lend must be off, read or all", "needs the user id", "match must be user or shared", "unknown role \"ghost\"", "lend c1: unknown role \"nobody\"", "pick needs at least one op"} {
+	for _, want := range []string{"built in", "rank must be 1-99", "lend must be off, read or all", "needs the user id", "match must be user, shared or tag", "unknown role \"ghost\"", "lend c1: unknown role \"nobody\"", "pick needs at least one op"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
@@ -49,10 +49,10 @@ func TestRBACDocAcceptsGuestLendAndCoOwner(t *testing.T) {
 	if !d.HasCoOwner() {
 		t.Fatal("co-owner rule not seen")
 	}
-	if got := d.RoleFor("user-owner", "user-a", nil); got != RoleOwner {
+	if got := d.RoleFor("user-owner", "user-a", nil, nil); got != RoleOwner {
 		t.Fatalf("co-owner role = %q", got)
 	}
-	if got := d.RoleFor("user-owner", "user-z", func() bool { return true }); got != RoleGuest {
+	if got := d.RoleFor("user-owner", "user-z", func() bool { return true }, nil); got != RoleGuest {
 		t.Fatalf("user ruled guest = %q", got)
 	}
 	// Guest has no default: a row without guest lends it nothing, and a
@@ -104,6 +104,27 @@ func TestRolesScopeGuestLendAndCoOwner(t *testing.T) {
 	}
 }
 
+func TestRBACRoleForTag(t *testing.T) {
+	d := DefaultRBACDoc()
+	d.Roles["support"] = RBACRole{Rank: 60, Lend: LevelRead}
+	d.Rules = append([]RBACRule{{Match: MatchTag, Value: "tag-support", Role: "support"}}, d.Rules...)
+	if err := d.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	has := func(id string) bool { return id == "tag-support" }
+	if got := d.RoleFor("user-owner", "user-s", nil, has); got != "support" {
+		t.Fatalf("tagged user = %q", got)
+	}
+	if got := d.RoleFor("user-owner", "user-s", nil, nil); got != RoleGuest {
+		t.Fatalf("no tag lookup = %q, want guest", got)
+	}
+	bad := DefaultRBACDoc()
+	bad.Rules = []RBACRule{{Match: MatchTag, Role: "member"}}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "needs the tag id") {
+		t.Fatalf("tag rule without a tag: %v", err)
+	}
+}
+
 func TestRBACLevelJSON(t *testing.T) {
 	in := `{"c1":{"member":"read","trusted":{"level":"pick","ops":["get","list"]}}}`
 	var m map[string]map[string]RBACLevel
@@ -137,7 +158,7 @@ func TestRBACRoleFor(t *testing.T) {
 		{internalPrincipal, true, RoleGuest},
 	}
 	for _, c := range cases {
-		if got := d.RoleFor("user-owner", c.caller, shared(c.shared)); got != c.want {
+		if got := d.RoleFor("user-owner", c.caller, shared(c.shared), nil); got != c.want {
 			t.Errorf("RoleFor(%q, shared=%v) = %q, want %q", c.caller, c.shared, got, c.want)
 		}
 	}

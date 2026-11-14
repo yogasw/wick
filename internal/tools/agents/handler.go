@@ -416,6 +416,7 @@ func Register(r tool.Router) {
 	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
 	r.PATCH("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareUpdate)
 	r.GET("/api/team/share-users", apiTeamShareUsers)
+	r.GET("/api/team/role-tags", apiTeamRoleTags)
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
 	r.GET("/api/team/agents/{id}/access/effective", apiTeamAgentAccessEffective)
 	r.GET("/api/team/agents/{id}/access/trail", apiTeamAgentAccessTrail)
