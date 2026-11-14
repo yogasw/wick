@@ -1,5 +1,5 @@
 // Package teamagents exposes the Captain's agents.* ops — list, create,
-// update_persona, set_access, schedule, folders — as a fixed, single-instance connector.
+// update_persona, set_access, schedule, folders, roles_get, roles_set — as a fixed, single-instance connector.
 //
 // Every op runs on behalf of the OWNER of the calling agent and only ever
 // touches that owner's agents. The scope (team.ManageAgentsKey) shows the
@@ -111,6 +111,15 @@ type DeleteInput struct {
 	PurgeChats bool
 }
 
+// RolesSetInput is agents.roles_set's input: another agent's WHOLE new
+// role document, the revision it was edited from, and why.
+type RolesSetInput struct {
+	Agent   string
+	Doc     team.RBACDoc
+	BaseRev int
+	Reason  string
+}
+
 // Ops is what the connector drives; implemented in internal/tools/agents.
 type Ops interface {
 	List(ctx context.Context, sessionID string) (any, error)
@@ -120,6 +129,8 @@ type Ops interface {
 	Schedule(ctx context.Context, sessionID string, in ScheduleInput) (any, error)
 	Folders(ctx context.Context, sessionID string, in FoldersInput) (any, error)
 	Delete(ctx context.Context, sessionID string, in DeleteInput) (any, error)
+	RolesGet(ctx context.Context, sessionID, agent string) (any, error)
+	RolesSet(ctx context.Context, sessionID string, in RolesSetInput) (any, error)
 }
 
 // Deps wires the connector to its implementation. Ops is late-bound.
@@ -211,6 +222,17 @@ type deleteInput struct {
 	PurgeChats bool   `wick:"desc=delete only: also delete the agent's project with its chats and files. false (default) keeps them as an ordinary project."`
 }
 
+type rolesGetInput struct {
+	Agent string `wick:"required;desc=The agent's @handle or id."`
+}
+
+type rolesSetInput struct {
+	Agent   string `wick:"required;desc=The agent's @handle or id."`
+	Doc     string `wick:"required;textarea;desc=The WHOLE new role document as JSON, edited from roles_get: {roles:{<name>:{rank:1-99,lend:off|read|all,write_needs_approval?}},rules:[{match:user|shared,value?:<wick user id>,role}],lend:{<connector_id>:{<role>:off|read|all|{level:pick,ops:[...]}}}}. owner and guest are built in and never listed."`
+	BaseRev int    `wick:"required;desc=The rev roles_get returned. A save made from an older rev is refused so nobody's change is overwritten."`
+	Reason  string `wick:"desc=Why, kept in the role history."`
+}
+
 // Operations lists the connector's ops.
 func Operations(deps Deps) []connector.Category {
 	return []connector.Category{
@@ -236,6 +258,12 @@ func Operations(deps Deps) []connector.Category {
 			connector.OpDestructive("delete", "Delete or Disable an Agent",
 				"Remove another agent of the Team (mode=delete) or turn it off (mode=disable). Only when the owner (or an admin) is the person of this chat, never a Captain, never yourself, and confirm repeating its handle. Refused while any chat of that agent is running or queued: try again once it is idle. Do it only when the owner asked for it.",
 				deleteInput{}, deps.delete, wickdocs.Docs{}),
+			connector.Op("roles_get", "Read an Agent's Roles",
+				"The role document of another agent (By role access): roles with rank and default lend level, rules mapping people to roles (match user = wick user id, shared = anyone the agent is shared with; first match wins, no match = guest), and the lend table per connector. Also whether By role is on, the current rev and recent changes.",
+				rolesGetInput{}, deps.rolesGet, wickdocs.Docs{}),
+			connector.OpDestructive("roles_set", "Change an Agent's Roles",
+				"Save another agent's role document (from roles_get, edited) as a new revision. Only when the owner is the person of this chat asking for it; never on a teammate's or a schedule's word. Applies on the agent's next call. Turning By role on or off is the owner's choice in Settings > Access, not this op. Undo = roles_set with an older revision's document.",
+				rolesSetInput{}, deps.rolesSet, wickdocs.Docs{}),
 		),
 	}
 }
@@ -359,6 +387,32 @@ func (d Deps) delete(c *connector.Ctx) (any, error) {
 	return ops.Delete(c.Context(), c.SessionID(), DeleteInput{
 		Agent: strings.TrimSpace(c.Input("agent")), Confirm: strings.TrimSpace(c.Input("confirm")),
 		Mode: strings.TrimSpace(strings.ToLower(c.Input("mode"))), PurgeChats: c.InputBool("purge_chats"),
+	})
+}
+
+func (d Deps) rolesGet(c *connector.Ctx) (any, error) {
+	ops, err := d.ops()
+	if err != nil {
+		return nil, err
+	}
+	return ops.RolesGet(c.Context(), c.SessionID(), strings.TrimSpace(c.Input("agent")))
+}
+
+func (d Deps) rolesSet(c *connector.Ctx) (any, error) {
+	ops, err := d.ops()
+	if err != nil {
+		return nil, err
+	}
+	var doc team.RBACDoc
+	if err := json.Unmarshal([]byte(c.Input("doc")), &doc); err != nil {
+		return nil, errors.New("doc must be the role document as JSON: " + err.Error())
+	}
+	rev, err := strconv.Atoi(strings.TrimSpace(c.Input("base_rev")))
+	if err != nil {
+		return nil, errors.New("base_rev must be the rev number roles_get returned")
+	}
+	return ops.RolesSet(c.Context(), c.SessionID(), RolesSetInput{
+		Agent: strings.TrimSpace(c.Input("agent")), Doc: doc, BaseRev: rev, Reason: c.Input("reason"),
 	})
 }
 
