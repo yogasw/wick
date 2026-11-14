@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -36,11 +37,17 @@ func effectiveFor(ctx context.Context, p entity.AgentPersona, as, userID string)
 			caller.Owner = true
 		} else if globalConnectors != nil && globalAuth != nil && userID != "" {
 			if u, err := globalAuth.GetUserByID(ctx, userID); err == nil && u != nil {
+				// One visibility read for the whole list: asking per
+				// connector cost several DB round trips each and left the
+				// preview loading for many seconds.
 				tags := globalAuth.GetUserFilterTagIDs(ctx, u.ID)
-				caller.Reaches = func(connectorID string) bool {
-					ok, err := globalConnectors.IsVisibleTo(ctx, connectorID, u.ID, tags, u.IsAdmin())
-					return err == nil && ok
+				own := map[string]bool{}
+				if rows, err := globalConnectors.ListVisibleTo(connectors.WithoutAgentScope(ctx), u.ID, tags, u.IsAdmin()); err == nil {
+					for _, r := range rows {
+						own[r.ID] = true
+					}
 				}
+				caller.Reaches = func(connectorID string) bool { return own[connectorID] }
 			}
 		}
 	}

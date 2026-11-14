@@ -39,6 +39,17 @@ The web UI is always on. Slack and Telegram need a bot token and access-control 
 
 An agent from the Team page inherits its OWNER's connector access, narrowed by its checklist — the checklist only offers what the owner sees in `wick_list`, and saving anything outside it is refused. Its "run as" setting picks the identity: `caller` (default) runs a turn as the person who sent it, falling back to the owner for schedules, bots and workflows; `owner` always runs as the owner, so anyone who can message the agent uses the owner's access within the checklist.
 
+### By role
+
+Settings › Access › "Which connectors?" has three modes: All, Selected, By role. Switching asks for a confirmation because it saves at once. In By role the agent sees everything its owner sees, and who is chatting decides what they may borrow of the owner's connectors:
+
+- **owner**: the agent's owner, everything. **guest**: anyone no rule names, plus bots and unknown callers: nothing at all, not even their own access.
+- Roles in between are the owner's own (default: `trusted` rank 70 borrows all, `member` rank 40 borrows read with writes waiting for approval). Rules map a wick user id, or "anyone the agent is shared with", to a role; first match wins.
+- `lend` lists, per connector, what each role borrows (`off` / `read` / `all` / pick ops). A connector not in `lend` is never borrowed; people keep their own access to it.
+- A write that needs approval is refused for now with a message saying so: the approval flow is not built yet.
+
+The Settings screen only SHOWS roles (who is who, the connector × role table, a preview as one person, history). They are changed by chatting, through the Team agents connector ops `roles_get` and `roles_set` (doc JSON + `base_rev` + reason; a stale `base_rev` is refused, so read first). Only the owner's own request changes roles, and only from a session that holds the Team agents connector, normally the Captain's chat: an agent cannot change its own roles from inside its own chat, so asking the agent itself ("make X trusted here") is refused by design. Every save is a new revision; undo by saving an old revision's doc again.
+
 ## The pool
 
 A pool caps how many agent subprocesses run at once and FIFO-queues the rest. Idle sessions are killed and later resumed transparently, so a long-lived conversation does not hold a process hostage.

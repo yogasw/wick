@@ -6,6 +6,7 @@
   by chatting (agents.roles_set). Activity, Raw and History fold away.
 -->
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { AgentConnector, AccessTrailItem, EffectiveRow, RBACDoc, RBACRevision, ShareUser } from "../api/team.js";
   import { getAccessEffective, getAccessTrail, getRBAC, listShareUsers, runApi } from "../api/team.js";
   import { cellOf, roleOrder, roleTitle, whoIs } from "../rbacView.js";
@@ -39,18 +40,36 @@
   const lentIDs = $derived(doc ? Object.keys(doc.lend ?? {}).sort((a, b) => labelOf(a).localeCompare(labelOf(b))) : []);
   const others = $derived(Math.max(0, catalog.filter((c) => !c.tool && (c.tier ?? "") === "").length - lentIDs.length));
 
-  /* Preview as one person: the server applies the same role rules a run does. */
-  let previewAs = $state("guest");
+  /* Preview as one person: the server applies the same role rules a run
+     does. Nothing is asked until someone is picked: a preview walks every
+     connector, and the viewer must not load one on open. */
+  let previewAs = $state("");
   let preview = $state<EffectiveRow[] | null>(null);
   let previewError = $state("");
+  /* One request per pick: the key below is plain (not $state), and the
+     request runs untracked, so a re-render or a parent refresh can never
+     turn the preview into a reload loop. A late answer for an older pick
+     is dropped. */
+  let previewKey = "";
   $effect(() => {
     const p = previewAs;
-    const [as, uid] = p === "owner" || p === "guest" ? [p, ""] : ["user", p];
-    preview = null;
-    previewError = "";
-    runApi(getAccessEffective(base, agentId, as as "owner" | "user" | "guest", uid))
-      .then((r) => (preview = (r.items ?? []).filter((x) => x.runs_as !== "none")))
-      .catch((e) => (previewError = e instanceof Error ? e.message : String(e)));
+    const id = agentId;
+    if (!p) return;
+    const key = `${id}|${p}`;
+    if (key === previewKey) return;
+    previewKey = key;
+    untrack(() => {
+      const [as, uid] = p === "owner" || p === "guest" ? [p, ""] : ["user", p];
+      preview = null;
+      previewError = "";
+      runApi(getAccessEffective(base, id, as as "owner" | "user" | "guest", uid))
+        .then((r) => {
+          if (previewKey === key) preview = (r.items ?? []).filter((x) => x.runs_as !== "none");
+        })
+        .catch((e) => {
+          if (previewKey === key) previewError = e instanceof Error ? e.message : String(e);
+        });
+    });
   });
 
   let trail = $state<AccessTrailItem[] | null>(null);
@@ -127,11 +146,14 @@
       <div data-testid="roles-preview">
         <p class="text-xs font-medium text-black-900 dark:text-white-100">Preview as</p>
         <select class="mt-1 rounded-md border border-white-300 bg-white-100 px-2 py-1 text-xs text-black-900 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={previewAs} aria-label="Preview as">
+          <option value="">Choose a person…</option>
           <option value="owner">You</option>
           {#each users as u (u.id)}<option value={u.id}>{u.name || u.id}</option>{/each}
           <option value="guest">Someone unknown</option>
         </select>
-        {#if previewError}
+        {#if !previewAs}
+          <p class="mt-2 {muted}">Pick someone to see what this agent gives them.</p>
+        {:else if previewError}
           <p class="mt-2 text-xs text-neg-400">{previewError}</p>
         {:else if preview === null}
           <p class="mt-2 {muted}">Loading…</p>
@@ -140,7 +162,7 @@
         {:else}
           <ul class="mt-2 space-y-0.5 text-xs text-black-900 dark:text-white-100">
             {#each preview.slice(0, 12) as r (r.connector_id)}
-              <li><b>{r.label}</b> · {r.runs_as === "owner" ? "on your account" : "their own access"} · {r.ops.length} op{r.ops.length === 1 ? "" : "s"}</li>
+              <li><b>{r.label}</b> · {r.runs_as === "owner" ? "on your account" : previewAs === "owner" ? "your own access" : "their own access"} · {r.ops.length} op{r.ops.length === 1 ? "" : "s"}</li>
             {/each}
             {#if preview.length > 12}<li class={muted}>+ {preview.length - 12} more</li>{/if}
           </ul>
