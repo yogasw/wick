@@ -106,7 +106,7 @@ func (s *Service) SetConnectorTiers(f ConnectorTiersFunc) {
 // through; nil for any other agent, or when the lookup fails (the agent
 // then stays capped at its owner's catalog).
 func (s *Service) tiersOf(ctx context.Context, p entity.AgentPersona) map[string]string {
-	if NormalizeAccessMode(p.AccessMode) != AccessOwner {
+	if m := NormalizeAccessMode(p.AccessMode); m != AccessOwner && m != AccessRoles {
 		return nil
 	}
 	s.mu.Lock()
@@ -190,7 +190,11 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	case err != nil:
 		return DenyAll()
 	default:
-		scope = ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p))
+		sc, err := s.scopeWithRoles(ctx, p, ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p)))
+		if err != nil {
+			return DenyAll()
+		}
+		scope = sc
 	}
 	s.mu.Lock()
 	s.cache[agentID] = scopeEntry{scope: scope, expiry: now.Add(scopeCacheTTL)}
@@ -251,4 +255,21 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		_ = s.Store.DeleteShares(ctx, id)
 	}
 	return err
+}
+
+// scopeWithRoles loads p's role document onto a By role scope. A document
+// that cannot be read fails closed: the caller gets deny-all, never the
+// owner's whole reach.
+func (s *Service) scopeWithRoles(ctx context.Context, p entity.AgentPersona, sc *Scope) (*Scope, error) {
+	if NormalizeAccessMode(p.AccessMode) != AccessRoles || sc.denyAll {
+		return sc, nil
+	}
+	doc, _, err := s.RBAC(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	return sc.WithRoles(doc, func(ctx context.Context, agentID, userID string) bool {
+		_, err := s.ShareOf(ctx, agentID, userID)
+		return err == nil
+	}), nil
 }

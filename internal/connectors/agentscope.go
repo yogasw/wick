@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -62,6 +63,55 @@ type LendingScope interface {
 	LentBy(connectorID string) (lenderID string, ok bool)
 	// LentIDs lists every lent connector instance.
 	LentIDs() []string
+}
+
+// RoleScope is the optional part of an AgentScope whose access depends on
+// who is calling (an agent in "By role" access). callerID is the person
+// asking, before any lend swaps in the lender.
+type RoleScope interface {
+	// CallerLevel is what callerID may do on connectorID: on their own
+	// access (lent false) or on the owner's lend (lent true). level is
+	// "all", "read", "pick" (ops lists the ops) or "off"; why says, in
+	// words for the caller, what limited them ("" when nothing did).
+	CallerLevel(ctx context.Context, callerID, connectorID string, lent bool) (level string, ops []string, why string)
+}
+
+// callerLevel asks the RoleScope on ctx, if any; no RoleScope permits all.
+func callerLevel(ctx context.Context, callerID, connectorID string, lent bool) (string, []string, string) {
+	rs, ok := AgentScopeFrom(ctx).(RoleScope)
+	if !ok {
+		return "all", nil, ""
+	}
+	return rs.CallerLevel(ctx, callerID, connectorID, lent)
+}
+
+// roleAllowsOp refuses an op the caller's role does not allow on
+// connectorID (see RoleScope), with the reason in words.
+func roleAllowsOp(ctx context.Context, callerID, connectorID, opKey string, destructive, lent bool) error {
+	lv, ops, why := callerLevel(ctx, callerID, connectorID, lent)
+	refuse := func(def string) error {
+		if why == "" {
+			why = def
+		}
+		return fmt.Errorf("operation %q is not allowed: %s", opKey, why)
+	}
+	switch lv {
+	case "all":
+		return nil
+	case "read":
+		if destructive {
+			return refuse("your role may only read this connector")
+		}
+		return nil
+	case "pick":
+		for _, k := range ops {
+			if k == opKey {
+				return nil
+			}
+		}
+		return refuse("your role may only run some operations of this connector")
+	}
+	return refuse("your role has no access to this connector")
 }
 
 // LentAccountScope is the optional part of a LendingScope that names the

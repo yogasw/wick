@@ -419,6 +419,8 @@ func Register(r tool.Router) {
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
 	r.GET("/api/team/agents/{id}/access/effective", apiTeamAgentAccessEffective)
 	r.GET("/api/team/agents/{id}/access/trail", apiTeamAgentAccessTrail)
+	r.GET("/api/team/agents/{id}/rbac", apiTeamAgentRBAC)
+	r.PUT("/api/team/agents/{id}/rbac", apiTeamAgentRBACPut)
 	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
 	r.GET("/api/team/agents/{id}/slack/manifest", apiTeamAgentSlackManifest)
 	r.GET("/api/team/agents/{id}/slack", apiTeamAgentSlackGet)

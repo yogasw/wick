@@ -480,10 +480,10 @@ func validAccessMode(c *tool.Ctx, v *string, current string) (string, bool) {
 		return team.NormalizeAccessMode(current), true
 	}
 	switch *v {
-	case team.AccessChoose, team.AccessOwner:
+	case team.AccessChoose, team.AccessOwner, team.AccessRoles:
 		return *v, true
 	}
-	c.JSON(http.StatusBadRequest, map[string]string{"error": "access_mode must be choose or owner"})
+	c.JSON(http.StatusBadRequest, map[string]string{"error": "access_mode must be choose, owner or roles"})
 	return "", false
 }
 

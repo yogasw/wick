@@ -51,6 +51,13 @@ func effectiveFor(ctx context.Context, p entity.AgentPersona, as, userID string)
 			return accs
 		}
 	}
+	if scope.InRoles() {
+		uid := caller.UserID
+		caller.Level = func(id string, lent bool) (string, []string) {
+			lv, ops, _ := scope.CallerLevel(ctx, uid, id, lent)
+			return lv, ops
+		}
+	}
 	return team.Effective(scope, cat, caller, accounts), nil
 }
 

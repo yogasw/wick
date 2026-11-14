@@ -48,6 +48,9 @@ type Scope struct {
 	// owner, and the service's own visibility check is what limits them.
 	// nil keeps the old cap at reach.
 	tiers map[string]string
+	// roles is set in AccessRoles mode: lends come from its document and
+	// every call is checked against the caller's role (CallerLevel).
+	roles *roleScope
 	// denyAll is the disabled-agent scope: it answers no to everything.
 	denyAll bool
 	// offKeys and offTools are what the agent's switched-off features
@@ -141,7 +144,16 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	s := NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
 	s.agentID, s.ownerID = p.ID, p.OwnerUserID
 	s.manageAgents = ManagesAgents(p)
-	s.sameAsOwner = NormalizeAccessMode(p.AccessMode) == AccessOwner
+	mode := NormalizeAccessMode(p.AccessMode)
+	s.sameAsOwner = mode == AccessOwner || mode == AccessRoles
+	if mode == AccessRoles {
+		// Lends come from the role document (WithRoles), not the grants.
+		for id, g := range s.grants {
+			g.Lend = false
+			s.grants[id] = g
+		}
+		s.roles = &roleScope{doc: DefaultRBACDoc()}
+	}
 	return s
 }
 
@@ -227,6 +239,14 @@ func (s *Scope) LentBy(connectorID string) (string, bool) {
 	if s.denyAll || s.ownerID == "" {
 		return "", false
 	}
+	if s.roles != nil {
+		for _, id := range s.roles.doc.lentIDs() {
+			if id == connectorID && s.Level(connectorID) != LevelOff {
+				return s.ownerID, true
+			}
+		}
+		return "", false
+	}
 	g, ok := s.grants[connectorID]
 	if !ok || !g.Lend || s.Level(connectorID) == LevelOff {
 		return "", false
@@ -251,6 +271,14 @@ func (s *Scope) LentAccount(connectorID string) (string, bool) {
 // LentIDs implements connectors.LendingScope.
 func (s *Scope) LentIDs() []string {
 	var out []string
+	if s.roles != nil {
+		for _, id := range s.roles.doc.lentIDs() {
+			if _, ok := s.LentBy(id); ok {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
 	for id := range s.grants {
 		if _, ok := s.LentBy(id); ok {
 			out = append(out, id)

@@ -427,6 +427,9 @@ func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, 
 	if own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin); err != nil || own {
 		return nil, nil, false
 	}
+	if lv, _, _ := callerLevel(ctx, userID, connectorID, true); lv == "off" {
+		return nil, nil, false
+	}
 	lender, tags, err := s.identity(ctx, lenderID)
 	if err != nil || lender == nil {
 		return nil, nil, false
@@ -1035,6 +1038,9 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, u
 // narrowed by the agent scope.
 func (s *Service) isVisibleDirect(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
 	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
+		return false, nil
+	}
+	if lv, _, _ := callerLevel(ctx, userID, connectorID, false); lv == "off" {
 		return false, nil
 	}
 	if fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope); ok {
@@ -2352,6 +2358,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 		if !scope.AllowOp(c.ID, op.Key, op.Destructive) {
 			return nil, fmt.Errorf("operation %q is not allowed for this agent", op.Key)
+		}
+		if err := roleAllowsOp(ctx, requester, c.ID, op.Key, op.Destructive, lent); err != nil {
+			return nil, err
 		}
 	}
 

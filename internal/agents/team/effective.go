@@ -51,6 +51,9 @@ type EffectiveCaller struct {
 	UserID  string
 	Owner   bool
 	Reaches func(connectorID string) bool
+	// Level is the caller's role limit (Scope.CallerLevel) on their own
+	// access (lent false) or on a lend; nil means no role applies.
+	Level func(connectorID string, lent bool) (string, []string)
 }
 
 // Effective lists, for every connector in the owner's catalog, what
@@ -91,9 +94,16 @@ func Effective(scope *Scope, catalog []connectors.CatalogEntry, caller Effective
 				row.RunsAs = RunsAsOwner
 			}
 		}
+		roleLv, roleOps := LevelAll, []string(nil)
+		if caller.Level != nil && row.RunsAs != RunsAsNone {
+			roleLv, roleOps = caller.Level(id, row.RunsAs == RunsAsOwner)
+			if roleLv == LevelOff {
+				row.RunsAs = RunsAsNone
+			}
+		}
 		if row.RunsAs != RunsAsNone {
 			for _, op := range e.Ops {
-				if scope.AllowOp(id, op.Key, op.Destructive) {
+				if scope.AllowOp(id, op.Key, op.Destructive) && roleAllows(roleLv, roleOps, op.Key, op.Destructive) {
 					row.Ops = append(row.Ops, op.Key)
 				}
 			}
@@ -104,7 +114,30 @@ func Effective(scope *Scope, catalog []connectors.CatalogEntry, caller Effective
 }
 
 // ScopeForAgent is the scope p runs under — the one ScopeForSession
-// caches for p's sessions — built fresh, for previews.
+// caches for p's sessions — built fresh, for previews. A role document
+// that cannot be read gives deny-all, as at run time.
 func (s *Service) ScopeForAgent(ctx context.Context, p entity.AgentPersona) *Scope {
-	return ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p))
+	sc, err := s.scopeWithRoles(ctx, p, ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p)))
+	if err != nil {
+		return DenyAll()
+	}
+	return sc
+}
+
+// roleAllows is a role level applied to one op, as connectors does at run
+// time.
+func roleAllows(level string, ops []string, opKey string, destructive bool) bool {
+	switch level {
+	case LevelAll:
+		return true
+	case LevelRead:
+		return !destructive
+	case LevelPick:
+		for _, k := range ops {
+			if k == opKey {
+				return true
+			}
+		}
+	}
+	return false
 }
