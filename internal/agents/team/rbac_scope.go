@@ -62,10 +62,12 @@ func (s *Scope) RoleOf(ctx context.Context, callerID string) string {
 }
 
 // CallerLevel implements connectors.RoleScope. Outside By role access it
-// permits everything (the checklist alone decides). In it: a guest gets
-// nothing; anyone else keeps their own access; on a lend, the role's lend
-// level applies, and a role whose writes need approval reads only until
-// the approval flow exists.
+// permits everything (the checklist alone decides). In it: an owner (the
+// real one or a co-owner) gets everything; a guest gets nothing of their
+// own and only what the lend table lends to guest by name; anyone else
+// keeps their own access; on a lend, the role's lend level applies, and a
+// role whose writes need approval reads only until the approval flow
+// exists.
 func (s *Scope) CallerLevel(ctx context.Context, callerID, connectorID string, lent bool) (string, []string, string) {
 	if s.roles == nil || s.denyAll {
 		return LevelAll, nil, ""
@@ -74,13 +76,16 @@ func (s *Scope) CallerLevel(ctx context.Context, callerID, connectorID string, l
 	switch {
 	case role == RoleOwner:
 		return LevelAll, nil, ""
-	case role == RoleGuest:
-		return LevelOff, nil, "this agent gives guests no connectors; ask its owner for a role"
+	case role == RoleGuest && !lent:
+		return LevelOff, nil, "this agent gives guests only the connectors its owner lends to guest; ask its owner for a role"
 	case !lent:
 		return LevelAll, nil, ""
 	}
 	lv := s.roles.doc.LendLevel(role, connectorID)
 	if lv.Level == LevelOff {
+		if role == RoleGuest {
+			return LevelOff, nil, "this agent does not lend this connector to guests; ask its owner for a role"
+		}
 		return LevelOff, nil, fmt.Sprintf("the %s role does not borrow this connector from the agent's owner", role)
 	}
 	if s.roles.doc.Roles[role].WriteNeedsApproval && lv.Level == LevelAll {

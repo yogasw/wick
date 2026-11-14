@@ -57,3 +57,36 @@ func TestCaptainRoles(t *testing.T) {
 		t.Errorf("roles_set on a non-owner's turn: %v", err)
 	}
 }
+
+// team.roles / roles_set: an agent reads and changes its OWN roles, on
+// its owner's own request only; a co-owner and a guest lend are valid.
+func TestOwnRoles(t *testing.T) {
+	w := withCaptainWorld(t)
+	ctx := context.Background()
+
+	got, err := OwnRolesGet(ctx, w.captain.ID)
+	if err != nil || got.(map[string]any)["rev"] != 0 {
+		t.Fatalf("roles = %v, %v", got, err)
+	}
+	doc := `{"roles":{"member":{"rank":40,"lend":"read"}},"rules":[{"match":"user","value":"u7","role":"owner"}],"lend":{"n1":{"guest":"all"}}}`
+	out, err := OwnRolesSet(ctx, "s-captain", w.captain.ID, doc, 0, "co-owner + guest music")
+	if err != nil || out.(map[string]any)["rev"] != 1 {
+		t.Fatalf("roles_set = %v, %v", out, err)
+	}
+	saved, _, _ := globalTeam.RBAC(ctx, w.captain.ID)
+	if !saved.HasCoOwner() || saved.LendLevel(team.RoleGuest, "n1").Level != team.LevelAll {
+		t.Fatalf("saved = %+v", saved)
+	}
+	if _, err := OwnRolesSet(ctx, "s-captain", w.captain.ID, "{not json", 1, ""); err == nil {
+		t.Error("bad JSON saved")
+	}
+
+	// Someone else's words as the latest turn: refused, whatever they ask.
+	line := `{"role":"user","source":"slack","sender":{"id":"U9","channel":"slack","wick_user_id":"u9"}}` + "\n"
+	if err := os.WriteFile(globalLayout.SessionConversation("s-captain"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OwnRolesSet(ctx, "s-captain", w.captain.ID, doc, 1, ""); err == nil || !strings.Contains(err.Error(), "only this agent's owner") {
+		t.Errorf("roles_set on a non-owner's turn: %v", err)
+	}
+}

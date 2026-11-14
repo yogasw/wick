@@ -25,16 +25,16 @@ export function whoIs(doc: RBACDoc, name: (id: string) => string): Record<string
 }
 
 /** cellOf is what role borrows of connectorID, as the server's LendLevel
-    reads it: owner has it as their own, guest never borrows, a role
-    missing from the row borrows at its default. */
+    reads it: owner has it as their own, guest borrows only where the row
+    names guest, a role missing from the row borrows at its default. */
 export function cellOf(doc: RBACDoc, role: string, connectorID: string): { text: string; tone: "on" | "read" | "off"; approval: boolean } {
   if (role === "owner") return { text: "Write", tone: "on", approval: false };
-  const r = doc.roles?.[role];
+  const r = role === "guest" ? { rank: 0, lend: "off" } : doc.roles?.[role];
   const row = doc.lend?.[connectorID];
   if (!r || !row) return { text: "Off", tone: "off", approval: false };
-  const lv: RBACLevel = row[role] ?? r.lend;
+  const lv: RBACLevel = row[role] ?? (r.lend as RBACLevel);
   if (typeof lv === "object") return { text: `${lv.ops.length} ops`, tone: "read", approval: false };
-  if (lv === "all") return r.write_needs_approval ? { text: "Read", tone: "read", approval: true } : { text: "Write", tone: "on", approval: false };
+  if (lv === "all") return "write_needs_approval" in r && r.write_needs_approval ? { text: "Read", tone: "read", approval: true } : { text: "Write", tone: "on", approval: false };
   if (lv === "read") return { text: "Read", tone: "read", approval: false };
   return { text: "Off", tone: "off", approval: false };
 }

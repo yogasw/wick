@@ -43,12 +43,18 @@ An agent from the Team page inherits its OWNER's connector access, narrowed by i
 
 Settings › Access › "Which connectors?" has three modes: All, Selected, By role. Switching asks for a confirmation because it saves at once. In By role the agent sees everything its owner sees, and who is chatting decides what they may borrow of the owner's connectors:
 
-- **owner**: the agent's owner, everything. **guest**: anyone no rule names, plus bots and unknown callers: nothing at all, not even their own access.
+- **owner**: the agent's owner, everything. A rule can make another person owner too (a co-owner): they borrow every connector of the agent, but only the real owner changes roles.
+- **guest**: anyone no rule names, plus bots and unknown callers (a rule can also make a person guest). Nothing of their own; only the connectors the lend table lends to `guest` by name, e.g. `"lend": {"<huddle connector id>": {"guest": "all"}}`. Guest has no default level.
 - Roles in between are the owner's own (default: `trusted` rank 70 borrows all, `member` rank 40 borrows read with writes waiting for approval). Rules map a wick user id, or "anyone the agent is shared with", to a role; first match wins.
-- `lend` lists, per connector, what each role borrows (`off` / `read` / `all` / pick ops). A connector not in `lend` is never borrowed; people keep their own access to it.
+- `lend` lists, per connector, what each role (and `guest`) borrows (`off` / `read` / `all` / pick ops). A connector not in `lend` is never borrowed; people keep their own access to it.
 - A write that needs approval is refused for now with a message saying so: the approval flow is not built yet.
 
-The Settings screen only SHOWS roles (who is who, the connector × role table, a preview as one person, history). They are changed by chatting, through the Team agents connector ops `roles_get` and `roles_set` (doc JSON + `base_rev` + reason; a stale `base_rev` is refused, so read first). Only the owner's own request changes roles, and only from a session that holds the Team agents connector, normally the Captain's chat: an agent cannot change its own roles from inside its own chat, so asking the agent itself ("make X trusted here") is refused by design. Every save is a new revision; undo by saving an old revision's doc again.
+The Settings screen only SHOWS roles (who is who, the connector × role table, a preview as one person, history). They are changed by chatting:
+
+- **Inside the agent itself**: `team_roles` reads its own document, `team_roles_set` saves it (doc JSON + `base_rev` + reason). The owner asks in their own chat with that agent ("make Person A an owner here", "guests can use Huddle FM"). Any other sender, a teammate, a schedule or a forwarded message is refused, so a guest cannot promote themselves.
+- **From the Captain**: the Team agents connector ops `roles_get` / `roles_set` do the same for any agent of the owner's Team.
+
+Steps: read (`team_roles`), edit the WHOLE document, save with the `rev` you read (a stale `base_rev` is refused). People are named by wick user id in rules. Every save is a new revision; undo by saving an old revision's doc again. Turning By role on is still the owner's switch in Settings › Access.
 
 ## The pool
 

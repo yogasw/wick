@@ -18,9 +18,12 @@ import (
 
 // Roles ("By role" access, AccessRoles): who is chatting decides what of
 // the owner's connectors they may borrow through the agent. Two roles are
-// fixed: RoleOwner (the agent's owner, everything) and RoleGuest (anyone
-// no rule names, bots and unknown callers: nothing at all). Roles in
-// between are the owner's own, ranked 1–99.
+// fixed: RoleOwner (the agent's owner, everything; a rule may name another
+// person owner too, a co-owner who borrows everything the same way, but
+// only the real owner changes roles) and RoleGuest (anyone no rule names,
+// bots and unknown callers: nothing of their own, only the connectors the
+// lend table lends to guest by name). Roles in between are the owner's
+// own, ranked 1–99.
 //
 // A role only narrows. A person keeps their own access to a connector
 // (within the agent's checklist) whatever their role, except a guest, who
@@ -142,7 +145,7 @@ func (d RBACDoc) Validate() error {
 			errs = append(errs, fmt.Sprintf("role %q: lend must be off, read or all", name))
 		}
 	}
-	known := func(role string) bool { _, ok := d.Roles[role]; return ok || role == RoleGuest }
+	known := func(role string) bool { _, ok := d.Roles[role]; return ok || role == RoleGuest || role == RoleOwner }
 	for i, r := range d.Rules {
 		switch r.Match {
 		case MatchUser:
@@ -154,7 +157,7 @@ func (d RBACDoc) Validate() error {
 			errs = append(errs, fmt.Sprintf("rule %d: match must be user or shared", i+1))
 		}
 		if !known(r.Role) {
-			errs = append(errs, fmt.Sprintf("rule %d: unknown role %q (owner cannot be given by a rule)", i+1, r.Role))
+			errs = append(errs, fmt.Sprintf("rule %d: unknown role %q", i+1, r.Role))
 		}
 	}
 	for cid, row := range d.Lend {
@@ -162,8 +165,8 @@ func (d RBACDoc) Validate() error {
 			errs = append(errs, "lend: empty connector id")
 		}
 		for role, lv := range row {
-			if _, ok := d.Roles[role]; !ok {
-				errs = append(errs, fmt.Sprintf("lend %s: unknown role %q (only owner-defined roles borrow; guest never does)", cid, role))
+			if _, ok := d.Roles[role]; !ok && role != RoleGuest {
+				errs = append(errs, fmt.Sprintf("lend %s: unknown role %q (owner borrows everything already and is never listed)", cid, role))
 			}
 			switch lv.Level {
 			case LevelOff, LevelRead, LevelAll:
@@ -212,6 +215,9 @@ func (d RBACDoc) RoleFor(ownerID, callerID string, shared func() bool) string {
 
 // knownRole is role, or guest when the document no longer defines it.
 func (d RBACDoc) knownRole(role string) string {
+	if role == RoleOwner {
+		return RoleOwner
+	}
 	if _, ok := d.Roles[role]; ok {
 		return role
 	}
@@ -219,9 +225,16 @@ func (d RBACDoc) knownRole(role string) string {
 }
 
 // LendLevel is what role borrows of connectorID on the owner's account.
-// Owner borrows nothing (it is theirs); guest and a connector the
-// document does not lend get off.
+// Owner borrows nothing (it is theirs); a connector the document does not
+// lend gets off. Guest has no default level: it borrows only where a
+// connector's row names guest explicitly.
 func (d RBACDoc) LendLevel(role, connectorID string) RBACLevel {
+	if role == RoleGuest {
+		if lv, set := d.Lend[connectorID][RoleGuest]; set {
+			return lv
+		}
+		return RBACLevel{Level: LevelOff}
+	}
 	r, ok := d.Roles[role]
 	if !ok {
 		return RBACLevel{Level: LevelOff}
@@ -240,6 +253,10 @@ func (d RBACDoc) LendLevel(role, connectorID string) RBACLevel {
 func (d RBACDoc) lentIDs() []string {
 	var out []string
 	for cid := range d.Lend {
+		if d.LendLevel(RoleGuest, cid).Level != LevelOff {
+			out = append(out, cid)
+			continue
+		}
 		for role := range d.Roles {
 			if d.LendLevel(role, cid).Level != LevelOff {
 				out = append(out, cid)
@@ -249,6 +266,17 @@ func (d RBACDoc) lentIDs() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// HasCoOwner reports whether a rule makes someone besides the agent's
+// owner an owner: then every connector of the agent can be borrowed.
+func (d RBACDoc) HasCoOwner() bool {
+	for _, r := range d.Rules {
+		if r.Role == RoleOwner {
+			return true
+		}
+	}
+	return false
 }
 
 // internalPrincipal mirrors mcp.InternalAgentUserID (not imported here):

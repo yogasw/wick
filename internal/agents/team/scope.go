@@ -240,6 +240,11 @@ func (s *Scope) LentBy(connectorID string) (string, bool) {
 		return "", false
 	}
 	if s.roles != nil {
+		// A co-owner borrows every connector of the agent; who may use a
+		// lend is then decided per caller by CallerLevel.
+		if s.roles.doc.HasCoOwner() && s.Level(connectorID) != LevelOff {
+			return s.ownerID, true
+		}
 		for _, id := range s.roles.doc.lentIDs() {
 			if id == connectorID && s.Level(connectorID) != LevelOff {
 				return s.ownerID, true
@@ -272,11 +277,26 @@ func (s *Scope) LentAccount(connectorID string) (string, bool) {
 func (s *Scope) LentIDs() []string {
 	var out []string
 	if s.roles != nil {
-		for _, id := range s.roles.doc.lentIDs() {
+		ids := s.roles.doc.lentIDs()
+		if s.roles.doc.HasCoOwner() {
+			for id := range s.reach {
+				ids = append(ids, id)
+			}
+			for id := range s.tiers {
+				ids = append(ids, id)
+			}
+		}
+		seen := map[string]bool{}
+		for _, id := range ids {
+			if seen[id] || isToolGrant(id) {
+				continue
+			}
+			seen[id] = true
 			if _, ok := s.LentBy(id); ok {
 				out = append(out, id)
 			}
 		}
+		sort.Strings(out)
 		return out
 	}
 	for id := range s.grants {

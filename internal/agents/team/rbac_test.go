@@ -26,16 +26,81 @@ func TestRBACDocValidate(t *testing.T) {
 	bad := RBACDoc{
 		Roles: map[string]RBACRole{"owner": {Rank: 50, Lend: "read"}, "Ops!": {Rank: 120, Lend: "maybe"}},
 		Rules: []RBACRule{{Match: "user"}, {Match: "group", Role: "ghost"}},
-		Lend:  map[string]map[string]RBACLevel{"c1": {"guest": {Level: "read"}, "Ops!": {Level: LevelPick}}},
+		Lend:  map[string]map[string]RBACLevel{"c1": {"nobody": {Level: "read"}, "Ops!": {Level: LevelPick}}},
 	}
 	err := bad.Validate()
 	if err == nil {
 		t.Fatal("bad doc accepted")
 	}
-	for _, want := range []string{"built in", "rank must be 1-99", "lend must be off, read or all", "needs the user id", "match must be user or shared", "unknown role \"ghost\"", "guest never does", "pick needs at least one op"} {
+	for _, want := range []string{"built in", "rank must be 1-99", "lend must be off, read or all", "needs the user id", "match must be user or shared", "unknown role \"ghost\"", "lend c1: unknown role \"nobody\"", "pick needs at least one op"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
+	}
+}
+
+func TestRBACDocAcceptsGuestLendAndCoOwner(t *testing.T) {
+	d := DefaultRBACDoc()
+	d.Rules = append([]RBACRule{{Match: MatchUser, Value: "user-a", Role: RoleOwner}, {Match: MatchUser, Value: "user-z", Role: RoleGuest}}, d.Rules...)
+	d.Lend["music"] = map[string]RBACLevel{RoleGuest: {Level: LevelAll}}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("guest lend / co-owner refused: %v", err)
+	}
+	if !d.HasCoOwner() {
+		t.Fatal("co-owner rule not seen")
+	}
+	if got := d.RoleFor("user-owner", "user-a", nil); got != RoleOwner {
+		t.Fatalf("co-owner role = %q", got)
+	}
+	if got := d.RoleFor("user-owner", "user-z", func() bool { return true }); got != RoleGuest {
+		t.Fatalf("user ruled guest = %q", got)
+	}
+	// Guest has no default: a row without guest lends it nothing, and a
+	// role's default does not reach guests.
+	d.Lend["docs"] = map[string]RBACLevel{}
+	if lv := d.LendLevel(RoleGuest, "docs"); lv.Level != LevelOff {
+		t.Fatalf("guest borrowed docs by default: %s", lv.Level)
+	}
+	if lv := d.LendLevel(RoleGuest, "music"); lv.Level != LevelAll {
+		t.Fatalf("guest on music = %s", lv.Level)
+	}
+}
+
+func TestRolesScopeGuestLendAndCoOwner(t *testing.T) {
+	ctx := context.Background()
+	d := DefaultRBACDoc()
+	d.Lend["docs"] = map[string]RBACLevel{RoleGuest: {Level: LevelAll}}
+	s := rolesScope(d)
+	for _, w := range []struct {
+		caller, conn string
+		lent         bool
+		level        string
+	}{
+		{"user-g", "docs", true, LevelAll},  // lent to guest by name, writes included
+		{"", "docs", true, LevelAll},        // an unknown caller is a guest too
+		{"user-g", "docs", false, LevelOff}, // still nothing of their own
+		{"user-g", "tickets", true, LevelOff},
+	} {
+		if lv, _, _ := s.CallerLevel(ctx, w.caller, w.conn, w.lent); lv != w.level {
+			t.Errorf("CallerLevel(%q, %s, lent=%v) = %s, want %s", w.caller, w.conn, w.lent, lv, w.level)
+		}
+	}
+	if got := s.LentIDs(); strings.Join(got, ",") != "docs" {
+		t.Fatalf("LentIDs with a guest lend = %v", got)
+	}
+
+	// A co-owner borrows every connector of the agent; others still only
+	// what the table lends them.
+	d.Rules = append([]RBACRule{{Match: MatchUser, Value: "user-a", Role: RoleOwner}}, d.Rules...)
+	s = rolesScope(d, "user-m")
+	if got := s.LentIDs(); strings.Join(got, ",") != "chat,docs,tickets" {
+		t.Fatalf("LentIDs with a co-owner = %v", got)
+	}
+	if lv, _, _ := s.CallerLevel(ctx, "user-a", "tickets", true); lv != LevelAll {
+		t.Fatalf("co-owner on tickets = %s", lv)
+	}
+	if lv, _, _ := s.CallerLevel(ctx, "user-m", "tickets", true); lv != LevelOff {
+		t.Fatalf("member borrowed tickets through the co-owner lend: %s", lv)
 	}
 }
 
@@ -150,7 +215,7 @@ func TestRolesScopeLendsFromDocument(t *testing.T) {
 		{"user-m", "chat", true, LevelOff},     // not in the lend table
 		{"user-m", "chat", false, LevelAll},    // own access is kept
 		{"user-g", "docs", false, LevelOff},    // guest: nothing, own access included
-		{"user-g", "docs", true, LevelOff},
+		{"user-g", "docs", true, LevelOff},     // and no lend that does not name guest
 		{"", "docs", false, LevelOff},
 	} {
 		lv, _, _ := s.CallerLevel(ctx, w.caller, w.conn, w.lent)

@@ -2,10 +2,12 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/yogasw/wick/internal/agents/team"
 	teamagents "github.com/yogasw/wick/internal/connectors/team-agents"
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // RolesGet implements agents.roles_get: another agent's role document.
@@ -18,6 +20,45 @@ func (o CaptainOps) RolesGet(ctx context.Context, sessionID, agent string) (any,
 	if err != nil {
 		return nil, err
 	}
+	return rolesView(ctx, p)
+}
+
+// OwnRolesGet implements team.roles: the calling agent's own roles.
+func OwnRolesGet(ctx context.Context, agentID string) (any, error) {
+	if globalTeam == nil {
+		return nil, errors.New("team agents are not configured on this server")
+	}
+	p, err := globalTeam.Get(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return rolesView(ctx, p)
+}
+
+// OwnRolesSet implements team.roles_set: the calling agent changes its
+// OWN roles, only on its owner's own request in this session. The owner
+// of the role change is always the agent's real owner, so a co-owner
+// (role owner by a rule) can use everything but never edit the roles.
+func OwnRolesSet(ctx context.Context, sessionID, agentID, raw string, baseRev int, reason string) (any, error) {
+	if globalTeam == nil {
+		return nil, errors.New("team agents are not configured on this server")
+	}
+	p, err := globalTeam.Get(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if !requestedByOwner(sessionID, p.OwnerUserID) {
+		return nil, errors.New("only this agent's owner, asking in their own chat, can change its roles")
+	}
+	var doc team.RBACDoc
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil, errors.New("doc must be the role document as JSON: " + err.Error())
+	}
+	return saveRoles(ctx, p, doc, baseRev, p.OwnerUserID, reason)
+}
+
+// rolesView is an agent's role document, rev and recent changes.
+func rolesView(ctx context.Context, p entity.AgentPersona) (any, error) {
 	doc, rev, err := globalTeam.RBAC(ctx, p.ID)
 	if err != nil {
 		return nil, err
@@ -54,7 +95,12 @@ func (o CaptainOps) RolesSet(ctx context.Context, sessionID string, in teamagent
 	if err != nil {
 		return nil, err
 	}
-	rev, err := globalTeam.SetRBAC(ctx, p.ID, in.Doc, in.BaseRev, mgr.OwnerUserID, in.Reason)
+	return saveRoles(ctx, p, in.Doc, in.BaseRev, mgr.OwnerUserID, in.Reason)
+}
+
+// saveRoles stores doc as p's next role revision and drops cached scopes.
+func saveRoles(ctx context.Context, p entity.AgentPersona, doc team.RBACDoc, baseRev int, by, reason string) (any, error) {
+	rev, err := globalTeam.SetRBAC(ctx, p.ID, doc, baseRev, by, reason)
 	if err != nil {
 		return nil, err
 	}

@@ -28,4 +28,10 @@ describe("rbacView", () => {
     expect(cellOf(doc, "member", "chat").text).toBe("Off");
     expect(cellOf(doc, "owner", "chat").text).toBe("Write");
   });
+  it("shows a guest lend and a co-owner", () => {
+    const d: RBACDoc = { ...doc, rules: [{ match: "user", value: "u-b", role: "owner" }, ...doc.rules], lend: { ...doc.lend, music: { guest: "all" } } };
+    expect(cellOf(d, "guest", "music")).toEqual({ text: "Write", tone: "on", approval: false });
+    expect(cellOf(d, "guest", "docs").text).toBe("Off");
+    expect(whoIs(d, (id) => (id === "u-b" ? "Person B" : id)).owner).toEqual(["You", "Person B"]);
+  });
 });

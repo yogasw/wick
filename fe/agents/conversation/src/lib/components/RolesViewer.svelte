@@ -171,10 +171,11 @@
 
       <div class="rounded-lg border border-white-300 p-3 dark:border-navy-600">
         <p class="text-xs font-medium text-black-900 dark:text-white-100">Change it by chatting</p>
-        <p class={muted}>Tell @{captainHandle} in your own chat, for example:</p>
+        <p class={muted}>Tell this agent in your own chat (or @{captainHandle}), for example:</p>
         <ul class="mt-1 space-y-0.5 text-xs text-green-600 dark:text-green-400">
-          <li>"make Person A trusted on this agent"</li>
-          <li>"members can read Bitbucket here"</li>
+          <li>"make Person A an owner here"</li>
+          <li>"guests can use Huddle FM"</li>
+          <li>"make Person B a guest"</li>
           <li>"undo the last roles change"</li>
         </ul>
         <p class="mt-1 {muted}">Only your own request changes roles; every change is a new revision you can go back to.</p>
