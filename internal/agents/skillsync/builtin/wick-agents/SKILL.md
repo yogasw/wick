@@ -51,10 +51,10 @@ Settings › Access › "Which connectors?" has three modes: All, Selected, By r
 
 The Settings screen only SHOWS roles (who is who, the connector × role table, a preview as one person, history). They are changed by chatting:
 
-- **Inside the agent itself**: `team_roles` reads its own document, `team_roles_set` saves it (doc JSON + `base_rev` + reason). The owner asks in their own chat with that agent ("make Person A an owner here", "guests can use Huddle FM"). Any other sender, a teammate, a schedule or a forwarded message is refused, so a guest cannot promote themselves.
+- **Inside the agent itself** (every Team agent has these built-in tools, whatever its connectors): `wick_roles` answers "what is my role here" for whoever is chatting (`your_role`) and, for the owner, returns the whole document; `wick_roles_set` saves it (doc JSON + `base_rev` + reason). The owner asks in their own chat with that agent ("make Person A an owner here", "guests can use Huddle FM"). Any other sender, a teammate, a schedule or a forwarded message is refused, so a guest cannot promote themselves, and a non-owner sees only their own role.
 - **From the Captain**: the Team agents connector ops `roles_get` / `roles_set` do the same for any agent of the owner's Team.
 
-Steps: read (`team_roles`), edit the WHOLE document, save with the `rev` you read (a stale `base_rev` is refused). People are named by wick user id in rules. Every save is a new revision; undo by saving an old revision's doc again. Turning By role on is still the owner's switch in Settings › Access.
+Steps: read (`wick_roles`), edit the WHOLE document, save with the `rev` you read (a stale `base_rev` is refused). People are named by wick user id in rules. Every save is a new revision; undo by saving an old revision's doc again. Turning By role on is still the owner's switch in Settings › Access.
 
 ## The pool
 

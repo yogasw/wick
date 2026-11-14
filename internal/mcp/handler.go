@@ -453,6 +453,10 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSessionLink(w, r, hreq, rsp, h.layout, h.refreshSession, args)
 	case "wick_session_model":
 		handlers.WickSessionModel(w, r, hreq, rsp, h.layout, args)
+	case "wick_roles":
+		handlers.WickRoles(w, r, hreq, rsp)
+	case "wick_roles_set":
+		handlers.WickRolesSet(w, r, hreq, rsp, args)
 	// Tickets, notes and the source-repo selection are connectors
 	// (internal/connectors/{tickets,notes,source}), not meta-tools: a
 	// connector is taggable and auditable per user, which a hard-coded

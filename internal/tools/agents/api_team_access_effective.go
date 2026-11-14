@@ -99,7 +99,20 @@ func apiTeamAgentAccessEffective(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"as": as, "user_id": userID, "items": rows})
+	// role is the caller's role in By role access ("" outside it), so the
+	// preview can say who the person is on this agent.
+	role := ""
+	if sc := globalTeam.ScopeForAgent(c.Context(), p); sc.InRoles() {
+		switch as {
+		case effectiveAsOwner:
+			role = team.RoleOwner
+		case effectiveAsGuest:
+			role = team.RoleGuest
+		default:
+			role = sc.RoleOf(c.Context(), userID)
+		}
+	}
+	c.JSON(http.StatusOK, map[string]any{"as": as, "user_id": userID, "role": role, "items": rows})
 }
 
 // accessTrailItem is one lent run for the agent's trail.

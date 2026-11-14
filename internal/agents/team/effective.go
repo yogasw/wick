@@ -97,6 +97,13 @@ func Effective(scope *Scope, catalog []connectors.CatalogEntry, caller Effective
 		roleLv, roleOps := LevelAll, []string(nil)
 		if caller.Level != nil && row.RunsAs != RunsAsNone {
 			roleLv, roleOps = caller.Level(id, row.RunsAs == RunsAsOwner)
+			if roleLv == LevelOff && row.RunsAs == RunsAsSelf && lent && !caller.Owner {
+				// A role that switches the caller's own access off (a
+				// guest) can still borrow the lend: at run time the own
+				// connector is hidden and the lend applies instead.
+				row.RunsAs = RunsAsOwner
+				roleLv, roleOps = caller.Level(id, true)
+			}
 			if roleLv == LevelOff {
 				row.RunsAs = RunsAsNone
 			}

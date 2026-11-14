@@ -54,13 +54,6 @@ type Deps struct {
 	// ticket_conversation_read shape; read_chat checks access first.
 	// Optional: read_chat is unavailable without it.
 	ReadChat func(sessionID string, offset, limit int, order, detail string) (map[string]any, error)
-	// Roles reads the calling agent's OWN role document (By role access).
-	// Optional: roles is unavailable without it.
-	Roles func(ctx context.Context, agentID string) (any, error)
-	// SetRoles saves the calling agent's OWN role document. It must
-	// refuse unless the agent's owner is the person asking in sessionID.
-	// Optional: roles_set is unavailable without it.
-	SetRoles func(ctx context.Context, sessionID, agentID, doc string, baseRev int, reason string) (any, error)
 }
 
 // errInTicketRoom mirrors team.ErrInTicketRoom (this package does not
@@ -122,14 +115,6 @@ type cancelTaskInput struct {
 }
 
 type listTasksInput struct{}
-
-type rolesInput struct{}
-
-type rolesSetInput struct {
-	Doc     string `wick:"required;textarea;desc=The WHOLE new role document as JSON, edited from roles: {roles:{<name>:{rank:1-99,lend:off|read|all,write_needs_approval?}},rules:[{match:user|shared,value?:<wick user id>,role}],lend:{<connector_id>:{<role>:off|read|all|{level:pick,ops:[...]}}}}. owner and guest are built in and never defined under roles. A rule may give role owner (a co-owner: borrows everything) or guest. guest borrows only where a lend row names guest, e.g. lend:{<id>:{guest:all}}."`
-	BaseRev int    `wick:"required;desc=The rev roles returned. A save made from an older rev is refused so nobody's change is overwritten."`
-	Reason  string `wick:"desc=Why, kept in the role history."`
-}
 
 type takeoverInput struct {
 	Chat string `wick:"desc=The session to take over or release (session_id). Omit for this session."`
@@ -209,16 +194,6 @@ func Operations(deps Deps) []connector.Category {
 					"Turn it on in your own session (chat omitted) when the user writes \"take over\" there, and off when they write \"lanjut auto\". "+
 					"chat=<session_id> targets another session: only one of your own user's (or any, for an admin). Returns {chat, team_hold, by}; by is self, owner or admin.",
 				takeoverInput{}, deps.takeover, wickdocs.Docs{}),
-			connector.Op("roles", "Read My Roles",
-				"This agent's OWN role document (By role access): who is owner, who is guest, the owner's roles in between, rules mapping people to roles "+
-					"(match user = wick user id, shared = anyone the agent is shared with; first match wins, no match = guest), the lend table per connector, "+
-					"whether By role is on, the current rev and recent changes. Read it before roles_set.",
-				rolesInput{}, deps.roles, wickdocs.Docs{}),
-			connector.OpDestructive("roles_set", "Change My Roles",
-				"Save this agent's OWN role document (from roles, edited) as a new revision: make someone owner (co-owner), trusted, member or guest, "+
-					"or lend a connector to a role or to guest. Only when the agent's owner is the person asking in this chat; refused for anyone else, "+
-					"a teammate, a schedule or a forwarded message. Applies on the next call. Undo = roles_set with an older revision's document.",
-				rolesSetInput{}, deps.rolesSet, wickdocs.Docs{}),
 		),
 	}
 }
@@ -394,28 +369,6 @@ func (d Deps) takeover(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"chat": chat, "team_hold": on, "by": by}, nil
-}
-
-func (d Deps) roles(c *connector.Ctx) (any, error) {
-	if d.Roles == nil || d.AgentOf == nil {
-		return nil, errUnavailable
-	}
-	agentID := d.AgentOf(c.Context(), c.SessionID())
-	if agentID == "" {
-		return nil, teamlink.ErrNotTeamSession
-	}
-	return d.Roles(c.Context(), agentID)
-}
-
-func (d Deps) rolesSet(c *connector.Ctx) (any, error) {
-	if d.SetRoles == nil || d.AgentOf == nil {
-		return nil, errUnavailable
-	}
-	agentID := d.AgentOf(c.Context(), c.SessionID())
-	if agentID == "" {
-		return nil, teamlink.ErrNotTeamSession
-	}
-	return d.SetRoles(c.Context(), c.SessionID(), agentID, c.Input("doc"), c.InputInt("base_rev"), c.Input("reason"))
 }
 
 var (

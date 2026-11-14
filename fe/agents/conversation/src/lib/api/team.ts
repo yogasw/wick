@@ -1015,7 +1015,7 @@ export type EffectiveRow = {
 };
 
 export const getAccessEffective = (base: string, id: string, as: "owner" | "user" | "guest", userId = "") =>
-  apiGetE<{ as: string; user_id: string; items: EffectiveRow[] | null }>(
+  apiGetE<{ as: string; user_id: string; role?: string; items: EffectiveRow[] | null }>(
     `${base}/api/team/agents/${enc(id)}/access/effective?as=${enc(as)}${userId ? `&user_id=${enc(userId)}` : ""}`,
   );
 

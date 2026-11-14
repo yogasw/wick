@@ -507,7 +507,7 @@ func TestToolsListContainsAllExpectedTools(t *testing.T) {
 		"wick_context", "wick_usage", "wick_compact",
 		"wick_slack_listen",
 		"wick_session_link",
-		"wick_session_model",
+		"wick_session_model", "wick_roles", "wick_roles_set",
 	}
 
 	descriptors := handlers.MetaToolDescriptors()

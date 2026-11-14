@@ -90,3 +90,34 @@ func TestOwnRoles(t *testing.T) {
 		t.Errorf("roles_set on a non-owner's turn: %v", err)
 	}
 }
+
+// wick_roles: the session's own agent; the owner sees the document, a
+// non-owner's turn only its own role.
+func TestSessionRoles(t *testing.T) {
+	w := withCaptainWorld(t)
+	ctx := context.Background()
+	if TeamCallerOf(ctx, "s-captain") != w.captain.ID {
+		t.Skip("session is not bound to the captain in this fixture")
+	}
+	got, err := SessionRolesGet(ctx, "s-captain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := got.(map[string]any); m["doc"] == nil || m["your_role"] != team.RoleOwner {
+		t.Fatalf("owner view = %+v", m)
+	}
+	line := `{"role":"user","source":"slack","sender":{"id":"U9","channel":"slack","wick_user_id":"u9"}}` + "\n"
+	if err := os.WriteFile(globalLayout.SessionConversation("s-captain"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = SessionRolesGet(ctx, "s-captain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := got.(map[string]any); m["doc"] != nil {
+		t.Fatalf("a non-owner saw the document: %+v", m)
+	}
+	if _, err := SessionRolesSet(ctx, "s-captain", "{}", 0, ""); err == nil {
+		t.Fatal("a non-owner's turn changed roles")
+	}
+}

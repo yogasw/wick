@@ -2154,8 +2154,10 @@ func NewServer() *Server {
 	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamCallerOf, SessionUser: agentstool.SessionUserOf, InRoom: agentstool.InTicketRoom, Lookup: agentstool.TeamSessionLookup, SetHold: agentstool.SetTeamHold,
 		ReadChat: func(sessionID string, offset, limit int, order, detail string) (map[string]any, error) {
 			return ticketconn.ReadConversation(agentsLayout, sessionID, ticketconn.ConversationPage{Offset: offset, Limit: limit, Order: order, Detail: detail})
-		},
-		Roles: agentstool.OwnRolesGet, SetRoles: agentstool.OwnRolesSet}))
+		}}))
+	// wick_roles / wick_roles_set: an agent's own roles, on every Team agent.
+	mcphandlers.RolesRead = agentstool.SessionRolesGet
+	mcphandlers.RolesWrite = agentstool.SessionRolesSet
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
@@ -2792,7 +2794,8 @@ func NewServer() *Server {
 		"wick_list": true, "wick_search": true, "wick_get": true, "wick_info": true,
 		"wick_list_providers": true, "wick_skill_list": true, "wick_session_info": true,
 		"wick_set_title": true, "wick_session_workspace": true, "ask_user": true,
-		"todo": true, // wick's own task-list tool — no side effects outside the session
+		"todo":       true, // wick's own task-list tool — no side effects outside the session
+		"wick_roles": true, // read-only: who is who on this agent
 	}
 	// Command gate for the wick provider's in-process tool dispatch.
 	// Enforced natively (no subprocess PreToolUse hook), covering every

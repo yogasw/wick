@@ -49,6 +49,7 @@
      connector, and the viewer must not load one on open. */
   let previewAs = $state("");
   let preview = $state<EffectiveRow[] | null>(null);
+  let previewRole = $state("");
   let previewError = $state("");
   /* One request per pick: the key below is plain (not $state), and the
      request runs untracked, so a re-render or a parent refresh can never
@@ -65,10 +66,13 @@
     untrack(() => {
       const [as, uid] = p === "owner" || p === "guest" ? [p, ""] : ["user", p];
       preview = null;
+      previewRole = "";
       previewError = "";
       runApi(getAccessEffective(base, id, as as "owner" | "user" | "guest", uid))
         .then((r) => {
-          if (previewKey === key) preview = (r.items ?? []).filter((x) => x.runs_as !== "none");
+          if (previewKey !== key) return;
+          previewRole = r.role ?? "";
+          preview = (r.items ?? []).filter((x) => x.runs_as !== "none");
         })
         .catch((e) => {
           if (previewKey === key) previewError = e instanceof Error ? e.message : String(e);
@@ -123,24 +127,24 @@
           <table class="w-max min-w-full border-collapse text-xs">
             <thead>
               <tr class="text-left text-[11px] text-black-800 dark:text-black-600">
-                <th class="sticky left-0 z-10 bg-white-100 px-3 py-2 font-medium dark:bg-navy-700">Connector</th>
-                {#each roles as r (r)}<th class="whitespace-nowrap px-3 py-2 font-medium">{roleTitle(r)}</th>{/each}
+                <th class="sticky left-0 z-10 bg-white-100 px-2 py-2 font-medium dark:bg-navy-700">Connector</th>
+                {#each roles as r (r)}<th class="whitespace-nowrap px-2 py-2 font-medium">{roleTitle(r)}</th>{/each}
               </tr>
             </thead>
             <tbody>
               {#each lentIDs as id (id)}
                 <tr class="border-t border-white-300 dark:border-navy-600">
-                  <th scope="row" class="sticky left-0 z-10 max-w-[12rem] truncate bg-white-100 px-3 py-2 text-left font-medium text-black-900 dark:bg-navy-700 dark:text-white-100" title={labelOf(id)}>{labelOf(id)}</th>
+                  <th scope="row" class="sticky left-0 z-10 max-w-[9rem] truncate bg-white-100 px-2 py-2 text-left font-medium text-black-900 dark:bg-navy-700 dark:text-white-100" title={labelOf(id)}>{labelOf(id)}</th>
                   {#each roles as r (r)}
                     {@const c = cellOf(doc, r, id)}
-                    <td class="px-3 py-2"><span class={pill(c.tone)}>{c.text}{c.approval ? " ⚑" : ""}</span></td>
+                    <td class="px-2 py-2"><span class={pill(c.tone)}>{c.text}{c.approval ? " ⚑" : ""}</span></td>
                   {/each}
                 </tr>
               {/each}
               <tr class="border-t border-white-300 dark:border-navy-600">
-                <th scope="row" class="sticky left-0 z-10 bg-white-100 px-3 py-2 text-left font-normal {muted} dark:bg-navy-700">{others} other connector{others === 1 ? "" : "s"} on this agent</th>
-                <td class="px-3 py-2"><span class={pill("on")}>Write</span></td>
-                <td colspan={roles.length - 1} class="px-3 py-2 {muted}">not lent: others only with their own access</td>
+                <th scope="row" class="sticky left-0 z-10 max-w-[9rem] bg-white-100 px-2 py-2 text-left font-normal {muted} dark:bg-navy-700" title="Connectors on this agent that are not lent">{others} more, not lent</th>
+                <td class="px-2 py-2"><span class={pill("on")}>Write</span></td>
+                <td colspan={roles.length - 1} class="whitespace-normal px-2 py-2 {muted}">others only with their own access</td>
               </tr>
             </tbody>
           </table>
@@ -161,15 +165,20 @@
           <p class="mt-2 text-xs text-neg-400">{previewError}</p>
         {:else if preview === null}
           <p class="mt-2 {muted}">Loading…</p>
-        {:else if preview.length === 0}
-          <p class="mt-2 {muted}">Nothing — no connectors through this agent.</p>
         {:else}
-          <ul class="mt-2 space-y-0.5 text-xs text-black-900 dark:text-white-100">
-            {#each preview.slice(0, 12) as r (r.connector_id)}
-              <li><b>{r.label}</b> · {r.runs_as === "owner" ? "on your account" : previewAs === "owner" ? "your own access" : "their own access"} · {r.ops.length} op{r.ops.length === 1 ? "" : "s"}</li>
-            {/each}
-            {#if preview.length > 12}<li class={muted}>+ {preview.length - 12} more</li>{/if}
-          </ul>
+          {#if previewRole}
+            <p class="mt-2 text-xs text-black-900 dark:text-white-100" data-testid="preview-role">Role here: <b>{roleTitle(previewRole)}</b>{previewRole === "guest" ? " (no rule names them and the agent is not shared with them)" : ""}</p>
+          {/if}
+          {#if preview.length === 0}
+            <p class="mt-2 {muted}">Nothing — no connectors through this agent.</p>
+          {:else}
+            <ul class="mt-2 space-y-0.5 text-xs text-black-900 dark:text-white-100">
+              {#each preview.slice(0, 12) as r (r.connector_id)}
+                <li><b>{r.label}</b> · {r.runs_as === "owner" ? "on your account" : previewAs === "owner" ? "your own access" : "their own access"} · {r.ops.length} op{r.ops.length === 1 ? "" : "s"}</li>
+              {/each}
+              {#if preview.length > 12}<li class={muted}>+ {preview.length - 12} more</li>{/if}
+            </ul>
+          {/if}
         {/if}
       </div>
 

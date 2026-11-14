@@ -254,6 +254,25 @@ func TestRolesScopeCappedAtChecklist(t *testing.T) {
 	}
 }
 
+// A guest who has a connector of their own still gets the guest lend in
+// the preview, as at run time (their own access is off, the lend is not).
+func TestEffectiveGuestWithOwnAccessBorrows(t *testing.T) {
+	d := DefaultRBACDoc()
+	d.Lend["docs"] = map[string]RBACLevel{RoleGuest: {Level: LevelAll}}
+	s := rolesScope(d)
+	rows := Effective(s, effCatalog(), EffectiveCaller{UserID: "user-g", Reaches: func(string) bool { return true },
+		Level: func(id string, lent bool) (string, []string) {
+			lv, ops, _ := s.CallerLevel(context.Background(), "user-g", id, lent)
+			return lv, ops
+		}}, nil)
+	if docs := rowOf(rows, "docs"); docs.RunsAs != RunsAsOwner || len(docs.Ops) == 0 {
+		t.Fatalf("guest with own access on docs = %+v, want the guest lend", docs)
+	}
+	if chat := rowOf(rows, "chat"); chat.RunsAs != RunsAsNone {
+		t.Fatalf("guest kept own access on chat: %+v", chat)
+	}
+}
+
 func TestNonRoleScopePermitsEveryCaller(t *testing.T) {
 	p := entity.AgentPersona{ID: "a", OwnerUserID: "o", AccessMode: AccessOwner}
 	s := ScopeOf(p, reachOf("docs")).WithRoles(DefaultRBACDoc(), nil)
