@@ -132,3 +132,29 @@ func TestLentAccountID(t *testing.T) {
 	plain := WithAgentScope(bg, lendScope{conn: "c1", lender: "u1"})
 	assert.Equal(t, "", lentAccountID(plain, "c1"), "a scope without accounts names nothing")
 }
+
+// A per-user row the caller reaches on their own, but with no connected
+// account of theirs: the lend still applies when the lender has one, so
+// the call runs on the lender's account instead of asking the caller to
+// connect. A caller with their own account keeps it.
+func TestLendFillsMissingPerUserAccount(t *testing.T) {
+	bg := context.Background()
+	svc, _ := newSvcAccountVisDB(t)
+	row, err := svc.Create(bg, "acct-vis", "Per User Row", nil, "u-lender")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(bg, row.ID, AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	require.NoError(t, svc.SaveAccount(bg, row.ID, "u-lender", "ext-lender", "lender", "tok-lender"))
+	svc.SetIdentityLookup(func(_ context.Context, id string) (*entity.User, []string, error) {
+		return &entity.User{ID: id}, nil, nil
+	})
+	ctx := lendScope{conn: row.ID}.withLender("u-lender").ctx(bg)
+
+	// Admin bypass stands in for "reaches the row on their own".
+	lender, _, ok := svc.lendIdentity(ctx, row.ID, "u-guest", nil, true)
+	require.True(t, ok, "a caller without an account of their own must get the lend")
+	assert.Equal(t, "u-lender", lender.ID)
+
+	require.NoError(t, svc.SaveAccount(bg, row.ID, "u-guest", "ext-guest", "guest", "tok-guest"))
+	_, _, ok = svc.lendIdentity(ctx, row.ID, "u-guest", nil, true)
+	assert.False(t, ok, "a caller with their own account keeps it")
+}

@@ -424,7 +424,8 @@ func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, 
 	if !ok || lenderID == "" || lenderID == userID {
 		return nil, nil, false
 	}
-	if own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin); err != nil || own {
+	own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin)
+	if err != nil || (own && !s.lendFillsMissingAccount(ctx, connectorID, userID, lenderID)) {
 		return nil, nil, false
 	}
 	if lv, _, _ := callerLevel(ctx, userID, connectorID, true); lv == "off" {
@@ -438,6 +439,25 @@ func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, 
 		return nil, nil, false
 	}
 	return lender, tags, true
+}
+
+// lendFillsMissingAccount reports whether a caller who reaches a connector
+// on their own still needs the lend: the instance runs every call on the
+// caller's own connected account (per-user / SSO), the caller has none and
+// the lender has one. Without this, reaching the row would win over the
+// lend and the call would fail asking the caller to connect an account the
+// owner already lends them. The shared-credential policy is not consulted:
+// custom per-user rows never fall back to it, and the owner chose to lend.
+func (s *Service) lendFillsMissingAccount(ctx context.Context, connectorID, userID, lenderID string) bool {
+	row, err := s.repo.Get(ctx, connectorID)
+	if err != nil || row == nil || !row.EnableSSO {
+		return false
+	}
+	if mine, err := s.OwnAccount(ctx, connectorID, userID); err != nil || mine != nil {
+		return false
+	}
+	theirs, err := s.OwnAccount(ctx, connectorID, lenderID)
+	return err == nil && theirs != nil
 }
 
 // NewServiceFromDB is a convenience constructor for the web server and
