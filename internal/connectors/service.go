@@ -441,6 +441,17 @@ func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, 
 	return lender, tags, true
 }
 
+// isLenderOf reports whether userID is who the agent scope on ctx lends
+// connectorID from.
+func isLenderOf(ctx context.Context, connectorID, userID string) bool {
+	ls, ok := AgentScopeFrom(ctx).(LendingScope)
+	if !ok || userID == "" {
+		return false
+	}
+	lender, ok := ls.LentBy(connectorID)
+	return ok && lender == userID
+}
+
 // lendFillsMissingAccount reports whether a caller who reaches a connector
 // on their own still needs the lend: the instance runs every call on the
 // caller's own connected account (per-user / SSO), the caller has none and
@@ -2207,6 +2218,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// lent: the call runs as the lender (see lendIdentity), so the
 	// session's own human never picks the account below.
 	lent := false
+	// asLender: not lent, but the caller already is this connector's
+	// lender, so the call keeps them as its caller like a lent one.
+	asLender := false
 	// requester is who asked for this call, kept before a lend swaps the
 	// identity to the lender (see lendIdentity).
 	requester := p.UserID
@@ -2238,6 +2252,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			if p.AccountID == "" {
 				p.AccountID = lentAccountID(ctx, c.ID)
 			}
+		} else if isLenderOf(ctx, c.ID, p.UserID) {
+			// The turn already runs as the person who lends this connector
+			// (a bot's message runs as the channel owner): keep them, so the
+			// session owner below does not win back and the call looks for
+			// an account the lender never asked them to have.
+			asLender = true
 		}
 		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
 			return nil, err
@@ -2324,7 +2344,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 		if !shared {
 			owner := p.UserID
-			if !lent && s.sessionOwnerUser != nil && p.SessionID != "" {
+			if !lent && !asLender && s.sessionOwnerUser != nil && p.SessionID != "" {
 				if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
 					owner = uid
 				}
@@ -2659,7 +2679,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// A lent connector already runs as its lender (p.UserID was swapped
 	// above): the session owner must not win back here, or the lender's
 	// own account is looked up under the owner's id and never found.
-	cctx.SetCallerUserID(s.effectiveCaller(p.UserID, sessionID, lent))
+	cctx.SetCallerUserID(s.effectiveCaller(p.UserID, sessionID, lent || asLender))
 	if lent {
 		cctx.SetLend(p.UserID, s.lendRequester(requester, sessionID))
 	}

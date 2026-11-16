@@ -158,3 +158,16 @@ func TestLendFillsMissingPerUserAccount(t *testing.T) {
 	_, _, ok = svc.lendIdentity(ctx, row.ID, "u-guest", nil, true)
 	assert.False(t, ok, "a caller with their own account keeps it")
 }
+
+// A turn that already runs as the lender (a bot's message runs as the
+// channel owner) is recognised, so Execute keeps the lender as the caller
+// instead of falling back to the session's owner.
+func TestIsLenderOf(t *testing.T) {
+	bg := context.Background()
+	ctx := lendScope{conn: "c1"}.withLender("u-lender").ctx(bg)
+	assert.True(t, isLenderOf(ctx, "c1", "u-lender"))
+	assert.False(t, isLenderOf(ctx, "c1", "u-guest"), "another caller is not the lender")
+	assert.False(t, isLenderOf(ctx, "c2", "u-lender"), "another connector is not lent")
+	assert.False(t, isLenderOf(bg, "c1", "u-lender"), "no scope lends nothing")
+	assert.False(t, isLenderOf(ctx, "c1", ""), "no caller is nobody")
+}
