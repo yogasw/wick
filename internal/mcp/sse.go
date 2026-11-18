@@ -339,6 +339,11 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 	}
 
 	rawParams, _ := args["params"].(map[string]any)
+	override, rawParams, ovErr := connectors.OverrideFromParams(rawParams)
+	if ovErr != nil {
+		sseWriteToolError(sess, req, ovErr.Error(), toolID)
+		return
+	}
 	input := handlers.StringifyArgs(rawParams)
 
 	// Only attach a reporter when the client supplied a progressToken.
@@ -388,6 +393,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			AccountID:       accountID,
 			SessionInstance: sessionTarget,
 			SessionID:       sid,
+			ConfigOverride:  override,
 		})
 		resCh <- execOut{res: res, err: err}
 	}()

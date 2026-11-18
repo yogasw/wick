@@ -67,7 +67,7 @@ func (s *Service) Simulate(ctx context.Context, a Action, destructive bool) (Sim
 		// instance exists.
 		a.ConnectorKey = a.ConnectorID
 		if s.cat != nil {
-			if meta, err := s.cat.Describe(ctx, a.ConnectorID, a.OpKey); err == nil {
+			if meta, err := s.cat.Describe(ctx, a.ConnectorID, a.OpKey, overrideOfAction(a)); err == nil {
 				a.ConnectorKey = meta.ConnectorKey
 				destructive = meta.Destructive
 			}

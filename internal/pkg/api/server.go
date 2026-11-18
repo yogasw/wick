@@ -2943,6 +2943,12 @@ func NewServer() *Server {
 	}
 
 	tagsSvc := tags.NewService(db)
+	// Who owns a connector instance, for who may approve a per-call
+	// config override.
+	connectorsSvc.SetOwnerCheck(func(ctx context.Context, userID, connectorID string) bool {
+		owns, _ := tagsSvc.UserOwnsConnector(ctx, userID, connectorID)
+		return owns
+	})
 	// Late-bind tags into the custom-connector service and link the
 	// per-def access tags ([custom:<key> filter, Connector, category])
 	// onto existing instance rows. Idempotent — rows that already carry

@@ -16,8 +16,12 @@ package accessreq
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // Request statuses.
@@ -146,14 +150,17 @@ type Person struct {
 // connectors.Service; tests use a fake.
 type Catalog interface {
 	// Describe resolves a connector instance and one of its operations.
-	Describe(ctx context.Context, connectorID, opKey string) (ActionMeta, error)
+	// override is the action's per-call config override (nil for none).
+	Describe(ctx context.Context, connectorID, opKey string, override map[string]string) (ActionMeta, error)
 	// Requestable reports whether the session's agent may ask for actions
 	// on this connector at all: it must already be in its access (at least
 	// read). A connector its owner switched off cannot be asked for.
 	Requestable(ctx context.Context, sessionID, agentID, connectorID string) (bool, string)
 	// CanRun reports whether userID can run opKey on connectorID with
 	// their OWN access (no agent scope, no lend). why explains a no.
-	CanRun(ctx context.Context, userID, connectorID, opKey string) (ok bool, why string)
+	// With an override the user must also be allowed to configure the
+	// instance.
+	CanRun(ctx context.Context, userID, connectorID, opKey string, override map[string]string) (ok bool, why string)
 	// Run executes the action as userID with their own access and
 	// returns the run id and the response.
 	Run(ctx context.Context, userID, connectorID, opKey, accountID string, params map[string]any) (runID, result string, err error)
@@ -258,4 +265,48 @@ type Param struct {
 	Name  string
 	Value string
 	Long  bool
+}
+
+// ConfigOverrideParam is the reserved action parameter holding a per-call
+// config override ({"mode": "write"}). An action with one is approved once
+// at a time, never for the session, and never by a standing grant.
+const ConfigOverrideParam = "config_override"
+
+// overrideOf reads the override from stored or incoming params.
+func overrideOf(params map[string]any) map[string]string {
+	raw, ok := params[ConfigOverrideParam]
+	if !ok || raw == nil {
+		return nil
+	}
+	var m map[string]any
+	switch x := raw.(type) {
+	case map[string]any:
+		m = x
+	case string:
+		if json.Unmarshal([]byte(x), &m) != nil {
+			return map[string]string{"": x} // unreadable: Describe refuses it
+		}
+	default:
+		return map[string]string{"": fmt.Sprint(x)}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return stringify(m)
+}
+
+// overrideOfAction reads it from an Action's string params.
+func overrideOfAction(a Action) map[string]string {
+	raw, ok := a.Params[ConfigOverrideParam]
+	if !ok || raw == "" {
+		return nil
+	}
+	return overrideOf(map[string]any{ConfigOverrideParam: raw})
+}
+
+// overrideOfItem reads it from a stored item.
+func overrideOfItem(it entity.AccessRequestItem) map[string]string {
+	var params map[string]any
+	_ = json.Unmarshal([]byte(it.Params), &params)
+	return overrideOf(params)
 }

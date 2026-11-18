@@ -203,6 +203,8 @@ export interface ConnectorDetail {
   allow_others_see_accounts: boolean;
   session_config_capable: boolean;
   session_config_allowed: boolean;
+  overridable_config: string[];
+  overridable_candidates: string[];
 }
 
 export interface HealthCheckResult {

@@ -102,8 +102,13 @@ type Connector struct {
 	// toggle for capable connectors. Effective gate: module-capable AND
 	// this instance flag on.
 	AllowSessionConfig bool `gorm:"default:false"`
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// OverridableConfig lists (comma-separated) the config keys one call
+	// may set differently without changing the instance, e.g. "mode".
+	// Empty (default) = none. Only choice fields that are not secret
+	// qualify; an agent's override always needs a person's approval.
+	OverridableConfig string `gorm:"type:text;not null;default:''"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 func (c *Connector) BeforeCreate(tx *gorm.DB) error {

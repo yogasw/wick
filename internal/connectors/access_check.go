@@ -80,9 +80,20 @@ func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity
 	} else {
 		cfg = subjectConfig(s.LoadConfigs(*c))
 	}
+	input := p.Input
+	if len(p.ConfigOverride) > 0 {
+		// The override is part of what is approved: a rule sees it and an
+		// approval made without it does not cover it.
+		input = make(map[string]string, len(p.Input)+1)
+		for k, v := range p.Input {
+			input[k] = v
+		}
+		b, _ := json.Marshal(p.ConfigOverride)
+		input[ConfigOverrideParam] = string(b)
+	}
 	who, note, err := s.accessCheck(ctx, AccessQuery{
 		SessionID: p.SessionID, AgentID: agentIDOf(ctx), ConnectorID: c.ID, ConnectorKey: c.Key,
-		OpKey: op.Key, Destructive: op.Destructive, Input: p.Input, Config: cfg,
+		OpKey: op.Key, Destructive: op.Destructive, Input: input, Config: cfg,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("operation %q: %w", op.Key, err)
@@ -117,6 +128,13 @@ type OpInfo struct {
 
 // DescribeOp resolves a connector instance and one of its operations.
 func (s *Service) DescribeOp(ctx context.Context, connectorID, opKey string) (OpInfo, error) {
+	return s.DescribeOpWith(ctx, connectorID, opKey, nil)
+}
+
+// DescribeOpWith is DescribeOp for a call carrying a config override: the
+// override must be one the instance allows, and an op it switches on is
+// no longer refused as off.
+func (s *Service) DescribeOpWith(ctx context.Context, connectorID, opKey string, override map[string]string) (OpInfo, error) {
 	c, err := s.repo.Get(ctx, connectorID)
 	if err != nil {
 		return OpInfo{}, fmt.Errorf("connector %q not found", connectorID)
@@ -133,11 +151,15 @@ func (s *Service) DescribeOp(ctx context.Context, connectorID, opKey string) (Op
 			if op.ConfigOnly {
 				return OpInfo{}, fmt.Errorf("operation %q is a config helper, not an action", opKey)
 			}
+			if err := s.checkOverride(mod, *c, override); err != nil {
+				return OpInfo{}, err
+			}
 			// An op the instance's own config switches off cannot run for
-			// anyone, so asking for it would only fail after an approval.
+			// anyone, so asking for it would only fail after an approval —
+			// unless the override switches it on.
 			if states, err := s.OperationStatesFull(ctx, connectorID, c.Key); err == nil {
-				if st, ok := states[opKey]; ok && st.HiddenByConfig {
-					return OpInfo{}, fmt.Errorf("operation %q is %s", opKey, ConfigOffReason(op))
+				if st, ok := states[opKey]; ok && st.HiddenByConfig && !overrideOpens(mod, s.LoadConfigs(*c), override, op) {
+					return OpInfo{}, fmt.Errorf("operation %q is %s", opKey, s.configOffReasonFor(*c, op))
 				}
 			}
 			return OpInfo{ConnectorKey: c.Key, ConnectorLabel: c.Label, OpName: op.Name, Destructive: op.Destructive}, nil
@@ -150,6 +172,12 @@ func (s *Service) DescribeOp(ctx context.Context, connectorID, opKey string) (Op
 // own access: they reach the instance, the op is switched on, and an
 // admin-only op needs an admin. why says what is missing, in words.
 func (s *Service) CanRunOwn(ctx context.Context, userID, connectorID, opKey string) (bool, string) {
+	return s.CanRunOwnWith(ctx, userID, connectorID, opKey, nil)
+}
+
+// CanRunOwnWith is CanRunOwn for a call carrying a config override: the
+// user must also be allowed to configure the instance.
+func (s *Service) CanRunOwnWith(ctx context.Context, userID, connectorID, opKey string, override map[string]string) (bool, string) {
 	if s.identity == nil || userID == "" {
 		return false, "unknown user"
 	}
@@ -166,6 +194,18 @@ func (s *Service) CanRunOwn(ctx context.Context, userID, connectorID, opKey stri
 	if err != nil {
 		return false, "connector not found"
 	}
+	mod, hasMod := s.Module(c.Key)
+	if len(override) > 0 {
+		if !hasMod {
+			return false, "connector has no implementation loaded"
+		}
+		if err := s.checkOverride(mod, *c, override); err != nil {
+			return false, err.Error()
+		}
+		if !s.CanConfigure(ctx, u.ID, c.ID) {
+			return false, "running it with a " + ConfigOverrideParam + " needs someone who may configure this connector"
+		}
+	}
 	states, err := s.OperationStatesFull(ctx, connectorID, c.Key)
 	if err == nil {
 		if st, ok := states[opKey]; ok {
@@ -173,14 +213,18 @@ func (s *Service) CanRunOwn(ctx context.Context, userID, connectorID, opKey stri
 				return false, "this operation is switched off on the connector"
 			}
 			if st.HiddenByConfig {
-				if mod, ok := s.Module(c.Key); ok {
+				if hasMod {
 					for _, op := range mod.AllOps() {
 						if op.Key == opKey {
-							return false, "this operation is " + ConfigOffReason(op)
+							if overrideOpens(mod, s.LoadConfigs(*c), override, op) {
+								break
+							}
+							return false, "this operation is " + s.configOffReasonFor(*c, op)
 						}
 					}
+				} else {
+					return false, "this operation is turned off by this connector's config"
 				}
-				return false, "this operation is turned off by this connector's config"
 			}
 			if st.AdminOnly && !u.IsAdmin() {
 				return false, "this operation is restricted to admins"
@@ -201,6 +245,10 @@ func (s *Service) RunOwn(ctx context.Context, userID, connectorID, opKey, accoun
 		return "", "", fmt.Errorf("approver %q not found", userID)
 	}
 	ctx = WithoutAgentScope(ctx)
+	override, params, err := OverrideFromParams(params)
+	if err != nil {
+		return "", "", err
+	}
 	input := make(map[string]string, len(params))
 	for k, v := range params {
 		input[k] = stringifyParam(v)
@@ -208,6 +256,7 @@ func (s *Service) RunOwn(ctx context.Context, userID, connectorID, opKey, accoun
 	res, err := s.Execute(ctx, ExecuteParams{
 		ConnectorID: connectorID, OperationKey: opKey, Input: input, RawInput: params,
 		Source: entity.ConnectorRunSourceMCP, UserID: u.ID, IsAdmin: u.IsAdmin(), TagIDs: tags, AccountID: accountID,
+		ConfigOverride: override,
 	})
 	if err != nil {
 		body := err.Error()

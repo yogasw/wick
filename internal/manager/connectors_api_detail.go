@@ -252,6 +252,11 @@ type connectorDetailJSON struct {
 	// Session config: capability is module-level, allowed is per-instance.
 	SessionConfigCapable bool `json:"session_config_capable"`
 	SessionConfigAllowed bool `json:"session_config_allowed"`
+	// Per-call config override: the keys this instance lets one call set
+	// differently, and the keys that could be listed (choice fields that
+	// are not secret).
+	OverridableConfig     []string `json:"overridable_config"`
+	OverridableCandidates []string `json:"overridable_candidates"`
 	// HiddenForMe: the caller hid this instance for themselves.
 	HiddenForMe bool `json:"hidden_for_me,omitempty"`
 }
@@ -458,6 +463,8 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		AllowOthersSeeAccounts: row.AllowOthersSeeAccounts,
 		SessionConfigCapable:   mod.AllowSessionConfig,
 		SessionConfigAllowed:   row.AllowSessionConfig,
+		OverridableConfig:      nonNilStrings(h.connectors.OverridableKeys(*row)),
+		OverridableCandidates:  nonNilStrings(h.connectors.OverridableCandidates(row.Key)),
 		HiddenForMe:            user != nil && user.Metadata.IsConnectorHidden(row.ID),
 	})
 }
@@ -1092,4 +1099,11 @@ func (h *Handler) customMCPOAuthServer(ctx context.Context, key string) (*entity
 		return nil, false
 	}
 	return srv, true
+}
+
+func nonNilStrings(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }

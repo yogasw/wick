@@ -29,8 +29,8 @@ type accessCatalog struct {
 	users *login.Service
 }
 
-func (a accessCatalog) Describe(ctx context.Context, connectorID, opKey string) (accessreq.ActionMeta, error) {
-	info, err := a.svc.DescribeOp(ctx, connectorID, opKey)
+func (a accessCatalog) Describe(ctx context.Context, connectorID, opKey string, override map[string]string) (accessreq.ActionMeta, error) {
+	info, err := a.svc.DescribeOpWith(ctx, connectorID, opKey, override)
 	if err != nil {
 		return accessreq.ActionMeta{}, err
 	}
@@ -61,8 +61,8 @@ func (a accessCatalog) Requestable(ctx context.Context, sessionID, _ string, con
 	return true, ""
 }
 
-func (a accessCatalog) CanRun(ctx context.Context, userID, connectorID, opKey string) (bool, string) {
-	return a.svc.CanRunOwn(ctx, userID, connectorID, opKey)
+func (a accessCatalog) CanRun(ctx context.Context, userID, connectorID, opKey string, override map[string]string) (bool, string) {
+	return a.svc.CanRunOwnWith(ctx, userID, connectorID, opKey, override)
 }
 
 func (a accessCatalog) Run(ctx context.Context, userID, connectorID, opKey, accountID string, params map[string]any) (string, string, error) {

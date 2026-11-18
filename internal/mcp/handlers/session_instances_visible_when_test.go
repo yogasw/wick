@@ -76,12 +76,13 @@ func TestSessionInstanceVisibleWhen(t *testing.T) {
 		t.Fatalf("search total = %d, want 1 (open)", total)
 	}
 	target := &connectors.SessionInstanceTarget{BaseKey: "vwsess", Label: "S", Config: inst.Config}
-	// pdf is switched off by config: listed with a reason, no tool_id or schema.
+	// pdf is switched off by config: listed with a reason, and (asked for by
+	// key) with its tool_id and schema so a request can name it.
 	off, _, err := sessionInstanceDetail(svc, target, inst.ID, "pdf")
 	if err != nil {
 		t.Fatalf("wick_get pdf: %v", err)
 	}
-	if len(off.Tools) != 1 || off.Tools[0].ToolID != "" || off.Tools[0].InputSchema != nil ||
+	if len(off.Tools) != 1 || off.Tools[0].ToolID == "" || off.Tools[0].InputSchema == nil ||
 		!strings.Contains(off.Tools[0].Unavailable, "browser = moli") {
 		t.Fatalf("pdf on chromium must read as unavailable: %+v", off.Tools)
 	}

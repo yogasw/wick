@@ -27,9 +27,14 @@ type fakeCat struct {
 	runErr  error
 	refuse  string // connector id Requestable refuses
 	resultF string
+	// configure lists user|connector pairs who may configure (override).
+	configure map[string]bool
 }
 
-func (f *fakeCat) Describe(_ context.Context, cid, op string) (ActionMeta, error) {
+func (f *fakeCat) Describe(_ context.Context, cid, op string, ov map[string]string) (ActionMeta, error) {
+	if _, bad := ov[""]; bad {
+		return ActionMeta{}, errors.New("unreadable override")
+	}
 	m, ok := f.ops[cid+"."+op]
 	if !ok {
 		return ActionMeta{}, errors.New("unknown operation")
@@ -44,7 +49,10 @@ func (f *fakeCat) Requestable(_ context.Context, _, _, cid string) (bool, string
 	return true, ""
 }
 
-func (f *fakeCat) CanRun(_ context.Context, user, cid, _ string) (bool, string) {
+func (f *fakeCat) CanRun(_ context.Context, user, cid, _ string, ov map[string]string) (bool, string) {
+	if len(ov) > 0 && !f.configure[user+"|"+cid] {
+		return false, "may not configure"
+	}
 	if f.can[user+"|"+cid] {
 		return true, ""
 	}
@@ -487,5 +495,53 @@ func TestPruneFinishedKeepsPendingAndRecent(t *testing.T) {
 	}
 	if _, _, err := e.svc.store.request(ctx, open.ID); err != nil {
 		t.Fatalf("pending request pruned: %v", err)
+	}
+}
+
+func TestConfigOverrideOnceOnlyAndConfigurers(t *testing.T) {
+	e := newEnv(t)
+	e.cat.configure = map[string]bool{"admin-z|c-notes": true}
+	ctx := context.Background()
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1", ConfigOverrideParam: map[string]any{"mode": "write"}}))
+	// The owner can run the op but may not configure the connector.
+	ov, _ := e.svc.ViewFor(ctx, v.ID, "owner-a")
+	if ov.Items[0].CanDecide {
+		t.Fatalf("non-configurer may approve an override: %+v", ov.Items[0])
+	}
+	av, _ := e.svc.ViewFor(ctx, v.ID, "admin-z")
+	if !av.Items[0].CanDecide || len(av.Items[0].Modes) != 1 || av.Items[0].Modes[0] != ModeOnce {
+		t.Fatalf("configurer view = %+v", av.Items[0])
+	}
+	if len(av.Items[0].Approvers) != 1 || av.Items[0].Approvers[0].ID != "admin-z" {
+		t.Fatalf("approvers = %+v", av.Items[0].Approvers)
+	}
+	_, res, _ := e.svc.Decide(ctx, v.ID, "admin-z", []Decision{{ItemID: v.Items[0].ID, Mode: ModeSession}})
+	if len(res) != 1 || res[0].OK {
+		t.Fatalf("session mode accepted for an override: %+v", res)
+	}
+	_, res, _ = e.svc.Decide(ctx, v.ID, "admin-z", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}})
+	if len(res) != 1 || !res[0].OK || len(e.cat.runs) != 1 {
+		t.Fatalf("once = %+v runs %+v", res, e.cat.runs)
+	}
+	if _, ok := e.cat.runs[0].params[ConfigOverrideParam]; !ok {
+		t.Fatal("the override did not reach the run")
+	}
+}
+
+func TestGrantNeverCoversAnOverride(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	if _, res, _ := e.svc.Decide(ctx, v.ID, "owner-a", []Decision{{ItemID: v.Items[0].ID, Mode: ModeSession}}); len(res) != 1 || !res[0].OK {
+		t.Fatalf("session grant: %+v", res)
+	}
+	a := Action{SessionID: "sess-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite,
+		Params: map[string]string{"page_id": "p1"}}
+	if runAs, _, _ := e.svc.Check(ctx, a); runAs == "" {
+		t.Fatal("grant did not cover the same call")
+	}
+	a.Params[ConfigOverrideParam] = `{"mode":"write"}`
+	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
+		t.Fatalf("grant covered a call with an override: %q", runAs)
 	}
 }

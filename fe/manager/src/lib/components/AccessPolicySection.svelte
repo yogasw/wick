@@ -6,7 +6,13 @@
      submit on every checkbox change). Access policy toggles submit together
      as one payload; session config has its own endpoint. */
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { setConnectorAccessPolicy, setConnectorSessionConfig, setConnectorSharedCredential, type AccessPolicy } from "$lib/api.js";
+  import {
+    setConnectorAccessPolicy,
+    setConnectorConfigOverride,
+    setConnectorSessionConfig,
+    setConnectorSharedCredential,
+    type AccessPolicy,
+  } from "$lib/api.js";
   import type { ConnectorDetail } from "$lib/types.js";
 
   type Props = {
@@ -27,6 +33,8 @@
   let sharedBusy = $state(false);
   let busy = $state(false);
   let sessionBusy = $state(false);
+  let overrideKeys = $state<string[]>([]);
+  let overrideBusy = $state(false);
 
   $effect(() => {
     enableSso = data.enable_sso;
@@ -35,6 +43,7 @@
     allowOthersConfigure = data.allow_others_configure;
     allowOthersSeeAccounts = data.allow_others_see_accounts;
     allowSessionConfig = data.session_config_allowed;
+    overrideKeys = [...(data.overridable_config ?? [])];
     sharedCredential = !!data.oauth?.shared_credential;
   });
 
@@ -82,6 +91,23 @@
   async function clearSharedCredential(): Promise<void> {
     sharedCredential = false;
     await saveSharedCredential();
+  }
+
+  async function toggleOverride(key: string, on: boolean): Promise<void> {
+    if (overrideBusy) return;
+    overrideBusy = true;
+    const prev = overrideKeys;
+    const next = on ? [...new Set([...prev, key])] : prev.filter((k) => k !== key);
+    overrideKeys = next;
+    try {
+      overrideKeys = await setConnectorConfigOverride(connectorKey, connectorId, next);
+      toastOk("Per-call config override saved");
+    } catch (e) {
+      overrideKeys = prev;
+      toastError("Save failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      overrideBusy = false;
+    }
   }
 
   async function saveSessionConfig(): Promise<void> {
@@ -181,6 +207,32 @@
         </div>
         <input type="checkbox" disabled={sessionBusy} bind:checked={allowSessionConfig} onchange={saveSessionConfig} aria-label="Allow per-session config override" class="h-5 w-9 accent-green-500" />
       </label>
+    </div>
+  </section>
+{/if}
+
+{#if (data.overridable_candidates ?? []).length > 0}
+  <section class="mt-8" data-testid="config-override-section">
+    <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Per-call config override</h2>
+    <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+      Keys one call may set differently without changing this instance (e.g. mode = write for a single action). An
+      agent's call with an override always waits for approval on its card, by someone who may configure this
+      instance; project rules still apply. None by default.
+    </p>
+    <div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+      {#each data.overridable_candidates as key (key)}
+        <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3 hover:bg-white-200 dark:hover:bg-navy-800">
+          <p class="min-w-0 flex-1 font-mono text-sm text-black-900 dark:text-white-100">{key}</p>
+          <input
+            type="checkbox"
+            disabled={overrideBusy}
+            checked={overrideKeys.includes(key)}
+            onchange={(e) => toggleOverride(key, (e.currentTarget as HTMLInputElement).checked)}
+            aria-label={`Allow overriding ${key} per call`}
+            class="h-5 w-9 accent-green-500"
+          />
+        </label>
+      {/each}
     </div>
   </section>
 {/if}

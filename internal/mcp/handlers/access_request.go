@@ -46,7 +46,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 						"required": []string{"tool_id"},
 						"properties": map[string]any{
 							"tool_id": map[string]any{"type": "string", "description": "conn:<connector_id>/<op_key> exactly as wick_execute takes it."},
-							"params":  map[string]any{"type": "object", "description": "The exact parameters the action runs with."},
+							"params":  map[string]any{"type": "object", "description": "The exact parameters the action runs with. To run it with a few config keys set differently for this call only (when the connector lists them as overridable, e.g. an op off because mode is read), add config_override: {\"mode\": \"write\"} here; such an action is approved once, by someone who may configure the connector."},
 						},
 					},
 				},

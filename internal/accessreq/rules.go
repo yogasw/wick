@@ -429,7 +429,7 @@ func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
 			if auto != nil || s.cat == nil {
 				continue
 			}
-			if ok, _ := s.cat.CanRun(ctx, r.OwnerID, a.ConnectorID, a.OpKey); ok {
+			if ok, _ := s.cat.CanRun(ctx, r.OwnerID, a.ConnectorID, a.OpKey, overrideOfAction(a)); ok {
 				auto = &rules[i]
 			}
 		}

@@ -129,7 +129,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	}
 	var autos []auto
 	for i, a := range in.Actions {
-		meta, err := s.cat.Describe(ctx, a.ConnectorID, a.OpKey)
+		meta, err := s.cat.Describe(ctx, a.ConnectorID, a.OpKey, overrideOf(a.Params))
 		if err != nil {
 			return View{}, fmt.Errorf("action %d: %w", i+1, err)
 		}
@@ -319,8 +319,9 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 		_ = json.Unmarshal([]byte(it.Params), &params)
 		iv.Params, iv.ParamsJSON = maskParams(params)
 		iv.Target = targetSummary(params)
+		ov := overrideOf(params)
 		for _, c := range cands {
-			if ok, _ := s.cat.CanRun(ctx, c.ID, it.ConnectorID, it.OpKey); ok {
+			if ok, _ := s.cat.CanRun(ctx, c.ID, it.ConnectorID, it.OpKey, ov); ok {
 				iv.Approvers = append(iv.Approvers, c)
 			}
 		}
@@ -379,7 +380,8 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 			iv.LockedReason = "You are not an approver for this request." + whoCan(names) + extra
 		}
 	default:
-		if ok, why := s.cat.CanRun(ctx, viewer.ID, it.ConnectorID, it.OpKey); !ok {
+		ov := overrideOfItem(it)
+		if ok, why := s.cat.CanRun(ctx, viewer.ID, it.ConnectorID, it.OpKey, ov); !ok {
 			iv.LockedCode = ReasonApproverAccess
 			iv.LockedReason = fmt.Sprintf("You are an approver, but your own access cannot run %s on %s", it.OpKey, labelOr(it.ConnectorLabel, it.ConnectorKey))
 			if why != "" {
@@ -390,6 +392,9 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 		}
 		iv.CanDecide = true
 		for _, m := range ModesFor(it.Kind) {
+			if m != ModeOnce && len(ov) > 0 {
+				continue // a config override is approved one call at a time
+			}
 			if m == ModeAlways && (req.AgentID == "" || !(viewer.IsAdmin || viewer.ID == agentOwner)) {
 				continue
 			}
@@ -747,13 +752,14 @@ func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err 
 	}
 	scopes := map[string]string{ModeSession: a.SessionID, "agent": a.AgentID}
 	grants, gerr := s.store.grants(ctx, a.ConnectorID, a.OpKey, scopes)
-	if gerr == nil {
+	// A standing grant never covers a call with a config override.
+	if gerr == nil && len(overrideOfAction(a)) == 0 {
 		target := TargetKey(a.Params)
 		for _, g := range grants {
 			if g.Target != target {
 				continue
 			}
-			if ok, _ := s.cat.CanRun(ctx, g.ApproverID, a.ConnectorID, a.OpKey); ok {
+			if ok, _ := s.cat.CanRun(ctx, g.ApproverID, a.ConnectorID, a.OpKey, nil); ok {
 				return g.ApproverID, "grant " + g.ID, nil
 			}
 		}

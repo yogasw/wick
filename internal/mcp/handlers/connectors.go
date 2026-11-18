@@ -93,7 +93,9 @@ type toolDetail struct {
 	Destructive bool   `json:"destructive"`
 	Category    string `json:"category,omitempty"`
 	// Unavailable is set for an op the instance's config switched off: it
-	// is listed so the agent knows it exists, but has no tool_id to call.
+	// is listed so the agent knows it exists. In list mode it has no
+	// tool_id; asked for by its op key it carries its tool_id and schema, so
+	// an access request (with a config override when allowed) can name it.
 	Unavailable string `json:"unavailable,omitempty"`
 	// InputSchema is a pointer so it can be omitted in list mode
 	// (wick_get without a category). It is populated only when the caller
@@ -472,7 +474,16 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 			}
 			if !enabled(op.Key) {
 				if reason := offReason(op.Key); reason != "" {
-					detail.Tools = append(detail.Tools, unavailableTool(mod, op, reason))
+					// Keep the id and schema: an op that is off only by
+					// config can still be asked for (an access request,
+					// possibly with a config override), and that needs the
+					// exact params.
+					t := unavailableTool(mod, op, reason)
+					schema := ConfigsToJSONSchema(op.Input)
+					t.ToolID = toolIDFor(op.Key)
+					t.InputSchema = &schema
+					t.TS = TSCall(t.ToolID, op.Input)
+					detail.Tools = append(detail.Tools, t)
 					return detail, nil
 				}
 				return connectorDetail{}, fmt.Errorf("operation %q is disabled on this connector", selector)
@@ -795,12 +806,17 @@ func executeOneFrom(ctx context.Context, r *http.Request, svc *connectors.Servic
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
+	override, rawParams, err := connectors.OverrideFromParams(rawParams)
+	if err != nil {
+		return "", err
+	}
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
 		OperationKey:    opKey,
 		Input:           input,
 		RawInput:        rawParams,
+		ConfigOverride:  override,
 		Source:          source,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),
@@ -854,11 +870,16 @@ func ExecuteAs(ctx context.Context, svc *connectors.Service, layout agentconfig.
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
+	override, rawParams, err := connectors.OverrideFromParams(rawParams)
+	if err != nil {
+		return "", err
+	}
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
 		OperationKey:    opKey,
 		Input:           StringifyArgs(rawParams),
 		RawInput:        rawParams,
+		ConfigOverride:  override,
 		Source:          source,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),

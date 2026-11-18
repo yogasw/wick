@@ -128,6 +128,10 @@ type Service struct {
 	// see SetAccessCheck. nil changes nothing.
 	accessCheck AccessCheck
 
+	// ownerCheck tells whether a user owns an instance (its owner tag),
+	// for who may approve a config override — see SetOwnerCheck.
+	ownerCheck OwnerCheck
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
@@ -1791,6 +1795,7 @@ func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map
 		return nil
 	}
 	mod, _ := s.Module(key)
+	row, rowErr := s.repo.Get(ctx, connectorID)
 	scope := AgentScopeFrom(ctx)
 	var out map[string]string
 	for _, op := range mod.AllOps() {
@@ -1804,7 +1809,11 @@ func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map
 		if out == nil {
 			out = map[string]string{}
 		}
-		out[op.Key] = ConfigOffReason(op)
+		if rowErr == nil {
+			out[op.Key] = s.configOffReasonFor(*row, op)
+		} else {
+			out[op.Key] = ConfigOffReason(op)
+		}
 	}
 	return out
 }
@@ -2117,6 +2126,11 @@ type ExecuteParams struct {
 	// whose access token overrides the row's user_token config. Used by
 	// the test panel when multiple accounts are connected to one instance.
 	AccountID string
+	// ConfigOverride sets a few config keys differently for this call
+	// only (see config_override.go). The instance must list each key as
+	// overridable, and the caller must be allowed to configure it (an
+	// agent gets there only through an approval or a rule).
+	ConfigOverride map[string]string
 	// SessionInstance, when non-nil, runs against a session-workspace
 	// instance instead of a DB connector row: there is no row to load,
 	// so the base module is cloned and the instance's own Config map is
@@ -2388,6 +2402,17 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 
+	// A per-call config override: only on a saved instance, only keys it
+	// lists, only values the field offers.
+	if len(p.ConfigOverride) > 0 {
+		if virtual {
+			return nil, fmt.Errorf("a session connector takes no %s: set its config with wick_session_workspace action=set_config instead", ConfigOverrideParam)
+		}
+		if err := s.checkOverride(mod, *c, p.ConfigOverride); err != nil {
+			return nil, err
+		}
+	}
+
 	// An agent feature switched off takes every instance of its connector
 	// type with it, session instances included.
 	if !KeyAllowed(ctx, c.Key) {
@@ -2433,6 +2458,11 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			refusal = fmt.Errorf("operation %q is not allowed for this agent", op.Key)
 		} else if err := roleAllowsOp(ctx, requester, c.ID, op.Key, op.Destructive, lent); err != nil {
 			refusal = err
+		} else if len(p.ConfigOverride) > 0 && !s.CanConfigure(ctx, requester, c.ID) {
+			// The person this call runs for may configure the instance:
+			// the override is theirs to use, no card. Anyone else needs
+			// someone who may configure it to approve (or a rule).
+			refusal = fmt.Errorf("operation %q with a %s needs approval: you may not configure connector %q", op.Key, ConfigOverrideParam, c.Label)
 		}
 		if refusal != nil {
 			// The agent's own access said no. A standing approval (an
@@ -2445,6 +2475,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			}
 			if who == nil {
 				return nil, fmt.Errorf("%w %s", refusal, accessRequestHint)
+			}
+			if len(p.ConfigOverride) > 0 && !s.CanConfigure(ctx, who.user.ID, c.ID) {
+				return nil, fmt.Errorf("operation %q: the person who approved it may not configure connector %q, so its %s cannot run as them", op.Key, c.Label, ConfigOverrideParam)
 			}
 			p.UserID, p.IsAdmin, p.TagIDs = who.user.ID, who.user.IsAdmin(), who.tags
 			lent = true
@@ -2462,6 +2495,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				}
 			}
 		}
+	}
+
+	// Without an agent, the caller itself must be allowed to configure the
+	// instance to change its config, even for one call.
+	if len(p.ConfigOverride) > 0 && AgentScopeFrom(ctx) == nil && !s.CanConfigure(ctx, p.UserID, c.ID) {
+		return nil, fmt.Errorf("you may not configure connector %q, so you cannot override its config", c.Label)
 	}
 
 	// Per-row state checks (op enable/disable, admin-only) only apply to
@@ -2508,6 +2547,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
 	} else {
 		configs = s.LoadConfigs(*c)
+		for k, v := range p.ConfigOverride {
+			configs[k] = v
+		}
 	}
 
 	// No account resolved and the instance credential is off: fail here with
@@ -2535,7 +2577,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if virtual {
 			return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReasonSession(*op, p.ConnectorID, p.SessionInstance.LockSeals))
 		}
-		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReason(*op))
+		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, s.configOffReasonFor(*c, *op))
 	}
 
 	// Inject the selected account's token. Ownership and per-account op
