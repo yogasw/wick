@@ -67,7 +67,7 @@ func (a accessCatalog) runRulesAction(ctx context.Context, userID, opKey string,
 		return "", "", err
 	}
 	if !a.ownsProject(ctx, userID, pid) {
-		return "", "", errors.New("only the project's owner or an admin can approve a rule for it")
+		return "", "", fmt.Errorf("project %q was not found, or only its owner or an admin can approve a rule for it", pid)
 	}
 	if reason == "" {
 		reason = "proposed by an agent, approved on a card"
@@ -80,13 +80,19 @@ func (a accessCatalog) runRulesAction(ctx context.Context, userID, opKey string,
 	return "", string(b), nil
 }
 
+// ownsProject reports whether userID may approve a rule for projectID:
+// the project must exist, and userID own it or be an admin.
 func (a accessCatalog) ownsProject(ctx context.Context, userID, projectID string) bool {
 	if userID == "" || projectID == "" {
 		return false
 	}
-	if u, err := a.users.GetUserByID(ctx, userID); err == nil && u != nil && u.IsAdmin() {
+	p, err := project.Load(a.layout, projectID)
+	if err != nil {
+		return false
+	}
+	if p.Meta.OwnerUserID == userID {
 		return true
 	}
-	p, err := project.Load(a.layout, projectID)
-	return err == nil && p.Meta.OwnerUserID == userID
+	u, err := a.users.GetUserByID(ctx, userID)
+	return err == nil && u != nil && u.IsAdmin()
 }
