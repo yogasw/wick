@@ -94,6 +94,7 @@ func HashParams(connectorID, opKey, accountID string, params map[string]any) str
 // actions an auto_approve rule covers run at once and show on the card as
 // decided by that rule.
 func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
+	ctx = WithSession(ctx, in.SessionID)
 	if strings.TrimSpace(in.SessionID) == "" {
 		return View{}, errors.New("an access request needs a session: call it from an agent session")
 	}
@@ -242,6 +243,18 @@ func (s *Service) Enabled(sessionID string) bool {
 	return pid != "" && sw.AccessRequestsOn(pid)
 }
 
+// SessionPolicies is the optional part of a Directory that reads a
+// session's per-connector policy (Workspace panel).
+type SessionPolicies interface {
+	SessionPolicy(sessionID, connectorID string) string
+}
+
+// askEach reports whether a session set a connector to ask each time.
+func (s *Service) askEach(sessionID, connectorID string) bool {
+	sp, ok := s.dir.(SessionPolicies)
+	return ok && sp.SessionPolicy(sessionID, connectorID) == "ask"
+}
+
 // ErrOff refuses a request in a project that did not turn them on.
 var ErrOff = errors.New("access requests are off for this session's project; the project's owner can turn them on in the project settings (Access requests). Until then, an action outside your access cannot be requested")
 
@@ -301,6 +314,7 @@ func (s *Service) candidates(ctx context.Context, req *entity.AccessRequest) []P
 }
 
 func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []entity.AccessRequestItem, viewerID string) View {
+	ctx = WithSession(ctx, req.SessionID)
 	v := View{
 		ID: req.ID, SessionID: req.SessionID, AgentID: req.AgentID, AgentName: req.AgentName,
 		Reason: req.Reason, Status: req.Status, CreatedAt: req.CreatedAt, ViewerID: viewerID,
@@ -417,8 +431,8 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 		}
 		iv.CanDecide = true
 		for _, m := range ModesFor(it.Kind) {
-			if m != ModeOnce && len(ov) > 0 {
-				continue // a config override is approved one call at a time
+			if m != ModeOnce && (len(ov) > 0 || s.askEach(req.SessionID, it.ConnectorID)) {
+				continue // approved one call at a time
 			}
 			if m == ModeAlways && (req.AgentID == "" || !(viewer.IsAdmin || viewer.ID == agentOwner)) {
 				continue
@@ -591,7 +605,7 @@ func (s *Service) Cancel(ctx context.Context, id, sessionID string) error {
 // modes.
 func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequestItem, runAs func(entity.AccessRequestItem) string, grantBy string) {
 	work := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+		ctx, cancel := context.WithTimeout(WithSession(context.Background(), req.SessionID), runTimeout)
 		defer cancel()
 		for _, it := range items {
 			var params map[string]any
@@ -768,6 +782,7 @@ func (s *Service) List(ctx context.Context, status string, limit int) ([]View, e
 // (a standing grant's approver, or an auto_approve rule's owner), or an
 // error when a deny rule matches. ("", "", nil) leaves the refusal as is.
 func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err error) {
+	ctx = WithSession(ctx, a.SessionID)
 	if !s.Enabled(a.SessionID) {
 		return "", "", nil
 	}
@@ -780,8 +795,9 @@ func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err 
 	}
 	scopes := map[string]string{ModeSession: a.SessionID, "agent": a.AgentID}
 	grants, gerr := s.store.grants(ctx, a.ConnectorID, a.OpKey, scopes)
-	// A standing grant never covers a call with a config override.
-	if gerr == nil && len(overrideOfAction(a)) == 0 {
+	// A standing grant never covers a call with a config override, nor a
+	// connector the session set to ask each time.
+	if gerr == nil && len(overrideOfAction(a)) == 0 && !a.AskEach {
 		target := TargetKey(a.Params)
 		for _, g := range grants {
 			if g.Target != target {
@@ -823,6 +839,20 @@ func (s *Service) RevokeGrant(ctx context.Context, id, by string) error {
 	}
 	if !allowed {
 		return errors.New("only the approver, the owner or an admin can revoke this grant")
+	}
+	return s.store.revokeGrant(ctx, id, by)
+}
+
+// RevokeSessionGrant ends a "this session" grant from the session's own
+// Workspace panel: whoever may use the session may take it back (the web
+// layer checked the session access).
+func (s *Service) RevokeSessionGrant(ctx context.Context, sessionID, id, by string) error {
+	g, err := s.store.grant(ctx, id)
+	if err != nil {
+		return err
+	}
+	if g.ScopeType != ModeSession || g.ScopeID != sessionID {
+		return errors.New("this grant does not belong to this session")
 	}
 	return s.store.revokeGrant(ctx, id, by)
 }

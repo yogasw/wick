@@ -310,3 +310,20 @@ func overrideOfItem(it entity.AccessRequestItem) map[string]string {
 	_ = json.Unmarshal([]byte(it.Params), &params)
 	return overrideOf(params)
 }
+
+type sessionCtxKey struct{}
+
+// WithSession tells the Catalog which session an action belongs to, so a
+// session's own connector (sw_…) can be found.
+func WithSession(ctx context.Context, sessionID string) context.Context {
+	if sessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionCtxKey{}, sessionID)
+}
+
+// SessionOf is the session WithSession set ("" when none).
+func SessionOf(ctx context.Context) string {
+	v, _ := ctx.Value(sessionCtxKey{}).(string)
+	return v
+}

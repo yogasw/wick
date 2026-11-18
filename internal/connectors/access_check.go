@@ -32,6 +32,31 @@ type AccessQuery struct {
 	// app_code and the like), so a rule can tell which app a connector
 	// is bound to when the op itself names none.
 	Config map[string]string
+	// AskEach: the session set this connector to "ask each time", so a
+	// standing grant does not cover the call.
+	AskEach bool
+}
+
+// Session policies (Workspace panel, Connector access): how one session
+// lets its agent use one connector.
+const (
+	SessionPolicyAllow = "allow"
+	SessionPolicyAsk   = "ask"
+	SessionPolicyBlock = "block"
+)
+
+// SessionPolicyLookup answers a session's policy for a connector ("" or
+// allow when none).
+type SessionPolicyLookup func(sessionID, connectorID string) string
+
+// SetSessionPolicy wires the per-session policies. Set once at boot.
+func (s *Service) SetSessionPolicy(f SessionPolicyLookup) { s.sessionPolicyFn = f }
+
+func (s *Service) sessionPolicy(sessionID, connectorID string) string {
+	if s.sessionPolicyFn == nil || sessionID == "" {
+		return SessionPolicyAllow
+	}
+	return s.sessionPolicyFn(sessionID, connectorID)
 }
 
 // subjectConfigKeys are the instance config keys a rule may read. Only
@@ -96,6 +121,7 @@ func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity
 	who, note, err := s.accessCheck(ctx, AccessQuery{
 		SessionID: p.SessionID, AgentID: agentIDOf(ctx), ConnectorID: c.ID, ConnectorKey: c.Key,
 		OpKey: op.Key, Destructive: op.Destructive, Input: input, Config: cfg,
+		AskEach: s.sessionPolicy(p.SessionID, c.ID) == SessionPolicyAsk,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("operation %q: %w", op.Key, err)
@@ -325,4 +351,37 @@ func (s *Service) SubjectConfig(ctx context.Context, connectorID string) map[str
 		return nil
 	}
 	return subjectConfig(s.LoadConfigs(*c))
+}
+
+// DescribeSessionOp is DescribeOpWith for a session's own connector
+// (sw_…): the op must exist and, with the override applied, be on.
+func (s *Service) DescribeSessionOp(target SessionInstanceTarget, instanceID, opKey string, override map[string]string) (OpInfo, error) {
+	mod, ok := s.Module(target.BaseKey)
+	if !ok {
+		return OpInfo{}, fmt.Errorf("session connector %q has no implementation loaded", target.Label)
+	}
+	label := target.Label
+	if label == "" {
+		label = mod.Meta.Name + " (session)"
+	}
+	row := entity.Connector{ID: instanceID, Key: target.BaseKey, Label: label}
+	for _, op := range mod.AllOps() {
+		if op.Key != opKey {
+			continue
+		}
+		if op.ConfigOnly {
+			return OpInfo{}, fmt.Errorf("operation %q is a config helper, not an action", opKey)
+		}
+		if err := s.checkOverride(mod, row, override); err != nil {
+			return OpInfo{}, err
+		}
+		if op.VisibleWhen != "" {
+			cfg := s.ResolveSessionConfig(mod, instanceID, target.Config, target.LockSeals)
+			if !overrideOpens(mod, cfg, override, op) {
+				return OpInfo{}, fmt.Errorf("operation %q is %s", opKey, ConfigOffReasonSession(op, instanceID, target.LockSeals))
+			}
+		}
+		return OpInfo{ConnectorKey: target.BaseKey, ConnectorLabel: label, OpName: op.Name, Destructive: op.Destructive}, nil
+	}
+	return OpInfo{}, fmt.Errorf("unknown operation %q on session connector %q", opKey, label)
 }

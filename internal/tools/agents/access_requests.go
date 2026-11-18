@@ -39,6 +39,10 @@ func registerAccessRoutes(r tool.Router) {
 	r.POST("/api/projects/{id}/access/simulate", projectOwnerMW(projectAccessSimulate))
 	r.POST("/api/projects/{id}/access/grants/{gid}/revoke", projectOwnerMW(projectAccessGrantRevoke))
 	r.POST("/api/projects/{id}/access/enabled", projectOwnerMW(projectAccessSetEnabled))
+	// Workspace panel, Connector access (guarded by sessionAccessMW).
+	r.GET("/sessions/{id}/access", sessionAccessJSON)
+	r.POST("/sessions/{id}/access/policy", sessionAccessPolicySet)
+	r.POST("/sessions/{id}/access/grants/{gid}/revoke", sessionAccessGrantRevoke)
 }
 
 func accessUser(c *tool.Ctx) *entity.User {

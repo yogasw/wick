@@ -264,7 +264,7 @@ func TestConfigOffReasonSaysWhoCanChangeIt(t *testing.T) {
 		t.Fatalf("saved connector reason = %q", got)
 	}
 	got := ConfigOffReasonSession(op, "sw_test", nil)
-	if !strings.Contains(got, "action=set_config connector_id=sw_test") || !strings.Contains(got, `{"mode": "write"}`) {
+	if strings.Contains(got, "action=set_config") || !strings.Contains(got, "do not switch it yourself") || !strings.Contains(got, `{"mode": "write"}`) || !strings.Contains(got, "sw_test") {
 		t.Fatalf("session reason = %q", got)
 	}
 	if got := ConfigOffReasonSession(op, "sw_test", map[string]string{"mode": "seal"}); strings.Contains(got, "set_config") || !strings.Contains(got, "locked") {

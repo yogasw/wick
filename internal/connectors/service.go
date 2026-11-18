@@ -136,6 +136,10 @@ type Service struct {
 	// requests on — see SetAccessGate. nil = off everywhere.
 	accessGate AccessGate
 
+	// sessionPolicyFn reads a session's per-connector policy (Workspace
+	// panel) — see SetSessionPolicy. nil = allow everywhere.
+	sessionPolicyFn SessionPolicyLookup
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
@@ -1831,16 +1835,17 @@ func ConfigOffReason(op connector.Operation) string {
 	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); its config can be changed by an admin, the connector's owner, or anyone it allows to configure it, so ask one of them (or use a session connector you can configure)", field, values)
 }
 
-// ConfigOffReasonSession is the same note for a session connector: the
-// session configures its own instance, so it says how, unless a person
-// locked that key.
+// ConfigOffReasonSession is the same note for a session connector. It
+// never tells the agent to open the gate itself: a person with access to
+// the session switches it in the Session Workspace tab, or (where access
+// requests are on) approves one call with a config override.
 func ConfigOffReasonSession(op connector.Operation, instanceID string, lockSeals map[string]string) string {
 	field, values := configOffNeed(op)
 	if _, locked := lockSeals[field]; locked {
 		return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); a person locked %s, so ask them to change it in the Session Workspace tab", field, values, field)
 	}
 	first, _, _ := strings.Cut(values, "|")
-	return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); it is this session's own connector: set it with wick_session_workspace action=set_config connector_id=%s values={%q: %q}, then call again", field, values, instanceID, field, first)
+	return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); do not switch it yourself: a person with access to this session can change it in the Session Workspace tab, or, where access requests are on, ask with wick_request_access adding %s {%q: %q} to the action's params (tool_id %s)", field, values, ConfigOverrideParam, field, first, instanceID)
 }
 
 func configOffNeed(op connector.Operation) (field, values string) {
@@ -2410,9 +2415,6 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// A per-call config override: only on a saved instance, only keys it
 	// lists, only values the field offers.
 	if len(p.ConfigOverride) > 0 {
-		if virtual {
-			return nil, fmt.Errorf("a session connector takes no %s: set its config with wick_session_workspace action=set_config instead", ConfigOverrideParam)
-		}
 		if AgentScopeFrom(ctx) != nil && !s.accessOn(p.SessionID) {
 			return nil, fmt.Errorf("%s is part of access requests, which are off for this session's project (its owner can turn them on in the project settings, Access requests)", ConfigOverrideParam)
 		}
@@ -2427,6 +2429,18 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("connector %q is switched off for this agent", c.Key)
 	}
 
+	// The session's own say over this connector (Workspace panel): blocked
+	// refuses every agent call; ask sends every write through a card.
+	askEach := false
+	if AgentScopeFrom(ctx) != nil {
+		switch s.sessionPolicy(p.SessionID, c.ID) {
+		case SessionPolicyBlock:
+			return nil, fmt.Errorf("connector %q is blocked for this session (Workspace panel, Connector access)", c.Label)
+		case SessionPolicyAsk:
+			askEach = op.Destructive
+		}
+	}
+
 	// Agent checklist: the instance, the identity it runs as, and the op
 	// must all be on it. A session-workspace instance is no checklist
 	// entry of its own; it runs with what the checklist grants the base
@@ -2437,15 +2451,19 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
+		if !ok || askEach || len(p.ConfigOverride) > 0 {
 			// A session connector runs on its own config (its app, its
 			// tokens), so a rule or a standing approval only decides
-			// whether it may run; the call keeps its identity.
+			// whether it may run; the call keeps its identity. A config
+			// override is never the agent's own to use.
 			who, err := s.accessOverride(ctx, p, c, op)
 			if err != nil {
 				return nil, err
 			}
 			if who == nil {
+				if len(p.ConfigOverride) > 0 {
+					return nil, fmt.Errorf("operation %q with a %s needs approval%s", op.Key, ConfigOverrideParam, s.requestHint(p.SessionID))
+				}
 				return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance%s", op.Key, c.Key, s.requestHint(p.SessionID))
 			}
 		}
@@ -2471,6 +2489,8 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			// for: someone who may configure the instance approves it on a
 			// card (or a rule they wrote does).
 			refusal = fmt.Errorf("operation %q with a %s needs approval", op.Key, ConfigOverrideParam)
+		} else if askEach {
+			refusal = fmt.Errorf("operation %q on connector %q is set to ask each time in this session", op.Key, c.Label)
 		}
 		if refusal != nil {
 			// The agent's own access said no. A standing approval (an
@@ -2507,7 +2527,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 
 	// Without an agent, the caller itself must be allowed to configure the
 	// instance to change its config, even for one call.
-	if len(p.ConfigOverride) > 0 && AgentScopeFrom(ctx) == nil && !s.CanConfigure(ctx, p.UserID, c.ID) {
+	// (A session connector belongs to its session: whoever may use the
+	// session may set its config, so there is nothing more to check.)
+	if len(p.ConfigOverride) > 0 && !virtual && AgentScopeFrom(ctx) == nil && !s.CanConfigure(ctx, p.UserID, c.ID) {
 		return nil, fmt.Errorf("you may not configure connector %q, so you cannot override its config", c.Label)
 	}
 
@@ -2553,6 +2575,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	var configs map[string]string
 	if virtual {
 		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
+		for k, v := range p.ConfigOverride {
+			configs[k] = v
+		}
 	} else {
 		configs = s.LoadConfigs(*c)
 		for k, v := range p.ConfigOverride {
@@ -2627,6 +2652,16 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// audit log stores wick_enc_ tokens (not plaintext) in
 	// request_json, so a retry can re-decrypt under the retrier's key.
 	reqBytes, _ := json.Marshal(p.Input)
+	if len(p.ConfigOverride) > 0 {
+		// The override is part of what ran: keep it in the run's record so
+		// the session's Workspace panel and the audit show it.
+		rec := make(map[string]any, len(p.Input)+1)
+		for k, v := range p.Input {
+			rec[k] = v
+		}
+		rec[ConfigOverrideParam] = p.ConfigOverride
+		reqBytes, _ = json.Marshal(rec)
+	}
 
 	// Auto-decrypt: scan configs + input for wick_enc_ tokens and
 	// replace each with its plaintext. The connector only ever sees

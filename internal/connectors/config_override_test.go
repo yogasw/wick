@@ -74,12 +74,26 @@ func TestConfigOverridePerCall(t *testing.T) {
 	if ok, why := svc.CanRunOwnWith(ctx, "admin-1", id, "write", map[string]string{"mode": "write"}); !ok {
 		t.Fatalf("configurer cannot approve: %q", why)
 	}
-	// A session connector sets its own config instead.
-	_, err := svc.Execute(ctx, ExecuteParams{ConnectorID: "sw_x", OperationKey: "write", Source: entity.ConnectorRunSourceMCP,
-		ConfigOverride:  map[string]string{"mode": "write"},
-		SessionInstance: &SessionInstanceTarget{BaseKey: "ovstub", Label: "sw"}})
-	if err == nil || !strings.Contains(err.Error(), "set_config") {
-		t.Fatalf("session override = %v", err)
+	// A session connector: a person (no agent) may run it with an
+	// override; an agent needs approval like on a saved connector.
+	sess := func(c context.Context) error {
+		_, err := svc.Execute(c, ExecuteParams{ConnectorID: "sw_x", OperationKey: "write", Source: entity.ConnectorRunSourceMCP,
+			UserID: "user-1", SessionID: "sess-1", ConfigOverride: map[string]string{"mode": "write"},
+			SessionInstance: &SessionInstanceTarget{BaseKey: "ovstub", Label: "sw"}})
+		return err
+	}
+	if err := sess(ctx); err != nil {
+		t.Fatalf("approved session override: %v", err)
+	}
+	svc.SetAccessGate(func(string) bool { return true })
+	if err := sess(WithAgentScope(ctx, openScope{})); err == nil || !strings.Contains(err.Error(), "needs approval") {
+		t.Fatalf("agent session override = %v", err)
+	}
+	if _, err := svc.DescribeSessionOp(SessionInstanceTarget{BaseKey: "ovstub", Label: "sw"}, "sw_x", "write", map[string]string{"mode": "write"}); err != nil {
+		t.Fatalf("describe session op with override: %v", err)
+	}
+	if _, err := svc.DescribeSessionOp(SessionInstanceTarget{BaseKey: "ovstub", Label: "sw"}, "sw_x", "write", nil); err == nil {
+		t.Fatal("a config-off session op was requestable without the override")
 	}
 }
 
@@ -134,5 +148,55 @@ func TestAgentOverrideAlwaysNeedsApproval(t *testing.T) {
 	}
 	if err := run("user-1", false); err == nil || !strings.Contains(err.Error(), "needs approval") {
 		t.Fatalf("non-configurer's agent override = %v", err)
+	}
+}
+
+// A session's own policy: block refuses every agent call, ask sends a
+// write through approval (and never through a standing grant).
+func TestSessionPolicyBlockAndAsk(t *testing.T) {
+	bg := context.Background()
+	svc, id := newSvcWithModule(t, nil, overrideModule())
+	svc.SetIdentityLookup(func(_ context.Context, uid string) (*entity.User, []string, error) {
+		return &entity.User{ID: uid, Role: entity.RoleAdmin}, nil, nil
+	})
+	policy := map[string]string{}
+	svc.SetSessionPolicy(func(sid, cid string) string {
+		if sid != "sess-1" {
+			return SessionPolicyAllow
+		}
+		if m := policy[cid]; m != "" {
+			return m
+		}
+		return SessionPolicyAllow
+	})
+	ctx := WithAgentScope(bg, openScope{})
+	run := func(op, sid string) error {
+		_, err := svc.Execute(ctx, ExecuteParams{ConnectorID: id, OperationKey: op, Source: entity.ConnectorRunSourceMCP,
+			UserID: "admin-1", IsAdmin: true, SessionID: sid})
+		return err
+	}
+	if err := run("read", "sess-1"); err != nil {
+		t.Fatalf("allow: %v", err)
+	}
+	policy[id] = SessionPolicyBlock
+	if err := run("read", "sess-1"); err == nil || !strings.Contains(err.Error(), "blocked for this session") {
+		t.Fatalf("block = %v", err)
+	}
+	if err := run("read", "sess-2"); err != nil {
+		t.Fatalf("another session must not be blocked: %v", err)
+	}
+	policy[id] = SessionPolicyAsk
+	if err := run("read", "sess-1"); err != nil {
+		t.Fatalf("ask must let a read through: %v", err)
+	}
+	// A write under ask goes to the access check, flagged so no standing
+	// grant covers it.
+	var asked AccessQuery
+	svc.SetAccessGate(func(string) bool { return true })
+	svc.SetAccessCheck(func(_ context.Context, q AccessQuery) (string, string, error) { asked = q; return "", "", nil })
+	_, err := svc.Execute(ctx, ExecuteParams{ConnectorID: id, OperationKey: "write", Source: entity.ConnectorRunSourceMCP,
+		UserID: "admin-1", IsAdmin: true, SessionID: "sess-1", ConfigOverride: map[string]string{"mode": "write"}})
+	if err == nil || !asked.AskEach {
+		t.Fatalf("ask: err=%v asked=%+v", err, asked)
 	}
 }

@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -14,6 +16,7 @@ import (
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/channelidentity"
 	"github.com/yogasw/wick/internal/codemode"
@@ -26,11 +29,42 @@ import (
 
 // accessCatalog is accessreq.Catalog over the connectors service.
 type accessCatalog struct {
-	svc   *connectors.Service
-	users *login.Service
+	svc    *connectors.Service
+	users  *login.Service
+	layout agentconfig.Layout
+}
+
+// sessionTarget finds a session's own connector (sw_…) for the session the
+// action belongs to.
+func (a accessCatalog) sessionTarget(ctx context.Context, connectorID string) (*connectors.SessionInstanceTarget, bool, error) {
+	if !strings.HasPrefix(connectorID, "sw_") {
+		return nil, false, nil
+	}
+	sid := accessreq.SessionOf(ctx)
+	if sid == "" {
+		return nil, true, fmt.Errorf("session connector %q needs its session", connectorID)
+	}
+	inst, ok, err := sessionworkspace.Get(a.layout, sid, connectorID)
+	if err != nil {
+		return nil, true, err
+	}
+	if !ok {
+		return nil, true, fmt.Errorf("session connector %q not found in this session", connectorID)
+	}
+	return &connectors.SessionInstanceTarget{BaseKey: inst.BaseKey, Label: inst.Label, Config: inst.Config, LockSeals: inst.LockSeals}, true, nil
 }
 
 func (a accessCatalog) Describe(ctx context.Context, connectorID, opKey string, override map[string]string) (accessreq.ActionMeta, error) {
+	if t, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
+		if err != nil {
+			return accessreq.ActionMeta{}, err
+		}
+		info, err := a.svc.DescribeSessionOp(*t, connectorID, opKey, override)
+		if err != nil {
+			return accessreq.ActionMeta{}, err
+		}
+		return accessreq.ActionMeta{ConnectorKey: info.ConnectorKey, ConnectorLabel: info.ConnectorLabel, OpName: info.OpName, Destructive: info.Destructive}, nil
+	}
 	info, err := a.svc.DescribeOpWith(ctx, connectorID, opKey, override)
 	if err != nil {
 		return accessreq.ActionMeta{}, err
@@ -41,6 +75,12 @@ func (a accessCatalog) Describe(ctx context.Context, connectorID, opKey string, 
 // Requestable: an agent may only ask for a connector already in its
 // access list; outside an agent, the session's owner must see it.
 func (a accessCatalog) Requestable(ctx context.Context, sessionID, _ string, connectorID string) (bool, string) {
+	if _, isSession, err := a.sessionTarget(accessreq.WithSession(ctx, sessionID), connectorID); isSession {
+		if err != nil {
+			return false, err.Error()
+		}
+		return true, "" // the session's own connector
+	}
 	if scope := connectors.AgentScopeFrom(ctx); scope != nil {
 		if !scope.AllowConnector(connectorID) {
 			return false, "this connector is not in the agent's access at all; its owner has to add it (at least read) before actions on it can be requested"
@@ -63,10 +103,24 @@ func (a accessCatalog) Requestable(ctx context.Context, sessionID, _ string, con
 }
 
 func (a accessCatalog) CanRun(ctx context.Context, userID, connectorID, opKey string, override map[string]string) (bool, string) {
+	// A session's own connector runs on its own config for whoever may
+	// approve in that session (the request's roles already decide who).
+	if _, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
+		if err != nil {
+			return false, err.Error()
+		}
+		return true, ""
+	}
 	return a.svc.CanRunOwnWith(ctx, userID, connectorID, opKey, override)
 }
 
 func (a accessCatalog) Run(ctx context.Context, userID, connectorID, opKey, accountID string, params map[string]any) (string, string, error) {
+	if t, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
+		if err != nil {
+			return "", "", err
+		}
+		return a.runSession(ctx, *t, userID, connectorID, opKey, params)
+	}
 	return a.svc.RunOwn(ctx, userID, connectorID, opKey, accountID, params)
 }
 
@@ -80,6 +134,12 @@ type accessDirectory struct {
 
 // SessionProject names a session's project, for project-scoped rules and
 // the project's request history.
+// SessionPolicy reads a session's policy for a connector (Workspace
+// panel, Connector access).
+func (d accessDirectory) SessionPolicy(sessionID, connectorID string) string {
+	return agentstool.SessionConnectorPolicy(sessionID, connectorID)
+}
+
 // AccessRequestsOn reads the project's switch (off when unknown).
 func (d accessDirectory) AccessRequestsOn(projectID string) bool {
 	if projectID == "" {
@@ -180,7 +240,7 @@ func (p accessPublisher) Publish(ctx context.Context, v accessreq.View) (map[str
 func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Service, teamSvc *team.Service,
 	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, _ func() string,
 	layout agentconfig.Layout) *accessreq.Service {
-	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db), layout: layout})
+	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users, layout: layout}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db), layout: layout})
 	ar.AddPublisher(accessPublisher{reg: reg})
 	ar.AddPublisher(agentstool.AccessWebPublisher{})
 	ar.AddPublisher(agentstool.AccessFilePublisher{Layout: layout, Project: auditPlaces{layout: layout}.SessionProject})
@@ -188,11 +248,13 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 	ar.SetWaker(accessreq.Waker(deliver))
 	// Off unless the session's project turned access requests on.
 	svc.SetAccessGate(ar.Enabled)
+	svc.SetSessionPolicy(agentstool.SessionConnectorPolicy)
 	mcphandlers.AccessRequestsOn = ar.Enabled
 	svc.SetAccessCheck(func(ctx context.Context, q connectors.AccessQuery) (string, string, error) {
 		return ar.Check(ctx, accessreq.Action{
 			SessionID: q.SessionID, AgentID: q.AgentID, ConnectorID: q.ConnectorID, ConnectorKey: q.ConnectorKey,
 			OpKey: q.OpKey, Kind: accessreq.ClassifyOp(q.OpKey, q.Destructive), Params: q.Input, Config: q.Config,
+			AskEach: q.AskEach,
 		})
 	})
 	ar.SetScriptRunner(func(ctx context.Context, ownerID, code string, input map[string]any) (json.RawMessage, []string, error) {
@@ -256,4 +318,35 @@ func pruneAccessRequests(ar *accessreq.Service) {
 		}
 		time.Sleep(24 * time.Hour)
 	}
+}
+
+// runSession runs an approved action on a session's own connector, as the
+// approver, with the override it was approved with.
+func (a accessCatalog) runSession(ctx context.Context, t connectors.SessionInstanceTarget, userID, connectorID, opKey string, params map[string]any) (string, string, error) {
+	u, err := a.users.GetUserByID(ctx, userID)
+	if err != nil || u == nil {
+		return "", "", fmt.Errorf("approver %q not found", userID)
+	}
+	override, params, err := connectors.OverrideFromParams(params)
+	if err != nil {
+		return "", "", err
+	}
+	res, err := a.svc.Execute(connectors.WithoutAgentScope(ctx), connectors.ExecuteParams{
+		ConnectorID: connectorID, OperationKey: opKey, Input: mcphandlers.StringifyArgs(params), RawInput: params,
+		Source: entity.ConnectorRunSourceMCP, UserID: u.ID, IsAdmin: u.IsAdmin(),
+		TagIDs: a.users.GetUserFilterTagIDs(ctx, u.ID), SessionID: accessreq.SessionOf(ctx),
+		SessionInstance: &t, ConfigOverride: override,
+	})
+	if err != nil {
+		body := err.Error()
+		runID := ""
+		if res != nil {
+			runID = res.RunID
+			if res.ErrorMessage != "" {
+				body = res.ErrorMessage
+			}
+		}
+		return runID, "", errors.New(body)
+	}
+	return res.RunID, res.ResponseJSON, nil
 }

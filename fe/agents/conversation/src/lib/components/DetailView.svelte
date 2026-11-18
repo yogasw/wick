@@ -3793,6 +3793,8 @@
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
+          {base}
+          {sessionId}
           instances={wsInstances}
           bases={wsBases}
           deleted={wsDeleted}
@@ -4025,6 +4027,8 @@
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
+              {base}
+              {sessionId}
               instances={wsInstances}
               bases={wsBases}
               deleted={wsDeleted}
