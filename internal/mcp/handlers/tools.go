@@ -741,6 +741,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 		SessionModelDescriptor(),
 		RolesDescriptors()[0],
 		RolesDescriptors()[1],
+		AccessRequestDescriptor(),
 		{
 			Name: "wick_set_title",
 			Description: "Set the session's title (the label shown in the sidebar). " +

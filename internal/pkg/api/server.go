@@ -2161,6 +2161,16 @@ func NewServer() *Server {
 	// wick_roles / wick_roles_set: an agent's own roles, on every Team agent.
 	mcphandlers.RolesRead = agentstool.SessionRolesGet
 	mcphandlers.RolesWrite = agentstool.SessionRolesSet
+	// Access requests: an agent asks a person to approve actions its own
+	// access cannot run; approved ones run with the approver's access.
+	{
+		d := poolDeliverer{pool: agentsPool, channels: channelReg}
+		wireAccessRequests(db, connectorsSvc, authSvc, teamSvc, channelReg,
+			func(ctx context.Context, sessionID, text string) error {
+				return d.DeliverToSession(ctx, sessionID, "", text)
+			},
+			configsSvc.AppURL)
+	}
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt

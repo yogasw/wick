@@ -199,6 +199,9 @@ func agentIDOf(ctx context.Context) string {
 	return ""
 }
 
+// AgentIDOf is the Team agent whose scope is on ctx, "" when none.
+func AgentIDOf(ctx context.Context) string { return agentIDOf(ctx) }
+
 // AgentScopeFrom returns the scope on ctx, or nil when the caller is not
 // an agent.
 func AgentScopeFrom(ctx context.Context) AgentScope {

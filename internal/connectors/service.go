@@ -123,6 +123,11 @@ type Service struct {
 	// connector as its lender — see SetIdentityLookup. nil lends nothing.
 	identity IdentityLookup
 
+	// accessCheck is asked when an agent's own access refuses an op:
+	// a standing approval or an access rule may let it run as a person —
+	// see SetAccessCheck. nil changes nothing.
+	accessCheck AccessCheck
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
@@ -2382,7 +2387,16 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			return nil, err
 		}
 		if !ok {
-			return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance", op.Key, c.Key)
+			// A session connector runs on its own config (its app, its
+			// tokens), so a rule or a standing approval only decides
+			// whether it may run; the call keeps its identity.
+			who, err := s.accessOverride(ctx, p, c, op)
+			if err != nil {
+				return nil, err
+			}
+			if who == nil {
+				return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance %s", op.Key, c.Key, accessRequestHint)
+			}
 		}
 	}
 	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
@@ -2396,11 +2410,39 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if !scope.AllowAccount(c.ID, accountID) {
 			return nil, fmt.Errorf("this agent may not run connector %q as that account", c.ID)
 		}
+		var refusal error
 		if !scope.AllowOp(c.ID, op.Key, op.Destructive) {
-			return nil, fmt.Errorf("operation %q is not allowed for this agent", op.Key)
+			refusal = fmt.Errorf("operation %q is not allowed for this agent", op.Key)
+		} else if err := roleAllowsOp(ctx, requester, c.ID, op.Key, op.Destructive, lent); err != nil {
+			refusal = err
 		}
-		if err := roleAllowsOp(ctx, requester, c.ID, op.Key, op.Destructive, lent); err != nil {
-			return nil, err
+		if refusal != nil {
+			// The agent's own access said no. A standing approval (an
+			// access request decided "this session"/"always") or an
+			// auto_approve rule may still let it run, as the person who
+			// approved it; a deny rule refuses outright.
+			who, err := s.accessOverride(ctx, p, c, op)
+			if err != nil {
+				return nil, err
+			}
+			if who == nil {
+				return nil, fmt.Errorf("%w %s", refusal, accessRequestHint)
+			}
+			p.UserID, p.IsAdmin, p.TagIDs = who.user.ID, who.user.IsAdmin(), who.tags
+			lent = true
+			if acct != nil {
+				accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acct.ID})
+				if tagErr != nil || !AccountVisibleTo(*c, *acct, accTags[acct.ID], s.AccountAccessFor(*c, p.UserID, p.IsAdmin, p.TagIDs)) {
+					acct, p.AccountID = nil, ""
+				}
+			}
+			if acct == nil && p.AccountID == "" && mod.OAuth != nil && c.EnableSSO {
+				if shared, err := s.SharedCredentialAllowed(ctx, *c); err == nil && !shared {
+					if own, err := s.OwnAccount(ctx, c.ID, p.UserID); err == nil && own != nil {
+						acct = own
+					}
+				}
+			}
 		}
 	}
 

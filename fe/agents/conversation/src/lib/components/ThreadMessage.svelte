@@ -23,6 +23,7 @@
   import ProviderFailoverCard from "./system/ProviderFailoverCard.svelte";
   import ActionCard from "./system/ActionCard.svelte";
   import ApprovalRequestCard from "./system/ApprovalRequestCard.svelte";
+  import AccessRequestCard from "./system/AccessRequestCard.svelte";
   import type { ApprovalDecisionChoice } from "../interactiveCards.js";
   import { splitActionCards, cardMode } from "../actionCard.js";
   import type { CardState } from "../types/agents.js";
@@ -677,6 +678,8 @@
         <RemoteQueueChip {turn} agentName={agent?.name ?? ""} onCancel={onRemoteQueueCancel} />
       {:else if turn.kind === "approval_request"}
         <ApprovalRequestCard {turn} onDecide={onApprovalDecide} />
+      {:else if turn.kind === "access_request"}
+        <AccessRequestCard {turn} />
       {:else if turn.kind === "input_request"}
         <InputRequestCard {turn} />
       {:else if turn.kind === "provider_failover" || turn.kind === "provider_return"}

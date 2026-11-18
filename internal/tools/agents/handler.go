@@ -621,6 +621,7 @@ func Register(r tool.Router) {
 	// Gate approval (Stage 5). Modal in the UI POSTs the user's
 	// decision here; revoke removes a previously-approved match key.
 	r.POST("/sessions/{id}/approve", approveCommand)
+	registerAccessRoutes(r)
 	r.GET("/sessions/{id}/approvals", approvalsSnapshot)
 	r.DELETE("/sessions/{id}/approve/{matchKey}", revokeApproval)
 

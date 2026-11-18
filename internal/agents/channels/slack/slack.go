@@ -4782,10 +4782,19 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 	// caring about the gate-approval channel-side hijack below.
 	s.emitInteractionWorkflow(ctx, cb)
 
+	if cb.Type == slackgo.InteractionTypeViewSubmission &&
+		(cb.View.CallbackID == accessDecideCallback || cb.View.CallbackID == accessDenyCallback) {
+		s.handleAccessSubmit(ctx, cb)
+		return
+	}
 	if len(cb.ActionCallback.BlockActions) == 0 {
 		return
 	}
 	action := cb.ActionCallback.BlockActions[0]
+	if action.BlockID == accessBlockID {
+		s.handleAccessClick(ctx, cb, action)
+		return
+	}
 	if action.BlockID == cardBlockID {
 		s.handleCardClick(ctx, cb, action)
 		return

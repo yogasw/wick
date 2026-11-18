@@ -121,6 +121,7 @@ const FOLD_KEY: Record<string, string> = {
   mention_handoff: "task_id",
   input_request: "ask_id",
   approval_request: "approval_id",
+  access_request: "request_id",
   remote_queue: "queue_id",
   listen_held: "hold_id",
 };

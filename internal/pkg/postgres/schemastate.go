@@ -57,6 +57,15 @@ var migratedModels = []any{
 	&entity.ConnectorOperation{},
 	&entity.ConnectorRun{},
 	&entity.ConnectorRunLend{},
+	// Access requests: per-action approval cards, the standing grants a
+	// "session"/"always" decision leaves, and the rules + facts that
+	// decide an action without a card.
+	&entity.AccessRequest{},
+	&entity.AccessRequestItem{},
+	&entity.AccessGrant{},
+	&entity.AccessRule{},
+	&entity.AccessRuleRevision{},
+	&entity.AccessFact{},
 	&entity.CodeModeRun{},
 	&entity.ConnectorAccount{},
 	&entity.ConnectorCredentialPolicy{},

@@ -1,0 +1,229 @@
+package connectors
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
+)
+
+// accessRequestHint ends a refusal of an agent's op so the agent knows
+// there is a way forward that does not need the owner to widen its
+// access for good.
+const accessRequestHint = "(to run it anyway, ask a person with wick_request_access: they approve this exact action and it runs with their access)"
+
+// AccessQuery is one refused op the access check is asked about.
+type AccessQuery struct {
+	SessionID    string
+	AgentID      string
+	ConnectorID  string
+	ConnectorKey string
+	OpKey        string
+	Destructive  bool
+	Input        map[string]string
+	// Config holds the instance's non-secret subject settings (its
+	// app_code and the like), so a rule can tell which app a connector
+	// is bound to when the op itself names none.
+	Config map[string]string
+}
+
+// subjectConfigKeys are the instance config keys a rule may read. Only
+// names of things, never credentials.
+var subjectConfigKeys = []string{
+	"app_code", "app_id", "appCode", "appId", "appid", "app",
+	"env", "environment", "base_url", "workspace", "project", "repo", "repository",
+}
+
+func subjectConfig(all map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, k := range subjectConfigKeys {
+		if v, ok := all[k]; ok && v != "" && !strings.HasPrefix(v, "wick_enc_") {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// AccessCheck answers a refused op: the user it may run as instead
+// (runAs, with a note for the log), nothing ("" and nil: the refusal
+// stands), or an error that refuses it outright (a deny rule).
+type AccessCheck func(ctx context.Context, q AccessQuery) (runAs, note string, err error)
+
+// SetAccessCheck wires the access-request grants and rules. Set once at
+// boot.
+func (s *Service) SetAccessCheck(f AccessCheck) { s.accessCheck = f }
+
+type runAsIdentity struct {
+	user *entity.User
+	tags []string
+}
+
+// accessOverride asks the access check about an op the agent scope
+// refused, and resolves who it may run as. The person must still reach
+// the connector on their own: a grant never outlives its approver's
+// access.
+func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) (*runAsIdentity, error) {
+	if s.accessCheck == nil || s.identity == nil {
+		return nil, nil
+	}
+	virtual := p.SessionInstance != nil
+	var cfg map[string]string
+	if virtual {
+		cfg = subjectConfig(p.SessionInstance.Config)
+	} else {
+		cfg = subjectConfig(s.LoadConfigs(*c))
+	}
+	who, note, err := s.accessCheck(ctx, AccessQuery{
+		SessionID: p.SessionID, AgentID: agentIDOf(ctx), ConnectorID: c.ID, ConnectorKey: c.Key,
+		OpKey: op.Key, Destructive: op.Destructive, Input: p.Input, Config: cfg,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("operation %q: %w", op.Key, err)
+	}
+	if who == "" {
+		return nil, nil
+	}
+	u, tags, err := s.identity(ctx, who)
+	if err != nil || u == nil {
+		return nil, nil
+	}
+	if virtual {
+		log.Info().Str("connector", c.Key).Str("op", op.Key).Str("approved_by", u.ID).Str("by", note).
+			Str("session", p.SessionID).Msg("agent op on a session connector allowed by access approval")
+		return &runAsIdentity{user: u, tags: tags}, nil
+	}
+	if vis, err := s.isVisibleDirect(ctx, c.ID, u.ID, tags, u.IsAdmin()); err != nil || !vis {
+		return nil, nil
+	}
+	log.Info().Str("connector", c.ID).Str("op", op.Key).Str("run_as", u.ID).Str("by", note).
+		Str("session", p.SessionID).Msg("agent op allowed by access request approval")
+	return &runAsIdentity{user: u, tags: tags}, nil
+}
+
+// OpInfo describes one operation of a connector instance.
+type OpInfo struct {
+	ConnectorKey   string
+	ConnectorLabel string
+	OpName         string
+	Destructive    bool
+}
+
+// DescribeOp resolves a connector instance and one of its operations.
+func (s *Service) DescribeOp(ctx context.Context, connectorID, opKey string) (OpInfo, error) {
+	c, err := s.repo.Get(ctx, connectorID)
+	if err != nil {
+		return OpInfo{}, fmt.Errorf("connector %q not found", connectorID)
+	}
+	if c.Disabled {
+		return OpInfo{}, fmt.Errorf("connector %q is disabled", c.Label)
+	}
+	mod, ok := s.Module(c.Key)
+	if !ok {
+		return OpInfo{}, fmt.Errorf("connector %q has no implementation loaded", c.Label)
+	}
+	for _, op := range mod.AllOps() {
+		if op.Key == opKey {
+			if op.ConfigOnly {
+				return OpInfo{}, fmt.Errorf("operation %q is a config helper, not an action", opKey)
+			}
+			return OpInfo{ConnectorKey: c.Key, ConnectorLabel: c.Label, OpName: op.Name, Destructive: op.Destructive}, nil
+		}
+	}
+	return OpInfo{}, fmt.Errorf("unknown operation %q on connector %q", opKey, c.Label)
+}
+
+// CanRunOwn reports whether userID can run opKey on connectorID with their
+// own access: they reach the instance, the op is switched on, and an
+// admin-only op needs an admin. why says what is missing, in words.
+func (s *Service) CanRunOwn(ctx context.Context, userID, connectorID, opKey string) (bool, string) {
+	if s.identity == nil || userID == "" {
+		return false, "unknown user"
+	}
+	u, tags, err := s.identity(ctx, userID)
+	if err != nil || u == nil {
+		return false, "unknown user"
+	}
+	ctx = WithoutAgentScope(ctx)
+	vis, err := s.isVisibleDirect(ctx, connectorID, u.ID, tags, u.IsAdmin())
+	if err != nil || !vis {
+		return false, "this connector is not in your access"
+	}
+	c, err := s.repo.Get(ctx, connectorID)
+	if err != nil {
+		return false, "connector not found"
+	}
+	states, err := s.OperationStatesFull(ctx, connectorID, c.Key)
+	if err == nil {
+		if st, ok := states[opKey]; ok {
+			if !st.Enabled {
+				return false, "this operation is switched off on the connector"
+			}
+			if st.AdminOnly && !u.IsAdmin() {
+				return false, "this operation is restricted to admins"
+			}
+		}
+	}
+	return true, ""
+}
+
+// RunOwn executes an action as userID with their own access (no agent
+// scope, no lend). The run is filed under the user, with the source MCP.
+func (s *Service) RunOwn(ctx context.Context, userID, connectorID, opKey, accountID string, params map[string]any) (string, string, error) {
+	if s.identity == nil {
+		return "", "", errors.New("identity lookup not wired")
+	}
+	u, tags, err := s.identity(ctx, userID)
+	if err != nil || u == nil {
+		return "", "", fmt.Errorf("approver %q not found", userID)
+	}
+	ctx = WithoutAgentScope(ctx)
+	input := make(map[string]string, len(params))
+	for k, v := range params {
+		input[k] = stringifyParam(v)
+	}
+	res, err := s.Execute(ctx, ExecuteParams{
+		ConnectorID: connectorID, OperationKey: opKey, Input: input, RawInput: params,
+		Source: entity.ConnectorRunSourceMCP, UserID: u.ID, IsAdmin: u.IsAdmin(), TagIDs: tags, AccountID: accountID,
+	})
+	if err != nil {
+		body := err.Error()
+		runID := ""
+		if res != nil {
+			runID = res.RunID
+			if res.ErrorMessage != "" {
+				body = res.ErrorMessage
+			}
+		}
+		return runID, "", errors.New(body)
+	}
+	return res.RunID, res.ResponseJSON, nil
+}
+
+// stringifyParam renders one raw argument the way the MCP layer does for
+// Input: strings as is, whole numbers without a decimal point, the rest
+// as JSON.
+func stringifyParam(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		if x == float64(int64(x)) {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	default:
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+}
