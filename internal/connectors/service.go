@@ -2466,11 +2466,11 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			refusal = fmt.Errorf("operation %q is not allowed for this agent", op.Key)
 		} else if err := roleAllowsOp(ctx, requester, c.ID, op.Key, op.Destructive, lent); err != nil {
 			refusal = err
-		} else if len(p.ConfigOverride) > 0 && !s.CanConfigure(ctx, requester, c.ID) {
-			// The person this call runs for may configure the instance:
-			// the override is theirs to use, no card. Anyone else needs
-			// someone who may configure it to approve (or a rule).
-			refusal = fmt.Errorf("operation %q with a %s needs approval: you may not configure connector %q", op.Key, ConfigOverrideParam, c.Label)
+		} else if len(p.ConfigOverride) > 0 {
+			// An agent never uses an override on its own, whoever it works
+			// for: someone who may configure the instance approves it on a
+			// card (or a rule they wrote does).
+			refusal = fmt.Errorf("operation %q with a %s needs approval", op.Key, ConfigOverrideParam)
 		}
 		if refusal != nil {
 			// The agent's own access said no. A standing approval (an

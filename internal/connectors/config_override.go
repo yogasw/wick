@@ -16,10 +16,9 @@ import (
 // is not secret): their values are fixed by the connector, so an override
 // can never point the instance's credentials at another host. For an
 // agent it is part of the access-request feature, which each project
-// turns on (off by default): with it off nothing changes. With it on, the
-// call runs at once when the person the agent works for may configure the
-// instance; otherwise it needs an approval (or a rule) from someone who
-// may.
+// turns on (off by default): with it off nothing changes. With it on, an
+// agent's override always waits for a card that someone who may configure
+// the instance approves (or a rule they wrote).
 
 // ConfigOverrideParam is the reserved parameter an access request carries
 // the override in, so the card shows it and the approval covers it.
@@ -218,7 +217,7 @@ func (s *Service) configOffReasonFor(c entity.Connector, op connector.Operation,
 	field, values := configOffNeed(op)
 	if on && contains(s.OverridableCandidates(c.Key), field) {
 		first, _, _ := strings.Cut(values, "|")
-		return fmt.Sprintf("turned off by this connector's config (needs %s = %s); it can be overridden for one call: add %s {%q: %q} to the params. It runs at once when the person you work for may configure this connector; otherwise ask with wick_request_access (same params) and someone who may configure it approves", field, values, ConfigOverrideParam, field, first)
+		return fmt.Sprintf("turned off by this connector's config (needs %s = %s); it can be overridden for one call: ask with wick_request_access, adding %s {%q: %q} to the action's params; someone who may configure this connector approves it on the card", field, values, ConfigOverrideParam, field, first)
 	}
 	return ConfigOffReason(op)
 }

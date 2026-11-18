@@ -103,9 +103,9 @@ func (openScope) AllowConnector(string) bool        { return true }
 func (openScope) AllowAccount(string, string) bool  { return true }
 func (openScope) AllowOp(string, string, bool) bool { return true }
 
-// An agent working for someone who may configure the instance runs the
-// override at once; for anyone else it needs approval.
-func TestAgentOverrideNeedsApprovalOnlyForNonConfigurers(t *testing.T) {
+// An agent's override always needs approval, even when it works for an
+// admin: nobody is surprised by a write they did not approve.
+func TestAgentOverrideAlwaysNeedsApproval(t *testing.T) {
 	bg := context.Background()
 	svc, id := newSvcWithModule(t, nil, overrideModule())
 	svc.SetIdentityLookup(func(_ context.Context, uid string) (*entity.User, []string, error) {
@@ -129,8 +129,8 @@ func TestAgentOverrideNeedsApprovalOnlyForNonConfigurers(t *testing.T) {
 		UserID: "admin-1", IsAdmin: true, SessionID: "sess-1"}); err == nil || !strings.Contains(err.Error(), "config_override") {
 		t.Fatalf("with access requests on, the reason must offer the override: %v", err)
 	}
-	if err := run("admin-1", true); err != nil {
-		t.Fatalf("configurer's agent was stopped: %v", err)
+	if err := run("admin-1", true); err == nil || !strings.Contains(err.Error(), "needs approval") {
+		t.Fatalf("an admin's agent override ran without approval: %v", err)
 	}
 	if err := run("user-1", false); err == nil || !strings.Contains(err.Error(), "needs approval") {
 		t.Fatalf("non-configurer's agent override = %v", err)
