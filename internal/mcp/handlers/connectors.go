@@ -428,7 +428,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		}
 		return FormatToolID(row.ID, opKey)
 	}
-	off := svc.ConfigOffOps(r.Context(), row.ID, row.Key)
+	off := svc.ConfigOffOps(r.Context(), row.ID, row.Key, SessionOf(r))
 	detail, err := buildConnectorDetail(mod, row.ID, row.Label, row.Description, selector, toolIDFor,
 		func(opKey string) bool { return states[opKey] },
 		func(opKey string) string { return off[opKey] })

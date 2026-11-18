@@ -13,6 +13,7 @@ import (
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/channelidentity"
 	"github.com/yogasw/wick/internal/codemode"
@@ -79,6 +80,15 @@ type accessDirectory struct {
 
 // SessionProject names a session's project, for project-scoped rules and
 // the project's request history.
+// AccessRequestsOn reads the project's switch (off when unknown).
+func (d accessDirectory) AccessRequestsOn(projectID string) bool {
+	if projectID == "" {
+		return false
+	}
+	p, err := project.Load(d.layout, projectID)
+	return err == nil && p.Meta.AccessRequests
+}
+
 func (d accessDirectory) SessionProject(sessionID string) string {
 	return auditPlaces{layout: d.layout}.SessionProject(sessionID)
 }
@@ -176,6 +186,9 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 	ar.AddPublisher(agentstool.AccessFilePublisher{Layout: layout, Project: auditPlaces{layout: layout}.SessionProject})
 	go pruneAccessRequests(ar)
 	ar.SetWaker(accessreq.Waker(deliver))
+	// Off unless the session's project turned access requests on.
+	svc.SetAccessGate(ar.Enabled)
+	mcphandlers.AccessRequestsOn = ar.Enabled
 	svc.SetAccessCheck(func(ctx context.Context, q connectors.AccessQuery) (string, string, error) {
 		return ar.Check(ctx, accessreq.Action{
 			SessionID: q.SessionID, AgentID: q.AgentID, ConnectorID: q.ConnectorID, ConnectorKey: q.ConnectorKey,

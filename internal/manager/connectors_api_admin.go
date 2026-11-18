@@ -155,37 +155,6 @@ func (h *Handler) apiSetConnectorSessionConfig(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]bool{"allow_session_config": body.AllowSessionConfig})
 }
 
-// apiSetConnectorConfigOverride serves
-// POST /manager/api/connectors/{key}/{id}/config-override: the config keys
-// one call may set differently (none by default). Same gate as the access
-// policy (admin or the instance owner). Body: {"keys":["mode"]}.
-func (h *Handler) apiSetConnectorConfigOverride(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	row, errResp, ok := h.loadVisibleRow(r, user)
-	if !ok {
-		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
-		return
-	}
-	if !h.canManageAccessPolicy(user, row) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin or owner only"})
-		return
-	}
-	var body struct {
-		Keys []string `json:"keys"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
-		return
-	}
-	keys, err := h.connectors.SetOverridableConfig(ctx, row.ID, body.Keys)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"overridable_config": nonNilStrings(keys)})
-}
-
 // apiSetConnectorSharedCredential serves
 // POST /manager/api/connectors/{key}/{id}/shared-credential. Admin or the
 // instance owner (the access-policy gate), OAuth connectors only. Body:

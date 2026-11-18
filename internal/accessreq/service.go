@@ -97,6 +97,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	if strings.TrimSpace(in.SessionID) == "" {
 		return View{}, errors.New("an access request needs a session: call it from an agent session")
 	}
+	if !s.Enabled(in.SessionID) {
+		return View{}, ErrOff
+	}
 	if len(in.Actions) == 0 {
 		return View{}, errors.New("actions is empty: list at least one {tool_id, params}")
 	}
@@ -219,6 +222,28 @@ func (s *Service) sessionProject(sessionID string) string {
 	}
 	return ""
 }
+
+// ProjectSwitches is the optional part of a Directory that says whether
+// a project turned access requests on. Off (the default) means none of
+// this runs for its sessions: no cards, no rules, no grants, no
+// overrides — a refused op stays refused as it always was.
+type ProjectSwitches interface {
+	AccessRequestsOn(projectID string) bool
+}
+
+// Enabled reports whether access requests are on for a session.
+// A Directory that cannot tell leaves them on (tests, simple setups).
+func (s *Service) Enabled(sessionID string) bool {
+	sw, ok := s.dir.(ProjectSwitches)
+	if !ok {
+		return true
+	}
+	pid := s.sessionProject(sessionID)
+	return pid != "" && sw.AccessRequestsOn(pid)
+}
+
+// ErrOff refuses a request in a project that did not turn them on.
+var ErrOff = errors.New("access requests are off for this session's project; the project's owner can turn them on in the project settings (Access requests). Until then, an action outside your access cannot be requested")
 
 func (s *Service) owners(ctx context.Context, sessionID, agentID string) (sessionOwner, agentOwner string) {
 	if s.dir == nil {
@@ -743,6 +768,9 @@ func (s *Service) List(ctx context.Context, status string, limit int) ([]View, e
 // (a standing grant's approver, or an auto_approve rule's owner), or an
 // error when a deny rule matches. ("", "", nil) leaves the refusal as is.
 func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err error) {
+	if !s.Enabled(a.SessionID) {
+		return "", "", nil
+	}
 	if a.AgentName == "" && a.AgentID != "" && s.dir != nil {
 		a.AgentName = s.dir.AgentName(ctx, a.AgentID)
 	}

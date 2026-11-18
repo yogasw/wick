@@ -11,6 +11,7 @@ import (
 
 	"github.com/yogasw/wick/internal/accessreq"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -37,6 +38,7 @@ func registerAccessRoutes(r tool.Router) {
 	r.POST("/api/projects/{id}/access/rules/{rid}/delete", projectOwnerMW(projectAccessRuleDelete))
 	r.POST("/api/projects/{id}/access/simulate", projectOwnerMW(projectAccessSimulate))
 	r.POST("/api/projects/{id}/access/grants/{gid}/revoke", projectOwnerMW(projectAccessGrantRevoke))
+	r.POST("/api/projects/{id}/access/enabled", projectOwnerMW(projectAccessSetEnabled))
 }
 
 func accessUser(c *tool.Ctx) *entity.User {
@@ -294,7 +296,12 @@ func projectAccessJSON(c *tool.Ctx) {
 			"session_id": g.ScopeID, "approver": globalAccess.PersonName(c.Context(), g.ApproverID), "created_at": g.CreatedAt,
 		})
 	}
+	enabled := false
+	if p, err := project.Load(globalLayout, c.PathValue("id")); err == nil {
+		enabled = p.Meta.AccessRequests
+	}
 	c.JSON(http.StatusOK, map[string]any{
+		"enabled":  enabled,
 		"requests": reqs, "rules": rules, "grants": grants, "fact_names": pv.FactNames,
 		"rule_example": accessRuleExample, "script_examples": accessScriptExamples,
 	})
@@ -399,4 +406,34 @@ func projectAccessGrantRevoke(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]bool{"ok": true})
+}
+
+// projectAccessSetEnabled turns access requests on or off for a project.
+// Off: its sessions behave as before access requests existed.
+func projectAccessSetEnabled(c *tool.Ctx) {
+	if !accessSameOrigin(c) {
+		return
+	}
+	if accessUser(c) == nil {
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	id := c.PathValue("id")
+	p, err := project.Load(globalLayout, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	p.Meta.AccessRequests = body.Enabled
+	if err := project.SaveMeta(globalLayout, id, p.Meta); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]bool{"enabled": body.Enabled})
 }

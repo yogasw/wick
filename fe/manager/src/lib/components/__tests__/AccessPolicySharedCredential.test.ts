@@ -14,7 +14,7 @@ function detail(oauth: Partial<NonNullable<ConnectorDetail["oauth"]>> = {}): Con
     fields: [], operations: [], categories: [], accounts: [],
     oauth: { display_name: "Acme", start_url: "", shared_credential: false, ...oauth },
     enable_sso: true, multi_account: true, allow_others_connect_sso: false, allow_others_configure: false,
-    allow_others_see_accounts: false, session_config_capable: false, session_config_allowed: false, overridable_config: [], overridable_candidates: [],
+    allow_others_see_accounts: false, session_config_capable: false, session_config_allowed: false,
   };
 }
 

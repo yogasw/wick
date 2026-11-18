@@ -70,7 +70,9 @@ type runAsIdentity struct {
 // the connector on their own: a grant never outlives its approver's
 // access.
 func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) (*runAsIdentity, error) {
-	if s.accessCheck == nil || s.identity == nil || noAccessCheck(ctx) {
+	// Off for this session's project: nothing is asked, the refusal stands
+	// exactly as before access requests existed.
+	if s.accessCheck == nil || s.identity == nil || noAccessCheck(ctx) || !s.accessOn(p.SessionID) {
 		return nil, nil
 	}
 	virtual := p.SessionInstance != nil
@@ -159,7 +161,7 @@ func (s *Service) DescribeOpWith(ctx context.Context, connectorID, opKey string,
 			// unless the override switches it on.
 			if states, err := s.OperationStatesFull(ctx, connectorID, c.Key); err == nil {
 				if st, ok := states[opKey]; ok && st.HiddenByConfig && !overrideOpens(mod, s.LoadConfigs(*c), override, op) {
-					return OpInfo{}, fmt.Errorf("operation %q is %s", opKey, s.configOffReasonFor(*c, op))
+					return OpInfo{}, fmt.Errorf("operation %q is %s", opKey, s.configOffReasonFor(*c, op, true))
 				}
 			}
 			return OpInfo{ConnectorKey: c.Key, ConnectorLabel: c.Label, OpName: op.Name, Destructive: op.Destructive}, nil
@@ -219,7 +221,7 @@ func (s *Service) CanRunOwnWith(ctx context.Context, userID, connectorID, opKey 
 							if overrideOpens(mod, s.LoadConfigs(*c), override, op) {
 								break
 							}
-							return false, "this operation is " + s.configOffReasonFor(*c, op)
+							return false, "this operation is " + s.configOffReasonFor(*c, op, true)
 						}
 					}
 				} else {

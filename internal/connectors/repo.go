@@ -308,15 +308,6 @@ func (r *Repo) SetSessionConfigAllowed(ctx context.Context, id string, allowed b
 		}).Error
 }
 
-// SetOverridableConfig saves the instance's per-call overridable keys.
-func (r *Repo) SetOverridableConfig(ctx context.Context, id, keys string) error {
-	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
-		Updates(map[string]any{
-			"overridable_config": keys,
-			"updated_at":         time.Now(),
-		}).Error
-}
-
 // SharedCredentialPolicy returns the stored "allow shared instance
 // credential" answer for one instance, or nil when none was ever saved (the
 // caller then applies the default).

@@ -61,6 +61,10 @@
     }
   }
 
+  async function setEnabled(on: boolean) {
+    await act("enabled", { enabled: on }, on ? "Access requests are on for this project." : "Access requests are off for this project.");
+  }
+
   async function simulate() {
     busy = true;
     error = "";
@@ -103,6 +107,18 @@
   {#if !data && !error}
     <p class={"mt-2 " + muted}>Loading…</p>
   {:else if data}
+    <label class="mt-3 flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="project-access-enabled">
+      <span class="min-w-0 flex-1">
+        <span class="block text-sm font-medium text-black-900 dark:text-white-100">Turn on access requests</span>
+        <span class={"block " + muted}>
+          Off (default): nothing changes, an action outside an agent's access is simply refused. On: agents can ask
+          for approval on a card, the rules below apply, and an op that is off by config can run once with a
+          config override.
+        </span>
+      </span>
+      <input type="checkbox" class="h-5 w-9 accent-green-500" checked={data.enabled} disabled={busy}
+        onchange={(e) => setEnabled((e.currentTarget as HTMLInputElement).checked)} aria-label="Turn on access requests" />
+    </label>
     <h3 class={h}>Requests</h3>
     {#if data.requests.length === 0}
       <p class={muted}>No requests yet.</p>

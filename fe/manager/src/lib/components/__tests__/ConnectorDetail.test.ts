@@ -39,8 +39,6 @@ function makeData(over: Partial<DetailType> = {}): DetailType {
     allow_others_see_accounts: false,
     session_config_capable: false,
     session_config_allowed: false,
-    overridable_config: [],
-    overridable_candidates: [],
     ...over,
   };
 }

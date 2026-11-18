@@ -201,11 +201,6 @@ export async function setConnectorAccessPolicy(
   await apiPost(`${rowBase(key, id)}/access-policy`, policy);
 }
 
-export async function setConnectorConfigOverride(key: string, id: string, keys: string[]): Promise<string[]> {
-  const r = await apiPost<{ overridable_config: string[] }>(`${rowBase(key, id)}/config-override`, { keys });
-  return r.overridable_config;
-}
-
 export async function setConnectorSessionConfig(
   key: string,
   id: string,

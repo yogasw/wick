@@ -545,3 +545,30 @@ func TestGrantNeverCoversAnOverride(t *testing.T) {
 		t.Fatalf("grant covered a call with an override: %q", runAs)
 	}
 }
+
+type switchDir struct {
+	fakeDir
+	on map[string]bool
+}
+
+func (d switchDir) AccessRequestsOn(pid string) bool { return d.on[pid] }
+
+func TestProjectSwitchOffChangesNothing(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	saveRule(t, e, "owner-a", stagingAuto)
+	e.svc.dir = switchDir{fakeDir: e.svc.dir.(fakeDir), on: map[string]bool{"proj-2": true}}
+	// sess-1 is in proj-1, which is off: no request, and no rule applies.
+	if _, err := e.svc.Create(ctx, CreateInput{SessionID: "sess-1", Actions: []ActionInput{act("c-notes", "update_page", nil)}}); !errors.Is(err, ErrOff) {
+		t.Fatalf("create in an off project = %v", err)
+	}
+	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
+		Params: map[string]string{"app_code": "acme-stag"}}
+	if runAs, _, err := e.svc.Check(ctx, a); runAs != "" || err != nil {
+		t.Fatalf("check in an off project = %q %v", runAs, err)
+	}
+	e.svc.dir = switchDir{fakeDir: e.svc.dir.(switchDir).fakeDir, on: map[string]bool{"proj-1": true}}
+	if !e.svc.Enabled("sess-1") || e.svc.Enabled("sess-h") {
+		t.Fatal("switch not per project")
+	}
+}

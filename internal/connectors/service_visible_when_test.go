@@ -184,14 +184,14 @@ func TestSessionLockedFieldKeepsDefault(t *testing.T) {
 func TestConfigOffOps(t *testing.T) {
 	ctx := context.Background()
 	svc, id := newSvcWithModule(t, nil, visibleWhenModule())
-	off := svc.ConfigOffOps(ctx, id, "vwstub")
+	off := svc.ConfigOffOps(ctx, id, "vwstub", "")
 	if len(off) != 1 || !strings.Contains(off["pdf"], "needs browser = moli") {
 		t.Fatalf("want pdf listed as config-off, got %v", off)
 	}
 	if err := svc.Update(ctx, id, "VW", map[string]string{"browser": "moli"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if off := svc.ConfigOffOps(ctx, id, "vwstub"); len(off) != 0 {
+	if off := svc.ConfigOffOps(ctx, id, "vwstub", ""); len(off) != 0 {
 		t.Fatalf("browser=moli: want none off, got %v", off)
 	}
 }

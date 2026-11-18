@@ -132,6 +132,10 @@ type Service struct {
 	// for who may approve a config override — see SetOwnerCheck.
 	ownerCheck OwnerCheck
 
+	// accessGate tells whether a session's project turned access
+	// requests on — see SetAccessGate. nil = off everywhere.
+	accessGate AccessGate
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
@@ -1789,7 +1793,7 @@ func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, ful
 // VisibleWhen is not met) to the reason, limited to ops that would
 // otherwise be live for the caller. wick_get lists them as unavailable so
 // the agent knows they exist and why it cannot call them.
-func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map[string]string {
+func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key, sessionID string) map[string]string {
 	full, err := s.OperationStatesFull(ctx, connectorID, key)
 	if err != nil {
 		return nil
@@ -1810,7 +1814,7 @@ func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map
 			out = map[string]string{}
 		}
 		if rowErr == nil {
-			out[op.Key] = s.configOffReasonFor(*row, op)
+			out[op.Key] = s.configOffReasonFor(*row, op, s.accessOn(sessionID))
 		} else {
 			out[op.Key] = ConfigOffReason(op)
 		}
@@ -2408,6 +2412,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if virtual {
 			return nil, fmt.Errorf("a session connector takes no %s: set its config with wick_session_workspace action=set_config instead", ConfigOverrideParam)
 		}
+		if AgentScopeFrom(ctx) != nil && !s.accessOn(p.SessionID) {
+			return nil, fmt.Errorf("%s is part of access requests, which are off for this session's project (its owner can turn them on in the project settings, Access requests)", ConfigOverrideParam)
+		}
 		if err := s.checkOverride(mod, *c, p.ConfigOverride); err != nil {
 			return nil, err
 		}
@@ -2438,7 +2445,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, err
 			}
 			if who == nil {
-				return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance %s", op.Key, c.Key, accessRequestHint)
+				return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance%s", op.Key, c.Key, s.requestHint(p.SessionID))
 			}
 		}
 	}
@@ -2474,7 +2481,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, err
 			}
 			if who == nil {
-				return nil, fmt.Errorf("%w %s", refusal, accessRequestHint)
+				return nil, fmt.Errorf("%w%s", refusal, s.requestHint(p.SessionID))
 			}
 			if len(p.ConfigOverride) > 0 && !s.CanConfigure(ctx, who.user.ID, c.ID) {
 				return nil, fmt.Errorf("operation %q: the person who approved it may not configure connector %q, so its %s cannot run as them", op.Key, c.Label, ConfigOverrideParam)
@@ -2577,7 +2584,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if virtual {
 			return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReasonSession(*op, p.ConnectorID, p.SessionInstance.LockSeals))
 		}
-		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, s.configOffReasonFor(*c, *op))
+		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, s.configOffReasonFor(*c, *op, s.accessOn(p.SessionID)))
 	}
 
 	// Inject the selected account's token. Ownership and per-account op

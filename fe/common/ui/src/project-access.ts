@@ -44,6 +44,7 @@ export interface AccessGrantRow {
 }
 
 export interface ProjectAccess {
+  enabled: boolean;
   requests: AccessRequestRow[];
   rules: AccessRuleRow[];
   grants: AccessGrantRow[];

@@ -62,8 +62,6 @@ beforeEach(() => {
     allow_others_see_accounts: false,
     session_config_capable: false,
     session_config_allowed: false,
-    overridable_config: [],
-    overridable_candidates: [],
   });
   vi.mocked(api.getTestMeta).mockResolvedValue({
     key: "google_workspace",

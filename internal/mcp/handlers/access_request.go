@@ -21,6 +21,17 @@ var AccessRequests interface {
 const accessRequestTool = "wick_request_access"
 
 // AccessRequestDescriptor is the wick_request_access descriptor.
+// AccessRequestsOn reports whether a session's project turned access
+// requests on (wired at boot). nil = off everywhere: the tool is not
+// listed and refuses.
+var AccessRequestsOn func(sessionID string) bool
+
+// AccessRequestListed reports whether wick_request_access is shown to a
+// session.
+func AccessRequestListed(sessionID string) bool {
+	return AccessRequestsOn != nil && sessionID != "" && AccessRequestsOn(sessionID)
+}
+
 func AccessRequestDescriptor() ToolDescriptor {
 	return ToolDescriptor{
 		Name: accessRequestTool,
@@ -32,6 +43,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 			"them again. This call returns at once with status pending: say what you asked for and END YOUR TURN; the " +
 			"outcome of every action is delivered to this conversation later. An approval holds for those exact parameters " +
 			"only; changed parameters need a new request. Never ask for something the user did not want done. " +
+			"Works only where the session's project turned access requests on (project settings); elsewhere it refuses and a refused op simply stays refused. " +
 			"action=status reads a request, action=cancel withdraws one.",
 		InputSchema: map[string]any{
 			"type": "object",

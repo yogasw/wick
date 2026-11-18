@@ -650,3 +650,27 @@ func localAdminDispatch(t *testing.T, h *Handler, toolName string, args map[stri
 	msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":%s}`, p)
 	return h.dispatchLine(localAdminCtx(), []byte(msg))
 }
+
+func TestRequestAccessToolOnlyWhereProjectTurnedItOn(t *testing.T) {
+	has := func(tools []handlers.ToolDescriptor) bool {
+		for _, d := range tools {
+			if d.Name == "wick_request_access" {
+				return true
+			}
+		}
+		return false
+	}
+	prev := handlers.AccessRequestsOn
+	t.Cleanup(func() { handlers.AccessRequestsOn = prev })
+	handlers.AccessRequestsOn = nil
+	if has(accessRequestTools(handlers.MetaToolDescriptors(), "sess-1")) {
+		t.Fatal("listed with no switch wired")
+	}
+	handlers.AccessRequestsOn = func(sid string) bool { return sid == "sess-on" }
+	if has(accessRequestTools(handlers.MetaToolDescriptors(), "sess-off")) {
+		t.Fatal("listed for a project that is off")
+	}
+	if !has(accessRequestTools(handlers.MetaToolDescriptors(), "sess-on")) {
+		t.Fatal("missing for a project that is on")
+	}
+}

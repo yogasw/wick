@@ -2779,7 +2779,7 @@ func NewServer() *Server {
 		// bearer to carry, so the principal is resolved here and passed
 		// directly. Ownerless session → zero identity → synthetic admin.
 		id := agentToolIdentity(ctx, agentsMgr, authSvc, scope.SessionID)
-		descs := mcpHandler.AgentToolDescriptorsAs(ctx, id)
+		descs := mcpHandler.AgentToolDescriptorsAs(mcphandlers.WithSessionID(ctx, scope.SessionID), id)
 		out := make([]wickprovider.ExternalTool, 0, len(descs))
 		for _, d := range descs {
 			name := d.Name

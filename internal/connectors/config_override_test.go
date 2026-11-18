@@ -45,18 +45,8 @@ func TestConfigOverridePerCall(t *testing.T) {
 			UserID: user, IsAdmin: admin, ConfigOverride: ov})
 		return err
 	}
-	// Nothing listed: refused, and the reason does not offer an override.
-	if err := run("admin-1", true, map[string]string{"mode": "write"}); err == nil || !strings.Contains(err.Error(), "does not allow a config override") {
-		t.Fatalf("unlisted override = %v", err)
-	}
-	if _, err := svc.SetOverridableConfig(ctx, id, []string{"host"}); err == nil {
-		t.Fatal("a free-text key was accepted as overridable")
-	}
-	if _, err := svc.SetOverridableConfig(ctx, id, []string{"mode"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := run("admin-1", true, nil); err == nil || !strings.Contains(err.Error(), "config_override") {
-		t.Fatalf("config-off reason must point at the override: %v", err)
+	if err := run("admin-1", true, nil); err == nil || strings.Contains(err.Error(), "config_override") {
+		t.Fatalf("outside access requests the reason must not offer an override: %v", err)
 	}
 	if err := run("admin-1", true, map[string]string{"mode": "delete"}); err == nil || !strings.Contains(err.Error(), "takes one of") {
 		t.Fatalf("value outside the choices = %v", err)
@@ -124,14 +114,20 @@ func TestAgentOverrideNeedsApprovalOnlyForNonConfigurers(t *testing.T) {
 		}
 		return &entity.User{ID: uid}, nil, nil
 	})
-	if _, err := svc.SetOverridableConfig(bg, id, []string{"mode"}); err != nil {
-		t.Fatal(err)
-	}
 	ctx := WithAgentScope(bg, openScope{})
 	run := func(user string, admin bool) error {
 		_, err := svc.Execute(ctx, ExecuteParams{ConnectorID: id, OperationKey: "write", Source: entity.ConnectorRunSourceMCP,
-			UserID: user, IsAdmin: admin, ConfigOverride: map[string]string{"mode": "write"}})
+			UserID: user, IsAdmin: admin, SessionID: "sess-1", ConfigOverride: map[string]string{"mode": "write"}})
 		return err
+	}
+	// The project has access requests off: no override, whoever asks.
+	if err := run("admin-1", true); err == nil || !strings.Contains(err.Error(), "off for this session's project") {
+		t.Fatalf("override with access requests off = %v", err)
+	}
+	svc.SetAccessGate(func(sid string) bool { return sid == "sess-1" })
+	if _, err := svc.Execute(ctx, ExecuteParams{ConnectorID: id, OperationKey: "write", Source: entity.ConnectorRunSourceMCP,
+		UserID: "admin-1", IsAdmin: true, SessionID: "sess-1"}); err == nil || !strings.Contains(err.Error(), "config_override") {
+		t.Fatalf("with access requests on, the reason must offer the override: %v", err)
 	}
 	if err := run("admin-1", true); err != nil {
 		t.Fatalf("configurer's agent was stopped: %v", err)

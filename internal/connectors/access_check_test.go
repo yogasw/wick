@@ -42,6 +42,17 @@ func TestAccessCheckOverridesRefusal(t *testing.T) {
 		})
 	}
 
+	t.Run("project has access requests off: refused as before, nothing asked", func(t *testing.T) {
+		asked := false
+		svc.SetAccessCheck(func(context.Context, AccessQuery) (string, string, error) { asked = true; return "u-approver", "", nil })
+		_, err := exec()
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "wick_request_access")
+		assert.False(t, asked, "the access check ran for a project with access requests off")
+		svc.SetAccessCheck(nil)
+	})
+	svc.SetAccessGate(func(string) bool { return true })
+
 	t.Run("no check: refused with the way forward", func(t *testing.T) {
 		_, err := exec()
 		require.Error(t, err)

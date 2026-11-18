@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -13,13 +12,14 @@ import (
 
 // Per-call config override: a saved connector keeps its config, but one
 // call may run with a few keys set differently (e.g. mode = write for a
-// single resolve). The instance's admin or owner lists which keys may be
-// overridden (none by default). Only choice fields qualify (a dropdown or
-// a yes/no): their values are fixed by the connector, so an override can
-// never point the instance's credentials at another host. An agent's
-// call with an override runs at once when the person it works for may
-// configure the instance; otherwise it needs an approval (or a rule) from
-// someone who may.
+// single resolve). Only choice fields qualify (a dropdown or a yes/no that
+// is not secret): their values are fixed by the connector, so an override
+// can never point the instance's credentials at another host. For an
+// agent it is part of the access-request feature, which each project
+// turns on (off by default): with it off nothing changes. With it on, the
+// call runs at once when the person the agent works for may configure the
+// instance; otherwise it needs an approval (or a rule) from someone who
+// may.
 
 // ConfigOverrideParam is the reserved parameter an access request carries
 // the override in, so the card shows it and the approval covers it.
@@ -61,68 +61,37 @@ func (s *Service) OverridableCandidates(key string) []string {
 	return out
 }
 
-// OverridableKeys is the instance's allowed list, minus anything that no
-// longer qualifies.
-func (s *Service) OverridableKeys(c entity.Connector) []string {
-	if strings.TrimSpace(c.OverridableConfig) == "" {
-		return nil
-	}
-	ok := map[string]bool{}
-	for _, k := range s.OverridableCandidates(c.Key) {
-		ok[k] = true
-	}
-	var out []string
-	for _, k := range strings.Split(c.OverridableConfig, ",") {
-		if k = strings.TrimSpace(k); ok[k] && !contains(out, k) {
-			out = append(out, k)
-		}
-	}
-	return out
+// AccessGate reports whether the access-request feature is on for a
+// session (its project turned it on).
+type AccessGate func(sessionID string) bool
+
+// SetAccessGate wires the per-project switch. Set once at boot; nil
+// means off everywhere.
+func (s *Service) SetAccessGate(f AccessGate) { s.accessGate = f }
+
+// accessOn reports whether access requests (cards, rules, overrides) are
+// on for this call's session.
+func (s *Service) accessOn(sessionID string) bool {
+	return sessionID != "" && s.accessGate != nil && s.accessGate(sessionID)
 }
 
-// SetOverridableConfig saves the keys one instance lets callers override
-// per call. Unknown or ineligible keys are refused.
-func (s *Service) SetOverridableConfig(ctx context.Context, id string, keys []string) ([]string, error) {
-	c, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("connector %q not found", id)
-	}
-	allowed := map[string]bool{}
-	for _, k := range s.OverridableCandidates(c.Key) {
-		allowed[k] = true
-	}
-	var out []string
-	for _, k := range keys {
-		k = strings.TrimSpace(k)
-		if k == "" || contains(out, k) {
-			continue
-		}
-		if !allowed[k] {
-			return nil, fmt.Errorf("config %q cannot be overridden per call (only choice fields that are not secret)", k)
-		}
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out, s.repo.SetOverridableConfig(ctx, id, strings.Join(out, ","))
-}
-
-// checkOverride validates an override against the instance: every key
-// listed as overridable and every value one of the field's choices.
+// checkOverride validates an override: every key a choice field that is
+// not secret, every value one of the field's choices.
 func (s *Service) checkOverride(mod connector.Module, c entity.Connector, ov map[string]string) error {
 	if len(ov) == 0 {
 		return nil
 	}
-	allowed := s.OverridableKeys(c)
-	if len(allowed) == 0 {
-		return fmt.Errorf("connector %q does not allow a config override (its admin or owner can list keys under Access policy)", c.Label)
-	}
+	allowed := s.OverridableCandidates(c.Key)
 	fields := map[string]entity.Config{}
 	for _, f := range mod.Configs {
 		fields[f.Key] = f
 	}
 	for k, v := range ov {
 		if !contains(allowed, k) {
-			return fmt.Errorf("config %q cannot be overridden on connector %q (allowed: %s)", k, c.Label, strings.Join(allowed, ", "))
+			if len(allowed) == 0 {
+				return fmt.Errorf("connector %q has no config that can be overridden per call", c.Label)
+			}
+			return fmt.Errorf("config %q cannot be overridden on connector %q (only: %s)", k, c.Label, strings.Join(allowed, ", "))
 		}
 		f := fields[k]
 		switch f.Type {
@@ -242,13 +211,14 @@ func overrideOpens(mod connector.Module, stored, ov map[string]string, op connec
 	return connector.OpVisible(op, vals)
 }
 
-// configOffReasonFor is ConfigOffReason for one saved instance: when the
-// key the op needs may be overridden, it says how to ask for that.
-func (s *Service) configOffReasonFor(c entity.Connector, op connector.Operation) string {
+// configOffReasonFor is ConfigOffReason for one saved instance: when
+// access requests are on (on) and the key the op needs can be
+// overridden, it says how.
+func (s *Service) configOffReasonFor(c entity.Connector, op connector.Operation, on bool) string {
 	field, values := configOffNeed(op)
-	if contains(s.OverridableKeys(c), field) {
+	if on && contains(s.OverridableCandidates(c.Key), field) {
 		first, _, _ := strings.Cut(values, "|")
-		return fmt.Sprintf("turned off by this connector's config (needs %s = %s); this instance allows that key to be overridden for one call: add %s {%q: %q} to the params. It runs at once when the person you work for may configure this connector; otherwise ask with wick_request_access (same params) and someone who may configure it approves", field, values, ConfigOverrideParam, field, first)
+		return fmt.Sprintf("turned off by this connector's config (needs %s = %s); it can be overridden for one call: add %s {%q: %q} to the params. It runs at once when the person you work for may configure this connector; otherwise ask with wick_request_access (same params) and someone who may configure it approves", field, values, ConfigOverrideParam, field, first)
 	}
 	return ConfigOffReason(op)
 }
@@ -260,4 +230,13 @@ func contains(list []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// requestHint ends a refusal with the way forward, only where access
+// requests are on: elsewhere a refusal reads as it always did.
+func (s *Service) requestHint(sessionID string) string {
+	if s.accessOn(sessionID) {
+		return " " + accessRequestHint
+	}
+	return ""
 }
