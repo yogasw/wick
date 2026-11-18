@@ -83,7 +83,14 @@ func (s *Channel) PublishAccessRequest(ctx context.Context, v accessreq.View) (m
 	if threadTS != "" {
 		opts = append(opts, slackgo.MsgOptionTS(threadTS))
 	}
-	_, ts, err := api.PostMessageContext(ctx, chatID, opts...)
+	// Post as the thread's agent (its name and avatar), like its replies;
+	// without chat:write.customize fall back to the bot.
+	extra := s.personaOpts(threadTS)
+	_, ts, err := api.PostMessageContext(ctx, chatID, append(opts, extra...)...)
+	if err != nil && len(extra) > 0 && isCustomizeDenied(err) {
+		s.customizeDenied.Store(true)
+		_, ts, err = api.PostMessageContext(ctx, chatID, opts...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("post access request card: %w", err)
 	}

@@ -493,6 +493,9 @@ func (s *Service) Decide(ctx context.Context, id, viewerID string, ds []Decision
 	}
 	decidedAny := len(run) > 0 || denied > 0
 	if len(run) > 0 {
+		// Show the decision at once (🔄 running) so the card does not look
+		// stuck while the actions run; execute publishes again when done.
+		s.publish(context.WithoutCancel(ctx), req.ID)
 		s.execute(*req, run, func(entity.AccessRequestItem) string { return viewerID }, viewerID)
 	} else if decidedAny {
 		s.afterChange(context.WithoutCancel(ctx), req.ID, true)

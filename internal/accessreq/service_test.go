@@ -429,3 +429,31 @@ func TestTargetKey(t *testing.T) {
 		t.Fatalf("no target must bind every param: %q %q", n1, n2)
 	}
 }
+
+type recPub struct {
+	mu       sync.Mutex
+	statuses []string
+}
+
+func (p *recPub) Publish(_ context.Context, v View) (map[string]string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(v.Items) > 0 {
+		p.statuses = append(p.statuses, v.Items[0].Status)
+	}
+	return nil, nil
+}
+
+func TestDecideShowsRunningBeforeResult(t *testing.T) {
+	e := newEnv(t)
+	pub := &recPub{}
+	e.svc.AddPublisher(pub)
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	pub.statuses = nil
+	if _, _, err := e.svc.Decide(context.Background(), v.ID, "owner-a", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.statuses) < 2 || pub.statuses[0] != ItemRunning || pub.statuses[len(pub.statuses)-1] != ItemOK {
+		t.Fatalf("card states = %v, want running first and ok last", pub.statuses)
+	}
+}
