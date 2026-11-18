@@ -133,6 +133,13 @@ func (s *Service) DescribeOp(ctx context.Context, connectorID, opKey string) (Op
 			if op.ConfigOnly {
 				return OpInfo{}, fmt.Errorf("operation %q is a config helper, not an action", opKey)
 			}
+			// An op the instance's own config switches off cannot run for
+			// anyone, so asking for it would only fail after an approval.
+			if states, err := s.OperationStatesFull(ctx, connectorID, c.Key); err == nil {
+				if st, ok := states[opKey]; ok && st.HiddenByConfig {
+					return OpInfo{}, fmt.Errorf("operation %q is %s", opKey, ConfigOffReason(op))
+				}
+			}
 			return OpInfo{ConnectorKey: c.Key, ConnectorLabel: c.Label, OpName: op.Name, Destructive: op.Destructive}, nil
 		}
 	}
@@ -164,6 +171,16 @@ func (s *Service) CanRunOwn(ctx context.Context, userID, connectorID, opKey stri
 		if st, ok := states[opKey]; ok {
 			if !st.Enabled {
 				return false, "this operation is switched off on the connector"
+			}
+			if st.HiddenByConfig {
+				if mod, ok := s.Module(c.Key); ok {
+					for _, op := range mod.AllOps() {
+						if op.Key == opKey {
+							return false, "this operation is " + ConfigOffReason(op)
+						}
+					}
+				}
+				return false, "this operation is turned off by this connector's config"
 			}
 			if st.AdminOnly && !u.IsAdmin() {
 				return false, "this operation is restricted to admins"

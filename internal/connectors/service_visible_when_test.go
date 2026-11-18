@@ -234,3 +234,26 @@ func TestSessionLockedSealedValue(t *testing.T) {
 		t.Fatal("a seal for another value must not apply")
 	}
 }
+
+func TestAccessRequestRefusesConfigOffOp(t *testing.T) {
+	ctx := context.Background()
+	svc, id := newSvcWithModule(t, nil, visibleWhenModule())
+	if _, err := svc.DescribeOp(ctx, id, "pdf"); err == nil || !strings.Contains(err.Error(), "needs browser = moli") {
+		t.Fatalf("describe of a config-off op = %v, want the config reason", err)
+	}
+	if _, err := svc.DescribeOp(ctx, id, "open"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	svc.SetIdentityLookup(func(_ context.Context, uid string) (*entity.User, []string, error) {
+		return &entity.User{ID: uid, Role: entity.RoleAdmin}, nil, nil
+	})
+	if ok, why := svc.CanRunOwn(ctx, "admin-1", id, "pdf"); ok || !strings.Contains(why, "needs browser = moli") {
+		t.Fatalf("approver of a config-off op = %v %q", ok, why)
+	}
+	if err := svc.Update(ctx, id, "VW", map[string]string{"browser": "moli"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DescribeOp(ctx, id, "pdf"); err != nil {
+		t.Fatalf("browser=moli: pdf must be requestable: %v", err)
+	}
+}
