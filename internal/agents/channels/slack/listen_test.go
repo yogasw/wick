@@ -147,7 +147,7 @@ func TestListenWaitAskerAddsMore(t *testing.T) {
 		if r[0] != "mau tanya soal template" || r[2] != false {
 			t.Fatalf("dispatched %v", r)
 		}
-		if r[1].(time.Duration) < 1500*time.Millisecond {
+		if r[1].(time.Duration) < 1300*time.Millisecond {
 			t.Fatalf("wait did not restart: waited %v", r[1])
 		}
 	case <-time.After(4 * time.Second):
@@ -208,7 +208,9 @@ func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
 		if r[0] != "kenapa form-nya kosong?" || r[2] != true {
 			t.Fatalf("dispatched %v", r)
 		}
-		if r[1].(time.Duration) < 1500*time.Millisecond {
+		// No restart waits ~1s; a restart at ~0.6s waits ~1.6s. 1.3s
+		// splits the two with room for a loaded host (-race, CI).
+		if r[1].(time.Duration) < 1300*time.Millisecond {
 			t.Fatalf("another reply did not restart the wait: waited %v", r[1])
 		}
 	case <-time.After(4 * time.Second):

@@ -166,6 +166,9 @@ type turn struct {
 	// A later Done with nothing (a queued event's empty result) is not
 	// that person's unanswered turn: no emptyHumanReply then.
 	answered bool
+	// emptyWhy is why the last Done had nothing to post (emptyReason),
+	// logged when the thread settles (armEmptyReply).
+	emptyWhy string
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -3189,9 +3192,10 @@ func (t *turn) closingReply() string {
 // person started it (HumanTurn). Here:
 //   - a person's turn posts its reply, markers stripped, unless that
 //     person asked for no reply and the agent wrote [silent] anywhere;
-//     one that ends with nothing to show posts emptyHumanReply, once,
-//     and only while nothing of the agent reached the thread since
-//     that person's message (answered);
+//     one that ends with nothing to show returns emptyHumanReply (never
+//     posted: the Done keeps the thread working, armEmptyReply), only
+//     while nothing of the agent reached the thread since that
+//     person's message (answered);
 //   - any other turn that wrote [silent] after real text is ambiguous: a
 //     report (not a one-line narration) is held, neither posted nor
 //     lost, and a narration closing on [silent] posts nothing (6a14faef);
@@ -3209,6 +3213,7 @@ func (t *turn) finalReply() (text, held string) {
 		}
 		text := t.replyText()
 		if strings.TrimSpace(stripSilentMarker(text)) == "" && !t.postedTextInThread && !t.quiet && t.running && !t.answered {
+			t.emptyWhy = emptyReason(full, marked)
 			return emptyHumanReply, ""
 		}
 		return text, ""
@@ -3269,22 +3274,40 @@ var threadWriteOp = regexp.MustCompile(`(send_message|update_message|upload_file
 // threadTextOp is the part of threadWriteOp that writes a message, not a file.
 var threadTextOp = regexp.MustCompile(`(send_message|update_message|chat\.postMessage|chat\.update)`)
 
-// emptyHumanReply is posted for a person's turn that ended with nothing
-// to show (only [silent], or narration before its last tools) and did not
-// answer through a tool message: they asked, so the thread says something.
-const emptyHumanReply = "The agent stopped without a reply. Please send your message again; details are in the session."
+// emptyHumanReply marks a person's turn that ended with nothing to show
+// (only [silent], or narration before its last tools) and did not answer
+// through a tool message. It is never posted: the thread keeps reading as
+// working for emptyReplyWait, since the real answer often follows (a
+// resumed process closes a queued event's turn first), then the working
+// marks just come off. The session keeps the details.
+const emptyHumanReply = "\x00empty-reply"
 
-// emptyReplyWait is how long a person's turn that ended with nothing
-// waits before emptyHumanReply is posted. 0 posts it at once (tests).
+// emptyReason says, for the log, why a person's turn ended with nothing
+// to post: what the turn's buffer closed on.
+func emptyReason(full string, marked bool) string {
+	switch {
+	case strings.TrimSpace(full) == "":
+		return "no text at all (an empty result, e.g. a queued event's turn)"
+	case marked && strings.TrimSpace(stripSilentMarker(full)) == "":
+		return "only a [silent] marker"
+	case marked:
+		return "[silent] after its text"
+	default:
+		return "text only before its last tool call (narration, not an answer)"
+	}
+}
+
+// emptyReplyWait is how long the thread keeps reading as working after
+// a person's turn ended with nothing (armEmptyReply).
 var emptyReplyWait = 60 * time.Second
 
-// armEmptyReply posts emptyHumanReply for t once emptyReplyWait has
-// passed, unless the agent answered meanwhile (a later turn of the same
-// process, a message tool) or a new message replaced the turn. A turn
-// still running then is waited out again: its own Done may answer.
-// Until then the thread keeps its ⏳; posting the line takes it off.
-func (s *Channel) armEmptyReply(sessionKey string, t *turn) {
-	time.AfterFunc(emptyReplyWait, func() {
+// armEmptyReply settles a person's turn that ended with nothing once
+// emptyReplyWait has passed: the status line and ⏳ come off, nothing is
+// posted. A later answer (a turn of the same process, a message tool) or
+// a new message that took the turn settles it first; a turn still running
+// then is waited out again, since its own Done may answer.
+func (s *Channel) armEmptyReply(sessionKey string, t *turn, wait time.Duration) {
+	time.AfterFunc(wait, func() {
 		s.mu.Lock()
 		if s.turns[sessionKey] != t || t.answered || t.postedTextInThread {
 			s.mu.Unlock()
@@ -3292,14 +3315,16 @@ func (s *Channel) armEmptyReply(sessionKey string, t *turn) {
 		}
 		if t.running {
 			s.mu.Unlock()
-			s.armEmptyReply(sessionKey, t)
+			s.armEmptyReply(sessionKey, t, wait)
 			return
 		}
 		t.answered = true
+		channelID, threadTS, why := t.channelID, t.threadTS, t.emptyWhy
 		s.mu.Unlock()
-		log.Info().Str("channel", "slack").Str("session", sessionKey).
-			Dur("waited", emptyReplyWait).Msg("slack: person's turn ended with no reply; posting the empty-reply line")
-		s.NotifyState(sessionKey, "done", emptyHumanReply)
+		log.Warn().Str("channel", "slack").Str("session", sessionKey).
+			Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+			Dur("waited", wait).Msg("slack: person's turn ended with no reply and nothing followed; nothing posted, working marks cleared")
+		s.setAssistantStatus(channelID, threadTS, "")
 		s.clearWorking(sessionKey)
 	})
 }
@@ -4088,7 +4113,8 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		// process closes a queued event's turn first and the real reply
 		// follows seconds later. Wait before saying "empty", and only if
 		// nothing reached the thread meanwhile (armEmptyReply).
-		deferEmpty := text == emptyHumanReply && emptyReplyWait > 0
+		deferEmpty := text == emptyHumanReply
+		why := t.emptyWhy
 		if deferEmpty {
 			text = ""
 		}
@@ -4107,11 +4133,14 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			// Still reads as working (⏳ and the status line) while the
 			// answer may follow; armEmptyReply settles it either way.
 			keepWorking = true
+			log.Info().Str("channel", "slack").Str("session", sessionKey).
+				Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+				Dur("wait", emptyReplyWait).Msg("slack: person's turn ended with nothing to post; thread stays working while an answer may follow")
 			s.setAssistantStatus(channelID, threadTS, statusLabelThinking)
 			if _, dm := s.dmMain.Load(sessionKey); !dm {
 				s.persistThreadBinding(sessionKey, channelID, threadTS)
 			}
-			s.armEmptyReply(sessionKey, t)
+			s.armEmptyReply(sessionKey, t, emptyReplyWait)
 			return
 		}
 		if held != "" {

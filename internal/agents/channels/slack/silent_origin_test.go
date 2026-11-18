@@ -20,9 +20,6 @@ type silentRun struct {
 // "!failover" a provider failover. It returns what the thread got.
 func playOrigin(t *testing.T, tr turn, parts ...string) silentRun {
 	t.Helper()
-	prevWait := emptyReplyWait
-	emptyReplyWait = 0
-	t.Cleanup(func() { emptyReplyWait = prevWait })
 	f := newFakeSlack(t)
 	tr.channelID, tr.threadTS, tr.running = "C1", "1700000000.000100", true
 	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
@@ -90,8 +87,8 @@ func TestSilentHumanTurnAlwaysPosts(t *testing.T) {
 		}
 	}
 
-	// Nothing left to show once the marker is gone: the person still gets
-	// a line, never silence. Narration between tools is not the answer.
+	// Nothing left to show once the marker is gone: nothing is posted (the
+	// thread keeps working, armEmptyReply). Narration is not the answer.
 	for name, parts := range map[string][]string{
 		"marker only":               {"[silent]"},
 		"empty after tool":          {"", ""},
@@ -99,8 +96,8 @@ func TestSilentHumanTurnAlwaysPosts(t *testing.T) {
 		"after failover, bare mark": {"partial\n", "!failover", "", "[silent]"},
 	} {
 		got := playOrigin(t, humanTurn, parts...)
-		if !strings.Contains(got.posted, emptyHumanReply) || strings.Contains(got.posted, "Account format") || got.held != "" {
-			t.Errorf("%s: posted %q held %q, want the empty-reply line", name, got.posted, got.held)
+		if got.posted != "" || got.held != "" {
+			t.Errorf("%s: posted %q held %q, want nothing", name, got.posted, got.held)
 		}
 	}
 	// A typed turn closing on a tool keeps its last text (as without the
@@ -280,7 +277,7 @@ func TestDirectListenReply(t *testing.T) {
 }
 
 // A direct listen reply tells the agent to answer, never [silent], and
-// then follows a person's rules: an empty answer still posts a line.
+// then follows a person's rules: an empty answer posts nothing.
 func TestDirectListenReplyAnswered(t *testing.T) {
 	note := listenNote(listenTurn{direct: true, waited: 6 * time.Second})
 	if !strings.HasPrefix(note, "[listen mode · direct · held 6s]") || !strings.Contains(note, "never [silent]") {
@@ -290,7 +287,7 @@ func TestDirectListenReplyAnswered(t *testing.T) {
 		t.Fatalf("plain listen note changed: %q", plain)
 	}
 	direct := turn{human: personTurn(true, listenTurn{direct: true})}
-	if got := playOrigin(t, direct, "[silent]"); !strings.Contains(got.posted, emptyHumanReply) {
+	if got := playOrigin(t, direct, "[silent]"); got.posted != "" {
 		t.Fatalf("direct reply closing on [silent]: posted %q", got.posted)
 	}
 	if got := playOrigin(t, direct, "The video is over an hour, the limit; send a title instead."); !strings.Contains(got.posted, "over an hour") {
@@ -336,10 +333,10 @@ func TestEmptyReplyLineOnlyWhenUnanswered(t *testing.T) {
 	}
 }
 
-// An empty Done right after a person's message waits: when the real
-// answer follows (a resumed process closes a queued event's turn first),
-// the empty-reply line is never posted. With nothing following, it is.
-func TestEmptyReplyLineWaitsForLateAnswer(t *testing.T) {
+// An empty Done right after a person's message keeps the thread working
+// and posts nothing: the real answer that follows is posted on its own,
+// and with nothing following the turn just settles, still posting nothing.
+func TestEmptyReplyWaitsAndPostsNothing(t *testing.T) {
 	prevWait := emptyReplyWait
 	emptyReplyWait = 50 * time.Millisecond
 	t.Cleanup(func() { emptyReplyWait = prevWait })
@@ -351,9 +348,6 @@ func TestEmptyReplyLineWaitsForLateAnswer(t *testing.T) {
 	reg := agentchannels.NewRegistry()
 	reg.Add(c, nil)
 	reg.DispatchAgentEvent("slack-t1", done)
-	if got := postedText(f); got != "" {
-		t.Fatalf("posted at once: %q", got)
-	}
 	c.reopenTurn("slack-t1")
 	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Still checking, two more minutes."})
 	reg.DispatchAgentEvent("slack-t1", done)
@@ -369,10 +363,19 @@ func TestEmptyReplyLineWaitsForLateAnswer(t *testing.T) {
 	reg2.Add(c2, nil)
 	reg2.DispatchAgentEvent("slack-t1", done)
 	deadline := time.Now().Add(2 * time.Second)
-	for !strings.Contains(postedText(f2), emptyHumanReply) {
+	for {
+		c2.mu.Lock()
+		settled := tr2.answered
+		c2.mu.Unlock()
+		if settled {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no answer: posted %q", postedText(f2))
+			t.Fatal("empty turn never settled")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if got := postedText(f2); got != "" {
+		t.Fatalf("no answer: posted %q", got)
 	}
 }
