@@ -3272,7 +3272,7 @@ var threadTextOp = regexp.MustCompile(`(send_message|update_message|chat\.postMe
 // emptyHumanReply is posted for a person's turn that ended with nothing
 // to show (only [silent], or narration before its last tools) and did not
 // answer through a tool message: they asked, so the thread says something.
-const emptyHumanReply = "Agent berhenti tanpa balasan. Coba kirim ulang pesannya; detailnya ada di sesi."
+const emptyHumanReply = "The agent stopped without a reply. Please send your message again; details are in the session."
 
 // emptyReplyWait is how long a person's turn that ended with nothing
 // waits before emptyHumanReply is posted. 0 posts it at once (tests).
