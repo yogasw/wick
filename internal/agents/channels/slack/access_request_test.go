@@ -112,3 +112,15 @@ func TestAccessStateParsing(t *testing.T) {
 		t.Errorf("missing = %q", got)
 	}
 }
+
+func TestAccessModalSenderHeader(t *testing.T) {
+	m := withSenderHeader(reviewModal(sampleAccessView(), "x|C1|1.2"), "Helper Bot", "https://example.com/a.png")
+	if _, err := toModalRequest(m); err != nil {
+		t.Fatalf("modal with header: %v", err)
+	}
+	blocks := m["blocks"].([]map[string]any)
+	raw, _ := json.Marshal(blocks[0])
+	if !strings.Contains(string(raw), "Helper Bot") || !strings.Contains(string(raw), "example.com/a.png") {
+		t.Fatalf("first block = %s", raw)
+	}
+}

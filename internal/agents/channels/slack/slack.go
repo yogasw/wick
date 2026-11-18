@@ -343,6 +343,8 @@ type Channel struct {
 	// proved to lack chat:write.customize. See instant.go.
 	personas        sync.Map
 	customizeDenied atomic.Bool
+	// botAvatar caches this bot's own name and avatar (bot user id → [name, icon]).
+	botAvatar sync.Map
 
 	// eventsSeen is event subscription name → last receipt, for the
 	// health matrix's "never received since boot" warning.

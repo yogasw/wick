@@ -485,6 +485,9 @@ func (s *Channel) handleAccessClick(ctx context.Context, cb slackgo.InteractionC
 			view = reviewModal(v, meta)
 		}
 	}
+	if name, icon := s.accessSender(ctx, api, threadOf(cb)); name != "" {
+		view = withSenderHeader(view, name, icon)
+	}
 	req, err := toModalRequest(view)
 	if err != nil {
 		log.Warn().Str("channel", "slack").Err(err).Msg("access request: build modal failed")
@@ -592,4 +595,49 @@ func stateSelected(values map[string]any, blockID, actionID string) string {
 	opt, _ := stateField(values, blockID, actionID)["selected_option"].(map[string]any)
 	v, _ := opt["value"].(string)
 	return v
+}
+
+// accessSender is who the card was posted as in this thread: the thread's
+// agent persona when it has one, else this bot's own profile. Slack draws a
+// modal's header with the APP's icon and no API changes that, so the modal
+// repeats the sender at the top to match the card and the replies.
+func (s *Channel) accessSender(ctx context.Context, api *slackgo.Client, threadTS string) (name, icon string) {
+	if !s.customizeDenied.Load() && threadTS != "" {
+		if p, ok := s.personaFor(s.sessionKey(threadTS)); ok && p.Username != "" {
+			return p.Username, p.IconURL
+		}
+	}
+	s.cfgMu.Lock()
+	botID, botName := s.botUserID, s.botUserName
+	s.cfgMu.Unlock()
+	if botID == "" {
+		return "", ""
+	}
+	if v, ok := s.botAvatar.Load(botID); ok {
+		a := v.([2]string)
+		return a[0], a[1]
+	}
+	name, icon = botName, ""
+	if u, err := api.GetUserInfoContext(ctx, botID); err == nil && u != nil {
+		if u.Profile.DisplayName != "" {
+			name = u.Profile.DisplayName
+		} else if u.RealName != "" {
+			name = u.RealName
+		}
+		icon = u.Profile.Image72
+	}
+	s.botAvatar.Store(botID, [2]string{name, icon})
+	return name, icon
+}
+
+// withSenderHeader puts "<avatar> name" above a modal's blocks.
+func withSenderHeader(view map[string]any, name, icon string) map[string]any {
+	blocks, _ := view["blocks"].([]map[string]any)
+	els := []any{}
+	if icon != "" {
+		els = append(els, map[string]any{"type": "image", "image_url": icon, "alt_text": name})
+	}
+	els = append(els, mrkdwn("*"+escapeMrkdwn(name)+"*"))
+	view["blocks"] = append([]map[string]any{{"type": "context", "elements": els}}, blocks...)
+	return view
 }
