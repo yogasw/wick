@@ -43,6 +43,9 @@ func AccessRequestDescriptor() ToolDescriptor {
 			"them again. This call returns at once with status pending: say what you asked for and END YOUR TURN; the " +
 			"outcome of every action is delivered to this conversation later. An approval holds for those exact parameters " +
 			"only; changed parameters need a new request. Never ask for something the user did not want done. " +
+			"To propose a project's access rule (only when a person asked for it), use tool_id conn:wick-access-rules/save_rule " +
+			"with params {project_id, doc: the rule as YAML, rule_id: to change an existing one, reason}; it is saved only when " +
+			"the project's owner or an admin approves it. " +
 			"Works only where the session's project turned access requests on (project settings); elsewhere it refuses and a refused op simply stays refused. " +
 			"action=status reads a request, action=cancel withdraws one.",
 		InputSchema: map[string]any{

@@ -55,6 +55,9 @@ func (a accessCatalog) sessionTarget(ctx context.Context, connectorID string) (*
 }
 
 func (a accessCatalog) Describe(ctx context.Context, connectorID, opKey string, override map[string]string) (accessreq.ActionMeta, error) {
+	if isRulesAction(connectorID) {
+		return describeRulesAction(opKey)
+	}
 	if t, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
 		if err != nil {
 			return accessreq.ActionMeta{}, err
@@ -75,6 +78,9 @@ func (a accessCatalog) Describe(ctx context.Context, connectorID, opKey string, 
 // Requestable: an agent may only ask for a connector already in its
 // access list; outside an agent, the session's owner must see it.
 func (a accessCatalog) Requestable(ctx context.Context, sessionID, _ string, connectorID string) (bool, string) {
+	if isRulesAction(connectorID) {
+		return true, "" // a proposal: only the project's owner can approve it
+	}
 	if _, isSession, err := a.sessionTarget(accessreq.WithSession(ctx, sessionID), connectorID); isSession {
 		if err != nil {
 			return false, err.Error()
@@ -103,6 +109,11 @@ func (a accessCatalog) Requestable(ctx context.Context, sessionID, _ string, con
 }
 
 func (a accessCatalog) CanRun(ctx context.Context, userID, connectorID, opKey string, override map[string]string) (bool, string) {
+	if isRulesAction(connectorID) {
+		// Which project is in the params, checked again when it runs;
+		// here: someone who owns a project or is an admin.
+		return a.users != nil && userID != "", ""
+	}
 	// A session's own connector runs on its own config for whoever may
 	// approve in that session (the request's roles already decide who).
 	if _, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
@@ -115,6 +126,9 @@ func (a accessCatalog) CanRun(ctx context.Context, userID, connectorID, opKey st
 }
 
 func (a accessCatalog) Run(ctx context.Context, userID, connectorID, opKey, accountID string, params map[string]any) (string, string, error) {
+	if isRulesAction(connectorID) {
+		return a.runRulesAction(ctx, userID, opKey, params)
+	}
 	if t, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
 		if err != nil {
 			return "", "", err
@@ -240,6 +254,7 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, _ func() string,
 	layout agentconfig.Layout) *accessreq.Service {
 	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users, layout: layout}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db), layout: layout})
+	accessRules = ar
 	ar.AddPublisher(accessPublisher{reg: reg})
 	ar.AddPublisher(agentstool.AccessWebPublisher{})
 	ar.AddPublisher(agentstool.AccessFilePublisher{Layout: layout, Project: auditPlaces{layout: layout}.SessionProject})
