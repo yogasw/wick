@@ -37,7 +37,7 @@ func (s *Service) ProjectAccess(ctx context.Context, projectID, viewerID string)
 			out.Rules = append(out.Rules, r)
 		}
 	}
-	out.Grants, _ = s.store.projectGrants(ctx, projectID)
+	out.Grants, _ = s.store.projectGrants(ctx, projectID, s.now())
 	return out, nil
 }
 

@@ -32,16 +32,12 @@ type AccessQuery struct {
 	// app_code and the like), so a rule can tell which app a connector
 	// is bound to when the op itself names none.
 	Config map[string]string
-	// AskEach: the session set this connector to "ask each time", so a
-	// standing grant does not cover the call.
-	AskEach bool
 }
 
 // Session policies (Workspace panel, Connector access): how one session
 // lets its agent use one connector.
 const (
 	SessionPolicyAllow = "allow"
-	SessionPolicyAsk   = "ask"
 	SessionPolicyBlock = "block"
 )
 
@@ -121,7 +117,6 @@ func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity
 	who, note, err := s.accessCheck(ctx, AccessQuery{
 		SessionID: p.SessionID, AgentID: agentIDOf(ctx), ConnectorID: c.ID, ConnectorKey: c.Key,
 		OpKey: op.Key, Destructive: op.Destructive, Input: input, Config: cfg,
-		AskEach: s.sessionPolicy(p.SessionID, c.ID) == SessionPolicyAsk,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("operation %q: %w", op.Key, err)

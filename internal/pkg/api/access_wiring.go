@@ -134,10 +134,9 @@ type accessDirectory struct {
 
 // SessionProject names a session's project, for project-scoped rules and
 // the project's request history.
-// SessionPolicy reads a session's policy for a connector (Workspace
-// panel, Connector access).
-func (d accessDirectory) SessionPolicy(sessionID, connectorID string) string {
-	return agentstool.SessionConnectorPolicy(sessionID, connectorID)
+// LastAsker names the person behind a session's latest turn.
+func (d accessDirectory) LastAsker(sessionID string) *accessreq.Asker {
+	return agentstool.SessionLastAsker(sessionID)
 }
 
 // AccessRequestsOn reads the project's switch (off when unknown).
@@ -249,12 +248,21 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 	// Off unless the session's project turned access requests on.
 	svc.SetAccessGate(ar.Enabled)
 	svc.SetSessionPolicy(agentstool.SessionConnectorPolicy)
+	// A removed session connector takes its approvals and its policy
+	// with it.
+	sessionworkspace.SetOnRemoved(func(sessionID, instanceID string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := ar.ConnectorRemoved(ctx, sessionID, instanceID, ""); err != nil {
+			log.Warn().Err(err).Str("session", sessionID).Str("connector", instanceID).Msg("access: forget removed session connector")
+		}
+		agentstool.ForgetSessionConnector(sessionID, instanceID)
+	})
 	mcphandlers.AccessRequestsOn = ar.Enabled
 	svc.SetAccessCheck(func(ctx context.Context, q connectors.AccessQuery) (string, string, error) {
 		return ar.Check(ctx, accessreq.Action{
 			SessionID: q.SessionID, AgentID: q.AgentID, ConnectorID: q.ConnectorID, ConnectorKey: q.ConnectorKey,
 			OpKey: q.OpKey, Kind: accessreq.ClassifyOp(q.OpKey, q.Destructive), Params: q.Input, Config: q.Config,
-			AskEach: q.AskEach,
 		})
 	})
 	ar.SetScriptRunner(func(ctx context.Context, ownerID, code string, input map[string]any) (json.RawMessage, []string, error) {

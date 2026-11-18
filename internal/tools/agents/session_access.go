@@ -1,7 +1,10 @@
 package agents
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yogasw/wick/internal/accessreq"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -56,10 +61,67 @@ func SessionConnectorPolicy(sessionID, connectorID string) string {
 	if sessionID == "" || connectorID == "" || globalLayout.BaseDir == "" || !safeAccessID(sessionID) {
 		return connectors.SessionPolicyAllow
 	}
-	if m := loadSessionPolicy(sessionID).Connectors[connectorID]; m != "" {
-		return m
+	// Only block is stored now; an older "ask" reads as allow (every
+	// write the agent cannot run already goes through a card).
+	if loadSessionPolicy(sessionID).Connectors[connectorID] == connectors.SessionPolicyBlock {
+		return connectors.SessionPolicyBlock
 	}
 	return connectors.SessionPolicyAllow
+}
+
+// ForgetSessionConnector drops a removed connector from a session's
+// policy.
+func ForgetSessionConnector(sessionID, connectorID string) {
+	if !safeAccessID(sessionID) || globalLayout.BaseDir == "" {
+		return
+	}
+	if _, ok := loadSessionPolicy(sessionID).Connectors[connectorID]; ok {
+		_ = saveSessionPolicy(sessionID, connectorID, connectors.SessionPolicyAllow, "connector removed")
+	}
+}
+
+// askerTailBytes is how much of a conversation's end LastAsker reads.
+const askerTailBytes = 256 << 10
+
+// SessionLastAsker names the person behind a session's latest user turn,
+// as the channel resolved it; nil when that turn had no person behind it
+// (a schedule, another agent) or the session has none.
+func SessionLastAsker(sessionID string) *accessreq.Asker {
+	if !safeAccessID(sessionID) || globalLayout.BaseDir == "" {
+		return nil
+	}
+	f, err := os.Open(globalLayout.SessionConversation(sessionID))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	off := st.Size() - askerTailBytes
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+		return nil
+	}
+	lines := bytes.Split(buf, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		var t struct {
+			Role   string        `json:"role"`
+			Sender *store.Sender `json:"sender"`
+		}
+		if len(bytes.TrimSpace(lines[i])) == 0 || json.Unmarshal(lines[i], &t) != nil || t.Role != "user" {
+			continue
+		}
+		if t.Sender == nil || t.Sender.ID == "" {
+			return nil
+		}
+		return &accessreq.Asker{ID: t.Sender.ID, Name: t.Sender.Name, Channel: t.Sender.Channel, WickUserID: t.Sender.WickUserID}
+	}
+	return nil
 }
 
 func saveSessionPolicy(sessionID, connectorID, mode, by string) error {
@@ -199,6 +261,7 @@ func sessionAccessJSON(c *tool.Ctx) {
 			grants = append(grants, map[string]any{
 				"id": g.ID, "connector_id": g.ConnectorID, "op_key": g.OpKey, "target": g.Target,
 				"approver": globalAccess.PersonName(ctx, g.ApproverID), "created_at": g.CreatedAt,
+				"expires_at": g.ExpiresAt,
 			})
 		}
 	}
@@ -299,9 +362,9 @@ func sessionAccessPolicySet(c *tool.Ctx) {
 		return
 	}
 	switch body.Mode {
-	case connectors.SessionPolicyAllow, connectors.SessionPolicyAsk, connectors.SessionPolicyBlock:
+	case connectors.SessionPolicyAllow, connectors.SessionPolicyBlock:
 	default:
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "mode must be allow, ask or block"})
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "mode must be allow or block"})
 		return
 	}
 	if err := saveSessionPolicy(sid, body.ConnectorID, body.Mode, u.ID); err != nil {

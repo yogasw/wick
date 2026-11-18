@@ -2430,15 +2430,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 
 	// The session's own say over this connector (Workspace panel): blocked
-	// refuses every agent call; ask sends every write through a card.
-	askEach := false
-	if AgentScopeFrom(ctx) != nil {
-		switch s.sessionPolicy(p.SessionID, c.ID) {
-		case SessionPolicyBlock:
-			return nil, fmt.Errorf("connector %q is blocked for this session (Workspace panel, Connector access)", c.Label)
-		case SessionPolicyAsk:
-			askEach = op.Destructive
-		}
+	// refuses every agent call.
+	if AgentScopeFrom(ctx) != nil && s.sessionPolicy(p.SessionID, c.ID) == SessionPolicyBlock {
+		return nil, fmt.Errorf("connector %q is blocked for this session (Workspace panel, Connector access)", c.Label)
 	}
 
 	// Agent checklist: the instance, the identity it runs as, and the op
@@ -2451,7 +2445,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if err != nil {
 			return nil, err
 		}
-		if !ok || askEach || len(p.ConfigOverride) > 0 {
+		if !ok || len(p.ConfigOverride) > 0 {
 			// A session connector runs on its own config (its app, its
 			// tokens), so a rule or a standing approval only decides
 			// whether it may run; the call keeps its identity. A config
@@ -2489,8 +2483,6 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			// for: someone who may configure the instance approves it on a
 			// card (or a rule they wrote does).
 			refusal = fmt.Errorf("operation %q with a %s needs approval", op.Key, ConfigOverrideParam)
-		} else if askEach {
-			refusal = fmt.Errorf("operation %q on connector %q is set to ask each time in this session", op.Key, c.Label)
 		}
 		if refusal != nil {
 			// The agent's own access said no. A standing approval (an

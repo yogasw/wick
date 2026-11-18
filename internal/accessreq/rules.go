@@ -194,9 +194,9 @@ type Action struct {
 	// Config is the connector instance's own subject settings (app_code
 	// of a connector bound to one app). Never credentials.
 	Config map[string]string
-	// AskEach: the session set this connector to "ask each time"
-	// (Workspace panel), so no standing grant covers the call.
-	AskEach bool
+	// AskedBy is the person behind the turn the agent was answering when
+	// it asked (nil when none). Rule scripts read it as "requester".
+	AskedBy *Asker
 }
 
 // paramAliases are the parameter names a subject fact is read from, in

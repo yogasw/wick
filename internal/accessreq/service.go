@@ -125,6 +125,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	if s.dir != nil && in.AgentID != "" {
 		req.AgentName = s.dir.AgentName(ctx, in.AgentID)
 	}
+	asker := s.lastAsker(in.SessionID)
+	if asker != nil {
+		if b, err := json.Marshal(asker); err == nil {
+			req.AskedBy = string(b)
+		}
+	}
 	items := make([]entity.AccessRequestItem, 0, len(in.Actions))
 	seen := map[string]bool{}
 	type auto struct {
@@ -150,7 +156,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		seen[hash] = true
 		kind := ClassifyOp(a.OpKey, meta.Destructive)
 		act := Action{SessionID: in.SessionID, AgentID: in.AgentID, AgentName: req.AgentName,
-			ConnectorID: a.ConnectorID, ConnectorKey: meta.ConnectorKey, OpKey: a.OpKey, Kind: kind, Params: stringify(a.Params)}
+			ConnectorID: a.ConnectorID, ConnectorKey: meta.ConnectorKey, OpKey: a.OpKey, Kind: kind, Params: stringify(a.Params),
+			AskedBy: asker}
 		if sc, ok := s.cat.(SubjectConfigs); ok {
 			act.Config = sc.SubjectConfig(ctx, a.ConnectorID)
 		}
@@ -163,6 +170,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 			ID: uuid.NewString(), RequestID: req.ID, Idx: i, ConnectorID: a.ConnectorID,
 			ConnectorKey: meta.ConnectorKey, ConnectorLabel: meta.ConnectorLabel, OpKey: a.OpKey, OpName: meta.OpName,
 			AccountID: a.AccountID, Params: string(params), ParamsHash: hash, Kind: kind, Status: ItemPending,
+			// A "require" rule, or an action that names no clear target,
+			// is approved one call at a time, never for a while.
+			OnceOnly: v.Effect == EffectRequire || !HasTarget(act.Params),
 		}
 		if len(v.Simulated) > 0 {
 			item.Note = "would auto-approve (simulate): " + strings.Join(v.Simulated, ", ")
@@ -243,16 +253,13 @@ func (s *Service) Enabled(sessionID string) bool {
 	return pid != "" && sw.AccessRequestsOn(pid)
 }
 
-// SessionPolicies is the optional part of a Directory that reads a
-// session's per-connector policy (Workspace panel).
-type SessionPolicies interface {
-	SessionPolicy(sessionID, connectorID string) string
-}
-
-// askEach reports whether a session set a connector to ask each time.
-func (s *Service) askEach(sessionID, connectorID string) bool {
-	sp, ok := s.dir.(SessionPolicies)
-	return ok && sp.SessionPolicy(sessionID, connectorID) == "ask"
+// lastAsker names the person behind the session's latest turn, nil when
+// none or unknown.
+func (s *Service) lastAsker(sessionID string) *Asker {
+	if sa, ok := s.dir.(SessionAskers); ok && sessionID != "" {
+		return sa.LastAsker(sessionID)
+	}
+	return nil
 }
 
 // ErrOff refuses a request in a project that did not turn them on.
@@ -322,6 +329,12 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 	if s.dir != nil && req.RequesterUserID != "" {
 		if p, ok := s.dir.User(ctx, req.RequesterUserID); ok {
 			v.Requester = p.Name
+		}
+	}
+	if req.AskedBy != "" {
+		var a Asker
+		if json.Unmarshal([]byte(req.AskedBy), &a) == nil && a.ID != "" {
+			v.AskedBy = &a
 		}
 	}
 	if req.Origin != "" {
@@ -431,7 +444,7 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 		}
 		iv.CanDecide = true
 		for _, m := range ModesFor(it.Kind) {
-			if m != ModeOnce && (len(ov) > 0 || s.askEach(req.SessionID, it.ConnectorID)) {
+			if m != ModeOnce && (len(ov) > 0 || it.OnceOnly) {
 				continue // approved one call at a time
 			}
 			if m == ModeAlways && (req.AgentID == "" || !(viewer.IsAdmin || viewer.ID == agentOwner)) {
@@ -635,9 +648,15 @@ func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequest
 func (s *Service) leaveGrant(ctx context.Context, req entity.AccessRequest, it entity.AccessRequestItem, by string) {
 	var params map[string]any
 	_ = json.Unmarshal([]byte(it.Params), &params)
+	if it.OnceOnly || !HasTarget(stringify(params)) {
+		return
+	}
 	g := entity.AccessGrant{ID: uuid.NewString(), ConnectorID: it.ConnectorID, OpKey: it.OpKey,
 		Target: TargetKey(stringify(params)), ProjectID: req.ProjectID, ApproverID: by, ItemID: it.ID, CreatedAt: s.now()}
 	switch it.Mode {
+	case ModeHour:
+		exp := g.CreatedAt.Add(GrantHour)
+		g.ScopeType, g.ScopeID, g.ExpiresAt = ModeSession, req.SessionID, &exp
 	case ModeSession:
 		g.ScopeType, g.ScopeID = ModeSession, req.SessionID
 	case ModeAlways:
@@ -789,15 +808,19 @@ func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err 
 	if a.AgentName == "" && a.AgentID != "" && s.dir != nil {
 		a.AgentName = s.dir.AgentName(ctx, a.AgentID)
 	}
+	if a.AskedBy == nil {
+		a.AskedBy = s.lastAsker(a.SessionID)
+	}
 	v := s.Evaluate(ctx, a)
 	if v.Effect == EffectDeny {
 		return "", "", fmt.Errorf("denied by access rule %q", v.Rule.Name)
 	}
 	scopes := map[string]string{ModeSession: a.SessionID, "agent": a.AgentID}
-	grants, gerr := s.store.grants(ctx, a.ConnectorID, a.OpKey, scopes)
-	// A standing grant never covers a call with a config override, nor a
-	// connector the session set to ask each time.
-	if gerr == nil && len(overrideOfAction(a)) == 0 && !a.AskEach {
+	grants, gerr := s.store.grants(ctx, a.ConnectorID, a.OpKey, scopes, s.now())
+	// A standing grant never covers a call with a config override, one a
+	// "require" rule matches (approved one call at a time), or one that
+	// names no clear target.
+	if gerr == nil && len(overrideOfAction(a)) == 0 && v.Effect != EffectRequire && HasTarget(a.Params) {
 		target := TargetKey(a.Params)
 		for _, g := range grants {
 			if g.Target != target {
@@ -816,7 +839,7 @@ func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err 
 
 // Grants lists standing grants (all when scopeType is "").
 func (s *Service) Grants(ctx context.Context, scopeType, scopeID string) ([]entity.AccessGrant, error) {
-	return s.store.listGrants(ctx, scopeType, scopeID)
+	return s.store.listGrants(ctx, scopeType, scopeID, s.now())
 }
 
 // RevokeGrant ends a standing grant. Its approver, the agent's owner or an
@@ -841,6 +864,36 @@ func (s *Service) RevokeGrant(ctx context.Context, id, by string) error {
 		return errors.New("only the approver, the owner or an admin can revoke this grant")
 	}
 	return s.store.revokeGrant(ctx, id, by)
+}
+
+// ConnectorRemoved forgets a session connector that was removed: its
+// grants in the session end and its pending actions are withdrawn, so a
+// card can no longer approve them. The history stays.
+func (s *Service) ConnectorRemoved(ctx context.Context, sessionID, connectorID, by string) error {
+	if sessionID == "" || connectorID == "" {
+		return nil
+	}
+	ctx = WithSession(ctx, sessionID)
+	if by == "" {
+		by = "connector removed"
+	}
+	if err := s.store.revokeConnectorGrants(ctx, sessionID, connectorID, by); err != nil {
+		return err
+	}
+	items, err := s.store.pendingItemsFor(ctx, sessionID, connectorID)
+	if err != nil {
+		return err
+	}
+	touched := map[string]bool{}
+	for _, it := range items {
+		if ok, err := s.store.claimItem(ctx, it.ID, ItemDenied, "", "system", "the session connector was removed", s.now()); err == nil && ok {
+			touched[it.RequestID] = true
+		}
+	}
+	for id := range touched {
+		s.afterChange(ctx, id, false)
+	}
+	return nil
 }
 
 // RevokeSessionGrant ends a "this session" grant from the session's own
@@ -969,6 +1022,18 @@ var grantTargetKeys = []string{
 	"path", "url", "id", "email", "user_id",
 }
 
+// HasTarget reports whether an action names what it touches (one of the
+// target parameters). One that does not ("resolve every room", a bulk
+// filter) is only ever approved once.
+func HasTarget(params map[string]string) bool {
+	for _, k := range grantTargetKeys {
+		if strings.TrimSpace(params[k]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // TargetKey is the target signature of an action's parameters: the
 // values of its target parameters in a fixed order, or, when it names
 // none, a hash of all its parameters (exactly that action again).
@@ -1093,6 +1158,8 @@ func modeLabel(m string) string {
 	switch m {
 	case ModeOnce:
 		return "once"
+	case ModeHour:
+		return "for an hour"
 	case ModeSession:
 		return "for this session"
 	case ModeAlways:
@@ -1106,6 +1173,8 @@ func ModeLabel(m string) string {
 	switch m {
 	case ModeOnce:
 		return "Once"
+	case ModeHour:
+		return "1 hour"
 	case ModeSession:
 		return "This session"
 	case ModeAlways:

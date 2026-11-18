@@ -100,6 +100,7 @@
   <p class={muted}>
     What this project's agents asked to run beyond their own access, and who decided. Approving happens on the card in the
     conversation. Rules here apply to this project's sessions: <b>deny</b> beats <b>require</b> beats <b>auto_approve</b>.
+    <b>require</b> means a card on every call, approved once only (no "1 hour" or "this session").
   </p>
   {#if error}<p class="mt-2 text-xs text-neg-400" data-testid="project-access-error">{error}</p>{/if}
   {#if notice}<p class="mt-2 text-xs text-green-500">{notice}</p>{/if}

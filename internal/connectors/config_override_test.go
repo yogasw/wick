@@ -151,9 +151,9 @@ func TestAgentOverrideAlwaysNeedsApproval(t *testing.T) {
 	}
 }
 
-// A session's own policy: block refuses every agent call, ask sends a
-// write through approval (and never through a standing grant).
-func TestSessionPolicyBlockAndAsk(t *testing.T) {
+// A session's own policy: block refuses every agent call in that session
+// only.
+func TestSessionPolicyBlock(t *testing.T) {
 	bg := context.Background()
 	svc, id := newSvcWithModule(t, nil, overrideModule())
 	svc.SetIdentityLookup(func(_ context.Context, uid string) (*entity.User, []string, error) {
@@ -185,18 +185,9 @@ func TestSessionPolicyBlockAndAsk(t *testing.T) {
 	if err := run("read", "sess-2"); err != nil {
 		t.Fatalf("another session must not be blocked: %v", err)
 	}
-	policy[id] = SessionPolicyAsk
+	// An older "ask" setting reads as allow.
+	policy[id] = "ask"
 	if err := run("read", "sess-1"); err != nil {
-		t.Fatalf("ask must let a read through: %v", err)
-	}
-	// A write under ask goes to the access check, flagged so no standing
-	// grant covers it.
-	var asked AccessQuery
-	svc.SetAccessGate(func(string) bool { return true })
-	svc.SetAccessCheck(func(_ context.Context, q AccessQuery) (string, string, error) { asked = q; return "", "", nil })
-	_, err := svc.Execute(ctx, ExecuteParams{ConnectorID: id, OperationKey: "write", Source: entity.ConnectorRunSourceMCP,
-		UserID: "admin-1", IsAdmin: true, SessionID: "sess-1", ConfigOverride: map[string]string{"mode": "write"}})
-	if err == nil || !asked.AskEach {
-		t.Fatalf("ask: err=%v asked=%+v", err, asked)
+		t.Fatalf("legacy ask: %v", err)
 	}
 }

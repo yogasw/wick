@@ -21,6 +21,12 @@ type AccessRequest struct {
 	AgentName string `gorm:"type:text"`
 	// RequesterUserID is the wick user the session belongs to.
 	RequesterUserID string `gorm:"type:text;index:idx_access_req_requester"`
+	// AskedBy is the person whose message the agent was answering when it
+	// asked, as the channel resolved it (JSON: id, name, channel, wick
+	// user). Empty when no person was behind the turn (a schedule, another
+	// agent). Recorded for audit and for rule scripts; never typed by the
+	// agent.
+	AskedBy string `gorm:"type:text"`
 	// Reason is the agent's own words. Shown labelled as an agent claim,
 	// never as a fact.
 	Reason string `gorm:"type:text"`
@@ -60,9 +66,12 @@ type AccessRequestItem struct {
 	Kind string `gorm:"type:varchar(16);not null"`
 	// Status: pending, running, ok, error, denied.
 	Status string `gorm:"type:varchar(16);not null"`
-	// Mode the approver picked: once, session, always ("" while pending or
-	// when denied).
-	Mode      string     `gorm:"type:varchar(16)"`
+	// Mode the approver picked: once, hour, session, always ("" while
+	// pending or when denied).
+	Mode string `gorm:"type:varchar(16)"`
+	// OnceOnly: this action can only be approved once (a "require" rule
+	// matched, or it names no clear target), never for a while.
+	OnceOnly  bool       `gorm:"not null;default:false"`
 	DecidedBy string     `gorm:"type:text"`
 	DecidedAt *time.Time `gorm:""`
 	// Note is the approver's reason when denying, or the rule that decided.
@@ -92,12 +101,15 @@ type AccessGrant struct {
 	// "params:<hash>": exactly the approved parameters again.
 	Target string `gorm:"type:text;not null;default:''"`
 	// ProjectID is the project of the session the grant was made in.
-	ProjectID  string     `gorm:"type:text;not null;default:'';index:idx_access_grant_project"`
-	ApproverID string     `gorm:"type:text;not null"`
-	ItemID     string     `gorm:"type:text"`
-	CreatedAt  time.Time  `gorm:"not null"`
-	RevokedAt  *time.Time `gorm:""`
-	RevokedBy  string     `gorm:"type:text"`
+	ProjectID  string    `gorm:"type:text;not null;default:'';index:idx_access_grant_project"`
+	ApproverID string    `gorm:"type:text;not null"`
+	ItemID     string    `gorm:"type:text"`
+	CreatedAt  time.Time `gorm:"not null"`
+	// ExpiresAt ends a time-boxed grant ("1 hour"); nil lasts as long as
+	// its scope (the session).
+	ExpiresAt *time.Time `gorm:"index:idx_access_grant_expiry"`
+	RevokedAt *time.Time `gorm:""`
+	RevokedBy string     `gorm:"type:text"`
 }
 
 // TableName pins the table name.

@@ -73,7 +73,10 @@ type fakeDir struct {
 	users      map[string]Person
 	sessionOwn map[string]string
 	agentOwn   map[string]string
+	askers     map[string]*Asker
 }
+
+func (d fakeDir) LastAsker(sid string) *Asker { return d.askers[sid] }
 
 func (d fakeDir) User(_ context.Context, id string) (Person, bool) {
 	p, ok := d.users[id]
@@ -146,6 +149,7 @@ func newEnv(t *testing.T) *env {
 		},
 		sessionOwn: map[string]string{"sess-1": "owner-a", "sess-2": "owner-a", "sess-h": "helper-b"},
 		agentOwn:   map[string]string{"agent-1": "owner-a"},
+		askers:     map[string]*Asker{"sess-1": {ID: "U-TEST-1", Name: "Person One", Channel: "slack"}},
 	}
 	e := &env{cat: cat}
 	e.svc = New(NewStore(db), cat, dir)
@@ -269,7 +273,8 @@ func TestModesFollowKind(t *testing.T) {
 		act("c-notes", "update_page", map[string]any{"page_id": "p2"}),
 	)
 	ov, _ := e.svc.ViewFor(context.Background(), v.ID, "owner-a")
-	want := [][]string{{ModeOnce}, {ModeOnce, ModeSession}, {ModeOnce, ModeSession}}
+	// A delete, and an action naming no target, are approved once only.
+	want := [][]string{{ModeOnce}, {ModeOnce}, {ModeOnce, ModeHour, ModeSession}}
 	for i, it := range ov.Items {
 		if strings.Join(it.Modes, ",") != strings.Join(want[i], ",") {
 			t.Errorf("item %d (%s) modes = %v, want %v", i, it.Kind, it.Modes, want[i])
@@ -326,10 +331,11 @@ func TestSessionGrantCoversSameSessionOnly(t *testing.T) {
 
 func TestSessionGrantIsRevocable(t *testing.T) {
 	e := newEnv(t)
-	v := e.create(t, act("c-notes", "update_page", nil))
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
 	e.svc.Decide(context.Background(), v.ID, "owner-a", []Decision{{ItemID: v.Items[0].ID, Mode: ModeSession}})
 	ctx := context.Background()
-	if runAs, _, _ := e.svc.Check(ctx, Action{SessionID: "sess-1", ConnectorID: "c-notes", OpKey: "update_page"}); runAs != "owner-a" {
+	p1 := map[string]string{"page_id": "p1"}
+	if runAs, _, _ := e.svc.Check(ctx, Action{SessionID: "sess-1", ConnectorID: "c-notes", OpKey: "update_page", Params: p1}); runAs != "owner-a" {
 		t.Fatalf("session grant: %q", runAs)
 	}
 	gs, _ := e.svc.Grants(ctx, ModeSession, "sess-1")
@@ -342,7 +348,7 @@ func TestSessionGrantIsRevocable(t *testing.T) {
 	if err := e.svc.RevokeGrant(ctx, gs[0].ID, "owner-a"); err != nil {
 		t.Fatal(err)
 	}
-	if runAs, _, _ := e.svc.Check(ctx, Action{SessionID: "sess-1", ConnectorID: "c-notes", OpKey: "update_page"}); runAs != "" {
+	if runAs, _, _ := e.svc.Check(ctx, Action{SessionID: "sess-1", ConnectorID: "c-notes", OpKey: "update_page", Params: p1}); runAs != "" {
 		t.Fatalf("revoked grant still used: %q", runAs)
 	}
 }

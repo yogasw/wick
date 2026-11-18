@@ -1,9 +1,9 @@
 <script lang="ts">
   /* Workspace › Connector access: what this session's agent did with each
      connector (calls, errors, config overrides, approved runs, last call),
-     and the session's own say over each one — Allowed, Ask each time or
-     Blocked — for this session only. Also the session's access requests and
-     its live "this session" grants. */
+     and the session's own say over each one — Normal or Blocked — for this
+     session only. Also the session's access requests and the approvals
+     still live in it ("1 hour" / "this session"), each revocable. */
   type Usage = {
     connector_id: string;
     key: string;
@@ -18,7 +18,7 @@
     last_status: string;
     last_error?: string;
     last_note?: string;
-    mode: "allow" | "ask" | "block";
+    mode: "allow" | "block";
   };
   type Req = {
     id: string;
@@ -26,7 +26,7 @@
     created_at: string;
     items: { id: string; connector_key: string; op_key: string; target: string; status: string; decided_by: string; mode: string; error: string; note: string }[];
   };
-  type Grant = { id: string; connector_id: string; op_key: string; target: string; approver: string };
+  type Grant = { id: string; connector_id: string; op_key: string; target: string; approver: string; expires_at?: string | null };
   type Data = { enabled: boolean; connectors: Usage[]; requests: Req[]; grants: Grant[] };
 
   type Props = { base: string; sessionId: string };
@@ -83,14 +83,22 @@
   });
 
   const MODES: { value: Usage["mode"]; label: string; on: string }[] = [
-    { value: "allow", label: "Allowed", on: "bg-green-500 text-white-100" },
-    { value: "ask", label: "Ask each time", on: "bg-amber-500 text-white-100" },
+    { value: "allow", label: "Normal", on: "bg-green-500 text-white-100" },
     { value: "block", label: "Blocked", on: "bg-neg-400 text-white-100" },
   ];
 
   function when(s: string): string {
     if (!s || s.startsWith("0001")) return "";
     return new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  /** left is how long an approval still runs: "42 min left", or "this session". */
+  function left(exp?: string | null): string {
+    if (!exp) return "this session";
+    const ms = new Date(exp).getTime() - Date.now();
+    if (ms <= 0) return "expired";
+    const min = Math.ceil(ms / 60000);
+    return min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min left` : `${min} min left`;
   }
 
   function icon(status: string): string {
@@ -115,10 +123,10 @@
   {:else if data}
     <div class="rounded-lg border border-white-300 dark:border-navy-600 px-2.5 py-1.5 text-[11px] text-black-800 dark:text-white-200">
       Access requests: <b class={data.enabled ? "text-green-500" : ""}>{data.enabled ? "ON" : "OFF"}</b> for this session's project
-      {#if !data.enabled}· "Ask each time" only refuses here; turn them on in the project settings{/if}
+      {#if !data.enabled}· writes outside the agent's access are refused; turn them on in the project settings for cards{/if}
     </div>
     <p class={muted}>
-      Every connector this session used. Change how the agent may use it — for this session only; the connector itself is untouched.
+      Every connector this session used. Normal: the agent works as its access allows, and a write beyond it asks on a card. Blocked: every call refused. For this session only; the connector itself is untouched.
     </p>
 
     {#if data.connectors.length === 0}
@@ -170,13 +178,13 @@
       {/each}
     {/if}
 
-    <div class={h}>"This session" grants</div>
+    <div class={h}>Live approvals</div>
     {#if data.grants.length === 0}
       <p class={muted}>None active.</p>
     {:else}
       {#each data.grants as g (g.id)}
         <div class="flex items-center justify-between gap-2 text-xs text-black-900 dark:text-white-100">
-          <span class="break-words"><code>{g.op_key}</code> {g.target} · by {g.approver}</span>
+          <span class="break-words"><code>{g.op_key}</code> {g.target} · by {g.approver} · {left(g.expires_at)}</span>
           <button type="button" disabled={busy}
             class="shrink-0 rounded-md border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] hover:bg-white-200 dark:hover:bg-navy-700"
             onclick={() => post(`/grants/${encodeURIComponent(g.id)}/revoke`, {})}>Revoke</button>

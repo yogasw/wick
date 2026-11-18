@@ -91,6 +91,14 @@ func scriptInput(a Action, viewer map[string]any) map[string]any {
 			"agent_id": a.AgentID, "agent": strings.TrimPrefix(a.AgentName, "@"), "session_id": a.SessionID,
 		},
 	}
+	// requester: the person whose message the agent was answering (null
+	// when none: a schedule, another agent). Set by the channel, never by
+	// the agent.
+	if a.AskedBy != nil {
+		in["requester"] = map[string]any{"id": a.AskedBy.ID, "name": a.AskedBy.Name, "channel": a.AskedBy.Channel, "wick_user_id": a.AskedBy.WickUserID}
+	} else {
+		in["requester"] = nil
+	}
 	if viewer != nil {
 		in["viewer"] = viewer
 	}

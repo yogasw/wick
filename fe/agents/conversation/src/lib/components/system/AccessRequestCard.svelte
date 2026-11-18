@@ -149,6 +149,7 @@
         <div class="flex flex-col gap-3" data-testid="access-review-modal">
           <div>
             <strong>{mine.agent} asks to run {mine.items.length} action(s)</strong>
+            {#if mine.asked_by}<div class="text-[11px] text-black-700 dark:text-black-500">Asked while answering {mine.asked_by}</div>{/if}
             {#if mine.requester}<div class="text-[11px] text-black-700 dark:text-black-500">Asked in a conversation of {mine.requester}</div>{/if}
             {#if mine.reason}<p class="mt-1 rounded-md border-l-2 border-amber-400 bg-white-200 px-2 py-1 text-xs dark:bg-navy-900"><span class="text-black-700 dark:text-black-500">Agent's claim (unverified):</span> {mine.reason}</p>{/if}
           </div>
@@ -181,7 +182,7 @@
           {/each}
           {#if mine.viewer_can_decide}
             <label class="flex flex-col gap-1 text-xs">Note for the agent (sent with a deny)<textarea bind:value={note} rows="2" class="rounded-lg border border-white-300 bg-white-200 p-2 text-xs dark:border-navy-600 dark:bg-navy-900"></textarea></label>
-            <p class="text-[11px] text-black-700 dark:text-black-500">Leave an action unselected to keep it waiting. Approved actions run right away with your access. "This session" covers the same operation on the same target only; standing access is set with rules.</p>
+            <p class="text-[11px] text-black-700 dark:text-black-500">Leave an action unselected to keep it waiting. Approved actions run right away with your access. "1 hour" and "This session" cover the same operation on the same target only, in this session; an action with no clear target, or one a require rule matches, is approved once. Standing access is set with rules.</p>
           {:else if mine.viewer_reason}
             <p class="text-xs text-black-700 dark:text-black-500">{mine.viewer_reason}</p>
           {/if}

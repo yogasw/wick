@@ -83,7 +83,7 @@ func accessReady(c *tool.Ctx) bool {
 // written without a card; production stays behind one (a second rule,
 // effect deny). Rules apply to this project's sessions only.
 const accessRuleExample = `name: staging-apps-auto
-effect: auto_approve        # or: require / deny / approvers
+effect: auto_approve        # or: require (a card every call, once only) / deny / approvers
 simulate: true              # log "would auto-approve" first; set false to act
 when:
   ops: [apps.*, bots.*]
@@ -92,8 +92,9 @@ when:
   all:
     - fact: app             # the app code from the action or its connector
       in: [acme-stag, acme-dev]
-# Pair it with a deny rule for production:
-#   name: prod-apps-never, effect: deny, same ops,
+# Pair it with a require rule for production (a card every call,
+# approved once only, never "for an hour"):
+#   name: prod-apps-card, effect: require, same ops,
 #   all: [{fact: app, in: [acme-prod]}]
 # A list kept elsewhere (a canvas, a sheet): use a script, see the examples.
 `
@@ -123,7 +124,19 @@ when:
     const app = input.action.config.app_code || input.action.params.app_code;
     return !!app && String(doc.markdown || "").includes(app);
 
+# 3. Only some people may get a write asked for them (others: no card at all)
+name: prod-asked-by-ops-only
+effect: deny
+when:
+  ops: [apps.*]
+  kind: [write]
+  script: |
+    const ops = ["U01TESTUSER"];   // chat user ids
+    return !input.requester || !ops.includes(input.requester.id);
+
 # input = {action: {connector_id, connector_key, op, kind, params, config, agent, session_id},
+#          requester: {id, name, channel, wick_user_id} | null   (whose message the agent answered;
+#                     null for a schedule or another agent),
 #          viewer: {wick_id, name, email, is_admin, slack_id}}   (viewer only for approvers rules)
 # A failing or unclear script never allows. Answers are cached 5 minutes per rule revision.
 `
@@ -190,7 +203,7 @@ func accessViewDTO(v accessreq.View) map[string]any {
 		"id": v.ID, "agent": accessAgentLabel(v), "requester": v.Requester, "reason": v.Reason, "status": v.Status,
 		"pending": v.Pending, "items": items, "viewer_can_decide": v.ViewerCanDecide,
 		"viewer_reason": v.ViewerReason, "viewer_reason_code": v.ViewerReasonCode,
-		"created_at": v.CreatedAt,
+		"created_at": v.CreatedAt, "asked_by": askedByName(v.AskedBy),
 	}
 }
 
@@ -440,4 +453,16 @@ func projectAccessSetEnabled(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]bool{"enabled": body.Enabled})
+}
+
+// askedByName is who the agent was answering when it asked ("" when
+// nobody: a schedule, another agent).
+func askedByName(a *accessreq.Asker) string {
+	if a == nil {
+		return ""
+	}
+	if a.Name != "" {
+		return a.Name
+	}
+	return a.ID
 }

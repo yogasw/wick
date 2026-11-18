@@ -31,6 +31,8 @@ export type AccessRequestView = {
   id: string;
   agent: string;
   requester: string;
+  /** Whose message the agent was answering when it asked ("" = nobody: a schedule, another agent). */
+  asked_by?: string;
   reason: string;
   status: "pending" | "done" | "cancelled" | string;
   pending: number;
@@ -72,6 +74,7 @@ export function accessStatusIcon(status: string): string {
 
 export const MODE_LABEL: Record<string, string> = {
   once: "Once",
+  hour: "1 hour",
   session: "This session",
   always: "Always",
   deny: "Deny",

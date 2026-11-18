@@ -39,7 +39,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 			"\"not allowed for this agent\", a read-only grant, a role that may only read). One request carries up to 10 " +
 			"exact actions ({tool_id, params}, the same shape as wick_execute). A card appears where this conversation lives " +
 			"(the Slack thread, the web); an approver opens it, sees every action with its real parameters, and decides each " +
-			"one: once, for this session, or deny (standing access is a rule, set in the project settings, Access requests). Approved actions run with the APPROVER's access — you do NOT run " +
+			"one: once, for an hour or for this session (same operation on the same target only), or deny (standing access is a rule, set in the project settings, Access requests). Approved actions run with the APPROVER's access — you do NOT run " +
 			"them again. This call returns at once with status pending: say what you asked for and END YOUR TURN; the " +
 			"outcome of every action is delivered to this conversation later. An approval holds for those exact parameters " +
 			"only; changed parameters need a new request. Never ask for something the user did not want done. " +

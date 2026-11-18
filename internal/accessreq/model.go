@@ -4,7 +4,7 @@
 // The flow never blocks an agent turn: wick_request_access files the
 // request and returns "pending"; the card shows wherever the session
 // lives (a Slack thread, the web); an approver opens it, picks a mode per
-// action (once, this session, always, or deny); wick runs the approved
+// action (once, an hour, this session, or deny); wick runs the approved
 // actions with the APPROVER's access and wakes the session with the
 // result.
 //
@@ -43,7 +43,10 @@ const (
 // Modes an approver picks per action. ModeDeny is a decision, not a
 // stored mode.
 const (
-	ModeOnce    = "once"
+	ModeOnce = "once"
+	// ModeHour covers the same operation on the same target for one hour
+	// in this session.
+	ModeHour    = "hour"
 	ModeSession = "session"
 	ModeAlways  = "always"
 	ModeDeny    = "deny"
@@ -97,13 +100,18 @@ func ClassifyOp(opKey string, destructive bool) string {
 //
 // "Always" is deliberately not offered on a card: standing access is a
 // rule (project settings: deny / require / auto_approve with facts such as
-// app.env), written on purpose, never one click on a card.
+// app.env), written on purpose, never one click on a card. The timed
+// modes (an hour, the rest of the session) cover the same operation on
+// the same target only, in this session.
 func ModesFor(kind string) []string {
 	if kind == KindDelete {
 		return []string{ModeOnce}
 	}
-	return []string{ModeOnce, ModeSession}
+	return []string{ModeOnce, ModeHour, ModeSession}
 }
+
+// GrantHour is how long a ModeHour grant lasts.
+const GrantHour = time.Hour
 
 // ActionInput is one action an agent asks for.
 type ActionInput struct {
@@ -178,6 +186,22 @@ type Directory interface {
 	AgentName(ctx context.Context, agentID string) string
 }
 
+// Asker is the person whose message the agent was answering when it
+// asked, as the channel resolved it (never what the agent typed).
+type Asker struct {
+	ID         string `json:"id"`
+	Name       string `json:"name,omitempty"`
+	Channel    string `json:"channel,omitempty"`
+	WickUserID string `json:"wick_user_id,omitempty"`
+}
+
+// SessionAskers is the optional part of a Directory that names the
+// person behind a session's latest turn (nil when none: a schedule,
+// another agent).
+type SessionAskers interface {
+	LastAsker(sessionID string) *Asker
+}
+
 // Publisher draws a request on the surfaces that show it. Publish is
 // called when the request is filed and again after every change; each
 // publisher decides whether the request's session is one it serves.
@@ -197,6 +221,9 @@ type View struct {
 	AgentName string
 	// Requester is the session's owner.
 	Requester string
+	// AskedBy is the person whose message the agent was answering (nil
+	// when none).
+	AskedBy *Asker
 	// Reason is the agent's claim, unverified.
 	Reason    string
 	Status    string

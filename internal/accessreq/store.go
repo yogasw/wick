@@ -98,9 +98,9 @@ func (s *Store) addGrant(ctx context.Context, g *entity.AccessGrant) error {
 	return s.db.WithContext(ctx).Create(g).Error
 }
 
-func (s *Store) grants(ctx context.Context, connectorID, opKey string, scopes map[string]string) ([]entity.AccessGrant, error) {
+func (s *Store) grants(ctx context.Context, connectorID, opKey string, scopes map[string]string, now time.Time) ([]entity.AccessGrant, error) {
 	var out []entity.AccessGrant
-	q := s.db.WithContext(ctx).Where("connector_id = ? AND op_key = ? AND revoked_at IS NULL", connectorID, opKey)
+	q := s.db.WithContext(ctx).Where("connector_id = ? AND op_key = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", connectorID, opKey, now)
 	var or *gorm.DB
 	for typ, id := range scopes {
 		if id == "" {
@@ -119,9 +119,9 @@ func (s *Store) grants(ctx context.Context, connectorID, opKey string, scopes ma
 	return out, q.Where(or).Order("created_at").Find(&out).Error
 }
 
-func (s *Store) listGrants(ctx context.Context, scopeType, scopeID string) ([]entity.AccessGrant, error) {
+func (s *Store) listGrants(ctx context.Context, scopeType, scopeID string, now time.Time) ([]entity.AccessGrant, error) {
 	var out []entity.AccessGrant
-	q := s.db.WithContext(ctx).Where("revoked_at IS NULL").Order("created_at DESC")
+	q := s.db.WithContext(ctx).Where("revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", now).Order("created_at DESC")
 	if scopeType != "" {
 		q = q.Where("scope_type = ? AND scope_id = ?", scopeType, scopeID)
 	}
@@ -191,6 +191,22 @@ func (s *Store) ruleHistory(ctx context.Context, ruleID string, limit int) ([]en
 // pruneFinished deletes requests that stopped changing before cutoff and
 // are no longer pending, with their items. Their history stays in the
 // session's files.
+// revokeConnectorGrants ends every live grant on connectorID in a
+// session (its session connector was removed).
+func (s *Store) revokeConnectorGrants(ctx context.Context, sessionID, connectorID, by string) error {
+	return s.db.WithContext(ctx).Model(&entity.AccessGrant{}).
+		Where("connector_id = ? AND scope_type = ? AND scope_id = ? AND revoked_at IS NULL", connectorID, "session", sessionID).
+		Updates(map[string]any{"revoked_at": time.Now(), "revoked_by": by}).Error
+}
+
+// pendingItemsFor lists the pending items on connectorID in a session's
+// open requests.
+func (s *Store) pendingItemsFor(ctx context.Context, sessionID, connectorID string) ([]entity.AccessRequestItem, error) {
+	var out []entity.AccessRequestItem
+	open := s.db.Model(&entity.AccessRequest{}).Select("id").Where("session_id = ? AND status = ?", sessionID, "pending")
+	return out, s.db.WithContext(ctx).Where("request_id IN (?) AND connector_id = ? AND status = ?", open, connectorID, "pending").Find(&out).Error
+}
+
 func (s *Store) pruneFinished(ctx context.Context, cutoff time.Time) (int64, error) {
 	var n int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -205,7 +221,7 @@ func (s *Store) pruneFinished(ctx context.Context, cutoff time.Time) (int64, err
 	return n, err
 }
 
-func (s *Store) projectGrants(ctx context.Context, projectID string) ([]entity.AccessGrant, error) {
+func (s *Store) projectGrants(ctx context.Context, projectID string, now time.Time) ([]entity.AccessGrant, error) {
 	var out []entity.AccessGrant
-	return out, s.db.WithContext(ctx).Where("project_id = ? AND revoked_at IS NULL", projectID).Order("created_at DESC").Find(&out).Error
+	return out, s.db.WithContext(ctx).Where("project_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", projectID, now).Order("created_at DESC").Find(&out).Error
 }

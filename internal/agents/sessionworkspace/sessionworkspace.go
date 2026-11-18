@@ -52,6 +52,13 @@ var onChange func(sessionID string)
 // SetOnChange registers the change listener (see onChange).
 func SetOnChange(fn func(sessionID string)) { onChange = fn }
 
+// onRemoved hears that a session instance was removed, so what was tied
+// to it (its approvals, its session policy) goes with it.
+var onRemoved func(sessionID, instanceID string)
+
+// SetOnRemoved registers the removal listener. Set once at boot.
+func SetOnRemoved(fn func(sessionID, instanceID string)) { onRemoved = fn }
+
 // Instance is one ephemeral connector clone scoped to a session.
 type Instance struct {
 	ID      string `json:"id"`       // "sw_<uuid>"
@@ -473,7 +480,13 @@ func Remove(layout agentconfig.Layout, sessionID, instanceID string) (bool, erro
 		return false, nil
 	}
 	ws.Instances = kept
-	return true, save(layout, sessionID, ws)
+	if err := save(layout, sessionID, ws); err != nil {
+		return true, err
+	}
+	if fn := onRemoved; fn != nil {
+		go fn(sessionID, instanceID)
+	}
+	return true, nil
 }
 
 func save(layout agentconfig.Layout, sessionID string, ws Workspace) error {

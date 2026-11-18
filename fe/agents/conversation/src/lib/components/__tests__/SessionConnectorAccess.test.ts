@@ -7,11 +7,14 @@ const DATA = {
   connectors: [
     {
       connector_id: "c-1", key: "notes", label: "Notes", kind: "saved", calls: 3, errors: 1, overrides: 1, approved: 2,
-      last_at: "2026-01-02T10:00:00Z", last_op: "update_page", last_status: "error", last_error: "401", last_note: "mode=write", mode: "ask",
+      last_at: "2026-01-02T10:00:00Z", last_op: "update_page", last_status: "error", last_error: "401", last_note: "mode=write", mode: "allow",
     },
   ],
   requests: [],
-  grants: [{ id: "g-1", connector_id: "c-1", op_key: "update_page", target: "page_id=p1", approver: "Owner A" }],
+  grants: [
+    { id: "g-1", connector_id: "c-1", op_key: "update_page", target: "page_id=p1", approver: "Owner A" },
+    { id: "g-2", connector_id: "c-1", op_key: "update_page", target: "page_id=p2", approver: "Owner A", expires_at: new Date(Date.now() + 30 * 60000).toISOString() },
+  ],
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -26,11 +29,14 @@ describe("SessionConnectorAccess", () => {
     render(SessionConnectorAccess, { base: "/tools/agents", sessionId: "sess-1" });
     await screen.findByText(/1 override/);
     expect(screen.getByText(/2 approved/)).toBeTruthy();
-    expect(screen.getByRole("radio", { name: "Ask each time" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Normal" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("radio", { name: "Ask each time" })).toBeNull();
+    expect(screen.getAllByText(/· this session$/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/(29|30) min left/).length).toBeGreaterThan(0);
     await fireEvent.click(screen.getByRole("radio", { name: "Blocked" }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/sessions/sess-1/access/policy"))).toBe(true));
     const post = calls.find((c) => c.url.endsWith("/access/policy"));
     expect(JSON.parse(post!.body!)).toEqual({ connector_id: "c-1", mode: "block" });
-    expect(screen.getByText("Revoke")).toBeTruthy();
+    expect(screen.getAllByText("Revoke").length).toBe(2);
   });
 });

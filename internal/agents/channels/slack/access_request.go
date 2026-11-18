@@ -288,6 +288,13 @@ func reviewModal(v accessreq.View, meta string) map[string]any {
 	blocks := []map[string]any{
 		section(fmt.Sprintf("*%s* asks to run %d action(s)", escapeMrkdwn(agentLabel(v)), len(v.Items))),
 	}
+	if v.AskedBy != nil {
+		who := v.AskedBy.Name
+		if who == "" {
+			who = v.AskedBy.ID
+		}
+		blocks = append(blocks, contextBlock("Asked while answering "+escapeMrkdwn(who)))
+	}
 	if v.Requester != "" {
 		blocks = append(blocks, contextBlock("Asked in a conversation of "+escapeMrkdwn(v.Requester)))
 	}
