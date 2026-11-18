@@ -3274,6 +3274,34 @@ var threadTextOp = regexp.MustCompile(`(send_message|update_message|chat\.postMe
 // answer through a tool message: they asked, so the thread says something.
 const emptyHumanReply = "Sudah diproses, tapi balasannya kosong. Detailnya ada di sesi."
 
+// emptyReplyWait is how long a person's turn that ended with nothing
+// waits before emptyHumanReply is posted. 0 posts it at once (tests).
+var emptyReplyWait = 60 * time.Second
+
+// armEmptyReply posts emptyHumanReply for t once emptyReplyWait has
+// passed, unless the agent answered meanwhile (a later turn of the same
+// process, a message tool) or a new message replaced the turn. A turn
+// still running then is waited out again: its own Done may answer.
+func (s *Channel) armEmptyReply(sessionKey string, t *turn) {
+	time.AfterFunc(emptyReplyWait, func() {
+		s.mu.Lock()
+		if s.turns[sessionKey] != t || t.answered || t.postedTextInThread {
+			s.mu.Unlock()
+			return
+		}
+		if t.running {
+			s.mu.Unlock()
+			s.armEmptyReply(sessionKey, t)
+			return
+		}
+		t.answered = true
+		s.mu.Unlock()
+		log.Info().Str("channel", "slack").Str("session", sessionKey).
+			Dur("waited", emptyReplyWait).Msg("slack: person's turn ended with no reply; posting the empty-reply line")
+		s.NotifyState(sessionKey, "done", emptyHumanReply)
+	})
+}
+
 // postsToThread reports whether a tool input writes a message into the
 // thread channelID/threadTS. A read of the same thread names both too,
 // so the op must be a write.
@@ -4049,6 +4077,14 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		if !liveStreamText {
 			text, held = t.finalReply()
 		}
+		// An empty Done is often not the end of the answer: a resumed
+		// process closes a queued event's turn first and the real reply
+		// follows seconds later. Wait before saying "empty", and only if
+		// nothing reached the thread meanwhile (armEmptyReply).
+		deferEmpty := text == emptyHumanReply && emptyReplyWait > 0
+		if deferEmpty {
+			text = ""
+		}
 		if strings.TrimSpace(text) != "" || t.postedTextInThread {
 			t.answered = true
 		}
@@ -4060,6 +4096,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		t.interim = agentchannels.InterimTurn{}
 		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
+		if deferEmpty {
+			s.armEmptyReply(sessionKey, t)
+		}
 		if held != "" {
 			// Neither posted nor dropped unseen: the session records it
 			// and someone decides (finalReply).

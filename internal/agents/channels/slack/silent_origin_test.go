@@ -20,6 +20,9 @@ type silentRun struct {
 // "!failover" a provider failover. It returns what the thread got.
 func playOrigin(t *testing.T, tr turn, parts ...string) silentRun {
 	t.Helper()
+	prevWait := emptyReplyWait
+	emptyReplyWait = 0
+	t.Cleanup(func() { emptyReplyWait = prevWait })
 	f := newFakeSlack(t)
 	tr.channelID, tr.threadTS, tr.running = "C1", "1700000000.000100", true
 	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
@@ -330,5 +333,46 @@ func TestEmptyReplyLineOnlyWhenUnanswered(t *testing.T) {
 	reg2.DispatchAgentEvent("slack-t1", done)
 	if got := postedText(f2); got != "" {
 		t.Fatalf("event turn posted %q", got)
+	}
+}
+
+// An empty Done right after a person's message waits: when the real
+// answer follows (a resumed process closes a queued event's turn first),
+// the empty-reply line is never posted. With nothing following, it is.
+func TestEmptyReplyLineWaitsForLateAnswer(t *testing.T) {
+	prevWait := emptyReplyWait
+	emptyReplyWait = 50 * time.Millisecond
+	t.Cleanup(func() { emptyReplyWait = prevWait })
+	done := event.AgentEvent{Type: event.Done}
+
+	f := newFakeSlack(t)
+	tr := turn{human: true, channelID: "C1", threadTS: "1700000000.000100", running: true}
+	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
+	reg := agentchannels.NewRegistry()
+	reg.Add(c, nil)
+	reg.DispatchAgentEvent("slack-t1", done)
+	if got := postedText(f); got != "" {
+		t.Fatalf("posted at once: %q", got)
+	}
+	c.reopenTurn("slack-t1")
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Still checking, two more minutes."})
+	reg.DispatchAgentEvent("slack-t1", done)
+	time.Sleep(200 * time.Millisecond)
+	if got := postedText(f); !strings.Contains(got, "two more minutes") || strings.Contains(got, emptyHumanReply) {
+		t.Fatalf("late answer: posted %q", got)
+	}
+
+	f2 := newFakeSlack(t)
+	tr2 := turn{human: true, channelID: "C1", threadTS: "1700000000.000100", running: true}
+	c2 := &Channel{api: f2.client(), turns: map[string]*turn{"slack-t1": &tr2}}
+	reg2 := agentchannels.NewRegistry()
+	reg2.Add(c2, nil)
+	reg2.DispatchAgentEvent("slack-t1", done)
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(postedText(f2), emptyHumanReply) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no answer: posted %q", postedText(f2))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
