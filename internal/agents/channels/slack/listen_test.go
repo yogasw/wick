@@ -183,7 +183,7 @@ func TestListenWaitOthersReplied(t *testing.T) {
 // Every reply a listening thread hears lands in the session at once, and
 // someone else joining in restarts the wait like the asker does.
 func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
-	ch, _, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	ch, _, got := listenChannel(t, "---\ndelay: 2\n---\n")
 	var mu sync.Mutex
 	var heard []map[string]string
 	ch.SetHeardFn(func(sessionID, text string, extras map[string]string) {
@@ -208,12 +208,13 @@ func TestListenWaitHeardAndRestartedByAnyone(t *testing.T) {
 		if r[0] != "kenapa form-nya kosong?" || r[2] != true {
 			t.Fatalf("dispatched %v", r)
 		}
-		// No restart waits ~1s; a restart at ~0.6s waits ~1.6s. 1.3s
-		// splits the two with room for a loaded host (-race, CI).
-		if r[1].(time.Duration) < 1300*time.Millisecond {
+		// No restart waits ~2s; a restart at ~0.6s waits ~2.6s. 2.3s
+		// splits the two; the 2s window leaves the 0.6s sleep room on a
+		// loaded host (-race, the whole package at once).
+		if r[1].(time.Duration) < 2300*time.Millisecond {
 			t.Fatalf("another reply did not restart the wait: waited %v", r[1])
 		}
-	case <-time.After(4 * time.Second):
+	case <-time.After(6 * time.Second):
 		t.Fatal("held reply never went through")
 	}
 	mu.Lock()
