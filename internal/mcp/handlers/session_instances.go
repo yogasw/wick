@@ -244,7 +244,7 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 	for _, op := range mod.AllOps() {
 		shown[op.Key] = visible(op)
 		if !shown[op.Key] && !op.ConfigOnly {
-			off[op.Key] = connectors.ConfigOffReason(op)
+			off[op.Key] = connectors.ConfigOffReasonSession(op, instanceID, target.LockSeals)
 		}
 	}
 	detail, err := buildConnectorDetail(mod, instanceID, label, "", selector,

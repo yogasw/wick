@@ -127,7 +127,7 @@ func TestVisibleWhenExecuteSessionInstance(t *testing.T) {
 		return err
 	}
 	// No browser saved on the session instance: the module default applies.
-	if err := run(map[string]string{}); err == nil || !strings.Contains(err.Error(), "turned off by this connector's config") {
+	if err := run(map[string]string{}); err == nil || !strings.Contains(err.Error(), "turned off by this session connector's config") {
 		t.Fatalf("want refusal, got %v", err)
 	}
 	if err := run(map[string]string{"browser": "moli"}); err != nil {
@@ -255,5 +255,19 @@ func TestAccessRequestRefusesConfigOffOp(t *testing.T) {
 	}
 	if _, err := svc.DescribeOp(ctx, id, "pdf"); err != nil {
 		t.Fatalf("browser=moli: pdf must be requestable: %v", err)
+	}
+}
+
+func TestConfigOffReasonSaysWhoCanChangeIt(t *testing.T) {
+	op := connector.Operation{Key: "resolve", VisibleWhen: "mode:write|admin"}
+	if got := ConfigOffReason(op); !strings.Contains(got, "only an admin") {
+		t.Fatalf("saved connector reason = %q", got)
+	}
+	got := ConfigOffReasonSession(op, "sw_test", nil)
+	if !strings.Contains(got, "action=set_config connector_id=sw_test") || !strings.Contains(got, `{"mode": "write"}`) {
+		t.Fatalf("session reason = %q", got)
+	}
+	if got := ConfigOffReasonSession(op, "sw_test", map[string]string{"mode": "seal"}); strings.Contains(got, "set_config") || !strings.Contains(got, "locked") {
+		t.Fatalf("locked session reason = %q", got)
 	}
 }

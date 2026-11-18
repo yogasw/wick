@@ -1809,11 +1809,29 @@ func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map
 	return out
 }
 
-// ConfigOffReason is the note shown for an op its instance's config has
-// switched off.
+// ConfigOffReason is the note shown for an op a saved connector's config
+// has switched off. Only an admin edits a saved connector; running it
+// (or borrowing it) never includes changing its config.
 func ConfigOffReason(op connector.Operation) string {
-	field, values, _ := strings.Cut(op.VisibleWhen, ":")
-	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); ask an admin to change the config to use it", strings.TrimSpace(field), strings.TrimSpace(values))
+	field, values := configOffNeed(op)
+	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); only an admin can change a saved connector's config, so ask one (or use a session connector you can configure)", field, values)
+}
+
+// ConfigOffReasonSession is the same note for a session connector: the
+// session configures its own instance, so it says how, unless a person
+// locked that key.
+func ConfigOffReasonSession(op connector.Operation, instanceID string, lockSeals map[string]string) string {
+	field, values := configOffNeed(op)
+	if _, locked := lockSeals[field]; locked {
+		return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); a person locked %s, so ask them to change it in the Session Workspace tab", field, values, field)
+	}
+	first, _, _ := strings.Cut(values, "|")
+	return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); it is this session's own connector: set it with wick_session_workspace action=set_config connector_id=%s values={%q: %q}, then call again", field, values, instanceID, field, first)
+}
+
+func configOffNeed(op connector.Operation) (field, values string) {
+	f, v, _ := strings.Cut(op.VisibleWhen, ":")
+	return strings.TrimSpace(f), strings.TrimSpace(v)
 }
 
 // OpState bundles the effective state of one operation on one connector
@@ -2514,6 +2532,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	testPath := p.Source == entity.ConnectorRunSourceTest || p.Source == entity.ConnectorRunSourcePluginTest
 	if op.VisibleWhen != "" && (virtual || !testPath) &&
 		!connector.OpVisible(*op, connector.EffectiveConfigValues(mod, configs)) {
+		if virtual {
+			return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReasonSession(*op, p.ConnectorID, p.SessionInstance.LockSeals))
+		}
 		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReason(*op))
 	}
 
