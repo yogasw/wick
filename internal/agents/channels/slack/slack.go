@@ -3272,7 +3272,7 @@ var threadTextOp = regexp.MustCompile(`(send_message|update_message|chat\.postMe
 // emptyHumanReply is posted for a person's turn that ended with nothing
 // to show (only [silent], or narration before its last tools) and did not
 // answer through a tool message: they asked, so the thread says something.
-const emptyHumanReply = "Sudah diproses, tapi balasannya kosong. Detailnya ada di sesi."
+const emptyHumanReply = "Agent berhenti tanpa balasan. Coba kirim ulang pesannya; detailnya ada di sesi."
 
 // emptyReplyWait is how long a person's turn that ended with nothing
 // waits before emptyHumanReply is posted. 0 posts it at once (tests).
@@ -3282,6 +3282,7 @@ var emptyReplyWait = 60 * time.Second
 // passed, unless the agent answered meanwhile (a later turn of the same
 // process, a message tool) or a new message replaced the turn. A turn
 // still running then is waited out again: its own Done may answer.
+// Until then the thread keeps its ⏳; posting the line takes it off.
 func (s *Channel) armEmptyReply(sessionKey string, t *turn) {
 	time.AfterFunc(emptyReplyWait, func() {
 		s.mu.Lock()
@@ -3299,6 +3300,7 @@ func (s *Channel) armEmptyReply(sessionKey string, t *turn) {
 		log.Info().Str("channel", "slack").Str("session", sessionKey).
 			Dur("waited", emptyReplyWait).Msg("slack: person's turn ended with no reply; posting the empty-reply line")
 		s.NotifyState(sessionKey, "done", emptyHumanReply)
+		s.clearWorking(sessionKey)
 	})
 }
 
@@ -4071,7 +4073,12 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		}
 		s.stopStatusAnimation(t)
 		s.stopEditTicker(t)
-		defer s.clearWorking(sessionKey)
+		keepWorking := false
+		defer func() {
+			if !keepWorking {
+				s.clearWorking(sessionKey)
+			}
+		}()
 		text = t.buf.String()
 		var held string
 		if !liveStreamText {
@@ -4097,7 +4104,15 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
 		if deferEmpty {
+			// Still reads as working (⏳ and the status line) while the
+			// answer may follow; armEmptyReply settles it either way.
+			keepWorking = true
+			s.setAssistantStatus(channelID, threadTS, statusLabelThinking)
+			if _, dm := s.dmMain.Load(sessionKey); !dm {
+				s.persistThreadBinding(sessionKey, channelID, threadTS)
+			}
 			s.armEmptyReply(sessionKey, t)
+			return
 		}
 		if held != "" {
 			// Neither posted nor dropped unseen: the session records it
