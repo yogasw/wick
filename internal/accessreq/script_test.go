@@ -114,10 +114,13 @@ func TestScriptAutoApproveAndCache(t *testing.T) {
 	if fr.owner != "owner-a" {
 		t.Fatalf("script ran as %q, want the rule owner", fr.owner)
 	}
-	// Same input again: cached.
+	// Same input again: never cached, the script runs again.
 	_, _, _ = e.svc.Check(ctx, a)
-	if fr.runs != 1 {
-		t.Fatalf("runs = %d, want 1 (cached)", fr.runs)
+	if fr.runs != 2 {
+		t.Fatalf("runs = %d, want 2 (no cache)", fr.runs)
+	}
+	if rc := e.svc.RuleCheckOf(ruleIDNamed(t, e, "listed-auto")); rc.LastOK == nil || rc.LastError != "" {
+		t.Fatalf("check = %+v", rc)
 	}
 	a.Params = map[string]string{"app_code": "acme-prod"}
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
@@ -140,10 +143,9 @@ func TestScriptFailureNeverAllows(t *testing.T) {
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
 		t.Fatalf("failing script auto-approved: %q", runAs)
 	}
-	// Failures are not cached: the next check runs again.
 	_, _, _ = e.svc.Check(ctx, a)
 	if fr.runs != 2 {
-		t.Fatalf("runs = %d, failures must not be cached", fr.runs)
+		t.Fatalf("runs = %d, each check must run the script", fr.runs)
 	}
 	fr.fn = func(string, map[string]any) (any, error) { return "yes", nil }
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {

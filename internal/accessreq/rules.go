@@ -369,6 +369,9 @@ type Verdict struct {
 	// Simulated names the simulate-mode rules that would have
 	// auto-approved.
 	Simulated []string
+	// Failed says which rule checks could not run and why ("rule "x":
+	// <error>"), so the card shows it.
+	Failed []string
 }
 
 // ruleApplies reports whether r covers the action's session. With no
@@ -411,11 +414,15 @@ func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
 			case res.Err != "" && (r.Effect == EffectDeny || r.Effect == EffectRequire):
 				// A deny or require rule whose check failed still asks a
 				// person, one call at a time: failing closed.
+				v.Failed = append(v.Failed, fmt.Sprintf("rule %q could not run its check (%s)", r.Name, clip(res.Err, 200)))
 				if require == nil {
 					require = &rules[i]
 				}
 				continue
-			case res.Err != "" || !res.Allow:
+			case res.Err != "":
+				v.Failed = append(v.Failed, fmt.Sprintf("rule %q could not run its check (%s)", r.Name, clip(res.Err, 200)))
+				continue
+			case !res.Allow:
 				continue
 			}
 		}

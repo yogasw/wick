@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,5 +148,54 @@ func TestRequireScriptErrorFailsClosed(t *testing.T) {
 	v := e.svc.Evaluate(context.Background(), Action{SessionID: "sess-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite})
 	if v.Effect != EffectRequire {
 		t.Fatalf("effect = %q", v.Effect)
+	}
+}
+
+func ruleIDNamed(t *testing.T, e *env, name string) string {
+	t.Helper()
+	rs, err := e.svc.store.rules(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rs {
+		if r.Name == name {
+			return r.ID
+		}
+	}
+	t.Fatalf("rule %q not found", name)
+	return ""
+}
+
+// A failed require check is noted on the card item, and recorded on the rule.
+func TestFailedCheckNotedOnItem(t *testing.T) {
+	e := newEnv(t)
+	e.svc.SetScriptRunner(func(context.Context, string, string, map[string]any) (json.RawMessage, []string, error) {
+		return nil, nil, errors.New("invalid_auth")
+	})
+	saveRule(t, e, "owner-a", "name: prod-card\neffect: require\nwhen:\n  ops: [notes.*]\n  script: return true\n")
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	if v.Items[0].Note == "" || !strings.Contains(v.Items[0].Note, "invalid_auth") || len(v.Items[0].Modes) > 1 {
+		t.Fatalf("item = note %q modes %v", v.Items[0].Note, v.Items[0].Modes)
+	}
+	if rc := e.svc.RuleCheckOf(ruleIDNamed(t, e, "prod-card")); !strings.Contains(rc.LastError, "invalid_auth") {
+		t.Fatalf("check = %+v", rc)
+	}
+}
+
+// An approvers-only rule whose check cannot run lets an admin decide, and
+// nobody else.
+func TestApproversCheckFailureFallsBackToAdmins(t *testing.T) {
+	e := newEnv(t)
+	e.svc.SetScriptRunner(func(context.Context, string, string, map[string]any) (json.RawMessage, []string, error) {
+		return nil, nil, errors.New("timeout")
+	})
+	saveRule(t, e, "owner-a", "name: ops-only\neffect: approvers\napprovers: only\nwhen:\n  ops: [notes.*]\n  script: return true\n")
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	if av, _ := e.svc.ViewFor(context.Background(), v.ID, "admin-z"); !av.Items[0].CanDecide {
+		t.Fatalf("admin locked out: %+v", av.Items[0])
+	}
+	ov, _ := e.svc.ViewFor(context.Background(), v.ID, "owner-a")
+	if ov.Items[0].CanDecide || !strings.Contains(ov.Items[0].LockedReason+ov.ViewerReason, "only an admin") {
+		t.Fatalf("owner = can %v reason %q / %q", ov.Items[0].CanDecide, ov.Items[0].LockedReason, ov.ViewerReason)
 	}
 }

@@ -88,7 +88,7 @@ export const MODE_LABEL: Record<string, string> = {
 export function itemLine(it: AccessItemView): string {
   const mode = (MODE_LABEL[it.mode] ?? it.mode).toLowerCase();
   switch (it.status) {
-    case "pending": return `Waiting · who can approve: ${it.approvers_text || (it.approvers.length ? it.approvers.join(", ") : "nobody yet")}`;
+    case "pending": return `Waiting · who can approve: ${it.approvers_text || (it.approvers.length ? it.approvers.join(", ") : "nobody yet")}${it.note ? ` · ℹ️ ${it.note}` : ""}`;
     case "running": return `Approved ${mode} by ${it.decided_by} · running…`;
     case "ok": return `Approved ${mode} by ${it.decided_by} · OK`;
     case "error": return `Approved ${mode} by ${it.decided_by} · error: ${it.error}`;

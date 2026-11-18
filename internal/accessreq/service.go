@@ -47,10 +47,10 @@ type Service struct {
 	sync bool
 	now  func() time.Time
 
-	// script runs rule scripts (SetScriptRunner); cache keeps their
-	// answers for a few minutes.
+	// script runs rule scripts (SetScriptRunner); checks keeps how each
+	// rule's script last went.
 	script ScriptRunner
-	cache  scriptCache
+	checks ruleChecks
 }
 
 // New builds a service.
@@ -176,6 +176,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		}
 		if len(v.Simulated) > 0 {
 			item.Note = "would auto-approve (simulate): " + strings.Join(v.Simulated, ", ")
+		}
+		if len(v.Failed) > 0 {
+			note := strings.Join(v.Failed, "; ") + ": approved once only until it runs again"
+			if item.Note != "" {
+				note = item.Note + "; " + note
+			}
+			item.Note = note
 		}
 		if v.Effect == EffectAutoApprove {
 			autos = append(autos, auto{idx: i, rule: *v.Rule})

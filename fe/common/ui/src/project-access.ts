@@ -33,6 +33,8 @@ export interface AccessRuleRow {
   owner: string;
   can_edit: boolean;
   yaml: string;
+  /** How the rule's script last went (scripts are never cached). */
+  check?: { last_ok?: string; last_error?: string; error_at?: string };
 }
 
 export interface AccessGrantRow {

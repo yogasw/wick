@@ -2,10 +2,7 @@ package accessreq
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,43 +33,47 @@ type ScriptResult struct {
 	Reason string   `json:"reason,omitempty"`
 	Err    string   `json:"error,omitempty"`
 	Logs   []string `json:"logs,omitempty"`
-	Cached bool     `json:"cached,omitempty"`
 }
 
-const (
-	scriptTimeout  = 10 * time.Second
-	scriptCacheTTL = 5 * time.Minute
-	scriptCacheMax = 2000
-)
+const scriptTimeout = 10 * time.Second
 
-type scriptCache struct {
+// RuleCheck is how a rule's script last went: when it last answered,
+// and the last failure (cleared by the next clean answer). Kept in
+// memory only, for the rule list and the card.
+type RuleCheck struct {
+	LastOK    *time.Time `json:"last_ok,omitempty"`
+	LastError string     `json:"last_error,omitempty"`
+	ErrorAt   *time.Time `json:"error_at,omitempty"`
+}
+
+type ruleChecks struct {
 	mu sync.Mutex
-	m  map[string]scriptCacheEntry
+	m  map[string]RuleCheck
 }
 
-type scriptCacheEntry struct {
-	res ScriptResult
-	at  time.Time
-}
-
-func (c *scriptCache) get(key string, now time.Time) (ScriptResult, bool) {
+func (c *ruleChecks) record(ruleID string, err string, at time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.m[key]
-	if !ok || now.Sub(e.at) > scriptCacheTTL {
-		return ScriptResult{}, false
+	if c.m == nil {
+		c.m = map[string]RuleCheck{}
 	}
-	return e.res, true
+	rc := c.m[ruleID]
+	if err == "" {
+		rc.LastOK, rc.LastError, rc.ErrorAt = &at, "", nil
+	} else {
+		rc.LastError, rc.ErrorAt = err, &at
+	}
+	c.m[ruleID] = rc
 }
 
-func (c *scriptCache) put(key string, res ScriptResult, now time.Time) {
+func (c *ruleChecks) get(ruleID string) RuleCheck {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.m == nil || len(c.m) >= scriptCacheMax {
-		c.m = map[string]scriptCacheEntry{}
-	}
-	c.m[key] = scriptCacheEntry{res: res, at: now}
+	return c.m[ruleID]
 }
+
+// RuleCheckOf is the last outcome of a rule's script.
+func (s *Service) RuleCheckOf(ruleID string) RuleCheck { return s.checks.get(ruleID) }
 
 // SetScriptRunner wires the Code Mode runner for rule scripts. Without one
 // a script condition never holds (fail closed).
@@ -112,7 +113,8 @@ func nonNil(m map[string]string) map[string]string {
 	return m
 }
 
-// runRuleScript runs a rule's script, cached per rule revision and input.
+// runRuleScript runs a rule's script. Never cached: every check reads
+// its sources (a canvas, a user group) as they are now.
 func (s *Service) runRuleScript(ctx context.Context, r entity.AccessRule, code string, input map[string]any) ScriptResult {
 	s.mu.RLock()
 	run := s.script
@@ -120,24 +122,14 @@ func (s *Service) runRuleScript(ctx context.Context, r entity.AccessRule, code s
 	if run == nil {
 		return ScriptResult{Err: "rule scripts are not available on this wick"}
 	}
-	raw, _ := json.Marshal(input)
-	sum := sha256.Sum256(append([]byte(r.ID+"|"+strconv.Itoa(r.Rev)+"|"), raw...))
-	key := hex.EncodeToString(sum[:])
-	now := s.now()
-	if res, ok := s.cache.get(key, now); ok {
-		res.Cached = true
-		return res
-	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scriptTimeout)
 	defer cancel()
 	out, logs, err := run(sctx, r.OwnerID, code, input)
 	res := parseScriptResult(out, err)
 	res.Logs = logs
+	s.checks.record(r.ID, res.Err, s.now())
 	if res.Err != "" {
-		log.Warn().Str("rule", r.Name).Str("error", res.Err).Msg("accessreq: rule script failed (treated as not allowed)")
-	} else {
-		// Only a clean answer is cached; a failure is retried next time.
-		s.cache.put(key, res, now)
+		log.Warn().Str("rule", r.Name).Str("error", res.Err).Msg("accessreq: rule script failed")
 	}
 	return res
 }
@@ -245,10 +237,15 @@ func (s *Service) itemRole(ctx context.Context, a Action, viewer Person, default
 		res := s.runRuleScript(ctx, ar.rule, ar.doc.When.Script, input)
 		allow := res.Err == "" && res.Allow
 		if ar.doc.Approvers == ApproversOnly {
+			// A check that could not run does not lock the card: an admin
+			// may still decide; everyone else waits until it runs again.
+			if res.Err != "" && viewer.IsAdmin {
+				continue
+			}
 			if !allow {
 				why := res.Reason
 				if res.Err != "" {
-					why = "the check could not run"
+					why = "its check could not run (" + clip(res.Err, 160) + "), so only an admin may approve for now"
 				}
 				if why == "" {
 					why = "you do not pass it"
@@ -267,7 +264,6 @@ func (s *Service) itemRole(ctx context.Context, a Action, viewer Person, default
 	return false, ""
 }
 
-// approverRuleNote names the add-rules for the "who can" line.
 // approversText is the card's "who can approve" from the matching
 // approvers rules' labels: an "only" rule's label replaces the names,
 // an "add" rule's label is listed after them. "" = no label.
@@ -293,6 +289,7 @@ func approversText(rules []approverRule, names []string) string {
 	return ""
 }
 
+// approverRuleNote names the add-rules for the "who can" line.
 func approverRuleNote(rules []approverRule) string {
 	var names []string
 	for _, ar := range rules {
@@ -340,4 +337,13 @@ func (s *Service) simulateScript(ctx context.Context, r *entity.AccessRule, a Ac
 	res := parseScriptResult(out, rerr)
 	res.Logs = logs
 	return res, nil
+}
+
+// clip shortens s to n runes.
+func clip(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return string(r[:n]) + "…"
 }

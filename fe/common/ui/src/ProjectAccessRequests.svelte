@@ -147,6 +147,11 @@
           {#if r.disabled}<span class="rounded bg-white-200 px-1 dark:bg-navy-800">disabled</span>{/if}
           <span class={muted}>by {r.owner || "someone"} · rev {r.rev}</span>
         </div>
+        {#if r.check?.last_error}
+          <p class="mt-1 text-[11px] text-neg-400" data-testid="project-access-rule-error">Last check failed{r.check.error_at ? ` (${new Date(r.check.error_at).toLocaleString()})` : ""}: {r.check.last_error}</p>
+        {:else if r.check?.last_ok}
+          <p class={muted}>Last check OK: {new Date(r.check.last_ok).toLocaleString()}</p>
+        {/if}
         {#if r.can_edit}
           <textarea class={code + " mt-1.5"} rows="8" value={editing[r.id] ?? r.yaml} oninput={(e) => (editing[r.id] = (e.currentTarget as HTMLTextAreaElement).value)}></textarea>
           <div class="mt-1.5 flex gap-1.5">

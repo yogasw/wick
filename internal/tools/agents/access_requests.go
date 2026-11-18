@@ -139,7 +139,8 @@ when:
 #          requester: {id, name, channel, wick_user_id} | null   (whose message the agent answered;
 #                     null for a schedule or another agent),
 #          viewer: {wick_id, name, email, is_admin, slack_id}}   (viewer only for approvers rules)
-# A failing or unclear script never allows. Answers are cached 5 minutes per rule revision.
+# A failing or unclear script never allows; a deny/require rule whose check fails still asks (once).
+# Scripts are never cached: every check reads its sources as they are now.
 `
 
 // ----- web chat: the inline card -----
@@ -304,7 +305,7 @@ func projectAccessJSON(c *tool.Ctx) {
 		rules = append(rules, map[string]any{
 			"id": r.ID, "name": r.Name, "effect": r.Effect, "simulate": r.Simulate, "disabled": r.Disabled,
 			"rev": r.Rev, "owner": r.OwnerName, "can_edit": r.CanEdit,
-			"yaml": r.YAML, "updated_at": r.UpdatedAt,
+			"yaml": r.YAML, "updated_at": r.UpdatedAt, "check": globalAccess.RuleCheckOf(r.ID),
 		})
 	}
 	grants := make([]map[string]any, 0, len(pv.Grants))

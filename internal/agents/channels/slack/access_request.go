@@ -178,7 +178,11 @@ func itemStatusLine(it accessreq.ItemView) string {
 		if it.ApproversText != "" {
 			who = it.ApproversText
 		}
-		return "_Waiting · who can approve: " + escapeMrkdwn(who) + "_"
+		line := "_Waiting · who can approve: " + escapeMrkdwn(who) + "_"
+		if it.Note != "" {
+			line += "\nℹ️ _" + escapeMrkdwn(clipText(it.Note, 300)) + "_"
+		}
+		return line
 	case accessreq.ItemRunning:
 		return fmt.Sprintf("_Approved %s by %s · running…_", strings.ToLower(accessreq.ModeLabel(it.Mode)), escapeMrkdwn(it.DecidedBy))
 	case accessreq.ItemOK:
