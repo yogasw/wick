@@ -44,6 +44,14 @@ return { open: list.items.length, stale: details.filter(d => d.ok).map(d => d.re
   with `wick.call(id, params, { timeout_ms: 45000 })`, a `timeout_ms` field on
   a `callMany` item, or `wick.tool(id)(params, { timeout_ms })`; it never goes
   past the run's end.
+- Cache a read call when the same lookup repeats across runs (a user group,
+  a canvas, an app's config): `wick.call(id, params, { cache: 300 })` keeps
+  the answer 5 min; `{ cache: { ok: 300, error: 60 } }` also keeps a failure
+  that is an answer (not found, forbidden), never a timeout, rate limit or
+  5xx. Max 1 h (failures 10 min). Same option on a `callMany` item. Writes
+  are never cached; entries belong to this user + session, and a hit still
+  passes the access check. A cached call shows `cached: true` in `calls`.
+  Off by default: only cache what may be that stale.
 - Pure helpers: `atob`, `btoa`, `TextEncoder` (`encode` → `Uint8Array`) and
   `TextDecoder` (utf-8).
 - `input` is the `input` argument (JSON). `console.log/warn/error` go to `logs`.

@@ -30,6 +30,8 @@ type fakeWick struct {
 	// wick); timeouts records each call's timeout_ms.
 	hang     map[string]bool
 	timeouts sync.Map
+	// caches records each call's cache option as sent.
+	caches sync.Map
 	// callTimeoutMS is the call_timeout_ms wick sends (0 = none, an older
 	// wick).
 	callTimeoutMS int64
@@ -87,6 +89,7 @@ func (f *fakeWick) run(lang, code string, input any, timeout time.Duration) (eve
 				res = f.file(ev.Op, ev.Path, ev.Data)
 			} else {
 				f.timeouts.Store(ev.ToolID, ev.TimeoutMS)
+				f.caches.Store(ev.ToolID, string(ev.Cache))
 				if f.hang[ev.ToolID] {
 					continue
 				}

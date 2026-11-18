@@ -63,7 +63,7 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		Describe: func(toolID string) (string, bool) { return describeTool(r.Context(), svc, toolID) },
 	}
 	started := time.Now()
-	res, err := host.Run(r.Context(), codemode.Request{Lang: lang, Code: code, Input: input, Timeout: timeout, Dir: dir, NoDir: noDir})
+	res, err := host.Run(r.Context(), codemode.Request{Lang: lang, Code: code, Input: input, Timeout: timeout, Dir: dir, NoDir: noDir, CacheScope: CodeCacheScope(user, sessionID)})
 	scriptPath, _ := args["script_path"].(string)
 	recordCodeRun(r.Context(), svc, layout, codeRunOrigin{via: entity.CodeModeViaMCP, script: scriptPath}, lang, sessionID, user, started, res, err)
 	if err != nil {
@@ -152,10 +152,22 @@ func RunCodeAs(ctx context.Context, svc *connectors.Service, layout agentconfig.
 		},
 		Describe: func(toolID string) (string, bool) { return describeTool(ctx, svc, toolID) },
 	}
+	if req.CacheScope == "" {
+		req.CacheScope = CodeCacheScope(user, sessionID)
+	}
 	started := time.Now()
 	res, err := host.Run(ctx, req)
 	recordCodeRun(ctx, svc, layout, codeRunOriginOf(ctx), req.Lang, sessionID, user, started, res, err)
 	return res, err
+}
+
+// CodeCacheScope is who owns a run's cached call answers: the user, and
+// the session (whose connectors and agent the calls resolve through).
+func CodeCacheScope(user *entity.User, sessionID string) string {
+	if user == nil {
+		return ""
+	}
+	return "u:" + user.ID + "|s:" + sessionID
 }
 
 // checkToolAccess is the pre-flight of one tool_id: it parses, names an

@@ -106,8 +106,9 @@ func render(v goja.Value) string {
 
 // call asks wick to run one tool and waits for the answer. The VM goroutine
 // blocks here; the run's context ends the wait on timeout. timeoutMS is the
-// script's own deadline for this call (0 = default).
-func (rn *run) call(ctx context.Context, toolID string, params any, timeoutMS int64) callResult {
+// script's own deadline for this call (0 = default); cache is its cache
+// option, passed to wick as written (wick decides what it means).
+func (rn *run) call(ctx context.Context, toolID string, params any, timeoutMS int64, cache json.RawMessage) callResult {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return callResult{Error: "params are not JSON: " + err.Error()}
@@ -124,7 +125,7 @@ func (rn *run) call(ctx context.Context, toolID string, params any, timeoutMS in
 	// stops waiting itself.
 	cctx, cancel := context.WithTimeoutCause(ctx, d+callGrace, fmt.Errorf("timed out after %s", seconds(d)))
 	defer cancel()
-	return rn.ask(cctx, event{Type: "call", ToolID: toolID, Params: raw, TimeoutMS: d.Milliseconds()}, toolID)
+	return rn.ask(cctx, event{Type: "call", ToolID: toolID, Params: raw, TimeoutMS: d.Milliseconds(), Cache: cache}, toolID)
 }
 
 // callDeadline is one call's deadline: ms when the script asked for one,
@@ -162,6 +163,20 @@ func timeoutOpt(o map[string]any) int64 {
 		return int64(n)
 	}
 	return 0
+}
+
+// cacheOpt reads a call's cache option (a number of seconds, true, or
+// {ok, error}) as JSON for wick. nil = no cache.
+func cacheOpt(o map[string]any) json.RawMessage {
+	v, ok := o["cache"]
+	if !ok || v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 // file asks wick for one wick.file op; wick does the IO, never the runner.
@@ -236,7 +251,7 @@ const guard = `(() => {
 
 func (rn *run) exec(ctx context.Context, in runRequest) (out event) {
 	out.Type = "done"
-	out.Features = []string{featureFile}
+	out.Features = []string{featureFile, featureCache}
 	defer func() {
 		if p := recover(); p != nil {
 			out.OK, out.Result = false, nil
@@ -354,7 +369,7 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 		if toolID == "" {
 			throw("wick.call: tool_id is required")
 		}
-		res := rn.call(ctx, toolID, params, timeoutOpt(opts))
+		res := rn.call(ctx, toolID, params, timeoutOpt(opts), cacheOpt(opts))
 		if !res.OK {
 			throw(toolID + ": " + res.Error)
 		}
@@ -375,19 +390,19 @@ func (rn *run) bind(ctx context.Context, vm *goja.Runtime, input json.RawMessage
 				tid, _ = c["tool_id"].(string)
 			}
 			wg.Add(1)
-			go func(i int, tid string, params any, ms int64) {
+			go func(i int, tid string, params any, ms int64, cache json.RawMessage) {
 				defer wg.Done()
 				if strings.TrimSpace(tid) == "" {
 					out[i] = map[string]any{"ok": false, "error": "toolId is required"}
 					return
 				}
-				res := rn.call(ctx, tid, params, ms)
+				res := rn.call(ctx, tid, params, ms, cache)
 				if !res.OK {
 					out[i] = map[string]any{"ok": false, "toolId": tid, "error": res.Error}
 					return
 				}
 				out[i] = map[string]any{"ok": true, "toolId": tid, "result": decode(res.Result)}
-			}(i, tid, c["params"], timeoutOpt(c))
+			}(i, tid, c["params"], timeoutOpt(c), cacheOpt(c))
 		}
 		wg.Wait()
 		return jsValue(vm, out)

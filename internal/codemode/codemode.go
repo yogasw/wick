@@ -80,6 +80,9 @@ type Request struct {
 	// (FileOp). Empty = no wick.file; NoDir then says why.
 	Dir   string
 	NoDir string
+	// CacheScope owns the cached answers of this run's calls (the caller:
+	// user + session). Empty = calls are never cached.
+	CacheScope string
 }
 
 // Call is one connector call recorded during a run.
@@ -90,6 +93,8 @@ type Call struct {
 	Destructive bool   `json:"destructive,omitempty"`
 	MS          int64  `json:"ms"`
 	Error       string `json:"error,omitempty"`
+	// Cached: the answer came from the call cache (wick.call's cache option).
+	Cached bool `json:"cached,omitempty"`
 	// Count is set on a folded entry (CompactCalls): this many successful
 	// calls to the same tool, MS their total.
 	Count int `json:"count,omitempty"`
@@ -102,19 +107,23 @@ type Call struct {
 // on the run's audit record.
 func CompactCalls(calls []Call) []Call {
 	out := make([]Call, 0, len(calls))
-	folded := map[string]int{} // tool_id -> index in out of its folded entry
+	folded := map[string]int{} // tool_id (+cached) -> index in out of its folded entry
 	for _, c := range calls {
 		if !c.OK {
 			out = append(out, c)
 			continue
 		}
-		if i, ok := folded[c.ToolID]; ok {
+		fk := c.ToolID
+		if c.Cached {
+			fk += "\x00cached"
+		}
+		if i, ok := folded[fk]; ok {
 			out[i].Count++
 			out[i].MS += c.MS
 			continue
 		}
 		c.Count = 1
-		folded[c.ToolID] = len(out)
+		folded[fk] = len(out)
 		out = append(out, c)
 	}
 	for i := range out {
@@ -154,6 +163,9 @@ type Host struct {
 	// Installer.Ensure); the run then picks again from Runners. Optional.
 	Install func(ctx context.Context) error
 }
+
+// cacheOptLiteral spots a cache option written in a script.
+var cacheOptLiteral = regexp.MustCompile(`\bcache\s*:`)
 
 var toolIDLiteral = regexp.MustCompile("conn:[A-Za-z0-9_.:-]+/[A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.:-]+)?")
 
@@ -230,6 +242,7 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, errors.New("input must be JSON")
 	}
 	usesFile := strings.Contains(req.Code, "wick.file")
+	usesCache := cacheOptLiteral.MatchString(req.Code)
 	if usesFile && req.Dir == "" {
 		msg := "not run, the script uses wick.file but this run has no project folder"
 		if req.NoDir != "" {
@@ -356,15 +369,33 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 					if len(ev.Params) > 0 {
 						_ = json.Unmarshal(ev.Params, &params)
 					}
-					mu.Lock()
-					inflight[ev.ID], started[ev.ID] = c, t0
-					mu.Unlock()
-					txt, err := h.execCall(runCtx, callTimeout(ev.TimeoutMS, limits.Call, time.Until(deadline)), ev.ToolID, params)
-					if err != nil {
-						out.Error = err.Error()
+					opt := ParseCacheOpt(ev.Cache)
+					if c.Destructive {
+						opt = CacheOpt{} // a write is never cached
+					}
+					key, hit, cached := cachedCall(req.CacheScope, opt, ev.ToolID, params)
+					if cached && h.Check != nil && h.Check(runCtx, ev.ToolID) != nil {
+						cached = false // access gone: ask the connector, which says why
+					}
+					if cached {
+						c.Cached = true
+						if hit.ok {
+							out.OK, out.Result = true, asJSON(hit.result)
+						} else {
+							out.Error = hit.result
+						}
 					} else {
-						out.OK = true
-						out.Result = asJSON(txt)
+						mu.Lock()
+						inflight[ev.ID], started[ev.ID] = c, t0
+						mu.Unlock()
+						txt, err := h.execCall(runCtx, callTimeout(ev.TimeoutMS, limits.Call, time.Until(deadline)), ev.ToolID, params)
+						if err != nil {
+							out.Error = err.Error()
+						} else {
+							out.OK = true
+							out.Result = asJSON(txt)
+						}
+						storeCall(key, opt, out.OK, txt, out.Error)
 					}
 				}
 				c.OK, c.Error, c.MS = out.OK, firstLine(out.Error), time.Since(t0).Milliseconds()
@@ -408,6 +439,9 @@ func (h Host) Run(ctx context.Context, req Request) (*Result, error) {
 				mu.Unlock()
 				runCancel(errors.New("script timeout after " + seconds(req.Timeout)))
 			}
+			if usesCache && !slices.Contains(ev.Features, FeatureCache) {
+				res.Logs = append(res.Logs, "WARN wick: this runner drops wick.call's cache option (update codemode_goja to 0.5.0 or later); no call was cached")
+			}
 			if usesFile && !res.OK && !slices.Contains(ev.Features, FeatureFile) {
 				res.Error = "runner too old, update codemode_goja (0.2.0 or later has wick.file): " + res.Error
 			}
@@ -436,6 +470,8 @@ type wireEvent struct {
 	Params json.RawMessage `json:"params"`
 	// TimeoutMS is the call's own deadline; 0 (an older runner) = default.
 	TimeoutMS int64 `json:"timeout_ms"`
+	// Cache is the call's cache option as the script wrote it (CacheOpt).
+	Cache json.RawMessage `json:"cache"`
 	// file
 	Op   string `json:"op"`
 	Path string `json:"path"`
