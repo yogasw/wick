@@ -93,6 +93,8 @@ type accessPageVM struct {
 	Grants  []entity.AccessGrant
 	FactsOK bool
 	Sim     *accessreq.SimulateResult
+	Script  *accessreq.ScriptResult
+	Scripts string
 	SimIn   map[string]string
 	Example string
 	Facts2  []string
@@ -270,6 +272,36 @@ when:
 # app.env comes from the Facts table below (app code -> staging/production).
 `
 
+// accessScriptExamples shows rules whose condition is a Code Mode script.
+// The script runs as the rule owner with read-only connector access and
+// returns true / false or {allow, reason}. Tool ids are placeholders.
+const accessScriptExamples = `# 1. Who may approve: members of one chat channel (approvers: add | only)
+name: channel-members-approve
+effect: approvers
+approvers: add              # add = they may approve too; only = every approver must pass
+when:
+  ops: [apps.*]
+  script: |
+    const r = await wick.call("conn:<chat-connector-id>/list_channel_members", { channel: "C01TESTCHAN" });
+    const ids = r.members || [];
+    return { allow: ids.includes(input.viewer.slack_id), reason: "not a member of the ops channel" };
+
+# 2. Auto-approve when the app code is listed in a document
+name: listed-apps-auto
+effect: auto_approve
+when:
+  ops: [apps.*]
+  kind: [write]
+  script: |
+    const doc = await wick.call("conn:<docs-connector-id>/read_canvas", { canvas_id: "F01TESTDOC" });
+    const app = input.action.config.app_code || input.action.params.app_code;
+    return !!app && String(doc.markdown || "").includes(app);
+
+# input = {action: {connector_id, connector_key, op, kind, params, config, agent, session_id},
+#          viewer: {wick_id, name, email, is_admin, slack_id}}   (viewer only for approvers rules)
+# A failing or unclear script never allows. Answers are cached 5 minutes per rule revision.
+`
+
 func accessRulesPage(c *tool.Ctx) {
 	if !accessReady(c) {
 		return
@@ -278,7 +310,7 @@ func accessRulesPage(c *tool.Ctx) {
 	if u == nil {
 		return
 	}
-	vm := accessPageVM{Title: "Access rules", User: u, Example: accessRuleExample, Facts2: accessreq.FactNames(), FactsOK: u.IsAdmin()}
+	vm := accessPageVM{Title: "Access rules", User: u, Example: accessRuleExample, Scripts: accessScriptExamples, Facts2: accessreq.FactNames(), FactsOK: u.IsAdmin()}
 	var err error
 	if vm.Rules, err = globalAccess.Rules(c.Context(), u.ID); err != nil {
 		vm.Error = err.Error()
@@ -365,6 +397,7 @@ func accessSimulate(c *tool.Ctx) {
 	in := map[string]string{
 		"connector": strings.TrimSpace(c.Form("connector")), "op": strings.TrimSpace(c.Form("op")),
 		"agent": strings.TrimSpace(c.Form("agent")), "params": c.Form("params"), "session": strings.TrimSpace(c.Form("session")),
+		"rule": strings.TrimSpace(c.Form("rule")), "viewer": strings.TrimSpace(c.Form("viewer")),
 	}
 	params := map[string]string{}
 	for _, line := range strings.Split(in["params"], "\n") {
@@ -375,9 +408,17 @@ func accessSimulate(c *tool.Ctx) {
 	}
 	a := accessreq.Action{SessionID: in["session"], AgentID: in["agent"], ConnectorID: in["connector"], OpKey: in["op"], Params: params}
 	res, err := globalAccess.Simulate(c.Context(), a, true)
-	vm := accessPageVM{Title: "Access rules", User: u, Example: accessRuleExample, Facts2: accessreq.FactNames(), FactsOK: u.IsAdmin(), Sim: &res, SimIn: in}
+	vm := accessPageVM{Title: "Access rules", User: u, Example: accessRuleExample, Scripts: accessScriptExamples, Facts2: accessreq.FactNames(), FactsOK: u.IsAdmin(), Sim: &res, SimIn: in}
 	if err != nil {
 		vm.Error = err.Error()
+	}
+	if in["rule"] != "" {
+		sr, serr := globalAccess.SimulateScript(c.Context(), u.ID, in["rule"], a, in["viewer"])
+		if serr != nil {
+			vm.Error = serr.Error()
+		} else {
+			vm.Script = &sr
+		}
 	}
 	vm.Rules, _ = globalAccess.Rules(c.Context(), u.ID)
 	vm.Facts, _ = globalAccess.Facts(c.Context())
@@ -545,13 +586,17 @@ textarea.code{font:12px/1.5 ui-monospace,Menlo,monospace;min-height:220px}
 {{else}}<pre>{{.YAML}}</pre>{{end}}</div>{{end}}
 <div class="card"><strong>New rule</strong><form method="post" action="{{.Base}}/access/rules"><textarea class="code" name="doc">{{.Example}}</textarea>
 <input type="text" name="reason" placeholder="Why (kept in history)" style="margin-top:8px"><div class="row" style="margin-top:8px"><button class="primary" type="submit">Create</button></div></form>
-<p class="small muted">Facts: {{range .Facts2}}<code>{{.}}</code> {{end}}</p></div>
+<p class="small muted">Facts: {{range .Facts2}}<code>{{.}}</code> {{end}}</p>
+<details style="margin-top:8px"><summary class="small">Script rules (look things up in other connectors)</summary><pre>{{.Scripts}}</pre></details></div>
 
 <h2>Simulate</h2>
 <form class="card" method="post" action="{{.Base}}/access/simulate">
 <div class="row"><input type="text" name="connector" placeholder="connector key or instance id" value="{{index .SimIn "connector"}}"><input type="text" name="op" placeholder="op key, e.g. update_page" value="{{index .SimIn "op"}}"><input type="text" name="agent" placeholder="agent id (optional)" value="{{index .SimIn "agent"}}"><input type="text" name="session" placeholder="session id (optional)" value="{{index .SimIn "session"}}"></div>
 <textarea name="params" rows="3" placeholder="params, one key=value per line" style="margin-top:8px">{{index .SimIn "params"}}</textarea>
-<div class="row" style="margin-top:8px"><button type="submit">Simulate</button>{{with .Sim}}<span>→ <b>{{.Effect}}</b>{{if .Rule}} by rule <b>{{.Rule}}</b>{{end}} · kind {{.Kind}}{{if .Simulated}} · would auto-approve (simulate): {{range .Simulated}}{{.}} {{end}}{{end}}</span>{{end}}</div></form>
+<div class="row" style="margin-top:8px"><select name="rule"><option value="">Run a rule's script too (optional)</option>{{range .Rules}}<option value="{{.ID}}"{{if eq .ID (index $.SimIn "rule")}} selected{{end}}>{{.Name}}</option>{{end}}</select><input type="text" name="viewer" placeholder="viewer wick user id (approvers rules)" value="{{index .SimIn "viewer"}}"></div>
+<div class="row" style="margin-top:8px"><button type="submit">Simulate</button>{{with .Sim}}<span>→ <b>{{.Effect}}</b>{{if .Rule}} by rule <b>{{.Rule}}</b>{{end}} · kind {{.Kind}}{{if .Simulated}} · would auto-approve (simulate): {{range .Simulated}}{{.}} {{end}}{{end}}</span>{{end}}</div>
+{{with .Script}}<div style="margin-top:8px">Script → {{if .Err}}<b>error</b>: {{.Err}} (counts as not allowed){{else}}<b>{{if .Allow}}allow{{else}}not allowed{{end}}</b>{{if .Reason}} · {{.Reason}}{{end}}{{end}}{{if .Logs}}<pre>{{range .Logs}}{{.}}
+{{end}}</pre>{{end}}</div>{{end}}</form>
 
 <h2>Facts</h2>
 <div class="card"><table><tr><th>Fact</th><th>Subject</th><th>Value</th><th></th></tr>

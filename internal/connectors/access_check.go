@@ -70,7 +70,7 @@ type runAsIdentity struct {
 // the connector on their own: a grant never outlives its approver's
 // access.
 func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) (*runAsIdentity, error) {
-	if s.accessCheck == nil || s.identity == nil {
+	if s.accessCheck == nil || s.identity == nil || noAccessCheck(ctx) {
 		return nil, nil
 	}
 	virtual := p.SessionInstance != nil
@@ -226,4 +226,35 @@ func stringifyParam(v any) string {
 		b, _ := json.Marshal(v)
 		return string(b)
 	}
+}
+
+type noAccessCheckKey struct{}
+
+// WithoutAccessCheck marks ctx so a refused op is never sent to the access
+// check: a rule script's own connector calls must not ask the rules again.
+func WithoutAccessCheck(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noAccessCheckKey{}, true)
+}
+
+func noAccessCheck(ctx context.Context) bool {
+	v, _ := ctx.Value(noAccessCheckKey{}).(bool)
+	return v
+}
+
+// ReadOnlyScope is an AgentScope that reaches every connector its holder
+// can see but runs only non-destructive operations.
+type ReadOnlyScope struct{}
+
+func (ReadOnlyScope) AllowConnector(string) bool                        { return true }
+func (ReadOnlyScope) AllowAccount(string, string) bool                  { return true }
+func (ReadOnlyScope) AllowOp(_ string, _ string, destructive bool) bool { return !destructive }
+
+// SubjectConfig is a connector instance's non-secret subject settings
+// (app_code, base_url, …), nil when it does not exist.
+func (s *Service) SubjectConfig(ctx context.Context, connectorID string) map[string]string {
+	c, err := s.Get(ctx, connectorID)
+	if err != nil || c == nil {
+		return nil
+	}
+	return subjectConfig(s.LoadConfigs(*c))
 }

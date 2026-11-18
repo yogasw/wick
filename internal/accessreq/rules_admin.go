@@ -10,6 +10,8 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 )
 
+var errNotRuleOwner = errors.New("only the rule's owner or an admin can do that")
+
 // Rules and facts are only ever changed by a signed-in person (the web
 // page), never by an agent tool: a rule that lives where an agent can
 // write would let it approve itself.

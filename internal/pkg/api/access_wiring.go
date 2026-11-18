@@ -2,14 +2,20 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/accessreq"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/channelidentity"
+	"github.com/yogasw/wick/internal/codemode"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -67,6 +73,7 @@ func (a accessCatalog) Run(ctx context.Context, userID, connectorID, opKey, acco
 type accessDirectory struct {
 	users *login.Service
 	team  *team.Service
+	ids   *channelidentity.Store
 }
 
 func personOf(u *entity.User) accessreq.Person {
@@ -154,8 +161,9 @@ func (p accessPublisher) Publish(ctx context.Context, v accessreq.View) (map[str
 // to the connector hook, the MCP tool, the Slack cards, the web page and
 // the session wake-up.
 func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Service, teamSvc *team.Service,
-	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, appURL func() string) *accessreq.Service {
-	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users}, accessDirectory{users: users, team: teamSvc})
+	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, appURL func() string,
+	layout agentconfig.Layout) *accessreq.Service {
+	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db)})
 	ar.AddPublisher(accessPublisher{reg: reg})
 	ar.AddPublisher(agentstool.AccessWebPublisher{})
 	ar.SetWaker(accessreq.Waker(deliver))
@@ -172,8 +180,52 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 			OpKey: q.OpKey, Kind: accessreq.ClassifyOp(q.OpKey, q.Destructive), Params: q.Input, Config: q.Config,
 		})
 	})
+	ar.SetScriptRunner(func(ctx context.Context, ownerID, code string, input map[string]any) (json.RawMessage, []string, error) {
+		u, err := users.GetUserByID(ctx, ownerID)
+		if err != nil || u == nil {
+			return nil, nil, fmt.Errorf("rule owner not found")
+		}
+		tags := users.GetUserFilterTagIDs(ctx, u.ID)
+		raw, _ := json.Marshal(input)
+		// Read-only, and never routed back into the access check.
+		sctx := connectors.WithoutAccessCheck(connectors.WithAgentScope(ctx, connectors.ReadOnlyScope{}))
+		res, err := mcphandlers.RunCodeAs(sctx, svc, layout, codemode.Request{Lang: "ts", Code: code, Input: raw, Timeout: 10 * time.Second}, "", u, tags)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !res.OK {
+			return nil, res.Logs, fmt.Errorf("script failed: %s", res.Error)
+		}
+		return res.Result, res.Logs, nil
+	})
 	mcphandlers.AccessRequests = ar
 	slackch.AccessRequests = ar
 	agentstool.SetAccessRequests(ar)
 	return ar
+}
+
+// SubjectConfig reads a connector's non-secret subject settings (app_code
+// and the like), so rules see them when a request is filed too.
+func (a accessCatalog) SubjectConfig(ctx context.Context, connectorID string) map[string]string {
+	return a.svc.SubjectConfig(ctx, connectorID)
+}
+
+// Identities names a person's email and chat accounts for approver
+// scripts: {"email": …, "slack_id": …} (one per channel type).
+func (d accessDirectory) Identities(ctx context.Context, userID string) map[string]string {
+	out := map[string]string{}
+	if u, err := d.users.GetUserByID(ctx, userID); err == nil && u != nil {
+		out["email"] = u.Email
+	}
+	if d.ids != nil {
+		if rows, err := d.ids.ListForUser(ctx, userID); err == nil {
+			for _, r := range rows {
+				k := r.ChannelType + "_id"
+				if _, seen := out[k]; !seen {
+					out[k] = r.ExternalUserID
+				}
+			}
+		}
+	}
+	return out
 }

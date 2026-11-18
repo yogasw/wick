@@ -103,7 +103,6 @@
     <div class="flex flex-wrap gap-1.5 pt-0.5">
       <button type="button" data-testid="access-review" onclick={() => open("review")} class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Review &amp; decide</button>
       <button type="button" data-testid="access-deny" onclick={() => open("deny")} class="rounded-lg border border-neg-400/40 px-3 py-1 text-xs font-medium text-neg-400 hover:bg-neg-400/10">Deny</button>
-      <a href={card.api} target="_blank" rel="noopener" class="rounded-lg border border-white-300 px-3 py-1 text-xs font-medium text-black-800 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-700">Open page</a>
     </div>
   {/if}
 </div>

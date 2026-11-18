@@ -46,6 +46,11 @@ type Service struct {
 	// the background so a Slack click is answered within Slack's 3s.
 	sync bool
 	now  func() time.Time
+
+	// script runs rule scripts (SetScriptRunner); cache keeps their
+	// answers for a few minutes.
+	script ScriptRunner
+	cache  scriptCache
 }
 
 // New builds a service.
@@ -141,6 +146,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		kind := ClassifyOp(a.OpKey, meta.Destructive)
 		act := Action{SessionID: in.SessionID, AgentID: in.AgentID, AgentName: req.AgentName,
 			ConnectorID: a.ConnectorID, ConnectorKey: meta.ConnectorKey, OpKey: a.OpKey, Kind: kind, Params: stringify(a.Params)}
+		if sc, ok := s.cat.(SubjectConfigs); ok {
+			act.Config = sc.SubjectConfig(ctx, a.ConnectorID)
+		}
 		v := s.Evaluate(ctx, act)
 		if v.Effect == EffectDeny {
 			return View{}, fmt.Errorf("action %d (%s.%s) is denied by rule %q", i+1, meta.ConnectorKey, a.OpKey, v.Rule.Name)
@@ -278,6 +286,7 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 		viewer, viewerKnown = s.dir.User(ctx, viewerID)
 	}
 	isRole := viewerKnown && viewer.Approved && s.approverRole(ctx, req, viewer)
+	anyRole := isRole
 	cands := s.candidates(ctx, req)
 	agentOwner := ""
 	if req.AgentID != "" && s.dir != nil {
@@ -307,16 +316,30 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 		if it.Status == ItemRunning {
 			v.Pending++
 		}
-		if viewerID != "" {
-			s.lockFor(ctx, req, it, &iv, viewer, viewerKnown, isRole, agentOwner)
-			if iv.CanDecide {
-				v.ViewerCanDecide = true
+		if it.Status == ItemPending && req.Status == StatusPending {
+			act := s.actionOfItem(ctx, req, it)
+			rules := s.approverRules(ctx, act)
+			iv.approverNote = approverRuleNote(rules)
+			if viewerID != "" && viewerKnown && viewer.Approved {
+				role, why := s.itemRole(ctx, act, viewer, isRole, rules)
+				iv.roleReason = why
+				if role {
+					anyRole = true
+				}
+				s.lockFor(ctx, req, it, &iv, viewer, viewerKnown, role, agentOwner)
+			} else if viewerID != "" {
+				s.lockFor(ctx, req, it, &iv, viewer, viewerKnown, isRole, agentOwner)
 			}
+		} else if viewerID != "" {
+			s.lockFor(ctx, req, it, &iv, viewer, viewerKnown, isRole, agentOwner)
+		}
+		if iv.CanDecide {
+			v.ViewerCanDecide = true
 		}
 		v.Items = append(v.Items, iv)
 	}
 	if viewerID != "" && !v.ViewerCanDecide {
-		v.ViewerReason, v.ViewerReasonCode = s.viewerReason(req, v, viewerKnown, viewer, isRole)
+		v.ViewerReason, v.ViewerReasonCode = s.viewerReason(req, v, viewerKnown, viewer, anyRole)
 	}
 	return v
 }
@@ -325,6 +348,7 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 // with which modes, or why not.
 func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it entity.AccessRequestItem, iv *ItemView, viewer Person, known, isRole bool, agentOwner string) {
 	names := approverNames(iv.Approvers)
+	extra := iv.approverNote
 	switch {
 	case req.Status == StatusCancelled:
 		iv.LockedCode, iv.LockedReason = ReasonInactive, "This request is no longer active."
@@ -335,7 +359,11 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 		iv.LockedCode, iv.LockedReason = ReasonNotLinked, "Your account is not linked to an approved wick user."
 	case !isRole:
 		iv.LockedCode = ReasonNotApprover
-		iv.LockedReason = "You are not an approver for this request." + whoCan(names)
+		if iv.roleReason != "" {
+			iv.LockedReason = iv.roleReason + whoCan(names) + extra
+		} else {
+			iv.LockedReason = "You are not an approver for this request." + whoCan(names) + extra
+		}
 	default:
 		if ok, why := s.cat.CanRun(ctx, viewer.ID, it.ConnectorID, it.OpKey); !ok {
 			iv.LockedCode = ReasonApproverAccess
@@ -343,7 +371,7 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 			if why != "" {
 				iv.LockedReason += ": " + why
 			}
-			iv.LockedReason += "." + whoCan(names)
+			iv.LockedReason += "." + whoCan(names) + extra
 			return
 		}
 		iv.CanDecide = true

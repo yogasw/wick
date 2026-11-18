@@ -246,6 +246,11 @@ type ItemView struct {
 	LockedCode   string
 	// Approvers are the people who could decide this item.
 	Approvers []Person
+
+	// approverNote names approvers rules that let more people in;
+	// roleReason is an "only" rule's refusal. Internal to the view.
+	approverNote string
+	roleReason   string
 }
 
 // Param is one masked parameter.

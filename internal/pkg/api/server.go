@@ -2169,7 +2169,7 @@ func NewServer() *Server {
 			func(ctx context.Context, sessionID, text string) error {
 				return d.DeliverToSession(ctx, sessionID, "", text)
 			},
-			configsSvc.AppURL)
+			configsSvc.AppURL, agentsLayout)
 	}
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)

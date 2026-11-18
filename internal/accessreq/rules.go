@@ -17,6 +17,16 @@ const (
 	EffectDeny        = "deny"
 	EffectRequire     = "require"
 	EffectAutoApprove = "auto_approve"
+	// EffectApprovers decides WHO may approve a matching action, by
+	// script: "add" lets in anyone the script allows (on top of admins
+	// and owners), "only" makes every approver pass it too.
+	EffectApprovers = "approvers"
+)
+
+// Approver rule modes.
+const (
+	ApproversAdd  = "add"
+	ApproversOnly = "only"
 )
 
 // RuleDoc is a rule as people write it (YAML or JSON):
@@ -31,11 +41,13 @@ const (
 //	    - fact: app.env
 //	      equals: staging
 type RuleDoc struct {
-	Name     string   `json:"name" yaml:"name"`
-	Effect   string   `json:"effect" yaml:"effect"`
-	Simulate bool     `json:"simulate,omitempty" yaml:"simulate,omitempty"`
-	Disabled bool     `json:"disabled,omitempty" yaml:"disabled,omitempty"`
-	When     RuleWhen `json:"when" yaml:"when"`
+	Name     string `json:"name" yaml:"name"`
+	Effect   string `json:"effect" yaml:"effect"`
+	Simulate bool   `json:"simulate,omitempty" yaml:"simulate,omitempty"`
+	Disabled bool   `json:"disabled,omitempty" yaml:"disabled,omitempty"`
+	// Approvers is the mode of an approvers rule: add (default) or only.
+	Approvers string   `json:"approvers,omitempty" yaml:"approvers,omitempty"`
+	When      RuleWhen `json:"when" yaml:"when"`
 }
 
 // RuleWhen is what an action must look like for the rule to match. Every
@@ -45,7 +57,16 @@ type RuleWhen struct {
 	Kind   []string `json:"kind,omitempty" yaml:"kind,omitempty"`
 	Agents []string `json:"agents,omitempty" yaml:"agents,omitempty"`
 	All    []Cond   `json:"all,omitempty" yaml:"all,omitempty"`
+	// Script is a Code Mode script (TypeScript) that decides the last
+	// condition. It reads `input` and may call READ-ONLY connector ops
+	// with wick.call; it returns true/false or {allow, reason}. It runs as
+	// the rule's owner. An error or a timeout never auto-approves and
+	// never lets an approver in.
+	Script string `json:"script,omitempty" yaml:"script,omitempty"`
 }
+
+// MaxScriptBytes caps a rule script.
+const MaxScriptBytes = 20000
 
 // Cond tests one fact. Exactly one of Equals, NotEquals, In, Exists is
 // set. A fact that cannot be determined fails every test except
@@ -77,9 +98,24 @@ func (d RuleDoc) Validate() error {
 		return fmt.Errorf("name is required")
 	}
 	switch d.Effect {
-	case EffectDeny, EffectRequire, EffectAutoApprove:
+	case EffectDeny, EffectRequire, EffectAutoApprove, EffectApprovers:
 	default:
-		return fmt.Errorf("effect must be deny, require or auto_approve")
+		return fmt.Errorf("effect must be deny, require, auto_approve or approvers")
+	}
+	if len(d.When.Script) > MaxScriptBytes {
+		return fmt.Errorf("when.script is over %d bytes", MaxScriptBytes)
+	}
+	if d.Effect == EffectApprovers {
+		if strings.TrimSpace(d.When.Script) == "" {
+			return fmt.Errorf("an approvers rule needs when.script: it decides who may approve (input.viewer, input.action)")
+		}
+		switch d.Approvers {
+		case "", ApproversAdd, ApproversOnly:
+		default:
+			return fmt.Errorf("approvers must be add or only")
+		}
+	} else if d.Approvers != "" {
+		return fmt.Errorf("approvers is only for effect: approvers")
 	}
 	if len(d.When.Ops) == 0 {
 		return fmt.Errorf("when.ops is required: name the operations, e.g. [notion.update_page] or [apps.*]")
@@ -375,9 +411,25 @@ func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
 		if r.Disabled || !s.ruleApplies(ctx, r, sessionOwner, agentOwner) {
 			continue
 		}
+		if r.Effect == EffectApprovers {
+			continue
+		}
 		d, err := ParseRule(r.Doc)
 		if err != nil || !s.Matches(ctx, d, a) {
 			continue
+		}
+		if strings.TrimSpace(d.When.Script) != "" {
+			res := s.runRuleScript(ctx, r, d.When.Script, scriptInput(a, nil))
+			switch {
+			case res.Err != "" && r.Effect == EffectDeny:
+				// A deny rule whose check failed still asks a person.
+				if require == nil {
+					require = &rules[i]
+				}
+				continue
+			case res.Err != "" || !res.Allow:
+				continue
+			}
 		}
 		switch r.Effect {
 		case EffectDeny:
