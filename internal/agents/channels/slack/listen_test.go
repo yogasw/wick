@@ -138,7 +138,10 @@ func listenMsg(user, text string) *slackevents.MessageEvent {
 // The asker adding to the question restarts the wait and the latest
 // message goes through once.
 func TestListenWaitAskerAddsMore(t *testing.T) {
-	ch, _, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	// A 2s wait with the second message at 0.6s: a loaded host (-race, the
+	// whole package) can stretch the sleep well past 1s without the first
+	// wait running out.
+	ch, _, got := listenChannel(t, "---\ndelay: 2\n---\n")
 	ch.queueListenMessage(t.Context(), "S", listenMsg("UCLIENT", "halo"), nil)
 	time.Sleep(600 * time.Millisecond)
 	ch.queueListenMessage(t.Context(), "S", listenMsg("UCLIENT", "mau tanya soal template"), []slackgo.File{})
@@ -147,10 +150,10 @@ func TestListenWaitAskerAddsMore(t *testing.T) {
 		if r[0] != "mau tanya soal template" || r[2] != false {
 			t.Fatalf("dispatched %v", r)
 		}
-		if r[1].(time.Duration) < 1300*time.Millisecond {
+		if r[1].(time.Duration) < 2300*time.Millisecond {
 			t.Fatalf("wait did not restart: waited %v", r[1])
 		}
-	case <-time.After(4 * time.Second):
+	case <-time.After(6 * time.Second):
 		t.Fatal("held reply never went through")
 	}
 }
@@ -358,7 +361,8 @@ func TestWorkingMarkClearedAtTurnEnd(t *testing.T) {
 
 // Stopping drops a held reply and records the stop, which beats a scope.
 func TestListenOffCancelsWait(t *testing.T) {
-	ch, fake, got := listenChannel(t, "---\ndelay: 1\n---\n")
+	// 2s: on a loaded host the stop must still land well before the wait ends.
+	ch, fake, got := listenChannel(t, "---\ndelay: 2\n---\n")
 	fake.SetAutoReply("S", true)
 	ch.queueListenMessage(t.Context(), "S", listenMsg("UCLIENT", "halo"), nil)
 	ch.ListenOff("S", "C1", "100.1", "test", false)
@@ -368,7 +372,7 @@ func TestListenOffCancelsWait(t *testing.T) {
 	select {
 	case r := <-got:
 		t.Fatalf("stopped thread dispatched %v", r)
-	case <-time.After(1500 * time.Millisecond):
+	case <-time.After(2500 * time.Millisecond):
 	}
 }
 
