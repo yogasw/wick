@@ -260,7 +260,7 @@ func TestAccessRequestRefusesConfigOffOp(t *testing.T) {
 
 func TestConfigOffReasonSaysWhoCanChangeIt(t *testing.T) {
 	op := connector.Operation{Key: "resolve", VisibleWhen: "mode:write|admin"}
-	if got := ConfigOffReason(op); !strings.Contains(got, "only an admin") {
+	if got := ConfigOffReason(op); !strings.Contains(got, "the connector's owner") {
 		t.Fatalf("saved connector reason = %q", got)
 	}
 	got := ConfigOffReasonSession(op, "sw_test", nil)

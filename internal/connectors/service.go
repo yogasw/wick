@@ -1823,11 +1823,12 @@ func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key, sessionID 
 }
 
 // ConfigOffReason is the note shown for an op a saved connector's config
-// has switched off. Only an admin edits a saved connector; running it
-// (or borrowing it) never includes changing its config.
+// has switched off. Running (or borrowing) a connector never includes
+// changing its config: that is for an admin, the instance's owner, or
+// anyone it lets configure it ("Allow others to configure").
 func ConfigOffReason(op connector.Operation) string {
 	field, values := configOffNeed(op)
-	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); only an admin can change a saved connector's config, so ask one (or use a session connector you can configure)", field, values)
+	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); its config can be changed by an admin, the connector's owner, or anyone it allows to configure it, so ask one of them (or use a session connector you can configure)", field, values)
 }
 
 // ConfigOffReasonSession is the same note for a session connector: the
