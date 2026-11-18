@@ -268,6 +268,31 @@ func (s *Service) itemRole(ctx context.Context, a Action, viewer Person, default
 }
 
 // approverRuleNote names the add-rules for the "who can" line.
+// approversText is the card's "who can approve" from the matching
+// approvers rules' labels: an "only" rule's label replaces the names,
+// an "add" rule's label is listed after them. "" = no label.
+func approversText(rules []approverRule, names []string) string {
+	var only, add []string
+	for _, ar := range rules {
+		l := strings.TrimSpace(ar.doc.ApproversLabel)
+		if l == "" {
+			continue
+		}
+		if ar.doc.Approvers == ApproversOnly {
+			only = append(only, l)
+		} else {
+			add = append(add, l)
+		}
+	}
+	switch {
+	case len(only) > 0:
+		return strings.Join(only, " and ")
+	case len(add) > 0:
+		return strings.Join(append(append([]string{}, names...), add...), ", ")
+	}
+	return ""
+}
+
 func approverRuleNote(rules []approverRule) string {
 	var names []string
 	for _, ar := range rules {

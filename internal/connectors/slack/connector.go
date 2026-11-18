@@ -111,6 +111,10 @@ type GetUserInfoInput struct {
 	User string `wick:"required;desc=User ID (U... or W...)."`
 }
 
+type ListUsergroupMembersInput struct {
+	Usergroup string `wick:"required;desc=User group ID (S...), e.g. from a <!subteam^S...> mention."`
+}
+
 type GetUserByEmailInput struct {
 	Email string `wick:"required;email;desc=Email address registered to a workspace user."`
 }
@@ -400,6 +404,26 @@ func Operations() []connector.Category {
 				"Return profile for a single user id: id, name, real_name, email, is_bot, is_admin, deleted.",
 				GetUserInfoInput{},
 				getUserInfo, wickdocs.Docs{},
+			),
+			connector.Op(
+				"list_usergroup_members",
+				"List User Group Members",
+				"Return the user ids in a Slack user group (S...). Read only. Use it to check whether someone belongs to a team handle such as @ops.",
+				ListUsergroupMembersInput{},
+				listUsergroupMembers,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"usergroup": "The user group id asked for (echo).",
+						"users":     "Array of member user ids (U...).",
+					},
+					Quirks: []string{
+						"Needs the usergroups:read scope on the token.",
+						"A disabled user group returns an empty list.",
+					},
+					PairWith:     []string{"connector:slack.get_user_info"},
+					InputSample:  `{"usergroup":"S01TESTGRP"}`,
+					OutputSample: `{"usergroup":"S01TESTGRP","users":["U01TESTUSER"]}`,
+				},
 			),
 			connector.Op(
 				"get_user_by_email",
@@ -1137,6 +1161,34 @@ func getUserInfo(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return shapeUserSingle(raw), nil
+}
+
+func listUsergroupMembers(c *connector.Ctx) (any, error) {
+	g := strings.TrimSpace(c.Input("usergroup"))
+	if g == "" {
+		return nil, fmt.Errorf("usergroup is required")
+	}
+	raw, err := slackGet(c, "usergroups.users.list", map[string]string{"usergroup": g})
+	if err != nil {
+		return nil, err
+	}
+	return shapeUsergroupMembers(g, raw), nil
+}
+
+// shapeUsergroupMembers keeps the member ids of a usergroups.users.list
+// reply.
+func shapeUsergroupMembers(group string, raw any) map[string]any {
+	users := []string{}
+	if m, ok := raw.(map[string]any); ok {
+		if list, ok := m["users"].([]any); ok {
+			for _, u := range list {
+				if id, ok := u.(string); ok && id != "" {
+					users = append(users, id)
+				}
+			}
+		}
+	}
+	return map[string]any{"usergroup": group, "users": users}
 }
 
 func getUserByEmail(c *connector.Ctx) (any, error) {

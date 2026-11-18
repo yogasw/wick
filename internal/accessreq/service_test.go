@@ -274,7 +274,7 @@ func TestModesFollowKind(t *testing.T) {
 	)
 	ov, _ := e.svc.ViewFor(context.Background(), v.ID, "owner-a")
 	// A delete, and an action naming no target, are approved once only.
-	want := [][]string{{ModeOnce}, {ModeOnce}, {ModeOnce, ModeHour, ModeSession}}
+	want := [][]string{{ModeOnce}, {ModeOnce}, {ModeOnce, ModeHour, Mode8h, Mode24h, ModeSession}}
 	for i, it := range ov.Items {
 		if strings.Join(it.Modes, ",") != strings.Join(want[i], ",") {
 			t.Errorf("item %d (%s) modes = %v, want %v", i, it.Kind, it.Modes, want[i])
@@ -515,17 +515,13 @@ func TestConfigOverrideOnceOnlyAndConfigurers(t *testing.T) {
 		t.Fatalf("non-configurer may approve an override: %+v", ov.Items[0])
 	}
 	av, _ := e.svc.ViewFor(ctx, v.ID, "admin-z")
-	if !av.Items[0].CanDecide || len(av.Items[0].Modes) != 1 || av.Items[0].Modes[0] != ModeOnce {
+	if !av.Items[0].CanDecide || !contains(av.Items[0].Modes, ModeOnce) || !contains(av.Items[0].Modes, Mode8h) {
 		t.Fatalf("configurer view = %+v", av.Items[0])
 	}
 	if len(av.Items[0].Approvers) != 1 || av.Items[0].Approvers[0].ID != "admin-z" {
 		t.Fatalf("approvers = %+v", av.Items[0].Approvers)
 	}
-	_, res, _ := e.svc.Decide(ctx, v.ID, "admin-z", []Decision{{ItemID: v.Items[0].ID, Mode: ModeSession}})
-	if len(res) != 1 || res[0].OK {
-		t.Fatalf("session mode accepted for an override: %+v", res)
-	}
-	_, res, _ = e.svc.Decide(ctx, v.ID, "admin-z", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}})
+	_, res, _ := e.svc.Decide(ctx, v.ID, "admin-z", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}})
 	if len(res) != 1 || !res[0].OK || len(e.cat.runs) != 1 {
 		t.Fatalf("once = %+v runs %+v", res, e.cat.runs)
 	}
@@ -549,6 +545,38 @@ func TestGrantNeverCoversAnOverride(t *testing.T) {
 	a.Params[ConfigOverrideParam] = `{"mode":"write"}`
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
 		t.Fatalf("grant covered a call with an override: %q", runAs)
+	}
+}
+
+// A timed approval of an override covers the same override on the same
+// target only, while its approver may still configure the connector.
+func TestTimedGrantCoversSameOverrideOnly(t *testing.T) {
+	e := newEnv(t)
+	e.cat.configure = map[string]bool{"admin-z|c-notes": true}
+	ctx := context.Background()
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1", ConfigOverrideParam: map[string]any{"mode": "write"}}))
+	if _, res, _ := e.svc.Decide(ctx, v.ID, "admin-z", []Decision{{ItemID: v.Items[0].ID, Mode: Mode8h}}); len(res) != 1 || !res[0].OK {
+		t.Fatalf("8h: %+v", res)
+	}
+	a := Action{SessionID: "sess-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite,
+		Params: map[string]string{"page_id": "p1", ConfigOverrideParam: `{"mode": "write"}`}}
+	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "admin-z" {
+		t.Fatalf("same override within 8h: %q", runAs)
+	}
+	other := Action{SessionID: "sess-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite,
+		Params: map[string]string{"page_id": "p1", ConfigOverrideParam: `{"mode":"admin"}`}}
+	if runAs, _, _ := e.svc.Check(ctx, other); runAs != "" {
+		t.Fatalf("another override covered: %q", runAs)
+	}
+	plain := Action{SessionID: "sess-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite,
+		Params: map[string]string{"page_id": "p1"}}
+	if runAs, _, _ := e.svc.Check(ctx, plain); runAs != "" {
+		t.Fatalf("override grant covered a plain call: %q", runAs)
+	}
+	base := e.svc.now()
+	e.svc.now = func() time.Time { return base.Add(8*time.Hour + time.Minute) }
+	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
+		t.Fatalf("after 8h: %q", runAs)
 	}
 }
 

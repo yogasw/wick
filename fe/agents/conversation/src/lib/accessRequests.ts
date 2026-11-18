@@ -19,6 +19,8 @@ export type AccessItemView = {
   error: string;
   result: string;
   approvers: string[];
+  /** Who may approve as an approvers rule names it ("members of @ops"); replaces the list when set. */
+  approvers_text?: string;
   can_decide: boolean;
   modes: string[];
   locked_reason: string;
@@ -75,6 +77,8 @@ export function accessStatusIcon(status: string): string {
 export const MODE_LABEL: Record<string, string> = {
   once: "Once",
   hour: "1 hour",
+  "8h": "8 hours",
+  "24h": "24 hours",
   session: "This session",
   always: "Always",
   deny: "Deny",
@@ -84,7 +88,7 @@ export const MODE_LABEL: Record<string, string> = {
 export function itemLine(it: AccessItemView): string {
   const mode = (MODE_LABEL[it.mode] ?? it.mode).toLowerCase();
   switch (it.status) {
-    case "pending": return `Waiting · who can approve: ${it.approvers.length ? it.approvers.join(", ") : "nobody yet"}`;
+    case "pending": return `Waiting · who can approve: ${it.approvers_text || (it.approvers.length ? it.approvers.join(", ") : "nobody yet")}`;
     case "running": return `Approved ${mode} by ${it.decided_by} · running…`;
     case "ok": return `Approved ${mode} by ${it.decided_by} · OK`;
     case "error": return `Approved ${mode} by ${it.decided_by} · error: ${it.error}`;

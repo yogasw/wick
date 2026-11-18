@@ -44,9 +44,11 @@ const (
 // stored mode.
 const (
 	ModeOnce = "once"
-	// ModeHour covers the same operation on the same target for one hour
-	// in this session.
+	// The timed modes cover the same operation on the same target (and
+	// the same config override, if any) for a while, in this session.
 	ModeHour    = "hour"
+	Mode8h      = "8h"
+	Mode24h     = "24h"
 	ModeSession = "session"
 	ModeAlways  = "always"
 	ModeDeny    = "deny"
@@ -107,11 +109,25 @@ func ModesFor(kind string) []string {
 	if kind == KindDelete {
 		return []string{ModeOnce}
 	}
-	return []string{ModeOnce, ModeHour, ModeSession}
+	return []string{ModeOnce, ModeHour, Mode8h, Mode24h, ModeSession}
 }
 
 // GrantHour is how long a ModeHour grant lasts.
 const GrantHour = time.Hour
+
+// modeTTL is how long a timed mode's grant lasts (0 = as long as its
+// scope).
+func modeTTL(m string) time.Duration {
+	switch m {
+	case ModeHour:
+		return GrantHour
+	case Mode8h:
+		return 8 * time.Hour
+	case Mode24h:
+		return 24 * time.Hour
+	}
+	return 0
+}
 
 // ActionInput is one action an agent asks for.
 type ActionInput struct {
@@ -271,6 +287,9 @@ type ItemView struct {
 	Note       string
 	Result     string
 	Error      string
+	// ApproversText, when set, is who may approve as the card says it
+	// (from an approvers rule's label); empty = list Approvers by name.
+	ApproversText string
 	// Modes the viewer may pick for this item (empty when locked).
 	Modes []string
 	// CanDecide is true when the viewer may decide this item now.
@@ -295,8 +314,8 @@ type Param struct {
 }
 
 // ConfigOverrideParam is the reserved action parameter holding a per-call
-// config override ({"mode": "write"}). An action with one is approved once
-// at a time, never for the session, and never by a standing grant.
+// config override ({"mode": "write"}). Only someone who may configure the
+// connector approves it; a timed approval covers the same override only.
 const ConfigOverrideParam = "config_override"
 
 // overrideOf reads the override from stored or incoming params.

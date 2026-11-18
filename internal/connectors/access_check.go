@@ -62,6 +62,10 @@ var subjectConfigKeys = []string{
 	"env", "environment", "base_url", "workspace", "project", "repo", "repository",
 }
 
+// SubjectConfigOf is subjectConfig for a config map held elsewhere (a
+// session connector's own config).
+func SubjectConfigOf(all map[string]string) map[string]string { return subjectConfig(all) }
+
 func subjectConfig(all map[string]string) map[string]string {
 	out := map[string]string{}
 	for _, k := range subjectConfigKeys {

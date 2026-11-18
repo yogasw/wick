@@ -387,6 +387,7 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 			act := s.actionOfItem(ctx, req, it)
 			rules := s.approverRules(ctx, act)
 			iv.approverNote = approverRuleNote(rules)
+			iv.ApproversText = approversText(rules, approverNames(iv.Approvers))
 			if viewerID != "" && viewerKnown && viewer.Approved {
 				role, why := s.itemRole(ctx, act, viewer, isRole, rules)
 				iv.roleReason = why
@@ -416,6 +417,9 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it entity.AccessRequestItem, iv *ItemView, viewer Person, known, isRole bool, agentOwner string) {
 	names := approverNames(iv.Approvers)
 	extra := iv.approverNote
+	if iv.ApproversText != "" {
+		names, extra = []string{iv.ApproversText}, ""
+	}
 	switch {
 	case req.Status == StatusCancelled:
 		iv.LockedCode, iv.LockedReason = ReasonInactive, "This request is no longer active."
@@ -444,7 +448,7 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 		}
 		iv.CanDecide = true
 		for _, m := range ModesFor(it.Kind) {
-			if m != ModeOnce && (len(ov) > 0 || it.OnceOnly) {
+			if m != ModeOnce && it.OnceOnly {
 				continue // approved one call at a time
 			}
 			if m == ModeAlways && (req.AgentID == "" || !(viewer.IsAdmin || viewer.ID == agentOwner)) {
@@ -654,8 +658,8 @@ func (s *Service) leaveGrant(ctx context.Context, req entity.AccessRequest, it e
 	g := entity.AccessGrant{ID: uuid.NewString(), ConnectorID: it.ConnectorID, OpKey: it.OpKey,
 		Target: TargetKey(stringify(params)), ProjectID: req.ProjectID, ApproverID: by, ItemID: it.ID, CreatedAt: s.now()}
 	switch it.Mode {
-	case ModeHour:
-		exp := g.CreatedAt.Add(GrantHour)
+	case ModeHour, Mode8h, Mode24h:
+		exp := g.CreatedAt.Add(modeTTL(it.Mode))
 		g.ScopeType, g.ScopeID, g.ExpiresAt = ModeSession, req.SessionID, &exp
 	case ModeSession:
 		g.ScopeType, g.ScopeID = ModeSession, req.SessionID
@@ -817,16 +821,19 @@ func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err 
 	}
 	scopes := map[string]string{ModeSession: a.SessionID, "agent": a.AgentID}
 	grants, gerr := s.store.grants(ctx, a.ConnectorID, a.OpKey, scopes, s.now())
-	// A standing grant never covers a call with a config override, one a
-	// "require" rule matches (approved one call at a time), or one that
-	// names no clear target.
-	if gerr == nil && len(overrideOfAction(a)) == 0 && v.Effect != EffectRequire && HasTarget(a.Params) {
+	// A standing grant never covers a call a "require" rule matches
+	// (approved one call at a time) or one that names no clear target. A
+	// call with a config override is covered only by a grant left for that
+	// same override (the target key carries it), by someone who may still
+	// configure the connector.
+	if gerr == nil && v.Effect != EffectRequire && HasTarget(a.Params) {
 		target := TargetKey(a.Params)
+		ov := overrideOfAction(a)
 		for _, g := range grants {
 			if g.Target != target {
 				continue
 			}
-			if ok, _ := s.cat.CanRun(ctx, g.ApproverID, a.ConnectorID, a.OpKey, nil); ok {
+			if ok, _ := s.cat.CanRun(ctx, g.ApproverID, a.ConnectorID, a.OpKey, ov); ok {
 				return g.ApproverID, "grant " + g.ID, nil
 			}
 		}
@@ -1045,6 +1052,12 @@ func TargetKey(params map[string]string) string {
 		}
 	}
 	if len(parts) > 0 {
+		// The config override an action runs with is part of what was
+		// approved: a grant for mode=write covers mode=write only.
+		if raw := params[ConfigOverrideParam]; raw != "" {
+			b, _ := json.Marshal(overrideOf(map[string]any{ConfigOverrideParam: raw}))
+			parts = append(parts, ConfigOverrideParam+"="+string(b))
+		}
 		return strings.Join(parts, "&")
 	}
 	keys := make([]string, 0, len(params))
@@ -1160,6 +1173,10 @@ func modeLabel(m string) string {
 		return "once"
 	case ModeHour:
 		return "for an hour"
+	case Mode8h:
+		return "for 8 hours"
+	case Mode24h:
+		return "for 24 hours"
 	case ModeSession:
 		return "for this session"
 	case ModeAlways:
@@ -1175,6 +1192,10 @@ func ModeLabel(m string) string {
 		return "Once"
 	case ModeHour:
 		return "1 hour"
+	case Mode8h:
+		return "8 hours"
+	case Mode24h:
+		return "24 hours"
 	case ModeSession:
 		return "This session"
 	case ModeAlways:

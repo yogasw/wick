@@ -46,8 +46,11 @@ type RuleDoc struct {
 	Simulate bool   `json:"simulate,omitempty" yaml:"simulate,omitempty"`
 	Disabled bool   `json:"disabled,omitempty" yaml:"disabled,omitempty"`
 	// Approvers is the mode of an approvers rule: add (default) or only.
-	Approvers string   `json:"approvers,omitempty" yaml:"approvers,omitempty"`
-	When      RuleWhen `json:"when" yaml:"when"`
+	Approvers string `json:"approvers,omitempty" yaml:"approvers,omitempty"`
+	// ApproversLabel names, on the card, who an approvers rule lets in
+	// ("members of @ops"), since a script's list is not known up front.
+	ApproversLabel string   `json:"approvers_label,omitempty" yaml:"approvers_label,omitempty"`
+	When           RuleWhen `json:"when" yaml:"when"`
 }
 
 // RuleWhen is what an action must look like for the rule to match. Every
@@ -405,8 +408,9 @@ func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
 		if strings.TrimSpace(d.When.Script) != "" {
 			res := s.runRuleScript(ctx, r, d.When.Script, scriptInput(a, nil))
 			switch {
-			case res.Err != "" && r.Effect == EffectDeny:
-				// A deny rule whose check failed still asks a person.
+			case res.Err != "" && (r.Effect == EffectDeny || r.Effect == EffectRequire):
+				// A deny or require rule whose check failed still asks a
+				// person, one call at a time: failing closed.
 				if require == nil {
 					require = &rules[i]
 				}

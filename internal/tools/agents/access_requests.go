@@ -102,16 +102,17 @@ when:
 // accessScriptExamples shows rules whose condition is a Code Mode script.
 // The script runs as the rule owner with read-only connector access and
 // returns true / false or {allow, reason}. Tool ids are placeholders.
-const accessScriptExamples = `# 1. Who may approve: members of one chat channel (approvers: add | only)
-name: channel-members-approve
+const accessScriptExamples = `# 1. Who may approve: members of one chat user group (approvers: add | only)
+name: ops-team-approve
 effect: approvers
-approvers: add              # add = they may approve too; only = every approver must pass
+approvers: only             # add = they may approve too; only = every approver must pass
+approvers_label: members of @ops   # what the card says under "who can approve"
 when:
   ops: [apps.*]
   script: |
-    const r = await wick.call("conn:<chat-connector-id>/list_channel_members", { channel: "C01TESTCHAN" });
-    const ids = r.members || [];
-    return { allow: ids.includes(input.viewer.slack_id), reason: "not a member of the ops channel" };
+    const r = await wick.call("conn:<chat-connector-id>/list_usergroup_members", { usergroup: "S01TESTGRP" });
+    const ids = r.users || [];
+    return { allow: ids.includes(input.viewer.slack_id), reason: "not a member of the ops team" };
 
 # 2. Auto-approve when the app code is listed in a document
 name: listed-apps-auto
@@ -191,7 +192,7 @@ func accessViewDTO(v accessreq.View) map[string]any {
 			"id": it.ID, "n": it.Idx + 1, "connector_key": it.ConnectorKey, "connector_label": it.ConnectorLabel,
 			"op_key": it.OpKey, "op_name": it.OpName, "kind": it.Kind, "target": it.Target, "status": it.Status,
 			"mode": it.Mode, "decided_by": it.DecidedBy, "note": it.Note, "error": it.Error, "result": it.Result,
-			"approvers": names, "can_decide": it.CanDecide, "modes": it.Modes, "locked_reason": it.LockedReason,
+			"approvers": names, "approvers_text": it.ApproversText, "can_decide": it.CanDecide, "modes": it.Modes, "locked_reason": it.LockedReason,
 			"locked_code": it.LockedCode, "params": params, "params_json": it.ParamsJSON,
 		}
 		if it.Modes == nil {

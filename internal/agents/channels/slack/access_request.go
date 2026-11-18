@@ -174,7 +174,11 @@ func approverList(ps []accessreq.Person) string {
 func itemStatusLine(it accessreq.ItemView) string {
 	switch it.Status {
 	case accessreq.ItemPending:
-		return "_Waiting · who can approve: " + escapeMrkdwn(approverList(it.Approvers)) + "_"
+		who := approverList(it.Approvers)
+		if it.ApproversText != "" {
+			who = it.ApproversText
+		}
+		return "_Waiting · who can approve: " + escapeMrkdwn(who) + "_"
 	case accessreq.ItemRunning:
 		return fmt.Sprintf("_Approved %s by %s · running…_", strings.ToLower(accessreq.ModeLabel(it.Mode)), escapeMrkdwn(it.DecidedBy))
 	case accessreq.ItemOK:
@@ -479,7 +483,11 @@ func (s *Channel) handleAccessClick(ctx context.Context, cb slackgo.InteractionC
 			for i := range v.Items {
 				v.Items[i].CanDecide = false
 				if v.Items[i].LockedReason == "" {
-					v.Items[i].LockedReason = "Not linked to wick. Who can: " + approverList(v.Items[i].Approvers) + "."
+					who := approverList(v.Items[i].Approvers)
+					if v.Items[i].ApproversText != "" {
+						who = v.Items[i].ApproversText
+					}
+					v.Items[i].LockedReason = "Not linked to wick. Who can: " + who + "."
 				}
 			}
 			view = reviewModal(v, meta)

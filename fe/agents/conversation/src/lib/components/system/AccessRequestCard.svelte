@@ -182,7 +182,7 @@
           {/each}
           {#if mine.viewer_can_decide}
             <label class="flex flex-col gap-1 text-xs">Note for the agent (sent with a deny)<textarea bind:value={note} rows="2" class="rounded-lg border border-white-300 bg-white-200 p-2 text-xs dark:border-navy-600 dark:bg-navy-900"></textarea></label>
-            <p class="text-[11px] text-black-700 dark:text-black-500">Leave an action unselected to keep it waiting. Approved actions run right away with your access. "1 hour" and "This session" cover the same operation on the same target only, in this session; an action with no clear target, or one a require rule matches, is approved once. Standing access is set with rules.</p>
+            <p class="text-[11px] text-black-700 dark:text-black-500">Leave an action unselected to keep it waiting. Approved actions run right away with your access. The timed choices (1, 8, 24 hours, This session) cover the same operation on the same target, with the same config override, in this session only; an action with no clear target, or one a require rule matches, is approved once. Standing access is set with rules.</p>
           {:else if mine.viewer_reason}
             <p class="text-xs text-black-700 dark:text-black-500">{mine.viewer_reason}</p>
           {/if}

@@ -292,6 +292,14 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 // SubjectConfig reads a connector's non-secret subject settings (app_code
 // and the like), so rules see them when a request is filed too.
 func (a accessCatalog) SubjectConfig(ctx context.Context, connectorID string) map[string]string {
+	// A session connector's subject (its app_code) lives in its own
+	// config, so rules can tell which app it is bound to.
+	if t, isSession, err := a.sessionTarget(ctx, connectorID); isSession {
+		if err != nil || t == nil {
+			return nil
+		}
+		return connectors.SubjectConfigOf(t.Config)
+	}
 	return a.svc.SubjectConfig(ctx, connectorID)
 }
 

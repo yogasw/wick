@@ -2,6 +2,8 @@ package accessreq
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -118,5 +120,32 @@ func TestAskedByRecordedAndInScript(t *testing.T) {
 	}
 	if in := scriptInput(Action{}, nil); in["requester"] != nil {
 		t.Fatalf("no asker must read null: %v", in["requester"])
+	}
+}
+
+func TestApproversText(t *testing.T) {
+	only := approverRule{doc: RuleDoc{Approvers: ApproversOnly, ApproversLabel: "members of @ops"}}
+	add := approverRule{doc: RuleDoc{Approvers: ApproversAdd, ApproversLabel: "the on-call"}}
+	if got := approversText([]approverRule{only, add}, []string{"Owner A"}); got != "members of @ops" {
+		t.Fatalf("only = %q", got)
+	}
+	if got := approversText([]approverRule{add}, []string{"Owner A"}); got != "Owner A, the on-call" {
+		t.Fatalf("add = %q", got)
+	}
+	if got := approversText([]approverRule{{doc: RuleDoc{Approvers: ApproversOnly}}}, []string{"Owner A"}); got != "" {
+		t.Fatalf("no label = %q", got)
+	}
+}
+
+// A require rule whose script fails still requires a card (fails closed).
+func TestRequireScriptErrorFailsClosed(t *testing.T) {
+	e := newEnv(t)
+	e.svc.SetScriptRunner(func(context.Context, string, string, map[string]any) (json.RawMessage, []string, error) {
+		return nil, nil, errors.New("boom")
+	})
+	saveRule(t, e, "owner-a", "name: prod-card\neffect: require\nwhen:\n  ops: [notes.*]\n  script: return true\n")
+	v := e.svc.Evaluate(context.Background(), Action{SessionID: "sess-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite})
+	if v.Effect != EffectRequire {
+		t.Fatalf("effect = %q", v.Effect)
 	}
 }
