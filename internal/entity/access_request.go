@@ -13,6 +13,8 @@ type AccessRequest struct {
 	// SessionID is the conversation that asked; its result is delivered
 	// back there.
 	SessionID string `gorm:"type:text;index:idx_access_req_session"`
+	// ProjectID is the session's project, for the project's audit list.
+	ProjectID string `gorm:"type:text;not null;default:'';index:idx_access_req_project"`
 	// AgentID is the Team agent that asked, when known.
 	AgentID string `gorm:"type:text;index:idx_access_req_agent"`
 	// AgentName is the agent's display name at the time of the request.
@@ -88,7 +90,9 @@ type AccessGrant struct {
 	// e.g. "page_id=p1"), so a standing grant covers the same op on the
 	// same target only. When the action named no target, Target is
 	// "params:<hash>": exactly the approved parameters again.
-	Target     string     `gorm:"type:text;not null;default:''"`
+	Target string `gorm:"type:text;not null;default:''"`
+	// ProjectID is the project of the session the grant was made in.
+	ProjectID  string     `gorm:"type:text;not null;default:'';index:idx_access_grant_project"`
 	ApproverID string     `gorm:"type:text;not null"`
 	ItemID     string     `gorm:"type:text"`
 	CreatedAt  time.Time  `gorm:"not null"`
@@ -109,7 +113,10 @@ type AccessRule struct {
 	// run the matched connectors themselves makes an auto_approve rule
 	// useful: the action runs with their access.
 	OwnerID string `gorm:"type:text;not null;index:idx_access_rule_owner"`
-	Name    string `gorm:"type:text;not null"`
+	// ProjectID scopes the rule to the sessions of one project; "" is a
+	// global rule (admins only).
+	ProjectID string `gorm:"type:text;not null;default:'';index:idx_access_rule_project"`
+	Name      string `gorm:"type:text;not null"`
 	// Effect: deny, require, auto_approve.
 	Effect string `gorm:"type:varchar(16);not null"`
 	// Simulate keeps an auto_approve rule from acting: a match is only
@@ -140,17 +147,3 @@ type AccessRuleRevision struct {
 
 // TableName pins the table name.
 func (AccessRuleRevision) TableName() string { return "access_rule_revisions" }
-
-// AccessFact is one known value a rule can test: fact "app.env" of
-// subject "app-123" is "staging". Facts are written by people (the rules
-// page), never taken from an agent's words.
-type AccessFact struct {
-	Fact      string    `gorm:"type:varchar(64);primaryKey"`
-	Subject   string    `gorm:"type:varchar(255);primaryKey"`
-	Value     string    `gorm:"type:text;not null"`
-	UpdatedBy string    `gorm:"type:text"`
-	UpdatedAt time.Time `gorm:"not null"`
-}
-
-// TableName pins the table name.
-func (AccessFact) TableName() string { return "access_facts" }

@@ -211,7 +211,6 @@ func FactNames() []string {
 	return []string{
 		"agent", "connector", "connector.key", "op", "kind",
 		"app", "channel", "repo", "branch", "param.<name>",
-		"app.env", "connector.env", "<app|channel|repo|branch|connector>.<attr> (from the facts table)",
 	}
 }
 
@@ -245,9 +244,9 @@ func (a Action) subject(base string) (string, bool) {
 	return "", false
 }
 
-// factValue resolves a fact for an action. Facts come from the action's
-// real parameters and from the facts table people maintain, never from
-// anything the agent says about the action.
+// factValue resolves a fact for an action from the action's real
+// parameters and connector config, never from anything the agent says
+// about the action.
 func (s *Service) factValue(ctx context.Context, a Action, name string) (string, bool) {
 	switch name {
 	case "agent":
@@ -267,18 +266,9 @@ func (s *Service) factValue(ctx context.Context, a Action, name string) (string,
 		v, has := a.Params[p]
 		return v, has
 	}
-	base, _, ok := strings.Cut(name, ".")
-	if !ok || s.store == nil {
-		return "", false
-	}
-	if _, known := paramAliases[base]; !known && base != "connector" {
-		return "", false
-	}
-	subj, ok := a.subject(base)
-	if !ok {
-		return "", false
-	}
-	return s.store.fact(ctx, name, subj)
+	// Anything else (a lookup like "is this app staging") is a rule
+	// script's job; an unknown fact never holds.
+	return "", false
 }
 
 func (s *Service) condHolds(ctx context.Context, a Action, c Cond) bool {
@@ -375,21 +365,12 @@ type Verdict struct {
 	Simulated []string
 }
 
-// ruleApplies: an admin's rule covers every session; anyone else's only
-// the sessions and agents they own, so nobody can loosen (or tighten)
-// someone else's agent with their own rule.
-func (s *Service) ruleApplies(ctx context.Context, r entity.AccessRule, sessionOwner, agentOwner string) bool {
-	if r.OwnerID == "" {
-		return false
-	}
-	if r.OwnerID == sessionOwner || (agentOwner != "" && r.OwnerID == agentOwner) {
-		return true
-	}
-	if s.dir == nil {
-		return false
-	}
-	p, ok := s.dir.User(ctx, r.OwnerID)
-	return ok && p.IsAdmin && p.Approved
+// ruleApplies reports whether r covers the action's session. With no
+// rules at all every refused action simply shows a card.
+func (s *Service) ruleApplies(_ context.Context, r entity.AccessRule, sessionID, _, _ string) bool {
+	// Rules are per project: a rule covers its project's sessions,
+	// whoever owns them; the project's managers set it.
+	return r.OwnerID != "" && r.ProjectID != "" && sessionID != "" && s.sessionProject(sessionID) == r.ProjectID
 }
 
 // Evaluate runs the rules over an action: deny beats require beats
@@ -408,7 +389,7 @@ func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
 	var deny, require, auto *entity.AccessRule
 	for i := range rules {
 		r := rules[i]
-		if r.Disabled || !s.ruleApplies(ctx, r, sessionOwner, agentOwner) {
+		if r.Disabled || !s.ruleApplies(ctx, r, a.SessionID, sessionOwner, agentOwner) {
 			continue
 		}
 		if r.Effect == EffectApprovers {

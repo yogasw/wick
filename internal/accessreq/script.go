@@ -19,7 +19,7 @@ import (
 // look things up in other connectors (is the viewer a member of a channel,
 // is the app code in a canvas, what does a report say) without wick
 // growing a new kind of fact each time. Scripts live in the rule, are
-// edited on the Rules page and need no redeploy.
+// edited in the project settings and need no redeploy.
 //
 // The runner (wired by the server) runs the script as the rule's owner
 // with READ-ONLY connector access: a write op refuses. The script reads
@@ -192,7 +192,7 @@ func (s *Service) approverRules(ctx context.Context, a Action) []approverRule {
 	sessionOwner, agentOwner := s.owners(ctx, a.SessionID, a.AgentID)
 	var out []approverRule
 	for _, r := range rules {
-		if r.Effect != EffectApprovers || r.Disabled || r.Simulate || !s.ruleApplies(ctx, r, sessionOwner, agentOwner) {
+		if r.Effect != EffectApprovers || r.Disabled || r.Simulate || !s.ruleApplies(ctx, r, a.SessionID, sessionOwner, agentOwner) {
 			continue
 		}
 		d, err := ParseRule(r.Doc)
@@ -273,17 +273,9 @@ func approverRuleNote(rules []approverRule) string {
 	return " Also anyone rule " + strings.Join(names, ", ") + " lets in."
 }
 
-// SimulateScript runs one saved rule's script for a sample action and
+// simulateScript runs one saved rule's script for a sample action and
 // viewer, uncached, and reports what it returned.
-func (s *Service) SimulateScript(ctx context.Context, byID, ruleID string, a Action, viewerID string) (ScriptResult, error) {
-	r, err := s.store.rule(ctx, ruleID)
-	if err != nil {
-		return ScriptResult{}, err
-	}
-	by, ok := s.person(ctx, byID)
-	if !ok || (!by.IsAdmin && r.OwnerID != byID) {
-		return ScriptResult{}, errNotRuleOwner
-	}
+func (s *Service) simulateScript(ctx context.Context, r *entity.AccessRule, a Action, viewerID string) (ScriptResult, error) {
 	d, err := ParseRule(r.Doc)
 	if err != nil {
 		return ScriptResult{}, err

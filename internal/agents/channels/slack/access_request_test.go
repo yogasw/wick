@@ -39,10 +39,13 @@ func TestAccessCardBlocksParse(t *testing.T) {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(accessCardBlocks(v))
 	s := sb.String()
-	for _, want := range []string{"Review & decide", accessReviewAction, accessDenyAction, "Open in web", "channel_not_found", "Approver A", "update the &lt;status&gt;"} {
+	for _, want := range []string{"Review & decide", accessReviewAction, accessDenyAction, "channel_not_found", "Approver A", "update the &lt;status&gt;"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("card misses %q", want)
 		}
+	}
+	if strings.Contains(s, "Open in web") {
+		t.Error("the card must not link to a separate page")
 	}
 	// A decided request has no buttons left.
 	v.Pending = 0

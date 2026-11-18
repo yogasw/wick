@@ -7,7 +7,7 @@
      flight per agent; edits made meanwhile go out in the next one. A
      rejected PATCH keeps the local value and shows the error inline. */
   import { onMount, untrack } from "svelte";
-  import { AIGenerateButton, Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
+  import { AIGenerateButton, Button, Modal, ProjectAccessRequests, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
@@ -710,6 +710,10 @@
         <RolesViewer {base} agentId={agent.id} {catalog} grants={draft.grants} captainHandle={agents.find((a) => a.is_captain)?.handle ?? "captain"} />
       {/if}
       <AccessHistory {base} agentId={agent.id} />
+      {#if agent.project_id}
+        <h3 class="mb-1.5 mt-5 text-sm font-semibold text-black-900 dark:text-white-100">Access requests</h3>
+        <ProjectAccessRequests {base} projectId={agent.project_id} />
+      {/if}
     {/key}
   {:else if view === "tools"}
     <div>

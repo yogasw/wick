@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/accessreq"
@@ -71,9 +71,16 @@ func (a accessCatalog) Run(ctx context.Context, userID, connectorID, opKey, acco
 
 // accessDirectory is accessreq.Directory over users, sessions and the Team.
 type accessDirectory struct {
-	users *login.Service
-	team  *team.Service
-	ids   *channelidentity.Store
+	users  *login.Service
+	team   *team.Service
+	ids    *channelidentity.Store
+	layout agentconfig.Layout
+}
+
+// SessionProject names a session's project, for project-scoped rules and
+// the project's request history.
+func (d accessDirectory) SessionProject(sessionID string) string {
+	return auditPlaces{layout: d.layout}.SessionProject(sessionID)
 }
 
 func personOf(u *entity.User) accessreq.Person {
@@ -161,19 +168,14 @@ func (p accessPublisher) Publish(ctx context.Context, v accessreq.View) (map[str
 // to the connector hook, the MCP tool, the Slack cards, the web page and
 // the session wake-up.
 func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Service, teamSvc *team.Service,
-	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, appURL func() string,
+	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, _ func() string,
 	layout agentconfig.Layout) *accessreq.Service {
-	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db)})
+	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db), layout: layout})
 	ar.AddPublisher(accessPublisher{reg: reg})
 	ar.AddPublisher(agentstool.AccessWebPublisher{})
+	ar.AddPublisher(agentstool.AccessFilePublisher{Layout: layout, Project: auditPlaces{layout: layout}.SessionProject})
+	go pruneAccessRequests(ar)
 	ar.SetWaker(accessreq.Waker(deliver))
-	ar.SetURL(func(id string) string {
-		base := strings.TrimRight(appURL(), "/")
-		if base == "" {
-			return ""
-		}
-		return base + "/tools/agents/access/" + id
-	})
 	svc.SetAccessCheck(func(ctx context.Context, q connectors.AccessQuery) (string, string, error) {
 		return ar.Check(ctx, accessreq.Action{
 			SessionID: q.SessionID, AgentID: q.AgentID, ConnectorID: q.ConnectorID, ConnectorKey: q.ConnectorKey,
@@ -228,4 +230,17 @@ func (d accessDirectory) Identities(ctx context.Context, userID string) map[stri
 		}
 	}
 	return out
+}
+
+// pruneAccessRequests drops finished requests past their retention once
+// a day; their history stays in the sessions' files.
+func pruneAccessRequests(ar *accessreq.Service) {
+	for {
+		if n, err := ar.PruneFinished(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("accessreq: prune failed")
+		} else if n > 0 {
+			log.Info().Int64("requests", n).Msg("accessreq: pruned finished requests")
+		}
+		time.Sleep(24 * time.Hour)
+	}
 }

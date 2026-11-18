@@ -65,7 +65,6 @@ var migratedModels = []any{
 	&entity.AccessGrant{},
 	&entity.AccessRule{},
 	&entity.AccessRuleRevision{},
-	&entity.AccessFact{},
 	&entity.CodeModeRun{},
 	&entity.ConnectorAccount{},
 	&entity.ConnectorCredentialPolicy{},

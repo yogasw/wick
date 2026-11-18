@@ -112,6 +112,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		SessionID:       in.SessionID,
 		AgentID:         in.AgentID,
 		RequesterUserID: s.sessionOwner(in.SessionID),
+		ProjectID:       s.sessionProject(in.SessionID),
 		Reason:          strings.TrimSpace(in.Reason),
 		Status:          StatusPending,
 		CreatedAt:       now,
@@ -204,6 +205,19 @@ func (s *Service) sessionOwner(sessionID string) string {
 		return ""
 	}
 	return s.dir.SessionOwner(sessionID)
+}
+
+// SessionProjects is the optional part of a Directory that names a
+// session's project.
+type SessionProjects interface {
+	SessionProject(sessionID string) string
+}
+
+func (s *Service) sessionProject(sessionID string) string {
+	if sp, ok := s.dir.(SessionProjects); ok && sessionID != "" {
+		return sp.SessionProject(sessionID)
+	}
+	return ""
 }
 
 func (s *Service) owners(ctx context.Context, sessionID, agentID string) (sessionOwner, agentOwner string) {
@@ -578,7 +592,7 @@ func (s *Service) leaveGrant(ctx context.Context, req entity.AccessRequest, it e
 	var params map[string]any
 	_ = json.Unmarshal([]byte(it.Params), &params)
 	g := entity.AccessGrant{ID: uuid.NewString(), ConnectorID: it.ConnectorID, OpKey: it.OpKey,
-		Target: TargetKey(stringify(params)), ApproverID: by, ItemID: it.ID, CreatedAt: s.now()}
+		Target: TargetKey(stringify(params)), ProjectID: req.ProjectID, ApproverID: by, ItemID: it.ID, CreatedAt: s.now()}
 	switch it.Mode {
 	case ModeSession:
 		g.ScopeType, g.ScopeID = ModeSession, req.SessionID

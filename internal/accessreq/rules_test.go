@@ -12,8 +12,8 @@ when:
   ops: [apps.*]
   kind: [read, write]
   all:
-    - fact: app.env
-      equals: staging
+    - fact: app
+      in: [acme-stag]
 `
 
 func TestParseRuleValidation(t *testing.T) {
@@ -45,35 +45,27 @@ func TestParseRuleValidation(t *testing.T) {
 
 func saveRule(t *testing.T, e *env, by, raw string) {
 	t.Helper()
-	if _, err := e.svc.SaveRule(context.Background(), by, "", raw, "test"); err != nil {
+	if _, err := e.svc.SaveProjectRule(context.Background(), by, "proj-1", "", raw, "test"); err != nil {
 		t.Fatalf("save rule: %v", err)
 	}
 }
 
-func TestAutoApproveNeedsTheFact(t *testing.T) {
+func TestAutoApproveNeedsAKnownApp(t *testing.T) {
 	e := newEnv(t)
 	saveRule(t, e, "owner-a", stagingAuto)
 	ctx := context.Background()
-	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
-		Params: map[string]string{"app_code": "acme-stag"}}
-	// Unknown app: fail closed.
+	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite}
+	// No app named at all: fail closed.
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
-		t.Fatalf("auto-approved without the fact: %q", runAs)
+		t.Fatalf("auto-approved without an app: %q", runAs)
 	}
-	if err := e.svc.SetFact(ctx, "owner-a", "app.env", "acme-stag", "staging"); err == nil {
-		t.Fatal("a non-admin changed a fact")
-	}
-	if err := e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging"); err != nil {
-		t.Fatal(err)
-	}
+	a.Params = map[string]string{"app_code": "acme-stag"}
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "owner-a" {
-		t.Fatalf("staging app not auto-approved: %q", runAs)
+		t.Fatalf("listed app not auto-approved: %q", runAs)
 	}
-	// The same rule, a production app.
 	a.Params = map[string]string{"app_id": "acme-prod"}
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-prod", "production")
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
-		t.Fatalf("production app auto-approved: %q", runAs)
+		t.Fatalf("unlisted app auto-approved: %q", runAs)
 	}
 }
 
@@ -82,7 +74,6 @@ func TestDenyBeatsAutoApprove(t *testing.T) {
 	saveRule(t, e, "owner-a", stagingAuto)
 	saveRule(t, e, "owner-a", "name: no-apps\neffect: deny\nwhen: {ops: [apps.update_*]}")
 	ctx := context.Background()
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
 	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
 		Params: map[string]string{"app_code": "acme-stag"}}
 	runAs, _, err := e.svc.Check(ctx, a)
@@ -99,7 +90,6 @@ func TestRequireBeatsAutoApprove(t *testing.T) {
 	saveRule(t, e, "owner-a", stagingAuto)
 	saveRule(t, e, "owner-a", "name: always-ask\neffect: require\nwhen: {ops: [apps.*]}")
 	ctx := context.Background()
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
 	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
 		Params: map[string]string{"app_code": "acme-stag"}}
 	if runAs, _, err := e.svc.Check(ctx, a); runAs != "" || err != nil {
@@ -111,7 +101,6 @@ func TestAutoApproveAtCreateRunsAsRuleOwner(t *testing.T) {
 	e := newEnv(t)
 	saveRule(t, e, "owner-a", stagingAuto)
 	ctx := context.Background()
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
 	v := e.create(t,
 		act("c-apps", "update_setting", map[string]any{"app_code": "acme-stag"}),
 		act("c-notes", "update_page", map[string]any{"page_id": "p1"}),
@@ -132,7 +121,6 @@ func TestSimulateRuleDoesNotAct(t *testing.T) {
 	e := newEnv(t)
 	saveRule(t, e, "owner-a", "simulate: true\n"+stagingAuto)
 	ctx := context.Background()
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
 	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
 		Params: map[string]string{"app_code": "acme-stag"}}
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
@@ -148,46 +136,46 @@ func TestSimulateRuleDoesNotAct(t *testing.T) {
 	}
 }
 
-func TestNonAdminRuleCoversOnlyOwnSessions(t *testing.T) {
+func TestProjectRuleCoversOnlyItsProject(t *testing.T) {
 	e := newEnv(t)
-	// helper-b's rule must not touch owner-a's session; admin-z's does.
-	e.cat.can["helper-b|c-apps"] = true
-	saveRule(t, e, "helper-b", strings.Replace(stagingAuto, "staging-auto", "helper-auto", 1))
+	saveRule(t, e, "owner-a", stagingAuto) // proj-1
 	ctx := context.Background()
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
 	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
 		Params: map[string]string{"app_code": "acme-stag"}}
+	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "owner-a" {
+		t.Fatalf("rule should apply in its project: %q", runAs)
+	}
+	a.SessionID = "sess-h" // proj-2
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
-		t.Fatalf("another user's rule applied: %q", runAs)
+		t.Fatalf("another project's rule applied: %q", runAs)
 	}
-	a.SessionID = "sess-h"
-	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "helper-b" {
-		t.Fatalf("own rule should apply in own session: %q", runAs)
-	}
-	saveRule(t, e, "admin-z", strings.Replace(stagingAuto, "staging-auto", "admin-auto", 1))
-	a.SessionID = "sess-1"
-	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "admin-z" {
-		t.Fatalf("admin rule should apply everywhere: %q", runAs)
+	a.SessionID = "sess-unknown" // no project
+	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
+		t.Fatalf("a rule applied to a session without a project: %q", runAs)
 	}
 }
 
-func TestRuleEditOnlyByOwnerOrAdmin(t *testing.T) {
+func TestRuleEditOnlyInItsProject(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	r, err := e.svc.SaveRule(ctx, "owner-a", "", stagingAuto, "")
+	r, err := e.svc.SaveProjectRule(ctx, "owner-a", "proj-1", "", stagingAuto, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.SaveRule(ctx, "stranger", r.ID, stagingAuto, ""); err == nil {
-		t.Fatal("a stranger edited the rule")
-	}
-	if _, err := e.svc.SaveRule(ctx, "admin-z", r.ID, strings.Replace(stagingAuto, "write]", "write, send]", 1), "widen"); err != nil {
+	// Another manager of the same project may change it.
+	if _, err := e.svc.SaveProjectRule(ctx, "helper-b", "proj-1", r.ID, strings.Replace(stagingAuto, "write]", "write, send]", 1), "widen"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.DeleteRule(ctx, "stranger", r.ID, ""); err == nil {
-		t.Fatal("a stranger deleted the rule")
+	if _, err := e.svc.SaveProjectRule(ctx, "helper-b", "proj-2", r.ID, stagingAuto, ""); err == nil {
+		t.Fatal("edited from another project")
 	}
-	if err := e.svc.DeleteRule(ctx, "owner-a", r.ID, "done"); err != nil {
+	if _, err := e.svc.SaveProjectRule(ctx, "owner-a", "", "", stagingAuto, ""); err == nil {
+		t.Fatal("saved a rule without a project")
+	}
+	if err := e.svc.DeleteProjectRule(ctx, "helper-b", "proj-2", r.ID, ""); err == nil {
+		t.Fatal("deleted from another project")
+	}
+	if err := e.svc.DeleteProjectRule(ctx, "owner-a", "proj-1", r.ID, "done"); err != nil {
 		t.Fatal(err)
 	}
 	h, _ := e.svc.RuleHistory(ctx, r.ID)
@@ -215,8 +203,6 @@ func TestAppFromConnectorConfig(t *testing.T) {
 	e := newEnv(t)
 	saveRule(t, e, "owner-a", stagingAuto)
 	ctx := context.Background()
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-prod", "production")
 	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
 		Config: map[string]string{"app_code": "acme-stag"}}
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "owner-a" {

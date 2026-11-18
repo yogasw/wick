@@ -223,9 +223,6 @@ func accessCardBlocks(v accessreq.View) []map[string]any {
 			map[string]any{"type": "button", "action_id": accessReviewAction, "value": v.ID, "style": "primary", "text": plain("Review & decide")},
 			map[string]any{"type": "button", "action_id": accessDenyAction, "value": v.ID, "style": "danger", "text": plain("Deny")},
 		}
-		if v.URL != "" {
-			elems = append(elems, map[string]any{"type": "button", "action_id": accessOpenWebAction, "value": v.ID, "url": v.URL, "text": plain("Open in web")})
-		}
 		blocks = append(blocks, map[string]any{"type": "actions", "block_id": accessBlockID, "elements": elems})
 	}
 	blocks = append(blocks, contextBlock(fmt.Sprintf("Request `%s` · approved actions run with the approver's own access", shortID(v.ID))))

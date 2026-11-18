@@ -156,7 +156,6 @@ func TestScriptDenyFailsClosedToRequire(t *testing.T) {
 	ctx := context.Background()
 	saveRule(t, e, "admin-z", stagingAuto)
 	saveRule(t, e, "admin-z", "name: prod-check\neffect: deny\nwhen:\n  ops: [apps.*]\n  script: 'return false'\n")
-	_ = e.svc.SetFact(ctx, "admin-z", "app.env", "acme-stag", "staging")
 	fr := &fakeRunner{fn: func(string, map[string]any) (any, error) { return nil, errors.New("timeout") }}
 	e.svc.SetScriptRunner(fr.run)
 	a := Action{SessionID: "sess-1", ConnectorID: "c-apps", ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite,
@@ -239,16 +238,16 @@ func TestSimulateScriptReportsResultAndLogs(t *testing.T) {
 		return map[string]any{"allow": true, "reason": "listed"}, nil
 	}}
 	e.svc.SetScriptRunner(fr.run)
-	r, err := e.svc.SaveRule(context.Background(), "owner-a", "", scriptAuto, "")
+	r, err := e.svc.SaveProjectRule(context.Background(), "owner-a", "proj-1", "", scriptAuto, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := Action{ConnectorKey: "apps", OpKey: "update_setting", Kind: KindWrite, Params: map[string]string{"app_code": "x"}}
-	res, err := e.svc.SimulateScript(context.Background(), "owner-a", r.ID, a, "")
+	res, err := e.svc.SimulateProjectScript(context.Background(), "owner-a", "proj-1", r.ID, a, "")
 	if err != nil || !res.Allow || res.Reason != "listed" || len(res.Logs) == 0 {
 		t.Fatalf("simulate = %+v %v", res, err)
 	}
-	if _, err := e.svc.SimulateScript(context.Background(), "stranger", r.ID, a, ""); err == nil {
-		t.Fatal("a stranger ran someone else's rule script")
+	if _, err := e.svc.SimulateProjectScript(context.Background(), "stranger", "proj-2", r.ID, a, ""); err == nil {
+		t.Fatal("another project ran this project's rule script")
 	}
 }

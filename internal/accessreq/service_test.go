@@ -82,7 +82,16 @@ func (d fakeDir) Admins(context.Context) []Person {
 	return out
 }
 
-func (d fakeDir) SessionOwner(s string) string                  { return d.sessionOwn[s] }
+func (d fakeDir) SessionOwner(s string) string { return d.sessionOwn[s] }
+func (d fakeDir) SessionProject(s string) string {
+	switch s {
+	case "sess-1", "sess-2":
+		return "proj-1"
+	case "sess-h":
+		return "proj-2"
+	}
+	return ""
+}
 func (d fakeDir) AgentOwner(_ context.Context, a string) string { return d.agentOwn[a] }
 func (d fakeDir) AgentName(_ context.Context, a string) string {
 	if a == "" {
@@ -455,5 +464,28 @@ func TestDecideShowsRunningBeforeResult(t *testing.T) {
 	}
 	if len(pub.statuses) < 2 || pub.statuses[0] != ItemRunning || pub.statuses[len(pub.statuses)-1] != ItemOK {
 		t.Fatalf("card states = %v, want running first and ok last", pub.statuses)
+	}
+}
+
+func TestPruneFinishedKeepsPendingAndRecent(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	old := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	open := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p2"}))
+	if ok, err := e.svc.store.setRequestStatus(ctx, old.ID, StatusPending, StatusCancelled); err != nil || !ok {
+		t.Fatalf("cancel: %v %v", ok, err)
+	}
+	// 31 days later only the finished one goes.
+	later := time.Now().Add(RequestRetention + 24*time.Hour)
+	e.svc.now = func() time.Time { return later }
+	n, err := e.svc.PruneFinished(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	if _, _, err := e.svc.store.request(ctx, old.ID); err == nil {
+		t.Fatal("finished request still stored")
+	}
+	if _, _, err := e.svc.store.request(ctx, open.ID); err != nil {
+		t.Fatalf("pending request pruned: %v", err)
 	}
 }

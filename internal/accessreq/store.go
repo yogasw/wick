@@ -188,32 +188,24 @@ func (s *Store) ruleHistory(ctx context.Context, ruleID string, limit int) ([]en
 	return out, s.db.WithContext(ctx).Where("rule_id = ?", ruleID).Order("rev DESC").Limit(limit).Find(&out).Error
 }
 
-func (s *Store) fact(ctx context.Context, fact, subject string) (string, bool) {
-	var f entity.AccessFact
-	if err := s.db.WithContext(ctx).First(&f, "fact = ? AND subject = ?", fact, subject).Error; err != nil {
-		return "", false
-	}
-	return f.Value, true
-}
-
-func (s *Store) facts(ctx context.Context) ([]entity.AccessFact, error) {
-	var out []entity.AccessFact
-	return out, s.db.WithContext(ctx).Order("fact, subject").Find(&out).Error
-}
-
-func (s *Store) setFact(ctx context.Context, f entity.AccessFact) error {
-	db := s.db.WithContext(ctx)
-	res := db.Model(&entity.AccessFact{}).Where("fact = ? AND subject = ?", f.Fact, f.Subject).
-		Updates(map[string]any{"value": f.Value, "updated_by": f.UpdatedBy, "updated_at": f.UpdatedAt})
-	if res.Error != nil {
+// pruneFinished deletes requests that stopped changing before cutoff and
+// are no longer pending, with their items. Their history stays in the
+// session's files.
+func (s *Store) pruneFinished(ctx context.Context, cutoff time.Time) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		old := tx.Model(&entity.AccessRequest{}).Select("id").Where("status <> ? AND updated_at < ?", "pending", cutoff)
+		if err := tx.Where("request_id IN (?)", old).Delete(&entity.AccessRequestItem{}).Error; err != nil {
+			return err
+		}
+		res := tx.Where("status <> ? AND updated_at < ?", "pending", cutoff).Delete(&entity.AccessRequest{})
+		n = res.RowsAffected
 		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return db.Create(&f).Error
-	}
-	return nil
+	})
+	return n, err
 }
 
-func (s *Store) deleteFact(ctx context.Context, fact, subject string) error {
-	return s.db.WithContext(ctx).Delete(&entity.AccessFact{}, "fact = ? AND subject = ?", fact, subject).Error
+func (s *Store) projectGrants(ctx context.Context, projectID string) ([]entity.AccessGrant, error) {
+	var out []entity.AccessGrant
+	return out, s.db.WithContext(ctx).Where("project_id = ? AND revoked_at IS NULL", projectID).Order("created_at DESC").Find(&out).Error
 }

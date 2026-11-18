@@ -92,7 +92,7 @@ func ClassifyOp(opKey string, destructive bool) string {
 // always allowed and not listed.
 //
 // "Always" is deliberately not offered on a card: standing access is a
-// rule (Rules page: deny / require / auto_approve with facts such as
+// rule (project settings: deny / require / auto_approve with facts such as
 // app.env), written on purpose, never one click on a card.
 func ModesFor(kind string) []string {
 	if kind == KindDelete {

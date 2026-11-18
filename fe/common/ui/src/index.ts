@@ -1,4 +1,7 @@
 export { default as ConfirmDialog } from "./ConfirmDialog.svelte";
+export { default as ProjectAccessRequests } from "./ProjectAccessRequests.svelte";
+export type { AccessItem, AccessRequestRow, AccessRuleRow, AccessGrantRow, ProjectAccess } from "./project-access.js";
+export { accessRequestLine, accessStatusIcon } from "./project-access.js";
 export { default as DeleteProjectDialog } from "./DeleteProjectDialog.svelte";
 export type { DeleteGates, DeleteProjectPreview, Sum } from "./delete-project.js";
 export { canConfirmDelete, DELETE_CONSENT, deleteProjectBody, makeSums, sumAnswered, TRASH_DAYS } from "./delete-project.js";
