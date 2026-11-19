@@ -198,6 +198,11 @@ type Service struct {
 	// can neither read nor use.
 	userName func(userID string) (name string, ok bool)
 
+	// userTags resolves a wick user id to its filter tag ids. Wired at boot
+	// via SetUserFilterTagResolver; nil means no per-account tag share can be
+	// proven for a caller known only by id (see AccountUsableBy).
+	userTags func(ctx context.Context, userID string) []string
+
 	// runObserver, when set, is notified as a run enters "running" and again when
 	// it reaches a terminal status, so the agent conversation UI can surface a
 	// per-tool-call Cancel button (it needs the connector run id, which is created
@@ -284,6 +289,31 @@ func (s *Service) SetSessionOwnerUserResolver(fn func(sessionID string) (string,
 // handing it a uuid — see Ctx.UserName.
 func (s *Service) SetUserNameResolver(fn func(userID string) (string, bool)) {
 	s.userName = fn
+}
+
+// SetUserFilterTagResolver wires the hook that maps a wick user id to its
+// filter tag ids. Called once at boot from the API server.
+func (s *Service) SetUserFilterTagResolver(fn func(ctx context.Context, userID string) []string) {
+	s.userTags = fn
+}
+
+// AccountUsableBy reports whether userID may run as acc on row, by the same
+// rule the account list uses (AccountVisibleTo): their own account, the
+// shared pool, an account shared with a tag they carry, or an instance they
+// own. Admin rights are deliberately not consulted: callers that only know
+// the effective user id (a connector's own second gate) must not widen
+// access past what that user could pick on the connector page as a
+// non-admin.
+func (s *Service) AccountUsableBy(ctx context.Context, row entity.Connector, acc entity.ConnectorAccount, userID string) (bool, error) {
+	caller := AccountAccess{UserID: userID, Privileged: OwnsConnector(row, userID)}
+	if s.userTags != nil && userID != "" {
+		caller.TagIDs = s.userTags(ctx, userID)
+	}
+	accTags, err := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+	if err != nil {
+		return false, fmt.Errorf("resolve account tags: %w", err)
+	}
+	return AccountVisibleTo(row, acc, accTags[acc.ID], caller), nil
 }
 
 // RunEvent is emitted to the runObserver as a run starts and finishes, so the

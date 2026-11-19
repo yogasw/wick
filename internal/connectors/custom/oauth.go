@@ -932,7 +932,10 @@ var ErrOAuthAccountNotYours = fmt.Errorf("account belongs to another user")
 // framework's AccountVisibleTo gate alone: that gate runs against the MCP
 // principal and passes every account for an admin one. An explicit
 // @accountId may name the caller's own account, an ownerless legacy row,
-// or any account when the instance shares them (AllowOthersSeeAccounts).
+// any account when the instance shares them (AllowOthersSeeAccounts), or an
+// account the caller may use by the connector page's own rule
+// (connectors.Service.AccountUsableBy: shared with a tag the caller carries,
+// or an instance the caller owns).
 // Without an explicit account the call runs as the caller's own account
 // and never falls back to someone else's.
 func (s *Service) callerAccount(ctx context.Context, inst entity.Connector, accountID, callerUserID string) (*entity.ConnectorAccount, error) {
@@ -948,6 +951,15 @@ func (s *Service) callerAccount(ctx context.Context, inst entity.Connector, acco
 			owner := accs[i].WickUserID
 			if owner == "" || inst.AllowOthersSeeAccounts || (callerUserID != "" && owner == callerUserID) {
 				return &accs[i], nil
+			}
+			if callerUserID != "" && s.conns != nil {
+				ok, err := s.conns.AccountUsableBy(ctx, inst, accs[i], callerUserID)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					return &accs[i], nil
+				}
 			}
 			return nil, ErrOAuthAccountNotYours
 		}

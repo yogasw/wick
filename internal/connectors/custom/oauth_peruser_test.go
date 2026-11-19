@@ -17,6 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
+	"gorm.io/gorm"
 )
 
 // perUserFixture is a fake MCP resource + authorization server where each
@@ -25,6 +26,7 @@ import (
 type perUserFixture struct {
 	svc     *Service
 	conns   *connectors.Service
+	db      *gorm.DB
 	mcpURL  string
 	mu      sync.Mutex
 	callers []string // Authorization header of each tools/call
@@ -113,6 +115,7 @@ func newPerUserFixture(t *testing.T) *perUserFixture {
 	})
 
 	db := newTestDB(t)
+	f.db = db
 	f.conns = connectors.NewServiceFromDB(db)
 	f.conns.SetConfigs(configs.NewService(db))
 	f.svc = New(Deps{DB: db, Connectors: f.conns, Keys: &fakeKeyStore{vals: map[string]string{}}})

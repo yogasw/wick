@@ -1982,6 +1982,10 @@ func NewServer() *Server {
 		return u.Name, true
 	})
 
+	// Filter tags per user, so a connector's own account gate (custom
+	// connectors) honours per-account tag shares like the account list does.
+	connectorsSvc.SetUserFilterTagResolver(authSvc.GetUserFilterTagIDs)
+
 	// Surface connector run start/finish to the conversation SSE stream so a
 	// running tool call can show a per-run Cancel button (the FE needs the run
 	// id, which only exists inside connectors.Service).
