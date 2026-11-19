@@ -369,7 +369,8 @@ func SuggestGroupRules(tools []PreviewTool) GroupRules {
 		}
 	}
 	// Permission-style descriptions: "Requires domain.view".
-	perm := regexp.MustCompile("Requires `?([a-z][a-z0-9_]*)\\.[a-z_]+")
+	// \s+: servers wrap long descriptions, so "Requires" often ends a line.
+	perm := regexp.MustCompile("Requires\\s+`?([a-z][a-z0-9_]*)\\.[a-z_]+")
 	n := 0
 	for _, t := range tools {
 		if perm.MatchString(t.Description) {
@@ -377,7 +378,7 @@ func SuggestGroupRules(tools []PreviewTool) GroupRules {
 		}
 	}
 	if n*2 >= len(tools) {
-		g.Templates = append(g.Templates, GroupTemplate{From: "description", Pattern: "Requires `?{group}\\."})
+		g.Templates = append(g.Templates, GroupTemplate{From: "description", Pattern: "Requires\\s+`?{group}\\."})
 	}
 	// <verb>-<resource>[-suffix] names.
 	sep := "-"

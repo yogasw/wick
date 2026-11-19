@@ -14,7 +14,8 @@ func fixtureTools() []PreviewTool {
 	add := func(name, res string, perm bool) {
 		d := "Does something with " + res + "."
 		if perm {
-			d += " Requires " + res + ".view."
+			// Wrapped like real servers do: "Requires" ends the line.
+			d += " Requires\n    " + res + ".view."
 		}
 		out = append(out, PreviewTool{Name: name, Description: d})
 	}
@@ -68,7 +69,7 @@ func TestPlacementOrderAndOther(t *testing.T) {
 	g := GroupRules{
 		Pins:      map[string]string{"get-widget-tool": "Pinned", "gone-tool": "X"},
 		Rules:     []GroupRule{{Pattern: "region", Group: "Places"}},
-		Templates: []GroupTemplate{{From: "description", Pattern: "Requires {group}\\."}},
+		Templates: []GroupTemplate{{From: "description", Pattern: "Requires\\s+{group}\\."}},
 		Titles:    map[string]string{"gadget": "Gadgets & Co"},
 	}
 	tools := append(fixtureTools(), PreviewTool{Name: "odd-one", Description: "x", Category: "From Server"})
