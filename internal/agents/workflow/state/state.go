@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/pkg/strutil"
 )
 
 // maxEventLine bounds one events.jsonl line so a malformed file can't
@@ -77,7 +78,7 @@ func compactOutputs(st workflow.RunState) workflow.RunState {
 		out[k] = map[string]any{
 			"_truncated": true,
 			"_size":      len(b),
-			"preview":    string(b[:storedPreviewBytes]),
+			"preview":    strutil.CutBytes(string(b), storedPreviewBytes),
 		}
 	}
 	if out != nil {
