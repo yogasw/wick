@@ -71,6 +71,7 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	mux.Handle("GET /manager/connectors/custom/mcp-servers/new", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("GET /manager/connectors/custom/mcp-servers/edit", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/test", authOnly(h.customMCPServerTest))
+	mux.Handle("POST /manager/connectors/custom/mcp-servers/grouping/preview", authOnly(h.customMCPGroupingPreview))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/save", authOnly(h.customMCPServerSave))
 
 	// OAuth (MCP authorization spec): browser login per account. The
@@ -442,6 +443,7 @@ func serverFormFromRow(srv *entity.CustomConnectorMCPServer) (*customconn.Server
 		SSO:         sso,
 		OAuth:       oauth,
 		Excluded:    excluded,
+		GroupRules:  &srv.GroupRules,
 	}, nil
 }
 
@@ -704,4 +706,47 @@ func (h *Handler) customPubkeyPEM(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(pem))
+}
+
+// customMCPGroupingPreview dry-runs a grouping recipe against a tool list
+// the form already holds (from Test or the edit prefill), so it works the
+// same while creating and editing. suggest=true first guesses a recipe
+// from the tools. Stateless: nothing is saved here; the recipe rides the
+// normal save as form.group_rules.
+func (h *Handler) customMCPGroupingPreview(w http.ResponseWriter, r *http.Request) {
+	if h.customNotReady(w, r, true) {
+		return
+	}
+	var body struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+		Rules   string `json:"rules"`
+		Suggest bool   `json:"suggest"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	tools := make([]customconn.PreviewTool, 0, len(body.Tools))
+	for _, t := range body.Tools {
+		tools = append(tools, customconn.PreviewTool{Name: t.Name, Description: t.Description})
+	}
+	var rules customconn.GroupRules
+	if body.Suggest {
+		rules = customconn.SuggestGroupRules(tools)
+	} else if g, err := customconn.ParseGroupRules(body.Rules); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	} else if g != nil {
+		rules = *g
+	}
+	preview, err := customconn.PreviewGroups(tools, rules)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	raw, _ := json.MarshalIndent(rules, "", "  ")
+	writeJSON(w, http.StatusOK, map[string]any{"rules": string(raw), "preview": preview})
 }

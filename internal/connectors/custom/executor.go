@@ -257,12 +257,12 @@ func (s *Service) serverRowForDef(parent context.Context, def *entity.CustomConn
 // servers may expose different tools per account, so the per-instance
 // re-sync passes the instance being viewed; "" falls back to the first
 // enabled instance with a connected account.
-func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector, preferInstance string) ([]DefCategory, bool) {
+func (s *Service) liveMCPRaw(parent context.Context, def *entity.CustomConnector, preferInstance string) (liveMCP, bool) {
 	l := log.Ctx(parent).With().Str("component", "custom-connector").Str("key", def.Key).Logger()
 	serverID := ParseSourceMeta(def.SourceMeta).ServerID
 	if serverID == "" {
 		l.Warn().Msg("mcp def has no server_id; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	// Derive from the caller so the request-scoped logger (request_id)
 	// reaches the outbound MCP logs and cancellation propagates.
@@ -271,12 +271,12 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 	row, err := s.store.GetServer(ctx, serverID)
 	if err != nil {
 		l.Warn().Err(err).Str("server_id", serverID).Msg("mcp server row missing; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	srv, err := resolveServerConfig(row.URL, row.AuthScheme, row.AuthSecret, row.AuthHeaders, row.AuthExtra, row.Headers)
 	if err != nil {
 		l.Warn().Err(err).Msg("resolve mcp server config; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	var claims *SSOClaims
 	if row.AuthScheme == "sso" {
@@ -293,14 +293,14 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 		}
 		if !s.borrowUserToken(ctx, def.Key, preferInstance, callerID, &srv) {
 			l.Warn().Msg("per-user token mcp def has no connected account; exposing zero operations")
-			return nil, false
+			return liveMCP{}, false
 		}
 	} else if len(configHeaderFields(row)) > 0 {
 		// Per-instance Config headers: sync under an instance that has
 		// its values filled in — the preferred one first.
 		if !s.borrowInstanceConfig(ctx, def.Key, preferInstance, &srv) {
 			l.Warn().Msg("mcp def has no instance with its config headers filled; exposing zero operations")
-			return nil, false
+			return liveMCP{}, false
 		}
 	}
 	if row.AuthScheme == "oauth" {
@@ -349,7 +349,7 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 		}
 		if srv.AccessToken == "" {
 			l.Warn().Msg("oauth mcp def has no connected account; exposing zero operations")
-			return nil, false
+			return liveMCP{}, false
 		}
 	}
 	res := s.mcp(nil).Probe(ctx, srv, claims)
@@ -365,10 +365,41 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 	_ = s.store.UpdateServer(ctx, row)
 	if !res.OK {
 		l.Warn().Str("error", res.Error).Msg("mcp tools/list probe failed; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	s.adoptServerDescription(ctx, def, res.Instructions)
-	return toolsToCats(toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools)), res.Categories), true
+	// A recipe that no longer parses is ignored rather than failing the
+	// catalog.
+	rules, rerr := ParseGroupRules(row.GroupRules)
+	if rerr != nil {
+		l.Warn().Err(rerr).Msg("mcp group rules invalid; ignoring them")
+		rules = nil
+	}
+	return liveMCP{
+		ops:    toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools)),
+		legend: res.Categories,
+		rules:  rules,
+	}, true
+}
+
+// liveMCP is one live tools/list read: the ungrouped ops, the server's
+// category legend and the row's grouping recipe.
+type liveMCP struct {
+	ops    []DefOp
+	legend []MCPCategory
+	rules  *GroupRules
+}
+
+// liveMCPOps is the live catalog in sections: the server's own
+// _meta.category first, then the row's grouping recipe (pins / rules /
+// templates / catch-all last).
+func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector, preferInstance string) ([]DefCategory, bool) {
+	live, ok := s.liveMCPRaw(parent, def, preferInstance)
+	if !ok {
+		return nil, false
+	}
+	ops := applyGroupRules(live.ops, live.rules)
+	return otherLast(toolsToCats(ops, legendFromRules(live.rules, live.legend)), live.rules), true
 }
 
 // toolsToCats groups a flat MCP op list into titled sections by each op's

@@ -2350,6 +2350,22 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("operation %q is a config-only helper and cannot be called as a tool", p.OperationKey)
 	}
 
+	// Agent calls are checked against the op's declared inputs before
+	// anything runs: a wrong guess comes back as an InputError (the MCP
+	// layer attaches the schema) instead of reaching the upstream service.
+	if validatesInput(p.Source) {
+		raw := p.RawInput
+		if raw == nil {
+			raw = make(map[string]any, len(p.Input))
+			for k, v := range p.Input {
+				raw[k] = v
+			}
+		}
+		if ierr := ValidateInput(*op, raw); ierr != nil {
+			return nil, ierr
+		}
+	}
+
 	// Resolve the named account BEFORE the per-row op gate, not after. The
 	// gate used to reject an operation the instance had turned off and
 	// return before any account was loaded — which made a per-account
@@ -2720,6 +2736,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		UserID:       p.UserID,
 		SessionID:    sessionID,
 		AccountID:    runAccountID,
+		AgentID:      agentIDOf(ctx),
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,

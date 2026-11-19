@@ -70,6 +70,7 @@ var migratedModels = []any{
 	&entity.ConnectorCredentialPolicy{},
 	&entity.CustomConnector{},
 	&entity.CustomConnectorMCPServer{},
+	&entity.ConnectorOpPref{},
 	&entity.PersonalAccessToken{},
 	&entity.PluginTestRequest{},
 	&entity.PushSubscription{},

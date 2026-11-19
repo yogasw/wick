@@ -812,6 +812,10 @@ type ServerForm struct {
 	SSO         SSOExtra       `json:"sso"`
 	OAuth       OAuthFormExtra `json:"oauth"`
 	Excluded    []string       `json:"excluded"`
+	// GroupRules is the grouping recipe JSON (see GroupRules). nil keeps
+	// the stored one, so a form that does not show it never wipes it; ""
+	// clears it.
+	GroupRules *string `json:"group_rules,omitempty"`
 	// OAuthLoginID references a completed in-flight browser login —
 	// the test/save endpoints resolve it to the session's tokens.
 	OAuthLoginID string `json:"oauth_login_id"`
@@ -991,6 +995,16 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 		ExcludedTools: mustJSON(excluded),
 		LastTestAt:    &now,
 		LastTestOK:    true,
+	}
+	if f.GroupRules != nil {
+		if _, err := ParseGroupRules(*f.GroupRules); err != nil {
+			return nil, "", "", err
+		}
+		row.GroupRules = strings.TrimSpace(*f.GroupRules)
+	} else if existingID != "" {
+		if prev, err := s.store.GetServer(ctx, existingID); err == nil {
+			row.GroupRules = prev.GroupRules
+		}
 	}
 
 	if existingID == "" {

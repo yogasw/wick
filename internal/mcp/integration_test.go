@@ -63,7 +63,8 @@ func stubModule() connector.Module {
 
 // groupedStubModule has two NAMED categories totalling more ops than
 // inlineSchemaThreshold so wick_get's two-tier (list categories → fetch one
-// category's schemas) path is exercised. Alpha has 10 ops, Beta has 5.
+// category's schemas) path is exercised — above the flat-listing threshold
+// (handlers.FlatOpThreshold) so level 1 really groups. Alpha has 10 ops, Beta has 8.
 func groupedStubModule() connector.Module {
 	type AInput struct {
 		Foo string `wick:"desc=foo arg"`
@@ -86,7 +87,7 @@ func groupedStubModule() connector.Module {
 		},
 		Operations: []connector.Category{
 			connector.Cat("Alpha", "Alpha group", mkOps("a", 10)...),
-			connector.Cat("Beta", "Beta group", mkOps("b", 5)...),
+			connector.Cat("Beta", "Beta group", mkOps("b", 8)...),
 		},
 	}
 }

@@ -463,6 +463,8 @@ export interface McpServerForm {
   sso: McpSSOExtra;
   oauth: McpOAuthExtra;
   excluded: string[];
+  /* Grouping recipe JSON (pins / rules / {group} templates / other); "" = none. */
+  group_rules?: string;
   oauth_login_id: string;
   /* oauth / bearer / custom_header: "Users connect their own account
      (SSO)" — save needs no Test, and the first instance turns Enable SSO
@@ -750,4 +752,23 @@ export interface PluginsList {
      Non-admins still receive the full list; the action buttons render
      disabled with a "requires admin" hint. */
   is_admin: boolean;
+}
+
+export interface McpGroupPlacement {
+  tool: string;
+  group: string;
+  by: string;
+}
+
+export interface McpGroupPreview {
+  groups: { title: string; tools: string[] }[];
+  other: string[] | null;
+  orphan_pins?: string[] | null;
+  placements: McpGroupPlacement[] | null;
+  total: number;
+}
+
+export interface McpGroupPreviewResult {
+  rules: string;
+  preview: McpGroupPreview;
 }

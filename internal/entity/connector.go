@@ -222,7 +222,12 @@ type ConnectorRun struct {
 	// UserID: a person can drive several connected accounts, and an agent
 	// or MCP client has no UserID at all while still choosing one. Indexed
 	// for the History page's Credential filter.
-	AccountID    string             `gorm:"type:text;index:idx_run_account"`
+	AccountID string `gorm:"type:text;index:idx_run_account"`
+	// AgentID is the Team agent whose scope the call ran under, empty for
+	// any other caller. Feeds the per-agent "frequent ops" ranking, which
+	// reads a 30-day window through the started_at index — no index of its
+	// own, so adding the column never rebuilds one on this large table.
+	AgentID      string             `gorm:"type:text"`
 	Source       ConnectorRunSource `gorm:"type:text;not null"`
 	RequestJSON  string             `gorm:"type:text"`
 	ResponseJSON string             `gorm:"type:text"`
@@ -350,3 +355,23 @@ type ConnectorOperation struct {
 	SystemDisabledReason string `gorm:"type:text"`
 	UpdatedAt            time.Time
 }
+
+// ConnectorOpPref is the admin/agent-curated metadata for one operation of
+// one connector instance: whether it is pinned into (or muted out of) the
+// "frequent" list agents see without discovery, a one-line note about its
+// pitfalls, and extra search keywords. Keyed by instance + op key; an op
+// that disappears from the module keeps its row (reported as orphaned).
+type ConnectorOpPref struct {
+	ConnectorID  string `gorm:"type:text;primaryKey"`
+	OperationKey string `gorm:"type:text;primaryKey"`
+	Pinned       bool   `gorm:"not null;default:false"`
+	Muted        bool   `gorm:"not null;default:false"`
+	Note         string `gorm:"type:text"`
+	// Keywords is a comma-separated list of extra words wick_search should
+	// match this op on ("revert, undo deploy").
+	Keywords  string `gorm:"type:text"`
+	UpdatedBy string `gorm:"type:text"`
+	UpdatedAt time.Time
+}
+
+func (ConnectorOpPref) TableName() string { return "connector_op_prefs" }

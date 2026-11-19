@@ -24,6 +24,7 @@
   import McpAuthPanel from "./McpAuthPanel.svelte";
   import McpHeadersEditor from "./McpHeadersEditor.svelte";
   import McpToolExcludeList from "./McpToolExcludeList.svelte";
+  import McpGrouping from "./McpGrouping.svelte";
   import IconPicker from "../icon/IconPicker.svelte";
   import type { McpServerForm, McpTool } from "$lib/types.js";
 
@@ -348,6 +349,16 @@
           {/if}
           <div class="mt-3">
             <McpToolExcludeList {tools} excluded={form.excluded} onChange={(ex) => { form.excluded = ex; }} />
+          </div>
+        </div>
+
+        <div class="mt-6 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+          <p class="text-sm font-semibold text-black-900 dark:text-white-100">Grouping <span class="ml-1 font-normal text-black-700 dark:text-black-600">· optional</span></p>
+          <p class="mt-0.5 text-xs text-black-800 dark:text-black-600">
+            Sort a large server's tools into groups so agents open one group instead of reading every tool. Saved with the connector.
+          </p>
+          <div class="mt-3">
+            <McpGrouping {tools} rules={form.group_rules ?? ""} onChange={(r) => { form.group_rules = r; }} />
           </div>
         </div>
       </div>

@@ -1890,6 +1890,11 @@ func NewServer() *Server {
 		return connectorsSvc.AgentCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
 	}
 	teamSvc.SetOwnerCatalog(ownerCatalog)
+	// "Frequent ops" in a Team agent's spawn prompt: its most used and
+	// pinned ops, callable without discovery.
+	teamSvc.SetFrequent(func(ctx context.Context, agentID string, allow map[string]func(string) bool) string {
+		return connectorsSvc.FrequentBlock(connectors.WithoutAgentScope(ctx), agentID, allow)
+	})
 	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (team.Reach, error) {
 		cat, err := ownerCatalog(ctx, userID)
 		if err != nil {

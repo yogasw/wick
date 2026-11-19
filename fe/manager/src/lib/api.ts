@@ -16,6 +16,8 @@ import type {
   McpServerForm,
   McpServerFormResult,
   McpTestResult,
+  McpGroupPreviewResult,
+  McpTool,
   McpOAuthStartResult,
   McpOAuthStatusResult,
   JobDetail,
@@ -400,6 +402,16 @@ export async function getMcpServerForm(id: string): Promise<McpServerFormResult>
 
 export async function testMcpServer(form: McpServerForm): Promise<McpTestResult> {
   return apiPost<McpTestResult>(`${mcpBase}/test`, form);
+}
+
+/* Dry-run a grouping recipe over the tools the form holds; suggest=true
+   guesses one first. Nothing is saved. */
+export async function previewMcpGrouping(
+  tools: McpTool[],
+  rules: string,
+  suggest = false,
+): Promise<McpGroupPreviewResult> {
+  return apiPost<McpGroupPreviewResult>(`${mcpBase}/grouping/preview`, { tools, rules, suggest });
 }
 
 export async function saveMcpServer(

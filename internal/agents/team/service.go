@@ -48,6 +48,9 @@ type Service struct {
 	// shareBlock is ShareBlock with the remote usage check filled in; nil
 	// checks the Captain only.
 	shareBlock func(entity.AgentPersona) string
+	// frequent renders the "Frequent ops" block of the spawn prompt; nil
+	// leaves it out.
+	frequent FrequentFunc
 }
 
 // SetShareBlock wires the full share check (the remote "Only me" usage

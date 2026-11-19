@@ -189,8 +189,8 @@ func TestWickGetListsCategoriesOnly(t *testing.T) {
 	for _, c := range p.Categories {
 		byName[c.Category] = c.TotalTools
 	}
-	if byName["Alpha"] != 10 || byName["Beta"] != 5 {
-		t.Fatalf("category counts = %v, want Alpha:10 Beta:5", byName)
+	if byName["Alpha"] != 10 || byName["Beta"] != 8 {
+		t.Fatalf("category counts = %v, want Alpha:10 Beta:8", byName)
 	}
 	if len(p.Tools) != 0 {
 		t.Fatalf("tools = %d, want 0 at category level", len(p.Tools))
