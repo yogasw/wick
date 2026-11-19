@@ -393,3 +393,39 @@ func TestFormatThreadHistoryEmpty(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// A main chat answering a DM thread reply reads the whole thread the first
+// time (the bot post being answered is pinned), then only what came since.
+func TestDMThreadContextFirstFullThenCatchUp(t *testing.T) {
+	var gotOldest []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotOldest = append(gotOldest, r.Form.Get("oldest"))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"has_more":false,"messages":[
+			{"ts":"1.0","user":"USELF","text":"daily report"},
+			{"ts":"10.1","user":"UA","text":"which one"},
+			{"ts":"10.2","user":"USELF","text":"the first"},
+			{"ts":"10.3","user":"UB","text":"added note"}]}`)
+	}))
+	defer srv.Close()
+	s := catchUpTestChannel()
+	s.api = slackgo.New("xoxb-test", slackgo.OptionAPIURL(srv.URL+"/"))
+
+	first := s.dmThreadContext("main", "D1", "1.0", "10.1")
+	want := threadHistoryHeader + "\n- you (this bot, earlier session) (1.0): daily report"
+	if first != want {
+		t.Fatalf("first turn got %q\nwant %q", first, want)
+	}
+	second := s.dmThreadContext("main", "D1", "1.0", "11.0")
+	if second != threadCatchUpHeader+"\n- @budi (10.3): added note" {
+		t.Fatalf("second turn got %q", second)
+	}
+	if len(gotOldest) != 2 || gotOldest[0] != "" || gotOldest[1] != "10.1" {
+		t.Fatalf("oldest per fetch = %q", gotOldest)
+	}
+	// Another DM thread of the same main chat starts fresh.
+	if got := s.dmThreadContext("main", "D1", "2.0", "10.1"); !strings.HasPrefix(got, threadHistoryHeader) {
+		t.Fatalf("other thread should read full history, got %q", got)
+	}
+}

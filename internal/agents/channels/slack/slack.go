@@ -337,6 +337,9 @@ type Channel struct {
 	// so their turn is let go once answered. See agent_dm.go.
 	dmMainFn DMMainFn
 	dmMain   sync.Map
+	// dmThreadSeen is dmThreadKey → newest ts a main chat has read in that
+	// DM thread (see dmThreadContext).
+	dmThreadSeen sync.Map
 
 	// personas is session key → Persona of the Instant agent answering it
 	// (zero Persona = wick itself); customizeDenied is set once the token
@@ -2879,7 +2882,9 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		// A new session woken inside an existing thread (a reset, a provider
 		// failover) has never seen it: open with what was said so far, or an
 		// empty mention reads as a greeting.
-		if !dmMain && ev.ChannelType != "im" && ev.TimeStamp != threadTS {
+		// DMs included: a reply in a DM thread under a bot post (a report,
+		// a scheduled result) is meaningless without that post.
+		if !dmMain && ev.TimeStamp != threadTS {
 			if block := s.threadHistory(sessionID, ev.Channel, threadTS, ev.TimeStamp); block != "" {
 				if userText == pingFallbackText {
 					userText = threadPingText
@@ -2903,6 +2908,16 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		// session gets buildSessionContext instead (thread metadata, not
 		// its messages) and no catch-up.
 		if block := s.threadCatchUp(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen); block != "" {
+			if userText == pingFallbackText {
+				userText = threadPingText
+			}
+			userText = block + "\n\n" + userText
+		}
+	}
+	// A main chat answers every DM thread of its sender, so a reply in one
+	// of them arrives without the post it answers. Open with that thread.
+	if dmMain && ev.TimeStamp != threadTS {
+		if block := s.dmThreadContext(sessionID, ev.Channel, threadTS, ev.TimeStamp); block != "" {
 			if userText == pingFallbackText {
 				userText = threadPingText
 			}
