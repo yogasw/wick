@@ -440,29 +440,65 @@ func (c *mcpClient) Probe(ctx context.Context, srv serverConfig, user *SSOClaims
 	if err != nil {
 		return fail(fmt.Errorf("initialize: %w", err))
 	}
-	result, _, err := c.rpc(ctx, srv, headers, session, rpcRequest{
-		JSONRPC: "2.0", ID: 3, Method: "tools/list",
-	})
+	tools, categories, err := c.listTools(ctx, srv, headers, session)
 	if err != nil {
-		return fail(fmt.Errorf("tools/list: %w", err))
-	}
-	var parsed struct {
-		Tools []MCPTool `json:"tools"`
-		Meta  struct {
-			Categories []MCPCategory `json:"categories"`
-		} `json:"_meta"`
-	}
-	if err := json.Unmarshal(result, &parsed); err != nil {
-		return fail(fmt.Errorf("decode tools/list: %w", err))
+		return fail(err)
 	}
 	return ProbeResult{
-		OK: true, Tools: parsed.Tools,
+		OK: true, Tools: tools,
 		LatencyMs:     int(time.Since(start).Milliseconds()),
 		ServerName:    ident.Name,
 		ServerVersion: ident.Version,
 		Instructions:  ident.Instructions,
-		Categories:    parsed.Meta.Categories,
+		Categories:    categories,
 	}
+}
+
+// maxToolListPages caps tools/list pagination so a server that keeps
+// handing out cursors cannot loop the probe forever.
+const maxToolListPages = 100
+
+// listTools walks every tools/list page: the spec lets a server return
+// a nextCursor, and the next request must carry it as params.cursor
+// until the cursor comes back empty. Reading only the first page
+// silently drops every tool past the server's page size.
+func (c *mcpClient) listTools(ctx context.Context, srv serverConfig, headers http.Header, session string) ([]MCPTool, []MCPCategory, error) {
+	var (
+		tools      []MCPTool
+		categories []MCPCategory
+		cursor     string
+		seen       = map[string]bool{}
+	)
+	for page := 0; page < maxToolListPages; page++ {
+		req := rpcRequest{JSONRPC: "2.0", ID: 3 + page, Method: "tools/list"}
+		if cursor != "" {
+			req.Params = map[string]any{"cursor": cursor}
+		}
+		result, _, err := c.rpc(ctx, srv, headers, session, req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("tools/list: %w", err)
+		}
+		var parsed struct {
+			Tools      []MCPTool `json:"tools"`
+			NextCursor string    `json:"nextCursor"`
+			Meta       struct {
+				Categories []MCPCategory `json:"categories"`
+			} `json:"_meta"`
+		}
+		if err := json.Unmarshal(result, &parsed); err != nil {
+			return nil, nil, fmt.Errorf("decode tools/list: %w", err)
+		}
+		tools = append(tools, parsed.Tools...)
+		if len(categories) == 0 {
+			categories = parsed.Meta.Categories
+		}
+		cursor = parsed.NextCursor
+		if cursor == "" || seen[cursor] {
+			return tools, categories, nil
+		}
+		seen[cursor] = true
+	}
+	return nil, nil, fmt.Errorf("tools/list: more than %d pages, giving up", maxToolListPages)
 }
 
 // Call proxies one tools/call. The result is the raw MCP content
