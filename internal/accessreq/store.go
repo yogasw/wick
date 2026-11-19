@@ -66,6 +66,10 @@ func (s *Store) claimItem(ctx context.Context, itemID, status, mode, by, note st
 	return res.RowsAffected == 1, res.Error
 }
 
+func (s *Store) setItemNote(ctx context.Context, itemID, note string) error {
+	return s.db.WithContext(ctx).Model(&entity.AccessRequestItem{}).Where("id = ?", itemID).Update("note", note).Error
+}
+
 func (s *Store) finishItem(ctx context.Context, itemID, status, runID, result, errText string) error {
 	return s.db.WithContext(ctx).Model(&entity.AccessRequestItem{}).Where("id = ?", itemID).
 		Updates(map[string]any{"status": status, "run_id": runID, "result": result, "error": errText}).Error

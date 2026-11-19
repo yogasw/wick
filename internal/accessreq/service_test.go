@@ -606,3 +606,81 @@ func TestProjectSwitchOffChangesNothing(t *testing.T) {
 		t.Fatal("switch not per project")
 	}
 }
+
+func twoStep(t *testing.T, e *env) View {
+	t.Helper()
+	return e.create(t,
+		act("c-notes", "update_page", map[string]any{"page_id": "p1"}),
+		act("c-chat", "post_message", map[string]any{"channel": "c1"}))
+}
+
+func TestMultiActionRunsInListOrderWhateverDecisionOrder(t *testing.T) {
+	e := newEnv(t)
+	v := twoStep(t, e)
+	// Decisions arrive last-first, like a Slack modal's map iteration can.
+	ds := []Decision{{ItemID: v.Items[1].ID, Mode: ModeOnce}, {ItemID: v.Items[0].ID, Mode: ModeOnce}}
+	out, res, err := e.svc.Decide(context.Background(), v.ID, "owner-a", ds)
+	if err != nil || len(res) != 2 || !res[0].OK || !res[1].OK {
+		t.Fatalf("decide: %v %+v", err, res)
+	}
+	if len(e.cat.runs) != 2 || e.cat.runs[0].op != "update_page" || e.cat.runs[1].op != "post_message" {
+		t.Fatalf("runs = %+v, want update_page then post_message", e.cat.runs)
+	}
+	if out.Status != StatusDone {
+		t.Fatalf("status = %s", out.Status)
+	}
+}
+
+func TestMultiActionStopsAfterFailure(t *testing.T) {
+	e := newEnv(t)
+	v := twoStep(t, e)
+	e.cat.runErr = errors.New("upstream said no")
+	out, _, err := e.svc.Decide(context.Background(), v.ID, "owner-a",
+		[]Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}, {ItemID: v.Items[1].ID, Mode: ModeOnce}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.cat.runs) != 1 {
+		t.Fatalf("runs = %+v, the second action must not run after the first failed", e.cat.runs)
+	}
+	if out.Items[1].Status != ItemError || !strings.Contains(out.Items[1].Error, "skipped") {
+		t.Fatalf("second item = %+v", out.Items[1])
+	}
+	if out.Status != StatusDone {
+		t.Fatalf("request must close, status = %s", out.Status)
+	}
+}
+
+func TestLaterActionWaitsForEarlierApproval(t *testing.T) {
+	e := newEnv(t)
+	v := twoStep(t, e)
+	ctx := context.Background()
+	_, res, _ := e.svc.Decide(ctx, v.ID, "owner-a", []Decision{{ItemID: v.Items[1].ID, Mode: ModeOnce}})
+	if len(res) != 1 || res[0].OK || res[0].Code != ReasonEarlierPending {
+		t.Fatalf("approving action 2 alone = %+v", res)
+	}
+	if len(e.cat.runs) != 0 {
+		t.Fatal("nothing may run before action 1 is decided")
+	}
+	// Separate clicks, in order, run both in order.
+	if _, res, _ := e.svc.Decide(ctx, v.ID, "owner-a", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}}); !res[0].OK {
+		t.Fatalf("action 1 = %+v", res)
+	}
+	out, res, _ := e.svc.Decide(ctx, v.ID, "owner-a", []Decision{{ItemID: v.Items[1].ID, Mode: ModeOnce}})
+	if !res[0].OK || len(e.cat.runs) != 2 || e.cat.runs[1].op != "post_message" || out.Items[1].Status != ItemOK {
+		t.Fatalf("res %+v runs %+v item %+v", res, e.cat.runs, out.Items[1])
+	}
+}
+
+func TestDeniedEarlierActionSkipsLaterOne(t *testing.T) {
+	e := newEnv(t)
+	v := twoStep(t, e)
+	out, _, err := e.svc.Decide(context.Background(), v.ID, "owner-a",
+		[]Decision{{ItemID: v.Items[0].ID, Mode: ModeDeny}, {ItemID: v.Items[1].ID, Mode: ModeOnce}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.cat.runs) != 0 || out.Items[1].Status != ItemError {
+		t.Fatalf("runs %+v item %+v", e.cat.runs, out.Items[1])
+	}
+}

@@ -51,6 +51,10 @@ type Service struct {
 	// rule's script last went.
 	script ScriptRunner
 	checks ruleChecks
+
+	// runLocks serializes execution per request, so actions approved in
+	// separate clicks still run one after another in list order.
+	runLocks sync.Map // request id -> *sync.Mutex
 }
 
 // New builds a service.
@@ -194,8 +198,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	}
 	if len(autos) > 0 {
 		var run []entity.AccessRequestItem
-		for _, a := range autos {
+		for n, a := range autos {
 			it := items[a.idx]
+			if a.idx != n {
+				// An earlier action still waits for a person; running this
+				// one now would jump the queue. It stays for the approver.
+				_ = s.store.setItemNote(ctx, it.ID, strings.TrimPrefix(it.Note+"; ", "; ")+
+					"rule "+a.rule.Name+" would auto-approve, but an earlier action needs approval first")
+				continue
+			}
 			by := "rule:" + a.rule.Name
 			if ok, err := s.store.claimItem(ctx, it.ID, ItemRunning, ModeOnce, by, "auto-approved by rule "+a.rule.Name, s.now()); err == nil && ok {
 				it.Status, it.Mode, it.DecidedBy = ItemRunning, ModeOnce, by
@@ -536,6 +547,14 @@ func (s *Service) Decide(ctx context.Context, id, viewerID string, ds []Decision
 	var results []DecideResult
 	var run []entity.AccessRequestItem
 	denied := 0
+	// Actions run in list order whatever order the decisions arrive in
+	// (a Slack modal hands them over as a map). An action may only be
+	// approved once every earlier action is decided, or decided with it
+	// (a later action behind a denied or failed one is then skipped).
+	deciding := map[string]bool{}
+	for _, d := range ds {
+		deciding[d.ItemID] = true
+	}
 	for _, d := range ds {
 		iv, ok := byID[d.ItemID]
 		if !ok {
@@ -550,6 +569,13 @@ func (s *Service) Decide(ctx context.Context, id, viewerID string, ds []Decision
 			results = append(results, DecideResult{ItemID: d.ItemID, Code: ReasonModeNotAllowed,
 				Error: fmt.Sprintf("mode %q is not offered for this action (offered: %s)", d.Mode, strings.Join(iv.Modes, ", "))})
 			continue
+		}
+		if d.Mode != ModeDeny {
+			if prev, ok := earlierPending(items, rawByID[d.ItemID], deciding); ok {
+				results = append(results, DecideResult{ItemID: d.ItemID, Code: ReasonEarlierPending,
+					Error: fmt.Sprintf("action %d (%s) comes first in this request: approve it in the same submit, or decide it before this one", prev.Idx+1, prev.OpKey)})
+				continue
+			}
 		}
 		status, mode := ItemRunning, d.Mode
 		if d.Mode == ModeDeny {
@@ -573,6 +599,7 @@ func (s *Service) Decide(ctx context.Context, id, viewerID string, ds []Decision
 		it.Status, it.Mode, it.DecidedBy = ItemRunning, mode, viewerID
 		run = append(run, it)
 	}
+	sort.SliceStable(run, func(i, j int) bool { return run[i].Idx < run[j].Idx })
 	decidedAny := len(run) > 0 || denied > 0
 	if len(run) > 0 {
 		// Show the decision at once (🔄 running) so the card does not look
@@ -628,10 +655,27 @@ func (s *Service) Cancel(ctx context.Context, id, sessionID string) error {
 // grantBy, when set, is who leaves a standing grant for session/always
 // modes.
 func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequestItem, runAs func(entity.AccessRequestItem) string, grantBy string) {
+	items = append([]entity.AccessRequestItem(nil), items...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Idx < items[j].Idx })
 	work := func() {
+		lk, _ := s.runLocks.LoadOrStore(req.ID, &sync.Mutex{})
+		mu := lk.(*sync.Mutex)
+		mu.Lock()
+		defer mu.Unlock()
 		ctx, cancel := context.WithTimeout(WithSession(context.Background(), req.SessionID), runTimeout)
 		defer cancel()
 		for _, it := range items {
+			// Re-read the request: an earlier action may have been denied,
+			// failed, or run in another click since this one was approved.
+			if _, cur, err := s.store.request(ctx, req.ID); err == nil {
+				if prev, bad := earlierUnfinished(cur, it); bad {
+					msg := fmt.Sprintf("skipped: action %d (%s) did not succeed (%s), so this one was not run", prev.Idx+1, prev.OpKey, prev.Status)
+					if ferr := s.store.finishItem(ctx, it.ID, ItemError, "", "", msg); ferr != nil {
+						log.Warn().Err(ferr).Str("item", it.ID).Msg("accessreq: record skip failed")
+					}
+					continue
+				}
+			}
 			var params map[string]any
 			_ = json.Unmarshal([]byte(it.Params), &params)
 			user := runAs(it)
@@ -654,6 +698,28 @@ func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequest
 		return
 	}
 	go work()
+}
+
+// earlierPending returns the first action before it that is still
+// pending and is not being decided in the same submit.
+func earlierPending(all []entity.AccessRequestItem, it entity.AccessRequestItem, deciding map[string]bool) (entity.AccessRequestItem, bool) {
+	for _, o := range all {
+		if o.Idx < it.Idx && o.Status == ItemPending && !deciding[o.ID] {
+			return o, true
+		}
+	}
+	return entity.AccessRequestItem{}, false
+}
+
+// earlierUnfinished returns the first action before it that did not end
+// OK: denied, failed, skipped, or (after a race) never approved.
+func earlierUnfinished(all []entity.AccessRequestItem, it entity.AccessRequestItem) (entity.AccessRequestItem, bool) {
+	for _, o := range all {
+		if o.Idx < it.Idx && o.Status != ItemOK {
+			return o, true
+		}
+	}
+	return entity.AccessRequestItem{}, false
 }
 
 func (s *Service) leaveGrant(ctx context.Context, req entity.AccessRequest, it entity.AccessRequestItem, by string) {

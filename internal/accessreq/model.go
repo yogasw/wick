@@ -74,6 +74,7 @@ const (
 	ReasonDecided        = "already_decided"
 	ReasonInactive       = "inactive"
 	ReasonModeNotAllowed = "mode_not_allowed"
+	ReasonEarlierPending = "earlier_pending"
 )
 
 // ClassifyOp names the kind of an operation from its key and its own
