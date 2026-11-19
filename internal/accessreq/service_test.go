@@ -260,7 +260,7 @@ func TestSecondDecisionIsAlreadyDecided(t *testing.T) {
 	if len(e.cat.runs) != 0 {
 		t.Fatal("denied action ran")
 	}
-	if len(e.woken) != 1 || !strings.Contains(e.woken[0], `denied by Owner A: "not now"`) {
+	if len(e.woken) != 1 || !strings.Contains(e.woken[0], `denied: "not now"`) {
 		t.Fatalf("woken = %v", e.woken)
 	}
 }

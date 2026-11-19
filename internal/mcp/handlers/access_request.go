@@ -47,7 +47,8 @@ func AccessRequestDescriptor() ToolDescriptor {
 			"with params {project_id, doc: the rule as YAML, rule_id: to change an existing one, reason}; it is saved only when " +
 			"the project's owner or an admin approves it. " +
 			"Works only where the session's project turned access requests on (project settings); elsewhere it refuses and a refused op simply stays refused. " +
-			"action=status reads a request, action=cancel withdraws one.",
+			"action=status reads a request, action=cancel withdraws one. " +
+			"When you tell the person, keep it to one line (\"waiting for approval\"): never repeat the request id, who can approve, the params or config_override; the card already shows them.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -127,11 +128,18 @@ func WickRequestAccess(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 	writeAccessResult(w, req, rsp, out, err)
 }
 
-// accessSummary is the request as the agent sees it: outcomes and who can
-// approve, without anyone's private details beyond names.
+// accessReplyNote tells the agent how to word its reply: the card already
+// shows everything an approver needs, so repeating its id, who may approve
+// or the raw parameters only leaks details into the conversation.
+const accessReplyNote = "The card is already posted where this conversation lives. In your reply do NOT repeat the request id, " +
+	"who can approve or decided, the params or any config_override. One short line is enough, e.g. \"Waiting for approval.\""
+
+// accessSummary is the request as the agent sees it: outcomes and, at
+// most, the approver group label from a rule. No person's name is
+// returned: agents copied it into client threads.
 func accessSummary(v accessreq.View) map[string]any {
 	items := make([]map[string]any, 0, len(v.Items))
-	var approvers []string
+	var groups []string
 	seen := map[string]bool{}
 	for _, it := range v.Items {
 		m := map[string]any{
@@ -143,9 +151,6 @@ func accessSummary(v accessreq.View) map[string]any {
 		if it.Mode != "" {
 			m["mode"] = it.Mode
 		}
-		if it.DecidedBy != "" {
-			m["decided_by"] = it.DecidedBy
-		}
 		if it.Note != "" {
 			m["note"] = it.Note
 		}
@@ -156,14 +161,15 @@ func accessSummary(v accessreq.View) map[string]any {
 			m["result"] = it.Result
 		}
 		items = append(items, m)
-		for _, p := range it.Approvers {
-			if !seen[p.ID] {
-				seen[p.ID] = true
-				approvers = append(approvers, p.Name)
-			}
+		if g := strings.TrimSpace(it.ApproversText); g != "" && !seen[g] {
+			seen[g] = true
+			groups = append(groups, g)
 		}
 	}
-	out := map[string]any{"request_id": v.ID, "status": v.Status, "pending": v.Pending, "actions": items, "approvers": approvers}
+	out := map[string]any{"request_id": v.ID, "status": v.Status, "pending": v.Pending, "actions": items, "reply_note": accessReplyNote}
+	if len(groups) > 0 {
+		out["approver_group"] = strings.Join(groups, "; ")
+	}
 	return out
 }
 

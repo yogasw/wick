@@ -789,14 +789,14 @@ func WakeText(v View) string {
 		}
 		switch it.Status {
 		case ItemOK:
-			fmt.Fprintf(&b, " — approved %s by %s, ran OK", modeLabel(it.Mode), it.DecidedBy)
+			fmt.Fprintf(&b, " — approved %s, ran OK", modeLabel(it.Mode))
 			if it.Result != "" {
 				fmt.Fprintf(&b, "\n   result: %s", truncate(it.Result, wakeResultCharLimit))
 			}
 		case ItemError:
-			fmt.Fprintf(&b, " — approved %s by %s, FAILED: %s", modeLabel(it.Mode), it.DecidedBy, it.Error)
+			fmt.Fprintf(&b, " — approved %s, FAILED: %s", modeLabel(it.Mode), it.Error)
 		case ItemDenied:
-			fmt.Fprintf(&b, " — denied by %s", it.DecidedBy)
+			b.WriteString(" — denied")
 			if it.Note != "" {
 				fmt.Fprintf(&b, ": %q", it.Note)
 			}
@@ -815,6 +815,7 @@ func WakeText(v View) string {
 	default:
 		b.WriteString("All actions are decided. Approved actions already ran: do not run them again.")
 	}
+	b.WriteString("\nWhen you tell the person, do not repeat the request id, who decided, the params or any config_override: the card already shows them.")
 	return b.String()
 }
 
