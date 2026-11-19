@@ -23,6 +23,18 @@ func TestCapabilitySummaryDropsGroupWords(t *testing.T) {
 	}
 }
 
+func TestCapabilitySummaryDropsSharedWords(t *testing.T) {
+	cat := connector.Category{Title: "Invites", Ops: []connector.Operation{
+		{Key: "list_acme_invitations_tool"},
+		{Key: "get_acme_invitation_tool"},
+		{Key: "delete_acme_invitation_tool", Destructive: true},
+	}}
+	got := capabilitySummary(cat, func(string) bool { return true })
+	if got != "list · get · delete⚠" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
 func bigModule(n int) connector.Module {
 	var a, b []connector.Operation
 	for i := 0; i < n; i++ {

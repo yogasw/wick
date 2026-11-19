@@ -37,6 +37,35 @@ func capabilitySummary(cat connector.Category, enabled func(string) bool) string
 		drop[w+"s"] = true
 		drop[strings.TrimSuffix(w, "s")] = true
 	}
+	// Words every op of the group shares ("prodlike", "organization") say
+	// nothing about what tells the ops apart; drop them too. Plural and
+	// singular count as one word.
+	if len(cat.Ops) > 1 {
+		common := map[string]int{}
+		n := 0
+		for _, op := range cat.Ops {
+			if !enabled(op.Key) {
+				continue
+			}
+			n++
+			seenWord := map[string]bool{}
+			for _, w := range splitWords(op.Key) {
+				w = strings.TrimSuffix(w, "s")
+				if !seenWord[w] {
+					seenWord[w] = true
+					common[w]++
+				}
+			}
+		}
+		if n > 1 {
+			for w, c := range common {
+				if c == n {
+					drop[w] = true
+					drop[w+"s"] = true
+				}
+			}
+		}
+	}
 	var parts []string
 	seen := map[string]bool{}
 	for _, op := range cat.Ops {
