@@ -271,6 +271,11 @@ func approversText(rules []approverRule, names []string) string {
 	var only, add []string
 	for _, ar := range rules {
 		l := strings.TrimSpace(ar.doc.ApproversLabel)
+		if l == "" && ar.doc.Approvers == ApproversOnly {
+			// An "only" rule decides who approves, so the default
+			// approvers' names would be wrong as well as needless.
+			l = "whoever rule \"" + ar.rule.Name + "\" allows"
+		}
 		if l == "" {
 			continue
 		}

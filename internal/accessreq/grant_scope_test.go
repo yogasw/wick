@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/internal/entity"
 )
 
 const requireNotes = `name: notes-always-card
@@ -133,8 +135,12 @@ func TestApproversText(t *testing.T) {
 	if got := approversText([]approverRule{add}, []string{"Owner A"}); got != "Owner A, the on-call" {
 		t.Fatalf("add = %q", got)
 	}
-	if got := approversText([]approverRule{{doc: RuleDoc{Approvers: ApproversOnly}}}, []string{"Owner A"}); got != "" {
-		t.Fatalf("no label = %q", got)
+	bare := approverRule{rule: entity.AccessRule{Name: "ops only"}, doc: RuleDoc{Approvers: ApproversOnly}}
+	if got := approversText([]approverRule{bare}, []string{"Owner A"}); got != `whoever rule "ops only" allows` {
+		t.Fatalf("only without label = %q", got)
+	}
+	if got := approversText([]approverRule{{doc: RuleDoc{Approvers: ApproversAdd}}}, []string{"Owner A"}); got != "" {
+		t.Fatalf("add without label = %q", got)
 	}
 }
 
