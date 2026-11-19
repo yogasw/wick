@@ -401,12 +401,18 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 		if it.Status == ItemRunning {
 			v.Pending++
 		}
-		if it.Status == ItemPending && req.Status == StatusPending {
+		if it.Status == ItemPending {
+			// The rule label is computed for every undecided item, also
+			// once the request ended, so no view falls back to names.
 			act := s.actionOfItem(ctx, req, it)
 			rules := s.approverRules(ctx, act)
 			iv.approverNote = approverRuleNote(rules)
 			iv.ApproversText = approversText(rules, approverNames(iv.Approvers))
-			if viewerID != "" && viewerKnown && viewer.Approved {
+			if req.Status != StatusPending {
+				if viewerID != "" {
+					s.lockFor(ctx, req, it, &iv, viewer, viewerKnown, isRole, agentOwner)
+				}
+			} else if viewerID != "" && viewerKnown && viewer.Approved {
 				role, why := s.itemRole(ctx, act, viewer, isRole, rules)
 				iv.roleReason = why
 				if role {

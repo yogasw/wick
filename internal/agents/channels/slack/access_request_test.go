@@ -127,3 +127,18 @@ func TestAccessModalSenderHeader(t *testing.T) {
 		t.Fatalf("first block = %s", raw)
 	}
 }
+
+func TestCancelledCardNamesNobody(t *testing.T) {
+	v := accessreq.View{ID: "req-c", Status: accessreq.StatusCancelled, Items: []accessreq.ItemView{{
+		ConnectorKey: "acme", OpKey: "publish", Status: accessreq.ItemPending,
+		Approvers: []accessreq.Person{{ID: "u1", Name: "Person A"}, {ID: "u2", Name: "Person B"}},
+	}}}
+	b, _ := json.Marshal(accessCardBlocks(v))
+	s := string(b)
+	if strings.Contains(s, "Person A") || strings.Contains(s, "who can approve") {
+		t.Fatalf("cancelled card still lists approvers: %s", s)
+	}
+	if !strings.Contains(s, "Not decided") {
+		t.Fatalf("cancelled card misses the not-decided line: %s", s)
+	}
+}

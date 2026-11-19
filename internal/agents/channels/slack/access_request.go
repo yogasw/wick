@@ -223,7 +223,14 @@ func accessCardBlocks(v accessreq.View) []map[string]any {
 		if it.Target != "" {
 			text += "\n" + escapeMrkdwn(it.Target)
 		}
-		text += "\n" + itemStatusLine(it)
+		if it.Status == accessreq.ItemPending && v.Status != accessreq.StatusPending {
+			// A request that ended (cancelled, expired) leaves its undecided
+			// items pending: say so instead of a "who can approve" line,
+			// which no rule labels any more and would list people by name.
+			text += "\n_Not decided · request " + escapeMrkdwn(v.Status) + "_"
+		} else {
+			text += "\n" + itemStatusLine(it)
+		}
 		blocks = append(blocks, section(text))
 	}
 	if v.Status == accessreq.StatusPending && v.Pending > 0 {
