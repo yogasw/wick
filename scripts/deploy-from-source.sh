@@ -455,6 +455,15 @@ prep_wick_source() {
       say "FE dependencies unchanged — reuse node_modules"
     fi
 
+    # Termux does not provide /usr/bin/env. npm's Vite shim points at
+    # /usr/bin/env node, so the workspace build reports "vite: not found"
+    # even when node_modules is complete. Use Termux's actual node binary
+    # as the interpreter; this is safe to repeat after npm ci or on reuse.
+    if [ -f fe/node_modules/vite/bin/vite.js ] && [ -n "$(command -v node 2>/dev/null || true)" ] && [ ! -e /usr/bin/env ]; then
+      local node_bin; node_bin="$(command -v node)"
+      sed -i "1c#!$node_bin" fe/node_modules/vite/bin/vite.js
+    fi
+
     # One stamp per workspace: only the SPAs whose source, or a workspace they depend on,
     # changed are built again. A build from the old single-stamp script seeds them all.
     local stamps="$SRC/.wick-fe-stamps" plan ws key todo=()
