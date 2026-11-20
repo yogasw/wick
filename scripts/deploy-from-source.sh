@@ -585,7 +585,14 @@ wick_self() {
   elif [ -e "$SRC/.git" ]; then
     say "wick source $SRC -> $REF"
     run git -C "$SRC" fetch --quiet origin "$REF"
-    run git -C "$SRC" checkout --quiet --force --detach FETCH_HEAD   # a build dir: local edits are not kept
+    if git -C "$SRC" show-ref --verify --quiet "refs/heads/$REF"; then
+      # Keep local commits on the requested branch. Fast-forward only: never
+      # replace a branch with FETCH_HEAD and silently discard local history.
+      run git -C "$SRC" checkout --quiet "$REF"
+      run git -C "$SRC" merge --ff-only --quiet FETCH_HEAD
+    else
+      run git -C "$SRC" checkout --quiet --detach FETCH_HEAD
+    fi
   else
     say "clone wick ($REF) -> $SRC"
     run git clone --quiet --branch "$REF" https://github.com/yogasw/wick.git "$SRC"
