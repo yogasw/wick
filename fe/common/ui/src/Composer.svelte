@@ -992,11 +992,17 @@
     if (!o) return;
     const key = setDrill ? setCacheKey(o.value, setPath) : o.value;
     const refresh = !!levelMeta(key, o)?.canRefresh;
+    // Every level of this provider goes: a new login can add a provider or
+    // an account row above the open one, not only models in it.
     const next = { ...modelCache };
-    delete next[key];
+    for (const k of Object.keys(next)) if (k === o.value || k.startsWith(`${o.value}::set::`)) delete next[k];
     modelCache = next;
-    if (setDrill) void loadSetModels(setPath, refresh);
-    else void loadModelsFor(o, refresh);
+    if (!setDrill) { void loadModelsFor(o, refresh); return; }
+    const path = [...setPath];
+    void loadSetModels(path, refresh).then(() => {
+      void loadModelsFor(o);
+      for (let i = 1; i < path.length; i++) void loadSetModels(path.slice(0, i));
+    });
   }
 
   // Commit a model selection and close the whole menu. Inside live rows the

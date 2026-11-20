@@ -149,10 +149,15 @@
     if (!d) return undefined;
     return modelMeta[drillStack.length ? cacheKey(d.value, encodePath(drillPath)) : cacheKey(d.value)];
   });
+  // Refresh reloads the open level from the CLI, then re-reads every level
+  // above it (a new login can add a provider or an account row there too).
   function refreshDrill() {
     const d = modelDrill;
     if (!d) return;
-    void ensureModels(d.value, drillStack.length ? encodePath(drillPath) : undefined, true);
+    const path = [...drillPath];
+    void ensureModels(d.value, path.length ? encodePath(path) : undefined, true).then(() => {
+      for (let i = 0; i < path.length; i++) void ensureModels(d.value, i ? encodePath(path.slice(0, i)) : undefined, true);
+    });
   }
 
   function isLiveSet(m: ComposerModelOption): boolean {
