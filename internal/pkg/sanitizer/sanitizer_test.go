@@ -330,16 +330,18 @@ func TestSanitizeHeaders(t *testing.T) {
 		{
 			name: "multiple sensitive headers",
 			headers: http.Header{
-				"Authorization": []string{"Bearer token123"},
-				"Cookie":        []string{"session=abc"},
-				"X-Api-Key":     []string{"key123"},
-				"Accept":        []string{"application/json"},
+				"Authorization":          []string{"Bearer token123"},
+				"Cookie":                 []string{"session=abc"},
+				"Cf-Access-Jwt-Assertion": []string{"jwt-value"},
+				"X-Api-Key":              []string{"key123"},
+				"Accept":                 []string{"application/json"},
 			},
 			expected: map[string]string{
-				"Authorization": RedactedValue,
-				"Cookie":        RedactedValue,
-				"X-Api-Key":     RedactedValue,
-				"Accept":        "application/json",
+				"Authorization":           RedactedValue,
+				"Cookie":                  RedactedValue,
+				"Cf-Access-Jwt-Assertion": RedactedValue,
+				"X-Api-Key":               RedactedValue,
+				"Accept":                  "application/json",
 			},
 		},
 		{

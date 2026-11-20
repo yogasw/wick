@@ -128,13 +128,19 @@ func Start(p Paths, args []string) (int, error) {
 	if st.Running {
 		return st.PID, ErrAlreadyRunning
 	}
-	// Stale PID file — remove before claiming a new slot.
-	if st.PID != 0 {
+	// Stale PID file — remove before claiming a new slot. Preserve the PID
+	// in the daemon log so a later manual recovery can confirm this process
+	// was already gone before the new start.
+	stalePID := st.PID
+	if stalePID != 0 {
 		_ = os.Remove(p.PIDFile)
 	}
 	logF, err := os.OpenFile(p.LogFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return 0, fmt.Errorf("open log %s: %w", p.LogFile, err)
+	}
+	if stalePID != 0 {
+		_, _ = fmt.Fprintf(logF, "%s daemon start: removed stale pid=%d\n", time.Now().Format(time.RFC3339), stalePID)
 	}
 	cmd := safeexec.Command(p.ExePath, args...)
 	// Keep the upgrade mode explicit across the detached exec. Some Android
@@ -158,6 +164,7 @@ func Start(p Paths, args []string) (int, error) {
 		return 0, fmt.Errorf("spawn daemon: %w", err)
 	}
 	pid := cmd.Process.Pid
+	_, _ = fmt.Fprintf(logF, "%s daemon child started pid=%d\n", time.Now().Format(time.RFC3339), pid)
 	// Release parent ref so the child outlives this process cleanly.
 	_ = cmd.Process.Release()
 	_ = logF.Close()

@@ -383,13 +383,23 @@ install_build() {
   target="$(command -v "$APP")"; sudo="$(priv "$target")"
   case "$mode" in
     graceful)
-      say "swap + zero-downtime reload"
-      # reload checks the candidate (wick module, app, arch, version direction), swaps it
-      # in atomically, hands the socket over and rolls back if the successor never serves.
-      # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
-      # without it.
-      run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
-        die "reload refused or failed — the running binary is unchanged (reason above). A daemon from before graceful was on by default ignores reload: rerun with --restart once."
+      if [ -d /data/data/com.termux/files/usr ]; then
+        say "stage + Termux auto-detect handover"
+        # Termux is the one platform where the running daemon's Admin safety
+        # gate must own the trigger: wait for a stable binary and unresumable
+        # work to clear before it calls tableflip. The CLI only validates and
+        # stages the candidate, then observes the resulting receipt.
+        run "$PWD/$bin" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --stage --wait || \
+          die "staged handover did not complete — the candidate remains available to the admin auto-detect gate"
+      else
+        say "swap + zero-downtime reload"
+        # reload checks the candidate (wick module, app, arch, version direction), swaps it
+        # in atomically, hands the socket over and rolls back if the successor never serves.
+        # --sudo only when the install dir is not ours: root, Termux and ~/.local/bin swap
+        # without it.
+        run "$APP" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --wait || \
+          die "reload refused or failed — the running binary is unchanged (reason above). A daemon from before graceful was on by default ignores reload: rerun with --restart once."
+      fi
       mark_built
       ;;
     running)

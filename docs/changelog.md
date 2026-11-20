@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   Redact Cloudflare Access JWT assertion values from HTTP request logs.
+*   Log daemon startup PID/source, stale-PID recovery, and handled shutdown signals for lifecycle diagnosis.
 
 ---
 

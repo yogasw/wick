@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/yogasw/wick/internal/pkg/daemon"
+	wickenv "github.com/yogasw/wick/internal/pkg/env"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
@@ -31,19 +33,13 @@ const autoSwapInterval = 15 * time.Second
 //   - the file differs from the running image (version or build timestamp),
 //   - it looked exactly the same one interval ago — size and mtime — so a
 //     half-written file is never executed,
-//   - nothing UNRESUMABLE is in flight — a workflow run mid-node, a cron job
-//     mid-write, a connector call. Those are the ones a handover could strand,
-//     and they are short.
+//   - no work that could be disrupted is in flight.
 //
-// Agent turns deliberately do NOT hold it back. The handover does not touch
-// them: the old process keeps serving its turns to the end and only then
-// exits, so a turn is no more interrupted by swapping than by not swapping.
-// Waiting for them was a mistake that only showed on a busy host — with two
-// conversations replying in turn, "nothing in flight" is a moment that may
-// never arrive, and the swap sat in "waiting for idle" for minutes while the
-// dashboard insisted something was happening. Two generations alive for the
-// length of a long turn is the price, and it is the price this whole feature
-// already pays during the drain.
+// Linux and macOS can keep agent turns alive in the draining predecessor, so
+// only workflow, cron and connector work blocks there. On Termux/Android,
+// however, starting the successor while an agent turn is active is the
+// reproducible unsafe path: the daemon can be killed before handover. There,
+// every running turn blocks the automatic trigger.
 //
 // A file that fails to take over is not retried. Otherwise a broken build
 // would be handed over to every 15 seconds, forever.
@@ -65,10 +61,19 @@ func (s *Server) watchBinarySwap(ctx context.Context, runningVersion, runningBui
 			return
 		}
 		p, ok := sw.inspect(runningVersion, runningBuiltAt)
-		// Only work that CANNOT be resumed gates the trigger; see the
-		// comment on watchBinarySwap. Busy() is still what gets logged, so
-		// the line says everything that was running, not just the blockers.
+		// Termux cannot safely drain agent turns across its handover. Its
+		// pool's direct active count is deliberate: the generic drain
+		// tracker omits a turn once it becomes resumable, while the Termux
+		// safety gate must wait until the reply has actually finished.
 		busy := upgrade.BusyKind(false)
+		if wickenv.IsTermux() {
+			busy = upgrade.Busy()
+			if s.agentsPool != nil {
+				if n := s.agentsPool.ActiveCount(); n > 0 {
+					busy = append(busy, fmt.Sprintf("agent turns=%d", n))
+				}
+			}
+		}
 		fire := sw.shouldSwap(p, ok, busy)
 		// Publish what this tick concluded BEFORE acting on it, so a page open
 		// during the wait shows the reason rather than an unexplained pause.

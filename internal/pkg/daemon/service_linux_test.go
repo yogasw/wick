@@ -62,9 +62,10 @@ func TestRenderUnit_UsesAppName(t *testing.T) {
 	}
 }
 
-// The Termux boot script restarts a daemon whose health keeps failing and
-// leaves a crash report behind.
-func TestTermuxBootScriptRestartsAndReports(t *testing.T) {
+// The watchdog must recover a dead daemon during a source deploy. A healthy
+// predecessor continues to pass health checks, while skipping recovery after
+// it is dead leaves the operator to restart it manually.
+func TestTermuxBootScriptRecoversDuringDeploy(t *testing.T) {
 	if _, err := safeexec.LookPath("sh"); err != nil {
 		t.Skip("no sh")
 	}
@@ -77,6 +78,15 @@ func TestTermuxBootScriptRestartsAndReports(t *testing.T) {
 	}
 	logs := filepath.Join(dir, "logs")
 	_ = os.MkdirAll(logs, 0o755)
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an active deploy. The old script treated this as a reason to
+	// suppress recovery forever.
+	if err := os.WriteFile(filepath.Join(binDir, "pgrep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	_ = os.WriteFile(filepath.Join(logs, "daemon-2026-01-01.log"), []byte("last line before it died\n"), 0o644)
 	script := filepath.Join(dir, "boot.sh")
 	body := termuxBootScript("app", Paths{Dir: dir, LogFile: filepath.Join(logs, "daemon-2026-01-01.log"), ExePath: app})
@@ -84,13 +94,28 @@ func TestTermuxBootScriptRestartsAndReports(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	cmd := safeexec.CommandContext(ctx, "sh", script)
-	cmd.Env = append(os.Environ(), "WICK_WATCHDOG_INTERVAL=0.2")
-	_ = cmd.Run()
-
-	b, _ := os.ReadFile(starts)
+	cmd.Env = append(os.Environ(),
+		"WICK_WATCHDOG_INTERVAL=0.2",
+		"WICK_DEPLOY_WATCHDOG_INTERVAL=0.2",
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	var b []byte
+	for time.Now().Before(deadline) {
+		b, _ = os.ReadFile(starts)
+		if strings.Count(string(b), "x") >= 2 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	cancel()
+	_ = cmd.Wait()
 	if n := strings.Count(string(b), "x"); n < 2 {
 		t.Fatalf("started %d times, want the boot start plus a restart", n)
 	}

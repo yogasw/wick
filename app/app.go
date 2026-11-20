@@ -101,6 +101,7 @@ var (
 const patObfKey = "wick-self-updater-pat-v1"
 
 func init() {
+	_, _ = fmt.Fprintf(os.Stderr, "%s app init entered pid=%d\n", time.Now().Format(time.RFC3339), os.Getpid())
 	// Mirror appname.Resolve() into BuildAppName so legacy callers
 	// reading `app.BuildAppName` see the same value as agents/gate/
 	// Layout etc. that read appname.Resolve() directly.
@@ -535,6 +536,10 @@ func Run() {
 		Use:   "all",
 		Short: "Run web server and cron scheduler in one process (single-node)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// This reaches the inherited daemon log before logfiles.Setup.
+			// It distinguishes a tableflip child that died during command
+			// bootstrap from one that reached the normal server lifecycle logs.
+			_, _ = fmt.Fprintf(os.Stderr, "%s daemon bootstrap entered pid=%d\n", time.Now().Format(time.RFC3339), os.Getpid())
 			if err := applyHostFlags(allHost, allLocalhost); err != nil {
 				return err
 			}
@@ -563,9 +568,21 @@ func Run() {
 				// real stdio, not the log pipes we just installed.
 				upgrade.SpawnWrapper = logfiles.WithOriginalStdio
 			}
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(signals)
 			ctx = serverLogger.WithContext(ctx)
+			go func() {
+				select {
+				case sig := <-signals:
+					serverLogger.Info().Str("signal", sig.String()).Int("pid", os.Getpid()).Msg("daemon received shutdown signal")
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			serverLogger.Info().Int("pid", os.Getpid()).Str("source", string(daemon.DetectSource())).Msg("daemon process started")
 
 			// Self-update boot, headless service edition (mirrors the tray
 			// boot path in internal/systemtray). On Linux/macOS the swap

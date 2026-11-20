@@ -79,8 +79,10 @@ func ProcessImageIs(pid int, path string) bool {
 	return os.SameFile(a, b)
 }
 
-// WaitSuccessor blocks until the daemon's main pid moves away from oldPID,
-// i.e. the successor has taken over as the service's main process.
+// WaitSuccessor blocks until the handover receipt confirms that a successor
+// with a new PID became ready. A PID change alone is insufficient: a
+// concurrent manual `start` can replace a dead process while the requested
+// tableflip handover has failed.
 func WaitSuccessor(p Paths, appName string, oldPID int, timeout time.Duration) (int, error) {
 	started := time.Now()
 	deadline := started.Add(timeout)
@@ -89,7 +91,8 @@ func WaitSuccessor(p Paths, appName string, oldPID int, timeout time.Duration) (
 		if pid <= 0 {
 			pid, _, _ = readPID(p.PIDFile)
 		}
-		if pid > 0 && pid != oldPID && processAlive(pid) {
+		if pid > 0 && pid != oldPID && processAlive(pid) &&
+			upgrade.SuccessorReadySince(p.Dir, started, pid) {
 			return pid, nil
 		}
 		// The daemon may have REFUSED to start a successor — most often

@@ -4604,6 +4604,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		// is about to be told to expect next time.
 		upgrade.RecordBootComplete(s.agentsLayout.BaseDir)
 		upg.Ready()
+		upgrade.RecordSuccessorReady(upg.IsChild())
 	}()
 
 	select {

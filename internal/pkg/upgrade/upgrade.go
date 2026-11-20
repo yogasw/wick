@@ -94,6 +94,7 @@ var lastHandover atomic.Value // handoverResult
 type handoverResult struct {
 	At    time.Time `json:"at"`
 	OK    bool      `json:"ok"`
+	PID   int       `json:"pid,omitempty"`
 	Error string    `json:"error,omitempty"`
 }
 
@@ -102,6 +103,19 @@ type handoverResult struct {
 func MarkServing(fromHandover bool) {
 	inherited.Store(fromHandover)
 	startedAt.Store(time.Now().Unix())
+}
+
+// RecordSuccessorReady records a completed handover from the process that
+// inherited the listener. It is deliberately called only after Ready: a PID
+// change alone can also be a concurrent manual `start`, which is not proof
+// that tableflip completed the requested handover.
+func RecordSuccessorReady(fromHandover bool) {
+	if !fromHandover {
+		return
+	}
+	r := handoverResult{At: time.Now(), OK: true, PID: os.Getpid()}
+	lastHandover.Store(r)
+	writeHandoverState(r)
 }
 
 // Inherited reports whether this process took over from a predecessor.
@@ -135,7 +149,11 @@ func recordHandover(err error) {
 		r.Error = err.Error()
 	}
 	lastHandover.Store(r)
-	writeHandoverState(r)
+	// A successful child writes the durable receipt with its own PID once it
+	// is ready. Do not overwrite that receipt from the draining parent.
+	if err != nil {
+		writeHandoverState(r)
+	}
 }
 
 // writeHandoverState persists the attempt. Best-effort: a missing file only
@@ -161,6 +179,23 @@ var stateDir atomic.Pointer[string]
 // CLI reads the same path the daemon writes.
 func HandoverStatePath(baseDir string) string {
 	return filepath.Join(baseDir, handoverStateFile)
+}
+
+// SuccessorReadySince reports whether the requested handover has a durable
+// receipt from the exact successor PID after since.
+func SuccessorReadySince(baseDir string, since time.Time, pid int) bool {
+	if baseDir == "" || pid <= 0 {
+		return false
+	}
+	b, err := os.ReadFile(HandoverStatePath(baseDir))
+	if err != nil {
+		return false
+	}
+	var r handoverResult
+	if json.Unmarshal(b, &r) != nil {
+		return false
+	}
+	return r.OK && r.PID == pid && !r.At.Before(since)
 }
 
 // AutoSwap is what the binary watcher is doing right now, published so the UI
@@ -529,10 +564,11 @@ func (u *Upgrader) Upgrade() error {
 	if BeforeSpawn != nil {
 		BeforeSpawn()
 	}
+	start := u.flip.Upgrade
 	if SpawnWrapper != nil {
-		return SpawnWrapper(u.flip.Upgrade)
+		start = func() error { return SpawnWrapper(u.flip.Upgrade) }
 	}
-	return u.flip.Upgrade()
+	return spawnInOwnSession(start)
 }
 
 // Stop releases the upgrader's own resources. Safe to defer unconditionally.

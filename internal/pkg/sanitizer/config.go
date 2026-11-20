@@ -110,13 +110,14 @@ func defaultSensitiveFields() map[string]struct{} {
 // defaultSensitiveHeaders returns static list of sensitive headers
 func defaultSensitiveHeaders() map[string]struct{} {
 	return map[string]struct{}{
-		"authorization":       {},
-		"x-api-key":           {},
-		"x-auth-token":        {},
-		"cookie":              {},
-		"set-cookie":          {},
-		"proxy-authorization": {},
-		"www-authenticate":    {},
+		"authorization":          {},
+		"x-api-key":              {},
+		"x-auth-token":            {},
+		"cf-access-jwt-assertion": {},
+		"cookie":                  {},
+		"set-cookie":              {},
+		"proxy-authorization":      {},
+		"www-authenticate":        {},
 	}
 }
 

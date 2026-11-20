@@ -197,6 +197,7 @@ func daemonReloadCmd() *cobra.Command {
 		useSudo    bool
 		wait       bool
 		waitDrain  bool
+		stage      bool
 		timeout    time.Duration
 	)
 	c := &cobra.Command{
@@ -230,6 +231,7 @@ func daemonReloadCmd() *cobra.Command {
 					useSudo:    useSudo,
 					wait:       wait || waitDrain,
 					waitDrain:  waitDrain,
+					stage:      stage,
 					timeout:    timeout,
 				})
 			}
@@ -243,6 +245,7 @@ func daemonReloadCmd() *cobra.Command {
 	c.Flags().BoolVar(&useSudo, "sudo", false, "run the file swap through sudo, for a root-owned target directory")
 	c.Flags().BoolVar(&wait, "wait", false, "block until the successor is serving, and roll the binary back if it never gets there")
 	c.Flags().BoolVar(&waitDrain, "wait-drain", false, "also wait for the previous process to finish its work and exit (implies --wait)")
+	c.Flags().BoolVar(&stage, "stage", false, "install a checked binary and let the daemon's auto-detect safety gate trigger handover")
 	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "with --wait: how long to wait for the successor to take over")
 	return c
 }
@@ -289,7 +292,10 @@ type reloadOpts struct {
 	// turn is itself something the next swap would wait on.
 	wait      bool
 	waitDrain bool
-	timeout   time.Duration
+	// stage leaves the checked candidate installed for the daemon's
+	// auto-detect gate instead of signalling it immediately.
+	stage   bool
+	timeout time.Duration
 }
 
 // reloadWithBinary installs a candidate binary and hands over to it.
@@ -372,6 +378,11 @@ func reloadWithBinary(p daemon.Paths, o reloadOpts) error {
 	// is exactly what happened here, 17 seconds after a good install.
 	installed := daemon.FileFingerprint(target)
 
+	if o.stage {
+		fmt.Printf("candidate staged at %s; waiting for the daemon's auto-detect safety gate\n", target)
+		return waitForStagedSuccessor(p, oldPID, target, candidate, running, o)
+	}
+
 	if err := signalReload(p); err != nil {
 		restoreAfterFailure(backup, target, o.useSudo, installed)
 		return err
@@ -416,6 +427,26 @@ func reloadWithBinary(p daemon.Paths, o reloadOpts) error {
 		}
 		fmt.Printf("pid %d drained and exited; cron, channels and scheduled messages are on pid %d\n", oldPID, newPID)
 	}
+	return nil
+}
+
+// waitForStagedSuccessor observes the daemon-owned auto-detect path. It must
+// not roll back on timeout: the panel may still be waiting for unresumable
+// work, and the checked candidate is deliberately staged for that decision.
+func waitForStagedSuccessor(p daemon.Paths, oldPID int, target string, candidate, running daemon.BinaryInfo, o reloadOpts) error {
+	if !o.wait {
+		return nil
+	}
+	fmt.Printf("waiting for auto-detect to approve and hand over (up to %s)...\n", o.timeout)
+	newPID, err := daemon.WaitSuccessor(p, BuildAppName, oldPID, o.timeout)
+	if err != nil {
+		return fmt.Errorf("%w — candidate remains staged for the admin auto-detect gate", err)
+	}
+	if !daemon.ProcessImageIs(newPID, target) {
+		fmt.Printf("WARNING: pid %d is not running %s — check whether the daemon was started from another path\n", newPID, target)
+	}
+	fmt.Printf("handover done: pid %d -> %d, %s -> %s\n", oldPID, newPID,
+		firstNonEmptyString(running.AppVersion, "unknown"), candidate.AppVersion)
 	return nil
 }
 
