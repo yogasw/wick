@@ -527,6 +527,10 @@ type claudeContentBlock struct {
 	ResultContent json.RawMessage `json:"content,omitempty"`
 }
 
+// stopHookFeedback opens the user frame claude sends when a Stop hook
+// blocks the end of a turn.
+const stopHookFeedback = "Stop hook feedback:"
+
 // Parse decodes one line and returns the normalized event. Empty / ws-
 // only lines yield (Unknown, nil) — caller can stream stdout without
 // filtering.
@@ -790,6 +794,12 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 		}
 		for _, b := range raw.Message.Content {
+			// A blocking Stop hook sends the model back to work: the text
+			// it ended on was refused, the reply is what comes next.
+			if b.Type == "text" && strings.HasPrefix(b.Text, stopHookFeedback) {
+				p.streamedText.Reset()
+				return AgentEvent{Type: TextReplace, Raw: trimmed}, nil
+			}
 			if b.Type == "tool_result" {
 				return AgentEvent{
 					Type:      ToolResult,

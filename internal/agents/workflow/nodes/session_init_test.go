@@ -182,3 +182,20 @@ func TestSessionInit_AllPresets_PassStorageValidator(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionInitPin(t *testing.T) {
+	cases := []struct {
+		prov, model, wantKey, wantModel string
+	}{
+		{"", "", "", ""},
+		{"claude/alt", "big", "claude/alt", "big"},
+		{" claude/alt::big ", "", "claude/alt", "big"},
+		{"claude/alt::big", "other", "claude/alt", "other"},
+	}
+	for _, c := range cases {
+		key, model := sessionInitPin(workflow.Node{Provider: c.prov, Model: c.model})
+		if key != c.wantKey || model != c.wantModel {
+			t.Errorf("sessionInitPin(%q, %q) = %q, %q; want %q, %q", c.prov, c.model, key, model, c.wantKey, c.wantModel)
+		}
+	}
+}

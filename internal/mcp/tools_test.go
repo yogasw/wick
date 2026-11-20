@@ -32,8 +32,10 @@ func TestWickSearchFindsConnector(t *testing.T) {
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -102,8 +104,10 @@ func TestWickSearchNoMatch(t *testing.T) {
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -146,8 +150,10 @@ func dispatchWickGet(t *testing.T, h *Handler, args map[string]any) wickGetPaylo
 	raw := dispatchJSON(t, h, "tools/call", map[string]any{"name": "wick_get", "arguments": args})
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -183,8 +189,8 @@ func TestWickGetListsCategoriesOnly(t *testing.T) {
 	for _, c := range p.Categories {
 		byName[c.Category] = c.TotalTools
 	}
-	if byName["Alpha"] != 10 || byName["Beta"] != 5 {
-		t.Fatalf("category counts = %v, want Alpha:10 Beta:5", byName)
+	if byName["Alpha"] != 10 || byName["Beta"] != 8 {
+		t.Fatalf("category counts = %v, want Alpha:10 Beta:8", byName)
 	}
 	if len(p.Tools) != 0 {
 		t.Fatalf("tools = %d, want 0 at category level", len(p.Tools))
@@ -327,7 +333,9 @@ func TestWickGetMissingID(t *testing.T) {
 	})
 
 	var resp struct {
-		Result struct{ IsError bool `json:"isError"` } `json:"result"`
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -346,7 +354,9 @@ func TestWickGetUnknownID(t *testing.T) {
 	})
 
 	var resp struct {
-		Result struct{ IsError bool `json:"isError"` } `json:"result"`
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -368,8 +378,10 @@ func TestWickEncryptReturnsURL(t *testing.T) {
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -404,8 +416,10 @@ func TestWickDecryptReturnsURL(t *testing.T) {
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -437,8 +451,10 @@ func TestWickListProvidersNoProviders(t *testing.T) {
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -491,6 +507,8 @@ func TestToolsListContainsAllExpectedTools(t *testing.T) {
 		"wick_context", "wick_usage", "wick_compact",
 		"wick_slack_listen",
 		"wick_session_link",
+		"wick_session_model", "wick_roles", "wick_roles_set",
+		"wick_request_access",
 	}
 
 	descriptors := handlers.MetaToolDescriptors()
@@ -631,4 +649,28 @@ func localAdminDispatch(t *testing.T, h *Handler, toolName string, args map[stri
 	p, _ := json.Marshal(map[string]any{"name": toolName, "arguments": args})
 	msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":%s}`, p)
 	return h.dispatchLine(localAdminCtx(), []byte(msg))
+}
+
+func TestRequestAccessToolOnlyWhereProjectTurnedItOn(t *testing.T) {
+	has := func(tools []handlers.ToolDescriptor) bool {
+		for _, d := range tools {
+			if d.Name == "wick_request_access" {
+				return true
+			}
+		}
+		return false
+	}
+	prev := handlers.AccessRequestsOn
+	t.Cleanup(func() { handlers.AccessRequestsOn = prev })
+	handlers.AccessRequestsOn = nil
+	if has(accessRequestTools(handlers.MetaToolDescriptors(), "sess-1")) {
+		t.Fatal("listed with no switch wired")
+	}
+	handlers.AccessRequestsOn = func(sid string) bool { return sid == "sess-on" }
+	if has(accessRequestTools(handlers.MetaToolDescriptors(), "sess-off")) {
+		t.Fatal("listed for a project that is off")
+	}
+	if !has(accessRequestTools(handlers.MetaToolDescriptors(), "sess-on")) {
+		t.Fatal("missing for a project that is on")
+	}
 }

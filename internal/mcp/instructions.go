@@ -19,11 +19,16 @@ ENCRYPTED VALUES (wick_enc_)
 
 WORKFLOW
 - wick_get drills down three levels via its selector argument, so you only load what you
-  need: (1) id only → lists categories; (2) id + a category title → lists that category's
-  operations (no schemas); (3) id + an op key → returns that one op's input_schema. An
-  ungrouped connector skips level 1 (it lists ops directly), so go straight to an op key.
-- Before calling wick_execute, always fetch the op's input_schema (level 3 — wick_get with
-  the op key). Never guess parameters — derive them from that schema.
+  need: (1) id only → the connector's groups, each with a summary of what it can do, plus
+  "frequent" (its most used / pinned ops WITH a call signature); (2) id + a group title →
+  that group's operations (no schemas); (3) id + an op key → that one op's input_schema. A
+  small or ungrouped connector lists every op at level 1, so go straight to an op key.
+- Know an op's params before calling wick_execute: a signature you were given (a "frequent"
+  entry, the "Frequent ops" block of your prompt) is enough; otherwise fetch the op's
+  input_schema (level 3). Never invent parameter names. A param that does not fit returns
+  the full input_schema and nothing runs: fix it and retry ONCE. Destructive ops: always
+  fetch the schema first.
+- An op's "note" is a curated pitfall (pagination, formats): follow it.
 - If a connector status is "needs_setup", do not call wick_execute. Tell the user to
   complete the setup in the Wick admin dashboard first.
 - To run several ops at once, pass wick_execute a "calls" array ([{tool_id, params,
@@ -32,7 +37,7 @@ WORKFLOW
   array; check each entry's "ok" (and "timed_out") rather than treating the batch as a
   single pass/fail. Use "timeout_ms" to bound slow calls (default 3 min, max 5 min). Up to
   100 calls per batch; the server bounds how many run at once, so you don't set concurrency.
-  Still fetch each op's input_schema first.
+  Each entry needs known params, same rule as a single call.
 
 ACTIVE REPOSITORY
 - A session's working directory often holds many cloned repos, and the Source panel has ONE

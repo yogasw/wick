@@ -24,6 +24,11 @@ export type BrowserSession = {
   browser: string;
   created: string;
   tabs: BrowserTab[] | null;
+  // From session_list: the named profile ("" = anonymous), seconds since the
+  // last use, and seconds until the idle reaper closes it (absent = never).
+  profile?: string;
+  idle_seconds?: number;
+  auto_close_in_seconds?: number;
 };
 
 /* Active playwright_browser connector instances, for the dropdown. Reuses the

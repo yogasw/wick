@@ -137,6 +137,13 @@ func Start(p Paths, args []string) (int, error) {
 		return 0, fmt.Errorf("open log %s: %w", p.LogFile, err)
 	}
 	cmd := safeexec.Command(p.ExePath, args...)
+	// Keep the upgrade mode explicit across the detached exec. Some Android
+	// launchers sanitize the parent's environment; without this, the child
+	// silently falls back to graceful-upgrade off even though the parent was
+	// started with the default enabled. Preserve an explicit operator override.
+	if strings.TrimSpace(os.Getenv("WICK_GRACEFUL_UPGRADE")) == "" {
+		cmd.Env = append(os.Environ(), "WICK_GRACEFUL_UPGRADE=1")
+	}
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	cmd.Stdin = nil

@@ -234,10 +234,10 @@ func sendTicketSessionMessage(c *tool.Ctx, sess session.Session, text string, ha
 		run := newTicketSessionRun(c.Context(), sess, tk, sender, plan.Target, backing)
 		run.started = runStarted
 		queued = true
-		go func() {
+		goRoomRun(func() {
 			defer runRelease()
 			run.play(runCtx, sess.ID, []teamlink.Peer{plan.Target})
-		}()
+		})
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "sent"})
 	return true

@@ -127,7 +127,7 @@ func TestVisibleWhenExecuteSessionInstance(t *testing.T) {
 		return err
 	}
 	// No browser saved on the session instance: the module default applies.
-	if err := run(map[string]string{}); err == nil || !strings.Contains(err.Error(), "turned off by this connector's config") {
+	if err := run(map[string]string{}); err == nil || !strings.Contains(err.Error(), "turned off by this session connector's config") {
 		t.Fatalf("want refusal, got %v", err)
 	}
 	if err := run(map[string]string{"browser": "moli"}); err != nil {
@@ -184,14 +184,14 @@ func TestSessionLockedFieldKeepsDefault(t *testing.T) {
 func TestConfigOffOps(t *testing.T) {
 	ctx := context.Background()
 	svc, id := newSvcWithModule(t, nil, visibleWhenModule())
-	off := svc.ConfigOffOps(ctx, id, "vwstub")
+	off := svc.ConfigOffOps(ctx, id, "vwstub", "")
 	if len(off) != 1 || !strings.Contains(off["pdf"], "needs browser = moli") {
 		t.Fatalf("want pdf listed as config-off, got %v", off)
 	}
 	if err := svc.Update(ctx, id, "VW", map[string]string{"browser": "moli"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if off := svc.ConfigOffOps(ctx, id, "vwstub"); len(off) != 0 {
+	if off := svc.ConfigOffOps(ctx, id, "vwstub", ""); len(off) != 0 {
 		t.Fatalf("browser=moli: want none off, got %v", off)
 	}
 }
@@ -232,5 +232,42 @@ func TestSessionLockedSealedValue(t *testing.T) {
 	other, _ := svc.SealSessionLock("sw_a", "browser", "chromium")
 	if err := run("sw_a", map[string]string{"browser": other}); err == nil {
 		t.Fatal("a seal for another value must not apply")
+	}
+}
+
+func TestAccessRequestRefusesConfigOffOp(t *testing.T) {
+	ctx := context.Background()
+	svc, id := newSvcWithModule(t, nil, visibleWhenModule())
+	if _, err := svc.DescribeOp(ctx, id, "pdf"); err == nil || !strings.Contains(err.Error(), "needs browser = moli") {
+		t.Fatalf("describe of a config-off op = %v, want the config reason", err)
+	}
+	if _, err := svc.DescribeOp(ctx, id, "open"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	svc.SetIdentityLookup(func(_ context.Context, uid string) (*entity.User, []string, error) {
+		return &entity.User{ID: uid, Role: entity.RoleAdmin}, nil, nil
+	})
+	if ok, why := svc.CanRunOwn(ctx, "admin-1", id, "pdf"); ok || !strings.Contains(why, "needs browser = moli") {
+		t.Fatalf("approver of a config-off op = %v %q", ok, why)
+	}
+	if err := svc.Update(ctx, id, "VW", map[string]string{"browser": "moli"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DescribeOp(ctx, id, "pdf"); err != nil {
+		t.Fatalf("browser=moli: pdf must be requestable: %v", err)
+	}
+}
+
+func TestConfigOffReasonSaysWhoCanChangeIt(t *testing.T) {
+	op := connector.Operation{Key: "resolve", VisibleWhen: "mode:write|admin"}
+	if got := ConfigOffReason(op); !strings.Contains(got, "the connector's owner") {
+		t.Fatalf("saved connector reason = %q", got)
+	}
+	got := ConfigOffReasonSession(op, "sw_test", nil)
+	if strings.Contains(got, "action=set_config") || !strings.Contains(got, "do not switch it yourself") || !strings.Contains(got, `{"mode": "write"}`) || !strings.Contains(got, "sw_test") {
+		t.Fatalf("session reason = %q", got)
+	}
+	if got := ConfigOffReasonSession(op, "sw_test", map[string]string{"mode": "seal"}); strings.Contains(got, "set_config") || !strings.Contains(got, "locked") {
+		t.Fatalf("locked session reason = %q", got)
 	}
 }

@@ -80,9 +80,12 @@ var requirements = []Feature{
 	// assistant_thread_started ("Agent View should use app_home_opened"),
 	// so the manifest asks for app_home_opened; an older app that still
 	// sends assistant_thread_started is answered all the same.
+	// agent_session_stopped makes Slack show its native Stop button while
+	// the thread status is "processing"; without the subscription the
+	// loading bubble cannot be clicked.
 	{Key: FeatureAgentView, Label: "Agent view and status banner", Need: NeedWhenOn,
 		BotScopes: []string{"assistant:write"},
-		Events:    []string{"app_home_opened"}},
+		Events:    []string{"app_home_opened", "agent_session_stopped"}},
 	// Instant agents reply under their own name and icon. Missing the scope
 	// is a warning: replies still go out, as the bot.
 	{Key: FeatureInstant, Label: "Instant agents (custom name and icon)", Need: NeedWhenOn,

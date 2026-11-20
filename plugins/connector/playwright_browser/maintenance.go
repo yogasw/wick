@@ -352,11 +352,12 @@ func browserUpdate(c *connector.Ctx) (any, error) {
 		return map[string]any{"browser": name, "updated": true, "note": "updated via cloakbrowser CLI"}, nil
 	}
 	if name == moliEngine {
+		before := moliVersion(c)
 		v, err := installMoli(c, true)
 		if err != nil {
 			return nil, fmt.Errorf("update moli: %w", err)
 		}
-		return map[string]any{"browser": name, "updated": true, "version": v}, nil
+		return map[string]any{"browser": name, "updated": true, "from": before, "version": v}, nil
 	}
 	if name == cloakEngine {
 		// Free engine: remove the cached download and re-install (picks up the

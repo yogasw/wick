@@ -269,6 +269,10 @@ const (
 	// KindApprovalRequest is a gate approval prompt, recorded when raised
 	// and again when decided (same extras.approval_id).
 	KindApprovalRequest = "approval_request"
+	// KindAccessRequest is an agent's access request card (actions it asks
+	// a person to approve), re-recorded on every change under the same
+	// extras.request_id.
+	KindAccessRequest = "access_request"
 	// KindGroupMemberAdded / KindGroupMemberRemoved record a member
 	// change in a group chat (extras: agent_id, handle, by).
 	KindGroupMemberAdded   = "group_member_added"
@@ -297,6 +301,11 @@ const KindRemoteQueue = "remote_queue"
 // hold_id fold into one row in the UI, so a held reply shows the moment it
 // arrives instead of only once it reaches the agent.
 const KindListenHeld = "listen_held"
+
+// KindReplyHeld: a Slack reply held at its turn's end instead of posted:
+// a turn nobody typed wrote [silent] after a real answer (text = that
+// answer). Someone decides whether it goes out.
+const KindReplyHeld = "reply_held"
 
 // KindThreadHeard: one reply a listening Slack thread heard, recorded the
 // moment it arrives (text = the reply; extras: hold_id, msg_ts, user, name,

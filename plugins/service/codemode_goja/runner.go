@@ -38,6 +38,9 @@ type event struct {
 	Params json.RawMessage `json:"params,omitempty"`
 	// TimeoutMS is the call's own deadline, which wick enforces.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
+	// Cache is the call's cache option as the script wrote it; wick keeps
+	// and serves the answers.
+	Cache json.RawMessage `json:"cache,omitempty"`
 
 	// file: wick does the IO inside the project's codemode/ folder
 	Op   string `json:"op,omitempty"` // "read" | "write" | "list" | "exists"
@@ -93,6 +96,9 @@ var langs = []string{"ts", "js"}
 
 // featureFile is the wick.file support both sides announce.
 const featureFile = "file"
+
+// featureCache: the runner forwards wick.call's cache option.
+const featureCache = "cache"
 
 type runner struct {
 	budgetMB func() int

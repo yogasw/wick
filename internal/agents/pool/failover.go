@@ -393,7 +393,11 @@ func (p *Pool) runFailover(j failoverJob) {
 		MsgKey:         j.msgKey,
 		ExpectFrom:     j.from,
 		ContinueFor: func(r provider.SwitchResult) string {
-			return provider.ContinueMessage(provider.ContinueInputFrom(r, kind, resetAt, snap))
+			in := provider.ContinueInputFrom(r, kind, resetAt, snap)
+			if !r.HistoryCarries {
+				in.Opening = provider.OpeningContext(p.cfg.Layout, sid)
+			}
+			return provider.ContinueMessage(in)
 		},
 		Notify: func(tag string, steps []string) {
 			if p.cfg.OnFailoverNotify != nil {
@@ -409,6 +413,7 @@ func (p *Pool) runFailover(j failoverJob) {
 		cont = provider.ContinueMessage(provider.ContinueInput{
 			From: j.from, To: normProviderKey(a.Provider), Reason: kind, ResetAt: resetAt,
 			UserMsg: snap.UserMsg, Produced: snap.Produced, PartialText: snap.Text, Tools: snap.Tools,
+			Opening: provider.OpeningContext(p.cfg.Layout, sid),
 		})
 		l.Info().Str("to", a.Provider).Msg("pool.failover: switched by hand meanwhile, re-sending there")
 	case err != nil:

@@ -46,3 +46,20 @@ export function activityLabel(substate?: string, toolName?: string): string {
   if (substate === "running_tool") return "running a tool…";
   return `running ${substate}…`;
 }
+
+/** The intent a tool call carries in its input — omp's `i` / `intent`, and
+    with withDescription a `description` (Bash and friends) — "" when it
+    names none. */
+export function toolIntent(input: string | undefined, withDescription = false): string {
+  if (!input) return "";
+  try {
+    const m = JSON.parse(input) as Record<string, unknown>;
+    for (const k of withDescription ? ["description", "i", "intent"] : ["i", "intent"]) {
+      const v = m?.[k];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+  } catch {
+    /* not JSON: no intent */
+  }
+  return "";
+}

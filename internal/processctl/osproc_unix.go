@@ -44,7 +44,12 @@ func QueryProcess(pid int) ProcessInfo {
 		return info
 	}
 	if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
-		info.Exe = exe
+		// Replacing the binary on disk (an update) leaves the running
+		// process's link as "<path> (deleted)". It is still the same
+		// program at the same path; without the trim a live daemon reads
+		// as someone else's, so stop/restart left it running and start
+		// launched a second one next to it.
+		info.Exe = strings.TrimSuffix(exe, " (deleted)")
 	}
 	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); err == nil {
 		info.Name = strings.TrimSpace(string(data))

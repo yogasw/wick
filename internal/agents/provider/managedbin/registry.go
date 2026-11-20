@@ -75,6 +75,7 @@ func FirstSemver(out string) (string, bool) {
 type Asset struct {
 	Name   string `json:"name"`
 	URL    string `json:"url"`
+	APIURL string `json:"api_url,omitempty"` // same file via the API, used when URL answers 5xx
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"` // hex, from the API digest; "" when GitHub gave none
 }

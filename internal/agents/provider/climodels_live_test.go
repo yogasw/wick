@@ -197,3 +197,32 @@ func TestTurnEndHarvestsModels(t *testing.T) {
 		t.Fatalf("cache %v, CLI calls %d", m, *calls)
 	}
 }
+
+// An account change (new login, new provider) shows on the next read: the
+// files are re-read inline, not after the picker already showed the old list.
+func TestCachedCLIModelsAccountChangeReadsInline(t *testing.T) {
+	ins := liveTestInstance(t)
+	stubCLIModels(t, "", nil)
+	list := []ModelSeed{{ID: "acme/one"}}
+	RegisterModelHarvester(ins.Type, func(context.Context, Instance) ([]ModelSeed, error) { return list, nil })
+	t.Cleanup(func() { RegisterModelHarvester(ins.Type, nil) })
+	stamp := "s1"
+	prev := AuthStamp
+	AuthStamp = func(Instance) string { return stamp }
+	t.Cleanup(func() { AuthStamp = prev })
+
+	if m, _, _ := CachedCLIModels(context.Background(), ins, false); len(m) != 1 {
+		t.Fatalf("first read: %v", m)
+	}
+	list = []ModelSeed{{ID: "acme/one"}, {ID: "beta/two"}}
+	stamp = "s2"
+	if m, _, _ := CachedCLIModels(context.Background(), ins, false); len(m) != 2 || m[1].ID != "beta/two" {
+		t.Fatalf("after the account change: %v", m)
+	}
+	// Files that say nothing keep the last list.
+	list = nil
+	stamp = "s3"
+	if m, _, _ := CachedCLIModels(context.Background(), ins, false); len(m) != 2 {
+		t.Fatalf("empty re-read dropped the list: %v", m)
+	}
+}

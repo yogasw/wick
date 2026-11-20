@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -712,7 +713,10 @@ func (s *Channel) fireListenWait(sessionID string, w *listenWait) {
 type listenTurn struct {
 	st listenSettings
 	// auto: the channel auto-replies, so the turn is always answered.
-	auto          bool
+	auto bool
+	// direct: the person who opened the thread with the agent wrote it
+	// and named no one else (directListenReply): answered like a mention.
+	direct        bool
 	waited        time.Duration
 	othersReplied bool
 	// threadPrompt is this thread's own "listen" instructions.
@@ -742,6 +746,10 @@ func (s *Channel) dispatchListen(sessionID string, ev *slackevents.MessageEvent,
 	log.Info().Str("channel", "slack").Str("session", sessionID).Dur("waited", waited).
 		Bool("others_replied", others).Bool("auto_reply", auto).Msg("listen: passing the reply to the agent")
 	lt := listenTurn{st: st, waited: waited, othersReplied: others, auto: auto}
+	if !auto {
+		threadTS := ev.ThreadTimeStamp
+		lt.direct = directListenReply(ev.Text, ev.User, s.threadStarter(ev.Channel, threadTS), s.BotUserID(), threadTS == "" || threadTS == ev.TimeStamp)
+	}
 	if ls, ok := s.listenStore(); ok {
 		lt.threadPrompt = ls.ListenThread(sessionID).Prompt
 		wickDoc, agentDoc := ls.ListenDocs(sessionID)
@@ -752,9 +760,57 @@ func (s *Channel) dispatchListen(sessionID string, ev *slackevents.MessageEvent,
 	s.handleMessage(ctx, ev, files)
 }
 
+// slackMention matches a user, group or broadcast mention in Slack text.
+var slackMention = regexp.MustCompile(`<[@!]([A-Za-z0-9^|]+)[^>]*>`)
+
+// directListenReply reports whether a listen reply is meant for the agent
+// though it does not mention it: a reply (not a new top-level message) by
+// the person who opened the thread with the agent, naming no one but the
+// agent. A reply naming someone else, or anyone else's chatter, stays a
+// listen reply the agent may leave with [silent].
+func directListenReply(text, sender, starter, botID string, topLevel bool) bool {
+	if topLevel || sender == "" || sender != starter {
+		return false
+	}
+	for _, m := range slackMention.FindAllStringSubmatch(text, -1) {
+		if id, _, _ := strings.Cut(m[1], "|"); id != botID {
+			return false
+		}
+	}
+	return true
+}
+
+// threadStarter is the Slack user who posted threadTS's parent message,
+// cached per thread; "" when it cannot be read.
+func (s *Channel) threadStarter(channelID, threadTS string) string {
+	if channelID == "" || threadTS == "" {
+		return ""
+	}
+	key := channelID + "/" + threadTS
+	if v, ok := s.threadStarters.Load(key); ok {
+		return v.(string)
+	}
+	api := s.API()
+	if api == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), threadCatchUpTimeout)
+	defer cancel()
+	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slackgo.GetConversationRepliesParameters{
+		ChannelID: channelID, Timestamp: threadTS, Limit: 1, Inclusive: true, Latest: threadTS,
+	})
+	if err != nil || len(msgs) == 0 {
+		log.Warn().Str("channel", "slack").Str("slack_channel", channelID).Str("thread_ts", threadTS).Err(err).
+			Msg("listen: thread starter not readable; the reply stays a listen reply")
+		return ""
+	}
+	s.threadStarters.Store(key, msgs[0].User)
+	return msgs[0].User
+}
+
 // listenRules is what every listening agent is told once, in its system
 // prompt (ListenPrompt); a listening turn itself only carries listenNote.
-const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message that opens with "[auto-reply]" comes from a thread set to auto-reply: answer it as you would a mention, never [silent]. A message without either marker (a mention, a DM) is answered as usual, even when a [listen mode] reply arrives in the same turn.`
+const listenRules = `A message that opens with "[listen mode]" is a reply in a Slack thread you listen to: it did not mention you, and wick may have held it for a while first (the thread block that follows also shows what was said during the wait). Answer only if it is a question or request meant for you; otherwise reply exactly [silent]. When the note says someone else replied meanwhile, read that first and add only what is still missing. A thank-you or a plain acknowledgement meant for you gets a reaction instead of words: reply exactly [react :pray:] (any Slack emoji name). A reply that is just "stop" is handled by wick. A message that opens with "[auto-reply]" comes from a thread set to auto-reply, and "[listen mode · direct]" from the person who opened the thread with you naming no one else: answer either as you would a mention, never [silent]. A message without either marker (a mention, a DM) is answered as usual, even when a [listen mode] reply arrives in the same turn.`
 
 // ListenPrompt is the "Slack listen mode" section of sessionID's system
 // prompt: the rules and its LISTEN.md instructions. The instructions are
@@ -809,6 +865,18 @@ func listenNote(lt listenTurn) string {
 			fmt.Fprintf(&b, " · held %s", lt.waited.Round(time.Second))
 		}
 		b.WriteString("] Not a mention, but this thread auto-replies: answer it as you would a mention, never [silent].")
+		if lt.threadPrompt != "" {
+			b.WriteString("\nFor this thread: ")
+			b.WriteString(lt.threadPrompt)
+		}
+		return b.String()
+	}
+	if lt.direct {
+		b.WriteString("[listen mode · direct")
+		if lt.waited > 0 {
+			fmt.Fprintf(&b, " · held %s", lt.waited.Round(time.Second))
+		}
+		b.WriteString("] Not a mention, but from the person who opened this thread with you, naming no one else: answer it as you would a mention, never [silent].")
 		if lt.threadPrompt != "" {
 			b.WriteString("\nFor this thread: ")
 			b.WriteString(lt.threadPrompt)

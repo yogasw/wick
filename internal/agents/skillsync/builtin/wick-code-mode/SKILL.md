@@ -44,6 +44,14 @@ return { open: list.items.length, stale: details.filter(d => d.ok).map(d => d.re
   with `wick.call(id, params, { timeout_ms: 45000 })`, a `timeout_ms` field on
   a `callMany` item, or `wick.tool(id)(params, { timeout_ms })`; it never goes
   past the run's end.
+- Cache a read call when the same lookup repeats across runs (a user group,
+  a canvas, an app's config): `wick.call(id, params, { cache: 300 })` keeps
+  the answer 5 min; `{ cache: { ok: 300, error: 60 } }` also keeps a failure
+  that is an answer (not found, forbidden), never a timeout, rate limit or
+  5xx. Max 1 h (failures 10 min). Same option on a `callMany` item. Writes
+  are never cached; entries belong to this user + session, and a hit still
+  passes the access check. A cached call shows `cached: true` in `calls`.
+  Off by default: only cache what may be that stale.
 - Pure helpers: `atob`, `btoa`, `TextEncoder` (`encode` → `Uint8Array`) and
   `TextDecoder` (utf-8).
 - `input` is the `input` argument (JSON). `console.log/warn/error` go to `logs`.
@@ -101,6 +109,49 @@ project gets a clear "no project folder" error.
 - The runner is downloaded automatically the first time a run finds none
   installed (unless the host turned that off). A "runner too old" error means
   the `codemode_goja` plugin needs an update.
+- `calls` comes back folded: successful calls to one tool are one entry with
+  a `count` (and their total `ms`); every failed call is listed on its own.
+  The run's audit record keeps the full list.
+
+## Many items (pages, rooms, tickets)
+
+- **Try one or two first**, check the output is what you want (not empty,
+  not just navigation), then run the rest.
+- **A few at a time**, not one `callMany` over everything: a connector that
+  starts a process per call (a browser, a CLI) starves a shared host and
+  every call times out. Batches of 3–5 in a loop.
+- **Store each item as it lands**, one `wick.file.write` per item (a file
+  holds 1 MB, a run ends at its timeout), and skip items already stored, so
+  a run that stops early is resumed by running it again.
+- **Stop before the timeout** (check `Date.now()` against a budget) and
+  return `remaining`, instead of being cut mid-batch.
+- **Return counts and a short sample,** not the items: the model reads the
+  files afterwards only when it needs them.
+- **Show progress** with the session `todo` (one item per stage or batch)
+  when someone is watching.
+
+## An operation a connector does not have yet
+
+A connector op that is missing, or an engine feature it does not wrap, is
+usually reachable without waiting for a connector release:
+
+1. **Look for a raw pass-through first.** Many connectors expose one: a raw
+   request op, a `cdp`/`eval` action, an `extra_args`/`launch_args` field.
+   The op description and the connector doc say which and what is fenced.
+2. **Compose the operation in a script** that chains the ops that do exist
+   (open → act through the pass-through → read → close) and returns only the
+   shaped result. Save it as `codemode/scripts/<name>.ts`, take everything
+   that varies from `input`, and run it with `script_path`: it now behaves
+   like an op of its own.
+3. **Make it findable:** a header comment saying what it does and its
+   `input`, and a line under `## KEEP` in `AGENT.md`, so the next session or
+   agent reuses it instead of writing it again.
+4. **Promote it when it earns it.** A script that is run often, or is slow
+   because it chains many calls, is the signal to ask for a proper connector
+   op; until then the script is the op.
+
+A fence on a pass-through (a refused flag or method) is a limit, not a puzzle:
+do not route around it, ask for the connector to support the case.
 
 ## In a watch (kind=code)
 

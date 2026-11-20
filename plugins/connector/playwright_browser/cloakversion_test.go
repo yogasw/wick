@@ -88,4 +88,7 @@ func TestCloakArgsBase(t *testing.T) {
 	if has("--start-maximized") {
 		t.Error("cloakArgs added --start-maximized for an unknown-version binary; want it gated off")
 	}
+	if has("--window-size") {
+		t.Error("cloakArgs added --window-size for an unknown-version binary; want it gated off")
+	}
 }

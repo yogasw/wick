@@ -7,7 +7,7 @@
      flight per agent; edits made meanwhile go out in the next one. A
      rejected PATCH keeps the local value and shows the error inline. */
   import { onMount, untrack } from "svelte";
-  import { AIGenerateButton, Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
+  import { AIGenerateButton, Button, Modal, ProjectAccessRequests, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
@@ -15,7 +15,7 @@
   const pendingImage = (a: AvatarSpec) => isImageKind(a.kind) && !a.image?.v;
   import AvatarImageEditor from "./AvatarImageEditor.svelte";
   import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
-  import { getProviderOptions, getProjectOptions } from "../api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getProjectOptions } from "../api/options.js";
   import {
     getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
@@ -32,6 +32,7 @@
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, AUTO_APPROVE_OPTIONS, AUTO_APPROVE_NOTE, FOLDERS_NOTE, captainCanOf, captainPolicyOf, captainBlock } from "../captainSettings.js";
   import { OWNER_ACCESS_HINT, accessToday, makeCaptainWithAccess } from "../captainAccess.js";
   import AccessHistory from "./AccessHistory.svelte";
+  import RolesViewer from "./RolesViewer.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
   import AgentSessionTab from "./AgentSessionTab.svelte";
@@ -124,6 +125,14 @@
   }
 
   let providers = $state<{ type: string; name: string; models?: { id: string; label: string; default: boolean }[] }[]>([]);
+  // Same lazy loader the chat's picker uses: omp/opencode keep their models
+  // in live lists the provider options do not carry.
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return runApi(getProviderOptionModels(base, type, name, opts));
+  }
   let catalog = $state<AgentConnector[]>([]);
   let catalogError = $state("");
   let catalogLoading = $state(true);
@@ -693,10 +702,18 @@
         bind:accessMode={draft.access_mode}
         errors={grantErrors}
         isCaptain={agent.is_captain}
+        confirmMode
       />
     {/if}
     {#key agent.id}
+      {#if draft.access_mode === "roles"}
+        <RolesViewer {base} agentId={agent.id} {catalog} grants={draft.grants} captainHandle={agents.find((a) => a.is_captain)?.handle ?? "captain"} />
+      {/if}
       <AccessHistory {base} agentId={agent.id} />
+      {#if agent.project_id}
+        <h3 class="mb-1.5 mt-5 text-sm font-semibold text-black-900 dark:text-white-100">Access requests</h3>
+        <ProjectAccessRequests {base} projectId={agent.project_id} />
+      {/if}
     {/key}
   {:else if view === "tools"}
     <div>
@@ -1049,6 +1066,7 @@
         value={draft.pick}
         onChange={(v) => (draft.pick = v)}
         placeholder="Default project"
+        loadModels={loadProviderModels}
       />
     </div>
     <div class="space-y-2" role="radiogroup" aria-label="Provider in chats" data-testid="as-provider-lock">

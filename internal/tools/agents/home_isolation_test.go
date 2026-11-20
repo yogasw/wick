@@ -20,6 +20,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("USERPROFILE", home)
 	os.Unsetenv(appname.DataDirEnv)
 	appname.ResetDataDirForTest()
+	// The wait publisher reads globals the tests swap (session_wait.go).
+	waitPublisherOff = true
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)

@@ -48,6 +48,9 @@ type Service struct {
 	// shareBlock is ShareBlock with the remote usage check filled in; nil
 	// checks the Captain only.
 	shareBlock func(entity.AgentPersona) string
+	// frequent renders the "Frequent ops" block of the spawn prompt; nil
+	// leaves it out.
+	frequent FrequentFunc
 }
 
 // SetShareBlock wires the full share check (the remote "Only me" usage
@@ -190,7 +193,11 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	case err != nil:
 		return DenyAll()
 	default:
-		scope = ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p))
+		sc, err := s.scopeWithRoles(ctx, p, ScopeOf(p, s.reachOf(ctx, p)).WithTiers(s.tiersOf(ctx, p)))
+		if err != nil {
+			return DenyAll()
+		}
+		scope = sc
 	}
 	s.mu.Lock()
 	s.cache[agentID] = scopeEntry{scope: scope, expiry: now.Add(scopeCacheTTL)}
@@ -251,4 +258,21 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		_ = s.Store.DeleteShares(ctx, id)
 	}
 	return err
+}
+
+// scopeWithRoles loads p's role document onto a By role scope. A document
+// that cannot be read fails closed: the caller gets deny-all, never the
+// owner's whole reach.
+func (s *Service) scopeWithRoles(ctx context.Context, p entity.AgentPersona, sc *Scope) (*Scope, error) {
+	if NormalizeAccessMode(p.AccessMode) != AccessRoles || sc.denyAll {
+		return sc, nil
+	}
+	doc, _, err := s.RBAC(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	return sc.WithRoles(doc, func(ctx context.Context, agentID, userID string) bool {
+		_, err := s.ShareOf(ctx, agentID, userID)
+		return err == nil
+	}).WithRoleTags(s.UserHasTag), nil
 }

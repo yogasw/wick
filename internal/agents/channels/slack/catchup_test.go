@@ -331,3 +331,101 @@ func TestThreadCatchUpFetchErrorSkips(t *testing.T) {
 		t.Fatalf("a failed fetch should add nothing, got %q", got)
 	}
 }
+
+// A new session in an existing thread reads everything before the waking
+// message, its own earlier replies included, with the parent pinned first.
+func TestThreadHistoryFetch(t *testing.T) {
+	var gotOldest, gotLatest string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotOldest, gotLatest = r.Form.Get("oldest"), r.Form.Get("latest")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"has_more":false,"messages":[
+			{"ts":"1.0","user":"UA","text":"parent ask"},
+			{"ts":"10.1","user":"UB","text":"satu"},
+			{"ts":"10.2","user":"USELF","text":"earlier answer"},
+			{"ts":"11.0","user":"UA","text":""}]}`)
+	}))
+	defer srv.Close()
+	s := catchUpTestChannel()
+	s.api = slackgo.New("xoxb-test", slackgo.OptionAPIURL(srv.URL+"/"))
+
+	got := s.threadHistory("k", "C1", "1.0", "11.0")
+	want := threadHistoryHeader +
+		"\n- Ani (@ani) (1.0): parent ask" +
+		"\n- @budi (10.1): satu" +
+		"\n- you (this bot, earlier session) (10.2): earlier answer"
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+	if gotOldest != "" || gotLatest != "11.0" {
+		t.Fatalf("oldest/latest = %q/%q", gotOldest, gotLatest)
+	}
+}
+
+// The parent survives the caps; the oldest replies are the ones dropped.
+func TestFormatThreadHistoryPinsParent(t *testing.T) {
+	entries := []catchUpEntry{{Name: "Ani", TS: "1.0", Text: "parent"}}
+	for i := 0; i < threadCatchUpMaxMessages+5; i++ {
+		entries = append(entries, catchUpEntry{Name: "Budi", TS: fmt.Sprintf("10.%02d", i), Text: "r"})
+	}
+	got := formatThreadHistory(entries, "1.0")
+	lines := strings.Split(got, "\n")
+	if lines[0] != threadHistoryHeader || lines[1] != "- Ani (1.0): parent" {
+		t.Fatalf("parent not pinned: %q", lines[:2])
+	}
+	if lines[2] != "(+6 pesan lebih lama dipotong)" {
+		t.Fatalf("drop note = %q", lines[2])
+	}
+	if n := len(lines) - 3; n != threadCatchUpMaxMessages-1 {
+		t.Fatalf("kept %d replies", n)
+	}
+	if !strings.HasSuffix(got, fmt.Sprintf("(10.%02d): r", threadCatchUpMaxMessages+4)) {
+		t.Fatalf("newest reply missing: %q", lines[len(lines)-1])
+	}
+}
+
+func TestFormatThreadHistoryEmpty(t *testing.T) {
+	if got := formatThreadHistory(nil, "1.0"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+	if got := formatThreadHistory([]catchUpEntry{{Name: "Ani", TS: "1.0", Text: "only parent"}}, "1.0"); got != threadHistoryHeader+"\n- Ani (1.0): only parent" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A main chat answering a DM thread reply reads the whole thread the first
+// time (the bot post being answered is pinned), then only what came since.
+func TestDMThreadContextFirstFullThenCatchUp(t *testing.T) {
+	var gotOldest []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotOldest = append(gotOldest, r.Form.Get("oldest"))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"has_more":false,"messages":[
+			{"ts":"1.0","user":"USELF","text":"daily report"},
+			{"ts":"10.1","user":"UA","text":"which one"},
+			{"ts":"10.2","user":"USELF","text":"the first"},
+			{"ts":"10.3","user":"UB","text":"added note"}]}`)
+	}))
+	defer srv.Close()
+	s := catchUpTestChannel()
+	s.api = slackgo.New("xoxb-test", slackgo.OptionAPIURL(srv.URL+"/"))
+
+	first := s.dmThreadContext("main", "D1", "1.0", "10.1")
+	want := threadHistoryHeader + "\n- you (this bot, earlier session) (1.0): daily report"
+	if first != want {
+		t.Fatalf("first turn got %q\nwant %q", first, want)
+	}
+	second := s.dmThreadContext("main", "D1", "1.0", "11.0")
+	if second != threadCatchUpHeader+"\n- @budi (10.3): added note" {
+		t.Fatalf("second turn got %q", second)
+	}
+	if len(gotOldest) != 2 || gotOldest[0] != "" || gotOldest[1] != "10.1" {
+		t.Fatalf("oldest per fetch = %q", gotOldest)
+	}
+	// Another DM thread of the same main chat starts fresh.
+	if got := s.dmThreadContext("main", "D1", "2.0", "10.1"); !strings.HasPrefix(got, threadHistoryHeader) {
+		t.Fatalf("other thread should read full history, got %q", got)
+	}
+}

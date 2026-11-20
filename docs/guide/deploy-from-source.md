@@ -140,8 +140,8 @@ How `core` installs the build (Linux / macOS):
 - **App already installed and running**: `<app> reload --binary bin/<app>-linux-<arch> --sudo -y --wait`.
   The new binary is checked (same wick app, arch, newer version), swapped in atomically, takes
   over the listening socket while the old process finishes its in-flight work, and is rolled
-  back if it never starts serving. The daemon needs `WICK_GRACEFUL_UPGRADE=1` (set by the
-  packaged systemd unit); without it the reload is refused and nothing changes. Rerun with
+  back if it never starts serving. Graceful handover is on by default; a daemon started with
+  `WICK_GRACEFUL_UPGRADE=0` (or an older build from before that default) refuses the reload and nothing changes. Rerun with
   `--restart` to stop, swap and start instead (a short downtime).
 - **Not installed yet**: installs the `.deb` from `bin/` (Linux with dpkg) or copies the binary
   to `/usr/local/bin/<app>`. Start it with `<app> start`.

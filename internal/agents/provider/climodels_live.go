@@ -135,6 +135,9 @@ func LiveModelsEnabled(ins Instance) bool {
 	return ins.LiveModels && (ins.Type == TypeOMP || ins.Type == TypeOpencode)
 }
 
+// cliModelsHarvestWait bounds the inline file re-read of a stale list.
+const cliModelsHarvestWait = 3 * time.Second
+
 // CachedCLIModels returns ins's model list.
 //
 // refresh=false (every read): the cached list; when there is none, or the
@@ -155,11 +158,23 @@ func CachedCLIModels(ctx context.Context, ins Instance, refresh bool) (models []
 		if ok && e.authStamp == stamp && (len(e.models) > 0 || e.err != nil) {
 			return e.models, e.at, e.err
 		}
-		// A known list whose account files moved since (omp writes its
-		// own on every turn, a restart reads the file back): serve it at
-		// once and re-read the harvester in the background — the picker
-		// never waits on a list it already has.
+		// A known list whose account files moved since (a login, a new
+		// provider, omp's own writes after a turn): re-read the files now —
+		// local sqlite/json, milliseconds — so an opened picker shows the
+		// current list instead of the one from before the change. Only when
+		// the files say nothing (env-key accounts, a slow disk) does the old
+		// list stay, re-read in the background.
 		if ok && len(e.models) > 0 {
+			hctx, cancel := context.WithTimeout(ctx, cliModelsHarvestWait)
+			hm, src := harvest(hctx, ins)
+			cancel()
+			if len(hm) > 0 {
+				cliModelsMu.Lock()
+				e = cliModelsEntry{models: hm, at: cliModelsNow(), source: src, authStamp: stamp}
+				cliModelsStore(ins, key, e)
+				cliModelsMu.Unlock()
+				return e.models, e.at, nil
+			}
 			HarvestCLIModels(ins)
 			return e.models, e.at, e.err
 		}

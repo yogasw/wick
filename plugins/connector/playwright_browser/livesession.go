@@ -206,7 +206,14 @@ func openSession(c *connector.Ctx) (any, error) {
 	if b != "" && b != defBrowser && !isCloakEngine(b) && !isMoliEngine(b) {
 		return nil, fmt.Errorf("live sessions require a CDP engine (chromium, cloakbrowser, cloakbrowser-pro, or moli); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
 	}
+	launchExtra, err := parseLaunchArgs(c.Input("launch_args"))
+	if err != nil {
+		return nil, err
+	}
 	if isMoliEngine(b) {
+		if len(launchExtra) > 0 {
+			return nil, fmt.Errorf("launch_args is for chromium/cloakbrowser; on moli use get_markdown extra_args or the run cdp action")
+		}
 		return openMoliSession(c, dir)
 	}
 
@@ -287,6 +294,9 @@ func openSession(c *connector.Ctx) (any, error) {
 		joined := strings.Join(exts, ",")
 		args = append(args, "--load-extension="+joined, "--disable-extensions-except="+joined)
 	}
+	// Caller flags go before the proxy so the connector's network setting
+	// is the last word on a flag both name.
+	args = append(args, launchExtra...)
 	if px := strings.TrimSpace(c.Cfg("proxy_server")); px != "" {
 		args = append(args, "--proxy-server="+px)
 	}
@@ -483,7 +493,9 @@ func listSessions(c *connector.Ctx) ([]sessionMeta, error) {
 	return out, nil
 }
 
-// sessionList is the session_list op: every live session plus its open tabs.
+// sessionList is the session_list op: this instance's live sessions plus their
+// open tabs. Sessions of other instances still count toward the shared cap;
+// others_live says how many there are so a full cap is not a mystery.
 func sessionList(c *connector.Ctx) (any, error) {
 	metas, err := listSessions(c)
 	if err != nil {
@@ -491,7 +503,12 @@ func sessionList(c *connector.Ctx) (any, error) {
 	}
 	now := sessionNow(c)
 	sessions := make([]map[string]any, 0, len(metas))
+	others := 0
 	for _, m := range metas {
+		if !ownsSession(c, m.ID) {
+			others++
+			continue
+		}
 		tabs := describeTabs(c, m.ID)
 		row := map[string]any{
 			"session_id": m.ID,
@@ -516,12 +533,20 @@ func sessionList(c *connector.Ctx) (any, error) {
 		sessions = append(sessions, row)
 	}
 	// max_tabs lets the UI disable "new tab" at the cap (0 = unlimited).
-	return map[string]any{"sessions": sessions, "count": len(sessions), "max_tabs": maxTabsPerSession(c)}, nil
+	return map[string]any{"sessions": sessions, "count": len(sessions), "others_live": others, "max_tabs": maxTabsPerSession(c)}, nil
 }
 
 // describeTabs lists a session's open pages (index, url, title). Best-effort:
 // returns nil on any connect error rather than failing the whole list.
 func describeTabs(c *connector.Ctx, id string) []map[string]any {
+	if meta, err := readMeta(sessionDir(c), id); err == nil && isMoliEngine(meta.Browser) {
+		// Moli shares Playwright's utility world across CDP clients, so a
+		// listing that attaches and detaches Playwright tears down the world
+		// a run on the same browser is using ("Execution context was
+		// destroyed"). Read the tabs over plain HTTP instead.
+		touchSession(c, id)
+		return tabsOverHTTP(meta.CDPURL)
+	}
 	lc, err := connectSession(c, id)
 	if err != nil {
 		return nil
@@ -741,6 +766,33 @@ func readDevToolsPort(udd string, wait time.Duration) (string, bool) {
 
 // cdpAlive reports whether a CDP endpoint answers /json/version — the liveness
 // probe used to sweep dead sessions.
+// tabsOverHTTP lists a browser's pages from its /json/list endpoint, without
+// attaching a CDP client. Nil on any error, like describeTabs.
+func tabsOverHTTP(cdpURL string) []map[string]any {
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(cdpURL + "/json/list")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var targets []struct {
+		Type  string `json:"type"`
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil
+	}
+	tabs := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		if t.Type != "page" {
+			continue
+		}
+		tabs = append(tabs, map[string]any{"index": len(tabs), "url": t.URL, "title": t.Title})
+	}
+	return tabs
+}
+
 func cdpAlive(cdpURL string) bool {
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(cdpURL + "/json/version")

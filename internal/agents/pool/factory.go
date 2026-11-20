@@ -640,7 +640,15 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		}(),
 		ExtraArgs:  extraArgs,
 		SkipSkills: skipSkills,
-		ExtraEnv:   resolvedIns.Env,
+		// The gate hook finds the per-message role limits (By role) of this
+		// session by its id; a session without a role file has no limit.
+		ExtraEnv: func() []string {
+			env := append([]string(nil), resolvedIns.Env...)
+			if opt.SessionID != "" {
+				env = append(env, gate.SessionEnv+"="+opt.SessionID)
+			}
+			return env
+		}(),
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the

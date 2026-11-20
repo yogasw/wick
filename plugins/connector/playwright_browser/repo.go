@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/playwright-community/playwright-go"
 	"github.com/yogasw/wick/pkg/connector"
@@ -282,7 +283,6 @@ func boolInput(c *connector.Ctx, key string) bool {
 	return false
 }
 
-
 // newPage opens a page in the session context, enforcing the tab cap and
 // wiring the configured action + navigation timeouts.
 func (s *session) newPage() (playwright.Page, error) {
@@ -516,12 +516,23 @@ func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, action
 	page.SetDefaultTimeout(actionTimeout(c))
 	page.SetDefaultNavigationTimeout(navTimeout(c))
 
-	// A viewport set earlier in this session is an emulation tied to the CDP
-	// connection, so it lapses when the previous run disconnected. Re-apply it
-	// before the actions so coordinates stay where the agent measured them.
-	if v, ok := sessionViewport.Load(strings.TrimSpace(c.Input("session_id"))); ok {
-		wh := v.([2]int)
-		_ = page.SetViewportSize(wh[0], wh[1])
+	// Keep the window at one size: the size a set_viewport chose earlier in this
+	// session, else the connector's configured size (1280x800 by default). It is
+	// the real window, not an emulation, so it also holds while no run is going
+	// and the live view never swings between two shapes. A device profile brings
+	// its own size and is left alone. If the browser refuses a window resize, an
+	// explicit set_viewport falls back to the emulation, which lapses between
+	// runs, so it is re-applied here to keep the agent's coordinates.
+	if strings.TrimSpace(c.Cfg("device")) == "" {
+		w, h := windowSize(c)
+		v, chosen := sessionViewport.Load(strings.TrimSpace(c.Input("session_id")))
+		if chosen {
+			wh := v.([2]int)
+			w, h = wh[0], wh[1]
+		}
+		if err := setWindowSize(ctx, page, w, h); err != nil && chosen {
+			_ = page.SetViewportSize(w, h)
+		}
 	}
 
 	var cap *capture
@@ -557,6 +568,7 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 	}
 	refreshCursor(page, env)
 	for i, a := range actions {
+		trackStep(env.key, i, a.Action, results)
 		env.run.observeTrigger(page, a, i == 0)
 		out, err := execAction(page, a, env)
 		if err == nil && triggerActions[a.Action] && !strings.HasPrefix(a.Action, "mouse_") {
@@ -573,10 +585,43 @@ func runActionLoop(page playwright.Page, actions []action, env mouseEnv) map[str
 	return map[string]any{"steps": results, "completed": true}
 }
 
+// runProgress is the step a live run is on, per session, so a run that hits
+// the op deadline can still say where it stopped and what had finished.
+var runProgress sync.Map // session id → string
+
+func trackStep(sid string, i int, act string, done []stepResult) {
+	if sid == "" {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "stuck at step %d (%s) since %s", i, act, time.Now().Format("15:04:05"))
+	if len(done) > 0 {
+		b.WriteString(", done before it:")
+		for _, r := range done {
+			fmt.Fprintf(&b, " %d %s", r.Step, r.Action)
+			if m, ok := r.Output.(map[string]any); ok && m["fallback"] != nil {
+				fmt.Fprintf(&b, "(%v)", m["fallback"])
+			}
+			b.WriteString(",")
+		}
+	}
+	runProgress.Store(sid, strings.TrimSuffix(b.String(), ","))
+}
+
 // execAction runs one action against the live page and returns its output.
 func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 	switch a.Action {
 	case "goto":
+		if env.moli {
+			// No load event from moli: go as far as commit, then read the
+			// document state (a slow page is not an error, wait_for_text
+			// covers the content).
+			if _, err := page.Goto(a.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateCommit}); err != nil {
+				return nil, fmt.Errorf("navigate to %s: %w", a.URL, err)
+			}
+			_, _ = page.WaitForFunction(`document.readyState === "complete"`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(15000)})
+			return nil, nil
+		}
 		if _, err := page.Goto(a.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateLoad}); err != nil {
 			return nil, fmt.Errorf("navigate to %s: %w", a.URL, err)
 		}
@@ -609,8 +654,17 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		}
 		return shotResult(raw, o.format(), a.SaveDir)
 	case "set_viewport":
-		if err := page.SetViewportSize(a.Width, a.Height); err != nil {
-			return nil, err
+		// A live session resizes the real window so the size holds between
+		// runs; a throwaway browser (or a browser that refuses the resize)
+		// uses the emulation, which lasts as long as this one connection.
+		resized := false
+		if env.key != "" {
+			resized = setWindowSize(page.Context(), page, a.Width, a.Height) == nil
+		}
+		if !resized {
+			if err := page.SetViewportSize(a.Width, a.Height); err != nil {
+				return nil, err
+			}
 		}
 		if env.key != "" {
 			sessionViewport.Store(env.key, [2]int{a.Width, a.Height})
@@ -621,7 +675,7 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 			}
 			refreshCursor(page, env)
 		}
-		return map[string]any{"width": a.Width, "height": a.Height}, nil
+		return map[string]any{"width": a.Width, "height": a.Height, "window": resized}, nil
 	case "content":
 		if a.Selector != "" {
 			el, err := page.WaitForSelector(a.Selector)
@@ -661,6 +715,15 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		return nil, err
 	case "wait_for_load_state":
 		st := loadState(a.State)
+		if env.moli && (st == nil || *st != *playwright.LoadStateNetworkidle) {
+			// No lifecycle events from moli: read the document state instead.
+			want := `document.readyState === "complete"`
+			if st != nil && *st == *playwright.LoadStateDomcontentloaded {
+				want = `document.readyState !== "loading"`
+			}
+			_, err := page.WaitForFunction(want, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(15000)})
+			return nil, err
+		}
 		if st == nil {
 			return nil, page.WaitForLoadState()
 		}
@@ -682,6 +745,12 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		}
 		return nil, page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: st})
 	case "wait_for_url":
+		if env.moli {
+			// Moli sends no navigation lifecycle, so Playwright's wait never
+			// resolves, not even for a page that is already there. Poll the
+			// address instead, then wait_for_text for the content.
+			return nil, pollURL(page, a.URL, waitTimeout(a.TimeoutMS))
+		}
 		return nil, page.WaitForURL(a.URL)
 
 	// ── interaction ─────────────────────────────────────────────────
@@ -742,6 +811,8 @@ func execAction(page playwright.Page, a action, env mouseEnv) (any, error) {
 		return out, err
 	case "frame_click":
 		return frameClick(page, env, a)
+	case "cdp":
+		return runCDP(page, a)
 
 	// ── read / extract ──────────────────────────────────────────────
 	case "get_attribute":

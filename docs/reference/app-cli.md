@@ -207,8 +207,8 @@ replaced. If the unit says `ExecStart=/usr/local/bin/myapp all`, that file is th
 hold the new bytes; anywhere else gives a reload that reports success and brings the old version
 back. `--binary` resolves that path from the running process instead of assuming it.
 
-Requires the daemon to run with `WICK_GRACEFUL_UPGRADE=1`; without it the signal is logged and
-ignored, and you should use `restart`. Supported on Linux, macOS and BSD, as a plain daemon or
+Graceful handover is on by default; a daemon started with `WICK_GRACEFUL_UPGRADE=0` (or `false`)
+logs and ignores the signal, and you should use `restart` there. Supported on Linux, macOS and BSD, as a plain daemon or
 under a service manager. On **Windows** — and when wick runs inside the tray's in-process
 supervisor — a socket cannot be handed to another process, so `reload` reports that and you fall
 back to `restart`.

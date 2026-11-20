@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/pkg/connector"
@@ -16,6 +17,11 @@ import (
 // process never collide, without needing a rand seed. The instance id is folded
 // in so sessions from different connector rows never clash in a shared dir.
 func newSessionID(c *connector.Ctx) string {
+	return fmt.Sprintf("%s-%d-%d", instanceTag(c), os.Getpid(), time.Now().UnixNano())
+}
+
+// instanceTag is the id prefix newSessionID stamps on this instance's sessions.
+func instanceTag(c *connector.Ctx) string {
 	inst := c.InstanceID()
 	if len(inst) > 6 {
 		inst = inst[:6]
@@ -23,7 +29,14 @@ func newSessionID(c *connector.Ctx) string {
 	if inst == "" {
 		inst = "pw"
 	}
-	return fmt.Sprintf("%s-%d-%d", inst, os.Getpid(), time.Now().UnixNano())
+	return inst
+}
+
+// ownsSession reports whether a session id was opened by this instance. All
+// instances share one session dir (and its cap), so session_list filters on it
+// to keep one instance's panel from showing another engine's browsers.
+func ownsSession(c *connector.Ctx, id string) bool {
+	return strings.HasPrefix(id, instanceTag(c)+"-")
 }
 
 // sessionNow is the timestamp stamped into a session's metadata. Wrapped so the

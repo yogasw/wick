@@ -52,7 +52,10 @@ var defaultDeny = []string{
 // Scrub returns a copy of env with denied keys removed. Entries that are
 // not "KEY=VALUE" are passed through untouched — that shape is what
 // os/exec expects, and reshaping it is not this function's job.
+// Termux glibc loader overrides are always removed (see termux.go): they
+// are not credentials, so the deny-list escape hatch does not keep them.
 func Scrub(env []string) []string {
+	env = dropTermuxGlibcLoader(env)
 	rules := loadRules()
 	if len(rules) == 0 {
 		return env

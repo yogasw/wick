@@ -35,6 +35,8 @@ type fakeMCP struct {
 	status     int  // non-zero → reply with this HTTP status
 	tools      []map[string]any
 	callResult map[string]any // result payload for tools/call
+	pageSize   int            // non-zero → paginate tools/list with nextCursor
+	loopCursor bool           // always hand back the same cursor
 }
 
 func (f *fakeMCP) handler() http.HandlerFunc {
@@ -61,7 +63,7 @@ func (f *fakeMCP) handler() http.HandlerFunc {
 			w.Header().Set("Mcp-Session-Id", "sess-123")
 			result = map[string]any{"protocolVersion": "2025-03-26"}
 		case "tools/list":
-			result = map[string]any{"tools": f.tools}
+			result = f.toolsPage(req.Params)
 		case "tools/call":
 			result = f.callResult
 		}
@@ -74,6 +76,43 @@ func (f *fakeMCP) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(resp)
 	}
+}
+
+func (f *fakeMCP) toolsPage(params json.RawMessage) map[string]any {
+	if f.pageSize == 0 {
+		return map[string]any{"tools": f.tools}
+	}
+	var p struct {
+		Cursor string `json:"cursor"`
+	}
+	_ = json.Unmarshal(params, &p)
+	off := 0
+	if p.Cursor != "" {
+		fmt.Sscanf(p.Cursor, "off-%d", &off)
+	}
+	end := off + f.pageSize
+	if end > len(f.tools) {
+		end = len(f.tools)
+	}
+	out := map[string]any{"tools": f.tools[off:end]}
+	if f.loopCursor {
+		out["nextCursor"] = "off-0"
+	} else if end < len(f.tools) {
+		out["nextCursor"] = fmt.Sprintf("off-%d", end)
+	}
+	return out
+}
+
+func (f *fakeMCP) count(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.method == method {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeMCP) callFor(method string) *rpcCall {
@@ -135,6 +174,40 @@ func TestProbePlainJSON(t *testing.T) {
 	}
 	if got := tl.header.Get("Mcp-Session-Id"); got != "sess-123" {
 		t.Errorf("Mcp-Session-Id = %q, want sess-123", got)
+	}
+}
+
+func TestProbeFollowsNextCursor(t *testing.T) {
+	f := &fakeMCP{pageSize: 15}
+	for i := 0; i < 95; i++ {
+		f.tools = append(f.tools, map[string]any{"name": fmt.Sprintf("tool_%02d", i)})
+	}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+
+	res := newMCPClient(srv, nil, nil).Probe(context.Background(), serverConfig{URL: srv.URL, AuthScheme: "none"}, nil)
+	if !res.OK {
+		t.Fatalf("Probe failed: %s", res.Error)
+	}
+	if len(res.Tools) != 95 || res.Tools[94].Name != "tool_94" {
+		t.Fatalf("got %d tools, want 95", len(res.Tools))
+	}
+	if n := f.count("tools/list"); n != 7 {
+		t.Errorf("tools/list calls = %d, want 7", n)
+	}
+}
+
+func TestProbeStopsOnRepeatedCursor(t *testing.T) {
+	f := &fakeMCP{pageSize: 2, loopCursor: true, tools: []map[string]any{{"name": "a"}, {"name": "b"}, {"name": "c"}}}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+
+	res := newMCPClient(srv, nil, nil).Probe(context.Background(), serverConfig{URL: srv.URL, AuthScheme: "none"}, nil)
+	if !res.OK {
+		t.Fatalf("Probe failed: %s", res.Error)
+	}
+	if n := f.count("tools/list"); n > 3 {
+		t.Errorf("tools/list calls = %d, cursor loop not stopped", n)
 	}
 }
 

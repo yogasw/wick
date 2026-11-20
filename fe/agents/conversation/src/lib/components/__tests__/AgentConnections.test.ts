@@ -35,6 +35,7 @@ vi.mock("../../slackInstant.js", async (orig) => ({
   ...(await orig<typeof import("../../slackInstant.js")>()),
   getAgentSlackInstant: () => Promise.resolve(instantNow),
   listSlackInstantApps: () => Promise.resolve({ apps: [] }),
+  disableAgentSlackInstant: () => Promise.resolve({ status: "ok" }),
 }));
 
 let accessFields: { key: string; value: string; type: string; group: string }[] = [];
@@ -102,6 +103,9 @@ describe("AgentConnections Slack mode", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Custom app" }));
     expect(screen.getByTestId("custom-exclusive").textContent).toContain("Turn off Instant");
     expect(screen.queryByTestId("slack-wizard")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Turn off Instant" }));
+    expect(await screen.findByTestId("slack-wizard")).toBeTruthy();
+    expect(screen.queryByTestId("custom-exclusive")).toBeNull();
     instantNow = { enabled: false, bound_channels: [] };
   });
 

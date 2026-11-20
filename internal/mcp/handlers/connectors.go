@@ -93,7 +93,9 @@ type toolDetail struct {
 	Destructive bool   `json:"destructive"`
 	Category    string `json:"category,omitempty"`
 	// Unavailable is set for an op the instance's config switched off: it
-	// is listed so the agent knows it exists, but has no tool_id to call.
+	// is listed so the agent knows it exists. In list mode it has no
+	// tool_id; asked for by its op key it carries its tool_id and schema, so
+	// an access request (with a config override when allowed) can name it.
 	Unavailable string `json:"unavailable,omitempty"`
 	// InputSchema is a pointer so it can be omitted in list mode
 	// (wick_get without a category). It is populated only when the caller
@@ -101,6 +103,11 @@ type toolDetail struct {
 	InputSchema *JSONSchema `json:"input_schema,omitempty"`
 	// TS is the op as a wick_run_code line (op schema level only).
 	TS string `json:"ts,omitempty"`
+	// Signature is the compact param list ("op(id: string, live?: boolean)")
+	// on frequent entries, enough to call wick_execute without a schema.
+	Signature string `json:"signature,omitempty"`
+	// Note is the curated one-line pitfall/usage note of this op.
+	Note string `json:"note,omitempty"`
 }
 
 // categoryDetail is one group entry in the wick_get list-mode response.
@@ -111,6 +118,10 @@ type categoryDetail struct {
 	// UnavailableTools counts the category's ops the instance's config
 	// switched off — listed with a reason when the category is opened.
 	UnavailableTools int `json:"unavailable_tools,omitempty"`
+	// Summary is what the group can do, from its op names
+	// ("list · get · logs · deploy · delete⚠"), so an op that is never used
+	// is still known to exist without opening the group.
+	Summary string `json:"summary,omitempty"`
 }
 
 type connectorDetail struct {
@@ -122,6 +133,9 @@ type connectorDetail struct {
 	// category argument (list mode). The caller picks one and re-calls
 	// wick_get with category=<title> to get the op schemas.
 	Categories []categoryDetail `json:"categories,omitempty"`
+	// Frequent lists the ops used most (or pinned) on this instance, with
+	// a call signature: call wick_execute on them directly.
+	Frequent []toolDetail `json:"frequent,omitempty"`
 	// Tools carries the per-op schemas. In list mode (no category arg) it
 	// holds lightweight entries WITHOUT input_schema; in scoped mode (a
 	// category was supplied) it holds the full schemas for that category.
@@ -284,6 +298,8 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	hiddenCount := 0
 	groups := make([]searchGroup, 0)
 	total := 0
+	// Curated keywords and notes widen the match ("revert" finds rollback).
+	prefs := svc.OpPrefs(r.Context(), "")
 	for _, row := range rows {
 		if row.Key == wickManagerKey {
 			continue // surfaced as top-level wick_manager_* tools, not via meta-tools
@@ -307,6 +323,9 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 				continue
 			}
 			hay := strings.ToLower(row.Label + " " + op.Name + " " + op.Description)
+			if p, ok := prefs[row.ID+"/"+op.Key]; ok {
+				hay += " " + strings.ToLower(p.Keywords+" "+p.Note)
+			}
 			if !strings.Contains(hay, needle) {
 				continue
 			}
@@ -374,7 +393,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	selector := firstNonEmpty(args, "selector", "category", "op_key")
 	// Session-workspace instance: resolve from the session file and render
 	// the base module's category list / op list / op schema, no DB row involved.
-	if target, ok, err := SessionInstanceForID(layout, CallSession(r, args), connectorID); err != nil {
+	if target, ok, err := SessionInstanceForCaller(r.Context(), layout, CallSession(r, args), connectorID); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
 	} else if ok {
@@ -426,7 +445,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		}
 		return FormatToolID(row.ID, opKey)
 	}
-	off := svc.ConfigOffOps(r.Context(), row.ID, row.Key)
+	off := svc.ConfigOffOps(r.Context(), row.ID, row.Key, SessionOf(r))
 	detail, err := buildConnectorDetail(mod, row.ID, row.Label, row.Description, selector, toolIDFor,
 		func(opKey string) bool { return states[opKey] },
 		func(opKey string) string { return off[opKey] })
@@ -434,6 +453,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
 	}
+	decorateDetail(r.Context(), svc, mod, row.ID, selector, &detail, toolIDFor, func(opKey string) bool { return states[opKey] })
 	rsp.ToolJSON(w, req.ID, detail)
 }
 
@@ -472,7 +492,16 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 			}
 			if !enabled(op.Key) {
 				if reason := offReason(op.Key); reason != "" {
-					detail.Tools = append(detail.Tools, unavailableTool(mod, op, reason))
+					// Keep the id and schema: an op that is off only by
+					// config can still be asked for (an access request,
+					// possibly with a config override), and that needs the
+					// exact params.
+					t := unavailableTool(mod, op, reason)
+					schema := ConfigsToJSONSchema(op.Input)
+					t.ToolID = toolIDFor(op.Key)
+					t.InputSchema = &schema
+					t.TS = TSCall(t.ToolID, op.Input)
+					detail.Tools = append(detail.Tools, t)
 					return detail, nil
 				}
 				return connectorDetail{}, fmt.Errorf("operation %q is disabled on this connector", selector)
@@ -524,8 +553,9 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 	}
 
 	// CATEGORY LIST (selector == ""). Flat connectors (no named categories)
-	// have nothing to group by, so fall through to listing every enabled op.
-	if !hasNamedCategories(mod) {
+	// have nothing to group by, and a small one is cheaper listed whole in
+	// one call than drilled into, so both list every enabled op.
+	if !hasNamedCategories(mod) || enabledCount(mod, enabled) <= FlatOpThreshold {
 		for _, op := range mod.AllOps() {
 			if !enabled(op.Key) {
 				if reason := offReason(op.Key); reason != "" {
@@ -538,6 +568,7 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 				Name:        op.Name,
 				Description: opDescription(op),
 				Destructive: op.Destructive,
+				Category:    mod.CategoryOf(op.Key),
 			})
 		}
 		return detail, nil
@@ -558,6 +589,7 @@ func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selecto
 				Description:      cat.Description,
 				TotalTools:       count,
 				UnavailableTools: off,
+				Summary:          capabilitySummary(cat, enabled),
 			})
 		}
 	}
@@ -779,9 +811,15 @@ func executeOneFrom(ctx context.Context, r *http.Request, svc *connectors.Servic
 	// Session-workspace instance: run against the ephemeral instance's own
 	// config (no DB row, no tag visibility — the session itself is the
 	// authorization scope).
-	sessionTarget, isSession, err := SessionInstanceForID(layout, sessionID, connectorID)
+	sessionTarget, isSession, err := SessionInstanceForCaller(ctx, layout, sessionID, connectorID)
 	if err != nil {
 		return "", err
+	}
+	// A session the caller may not use is not stamped on the run: it would
+	// pick that session owner's connected account and file the run under
+	// somebody else's conversation.
+	if !SessionTrusted(ctx, sessionID) {
+		sessionID = ""
 	}
 	if !isSession {
 		allowed, verr := svc.IsVisibleTo(ctx, connectorID, callerIDFromCtx(ctx), tagIDs, user.IsAdmin())
@@ -789,12 +827,17 @@ func executeOneFrom(ctx context.Context, r *http.Request, svc *connectors.Servic
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
+	override, rawParams, err := connectors.OverrideFromParams(rawParams)
+	if err != nil {
+		return "", err
+	}
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
 		OperationKey:    opKey,
 		Input:           input,
 		RawInput:        rawParams,
+		ConfigOverride:  override,
 		Source:          source,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),
@@ -806,6 +849,10 @@ func executeOneFrom(ctx context.Context, r *http.Request, svc *connectors.Servic
 		SessionID:       sessionID,
 	})
 	if execErr != nil {
+		var ierr *connectors.InputError
+		if errors.As(execErr, &ierr) {
+			return "", errors.New(inputErrorBody(toolID, ierr))
+		}
 		body := execErr.Error()
 		// Prefer the masked, agent-readable ErrorMessage (e.g. the explicit
 		// "cancelled by the user — don't retry" text) over the raw error, and the
@@ -848,11 +895,16 @@ func ExecuteAs(ctx context.Context, svc *connectors.Service, layout agentconfig.
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
+	override, rawParams, err := connectors.OverrideFromParams(rawParams)
+	if err != nil {
+		return "", err
+	}
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
 		OperationKey:    opKey,
 		Input:           StringifyArgs(rawParams),
 		RawInput:        rawParams,
+		ConfigOverride:  override,
 		Source:          source,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),
@@ -1182,4 +1234,24 @@ func ClientIP(r *http.Request) string {
 		return strings.TrimSpace(xff)
 	}
 	return r.RemoteAddr
+}
+
+// inputErrorBody renders an InputError as the JSON an agent reads: what is
+// wrong, the op's full input_schema and a call template, so one retry can
+// fix it without a separate wick_get.
+func inputErrorBody(toolID string, e *connectors.InputError) string {
+	schema := ConfigsToJSONSchema(e.Inputs)
+	out := map[string]any{
+		"error":        e.Error(),
+		"problems":     e.Problems,
+		"tool_id":      toolID,
+		"input_schema": schema,
+		"ts":           TSCall(toolID, e.Inputs),
+		"hint":         "Nothing ran. Fix the params against input_schema and call wick_execute again once.",
+	}
+	if len(e.Unknown) > 0 {
+		out["unknown_params"] = e.Unknown
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
 }

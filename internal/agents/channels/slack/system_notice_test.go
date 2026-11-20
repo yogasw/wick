@@ -50,22 +50,40 @@ func (f *fakeSlack) posts() []url.Values {
 	return append([]url.Values(nil), f.post...)
 }
 
-// The whole point of the fix: /compact asked for from a thread used to finish
-// in silence, because a compaction is a session-level event and the channel
-// only ever posted reply text.
-func TestCompactionPostsNoticeIntoThread(t *testing.T) {
+// A compaction boundary is context-window bookkeeping. It shows in the web
+// UI only; posted into a thread it reads as a stray system line above the
+// agent's answer, so even a thread the session is bound to gets nothing.
+func TestCompactionPostsNothingIntoThread(t *testing.T) {
 	f := newFakeSlack(t)
 	c := &Channel{
 		api:   f.client(),
 		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
 	}
 
-	c.OnAgentEvent("slack-t1", event.AgentEvent{
-		Type: event.Compaction,
-		Compaction: &event.CompactionInfo{
-			Trigger: "manual", PreTokens: 342500, PostTokens: 12500,
-		},
-	})
+	for _, trigger := range []string{"auto", "manual"} {
+		c.OnAgentEvent("slack-t1", event.AgentEvent{
+			Type: event.Compaction,
+			Compaction: &event.CompactionInfo{
+				Trigger: trigger, PreTokens: 342500, PostTokens: 12500,
+			},
+		})
+	}
+
+	if n := len(f.posts()); n != 0 {
+		t.Fatalf("a compaction must not post into the thread, got %d message(s)", n)
+	}
+}
+
+// wick's own notice still reaches the thread, as a muted context block with
+// Slack control characters escaped.
+func TestNoticePostsIntoThread(t *testing.T) {
+	f := newFakeSlack(t)
+	c := &Channel{
+		api:   f.client(),
+		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
+	}
+
+	c.OnAgentEvent("slack-t1", event.AgentEvent{Type: event.Notice, Text: "teammate replied <!channel>"})
 
 	posts := f.posts()
 	if len(posts) != 1 {
@@ -74,10 +92,6 @@ func TestCompactionPostsNoticeIntoThread(t *testing.T) {
 	if got := posts[0].Get("thread_ts"); got != "1700000000.000100" {
 		t.Errorf("notice posted to thread_ts %q, want the session's thread", got)
 	}
-	if got := posts[0].Get("channel"); got != "C1" {
-		t.Errorf("notice posted to channel %q, want C1", got)
-	}
-	// Posted as a muted context block, not as the agent's own words.
 	var blocks []map[string]any
 	if err := json.Unmarshal([]byte(posts[0].Get("blocks")), &blocks); err != nil {
 		t.Fatalf("blocks not valid JSON: %v (%q)", err, posts[0].Get("blocks"))
@@ -86,8 +100,8 @@ func TestCompactionPostsNoticeIntoThread(t *testing.T) {
 		t.Fatalf("want a single context block, got %v", blocks)
 	}
 	body := posts[0].Get("blocks")
-	if want := "Context compacted (manual) — 342.5k → 12.5k tokens"; !strings.Contains(body, want) {
-		t.Errorf("notice text missing %q in %q", want, body)
+	if strings.Contains(body, "<!channel>") || !strings.Contains(body, "teammate replied") {
+		t.Errorf("notice text not escaped or missing: %q", body)
 	}
 }
 

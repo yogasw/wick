@@ -123,12 +123,12 @@ func MetaToolDescriptors() []ToolDescriptor {
 		{
 			Name: "wick_get",
 			Description: "Drill into a connector's operations, one level at a time, so you never load more than you need into context. Three levels via the `selector` argument:\n" +
-				"(1) id ONLY → lists the connector's CATEGORIES (title, description, op count). No ops, no schemas.\n" +
+				"(1) id ONLY → lists the connector's CATEGORIES (title, description, op count, summary of what each can do) plus FREQUENT: its most used / pinned ops with tool_id, call signature and note — call those with wick_execute directly. No schemas.\n" +
 				"(2) id + selector=<category title> → lists the OPERATIONS in that category (tool_id, name, description). Still no input_schema.\n" +
 				"(3) id + selector=<op key> → returns that ONE operation with its input_schema. This is the only level that carries a schema.\n" +
 				"Flow: call with id only to see categories, again with a category to see its ops, then with the op key to get the schema. " +
-				"(An ungrouped connector has no categories, so level 1 lists its ops directly — go straight to level 3 with an op key.) " +
-				"ALWAYS fetch the op schema (level 3) before wick_execute — never guess params. " +
+				"(A small or ungrouped connector lists every op at level 1 — go straight to level 3 with an op key.) " +
+				"Fetch the op schema (level 3) before wick_execute unless you already have the op's signature; never invent params. " +
 				"For a session-workspace connector (id starts with sw_), also pass " +
 				"session_id as a SEPARATE argument — never append it to id.",
 			InputSchema: map[string]any{
@@ -157,8 +157,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 		{
 			Name: "wick_execute",
 			Description: "Execute one tool, or a BATCH of tools in a single call. " +
-				"PREREQUISITE: call wick_get first to get each tool's input_schema — " +
-				"never guess params. params must match the input_schema exactly. " +
+				"PREREQUISITE: know the op's params — from a signature you were given (wick_get \"frequent\", " +
+				"the Frequent ops block of your prompt) or its input_schema (wick_get with the op key); never invent them. " +
+				"Params that do not fit the op are refused BEFORE anything runs, and the error carries the full " +
+				"input_schema: fix and retry once. Destructive ops: fetch the schema first. " +
 				"On success returns the response as JSON; " +
 				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.\n\n" +
 				"BATCH MODE: pass \"calls\": [{tool_id, params, session_id?}, …] instead of a single " +
@@ -738,6 +740,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		SlackListenDescriptor(),
 		SessionLinkDescriptor(),
+		SessionModelDescriptor(),
+		RolesDescriptors()[0],
+		RolesDescriptors()[1],
+		AccessRequestDescriptor(),
 		{
 			Name: "wick_set_title",
 			Description: "Set the session's title (the label shown in the sidebar). " +

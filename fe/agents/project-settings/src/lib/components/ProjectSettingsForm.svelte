@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { DeleteProjectDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
+  import { DeleteProjectDialog, ProjectAccessRequests, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
@@ -328,11 +328,12 @@
       widgetSummary,
     ),
   );
+  const showAccess = $derived(hit("access requests approvals approve deny audit history rules auto approve grants simulate"));
   const showPinned = $derived(hit("pinned sessions pin chats"));
   const showAdvanced = $derived(hit("advanced raw project meta json folder change semantics danger zone delete remove project"));
 
   const matchCount = $derived(
-    [showProject, showFolder, showDefaults, showTicket, showWidget, showPinned, showAdvanced].filter(
+    [showProject, showFolder, showDefaults, showTicket, showWidget, showAccess, showPinned, showAdvanced].filter(
       Boolean,
     ).length,
   );
@@ -593,6 +594,17 @@
           />
         </SettingsSection>
       </div>
+      {/if}
+
+      {#if showAccess}
+      <SettingsSection
+        title="Access requests"
+        subtitle="What this project's agents asked to run, who decided, and the rules"
+        collapsible
+        forceOpen={searching}
+      >
+        <ProjectAccessRequests {base} projectId={projectID} />
+      </SettingsSection>
       {/if}
 
       {#if showPinned}

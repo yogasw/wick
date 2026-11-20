@@ -30,6 +30,8 @@ type fakeWick struct {
 	// wick); timeouts records each call's timeout_ms.
 	hang     map[string]bool
 	timeouts sync.Map
+	// caches records each call's cache option as sent.
+	caches sync.Map
 	// callTimeoutMS is the call_timeout_ms wick sends (0 = none, an older
 	// wick).
 	callTimeoutMS int64
@@ -87,6 +89,7 @@ func (f *fakeWick) run(lang, code string, input any, timeout time.Duration) (eve
 				res = f.file(ev.Op, ev.Path, ev.Data)
 			} else {
 				f.timeouts.Store(ev.ToolID, ev.TimeoutMS)
+				f.caches.Store(ev.ToolID, string(ev.Cache))
 				if f.hang[ev.ToolID] {
 					continue
 				}
@@ -278,5 +281,34 @@ func TestManyRunsAtOnce(t *testing.T) {
 	// 50 runs each waiting 50 ms on "I/O" finish together, not one by one.
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("50 concurrent runs took %v", d)
+	}
+}
+
+// Nested arrays in a call result, callMany result and input must be real JS
+// arrays: a wrapped Go slice ignored push() and kept its old length.
+func TestNestedArraysAreMutable(t *testing.T) {
+	f := newFake(t, 0)
+	f.answer = func(string, map[string]any) callResult {
+		return callResult{OK: true, Result: json.RawMessage(`{"sections":[{"ops":[{"key":"a","inputs":[{"key":"id"}]}]}]}`)}
+	}
+	ev, _ := f.run("js", `
+		const tool = "conn:00000000-0000-0000-0000-000000000001/get_def";
+		const d = await wick.call(tool, {});
+		d.sections[0].ops[0].inputs.push({ key: "extra" });
+		const many = await wick.callMany([{ toolId: tool, params: {} }]);
+		many[0].result.sections[0].ops.push({ key: "b" });
+		input.list.push(3);
+		return {
+			call: d.sections[0].ops[0].inputs.map(i => i.key),
+			many: many[0].result.sections[0].ops.length,
+			input: input.list,
+			isArray: Array.isArray(d.sections),
+		};
+	`, map[string]any{"list": []int{1, 2}}, 5*time.Second)
+	if !ev.OK {
+		t.Fatalf("run failed: %s", ev.Error)
+	}
+	if string(ev.Result) != `{"call":["id","extra"],"input":[1,2,3],"isArray":true,"many":2}` {
+		t.Fatalf("result = %s", ev.Result)
 	}
 }

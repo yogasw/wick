@@ -31,6 +31,19 @@
   let status = $state<LoginTTYStatus | null>(null);
   let usage = $state<UsageResult | null>(null);
   let loading = $state(true);
+  /* Seconds the account check has been running. Reading it starts the CLI
+     (omp is a full bun process — several seconds on a phone), and a bare
+     "Checking…" that sits there reads as a hang. */
+  let checkingSecs = $state(0);
+  let checkingNow = $derived(loading || status?.account.unknown === true);
+  $effect(() => {
+    if (!checkingNow) {
+      checkingSecs = 0;
+      return;
+    }
+    const t = setInterval(() => { checkingSecs += 1; }, 1000);
+    return () => clearInterval(t);
+  });
   let starting = $state(false);
   let session = $state<LoginTTYSession | null>(null);
   let showTerminal = $state(false);
@@ -340,10 +353,10 @@
     <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {expanded ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
     <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Connection</h3>
     {#if loading}
-      <span class="text-xs text-black-700 dark:text-black-600">Checking…</span>
+      <span data-testid="panel-loading" class="inline-flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600"><svg class="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25" /><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" /></svg>Checking…{checkingSecs > 0 ? ` ${checkingSecs}s` : ""}</span>
     {:else if status}
       {#if status.account.unknown}
-        <span data-testid="panel-checking" class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-semibold text-black-700 dark:text-black-500">Checking login…</span>
+        <span data-testid="panel-checking" class="inline-flex items-center gap-1.5 rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-semibold text-black-700 dark:text-black-500"><svg class="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25" /><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" /></svg>Checking login…{checkingSecs > 0 ? ` ${checkingSecs}s` : ""}</span>
       {:else if connected}
         <span class="rounded bg-pos-100 dark:bg-pos-400/20 px-2 py-0.5 text-xs font-semibold text-pos-400">Connected</span>
         {#if status.account.email}
@@ -370,7 +383,10 @@
   {#if expanded}
   <div class="p-5 space-y-4">
     {#if loading}
-      <p class="text-xs text-black-700 dark:text-black-600">Checking credentials…</p>
+      <p class="inline-flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600"><svg class="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25" /><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" /></svg>Checking credentials…{checkingSecs > 0 ? ` ${checkingSecs}s` : ""}</p>
+      {#if checkingSecs >= 8}
+        <p class="text-[11px] text-black-600 dark:text-black-500">Reading the accounts starts the CLI once; on a slow host that takes a while.</p>
+      {/if}
     {:else if !status}
       <p class="text-xs text-black-700 dark:text-black-600">Connection status unavailable.</p>
     {:else}

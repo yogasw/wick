@@ -85,6 +85,10 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if ms != "" {
 					ev["timeout_ms"] = json.Number(ms)
 				}
+			} else if rest, ok := strings.CutPrefix(line, "CCALL "); ok {
+				// CCALL <tool_id> <cache option JSON>
+				tid, opt, _ := strings.Cut(rest, " ")
+				ev["tool_id"], ev["params"], ev["cache"] = tid, map[string]any{"n": 1}, json.RawMessage(opt)
 			} else if rest, ok := strings.CutPrefix(line, "wick.file "); ok {
 				// wick.file <op> <path> [data]
 				parts := strings.SplitN(rest+"  ", " ", 3)
@@ -116,7 +120,7 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out, _ := json.Marshal(strings.Join(got, ","))
-		done := map[string]any{"type": "done", "ok": true, "result": json.RawMessage(out), "logs": []string{"hi"}, "features": []string{FeatureFile}}
+		done := map[string]any{"type": "done", "ok": true, "result": json.RawMessage(out), "logs": []string{"hi"}, "features": []string{FeatureFile, FeatureCache}}
 		if f.oldRunner {
 			done["ok"], done["error"] = false, "TypeError: Cannot read property 'read' of undefined"
 			delete(done, "features")

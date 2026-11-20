@@ -70,7 +70,7 @@ func TestBeginRunIsVisibleToStopImmediately(t *testing.T) {
 		t.Fatal("Stop did not cancel the run registered just before it")
 	}
 	waited := make(chan struct{})
-	go func() { s.runWg.Wait(); close(waited) }()
+	go func() { <-s.runWg.idleCh(); close(waited) }()
 	select {
 	case <-waited:
 		t.Fatal("runWg did not wait for the registered run")
@@ -96,7 +96,7 @@ func TestReloadOutlivesTheCallersContext(t *testing.T) {
 		t.Fatal("reload did not start a run")
 	}
 	ended := make(chan struct{})
-	go func() { s.runWg.Wait(); close(ended) }()
+	go func() { <-s.runWg.idleCh(); close(ended) }()
 	select {
 	case <-ended:
 		t.Fatal("the run ended with the caller's request")

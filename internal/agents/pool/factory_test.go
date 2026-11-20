@@ -98,7 +98,8 @@ func TestFactoryInstanceConfig_ExtraArgsAndEnv(t *testing.T) {
 		t.Errorf("SpawnOptions.ExtraArgs\n  got:  %v\n  want: %v", cap.got.ExtraArgs, wantArgs)
 	}
 
-	wantEnv := []string{"MY_TOKEN=secret", "DISABLE_AUTOUPDATER=1"}
+	// The instance env, then the session the gate hook reads role limits for.
+	wantEnv := []string{"MY_TOKEN=secret", "DISABLE_AUTOUPDATER=1", "WICK_GATE_SESSION=S3"}
 	if !reflect.DeepEqual(cap.got.ExtraEnv, wantEnv) {
 		t.Errorf("SpawnOptions.ExtraEnv\n  got:  %v\n  want: %v", cap.got.ExtraEnv, wantEnv)
 	}

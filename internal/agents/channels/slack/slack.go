@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 	slackgo "github.com/slack-go/slack"
@@ -33,6 +34,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/imagecard"
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/slackmd"
@@ -139,6 +141,44 @@ type turn struct {
 	// agent wrote between tools.
 	segStart int
 	lastSeg  string
+	// postedInThread is set when a tool call of the turn wrote into this
+	// thread itself (a Slack send/update op naming its channel and
+	// thread_ts). The agent delivered its answer that way, so a turn
+	// closing on a tool or a bare [silent] posts nothing instead of the
+	// narration it wrote before its last tools.
+	postedInThread bool
+	// postedTextInThread: one of those tool writes was a message (send
+	// or update), not only a file. A person's turn that posted its answer
+	// that way needs no closing line (emptyHumanReply).
+	postedTextInThread bool
+	// untyped is set when the running turn was not started by a message
+	// in this thread: a teammate's task or result, a schedule, the web
+	// UI (ensureTurn, reopenTurn). Nobody here waits on its narration,
+	// so the thread gets only the text after its last tool call.
+	untyped bool
+	// human is set when a person's mention or DM in this thread started
+	// the running turn (not a listen reply, a workflow brief or anything
+	// untyped). Its reply always posts, [silent] stripped wherever it
+	// sits, unless quiet: that person asked for no reply.
+	human, quiet bool
+	// answered is set once any reply of the agent reached the thread
+	// since the person's message (a Done with text, or a message tool).
+	// A later Done with nothing (a queued event's empty result) is not
+	// that person's unanswered turn: no emptyHumanReply then.
+	answered bool
+	// emptyWhy is why the last Done had nothing to post (emptyReason),
+	// logged when the thread settles (armEmptyReply).
+	emptyWhy string
+	// emptySilent: that empty Done closed on a [silent] marker, so the
+	// agent chose silence for a person's turn (armEmptyReply nudges it).
+	emptySilent bool
+	// nudged is set once the turn was sent its one follow-up asking for
+	// the answer it closed with [silent] instead (armEmptyReply). A second
+	// empty Done then posts emptyNetLine.
+	nudged bool
+	// sendCtx is the context the person's message was sent to the pool
+	// with (who, as which wick user), reused for that follow-up.
+	sendCtx context.Context
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -242,6 +282,8 @@ func (t *turn) carryOver(old *turn) {
 	t.buf.WriteString(old.buf.String())
 	t.hasStarted = old.hasStarted
 	t.segStart, t.lastSeg = old.segStart, old.lastSeg
+	t.postedInThread = old.postedInThread
+	t.postedTextInThread = old.postedTextInThread
 	// Keep pointing at the live message: dropping these makes finalizeReply
 	// post a fresh message and strand the streamed one mid-word.
 	t.liveTS = old.liveTS
@@ -305,12 +347,21 @@ type Channel struct {
 	// so their turn is let go once answered. See agent_dm.go.
 	dmMainFn DMMainFn
 	dmMain   sync.Map
+	// dmThreadSeen is dmThreadKey → newest ts a main chat has read in that
+	// DM thread (see dmThreadContext).
+	dmThreadSeen sync.Map
 
 	// personas is session key → Persona of the Instant agent answering it
 	// (zero Persona = wick itself); customizeDenied is set once the token
 	// proved to lack chat:write.customize. See instant.go.
 	personas        sync.Map
 	customizeDenied atomic.Bool
+	// botAvatar caches this bot's own name and avatar (bot user id → [name, icon]).
+	botAvatar sync.Map
+	// mainThreads remembers, per session thread ("chat/ts"), the thread a
+	// mirror thread links to ([chat, ts], empty when none): its access
+	// cards go there.
+	mainThreads sync.Map
 
 	// eventsSeen is event subscription name → last receipt, for the
 	// health matrix's "never received since boot" warning.
@@ -325,12 +376,15 @@ type Channel struct {
 	bgKeepAlive time.Duration
 	bgTick      time.Duration
 
-	cfgMu          sync.Mutex
-	cfg            agentconfig.SlackChannelConfig
-	pubURL         string
-	api            *slackgo.Client
-	socket         *socketmode.Client
-	botUserID      string           // Slack user ID of the bot itself (U...), resolved via auth.test
+	cfgMu     sync.Mutex
+	cfg       agentconfig.SlackChannelConfig
+	pubURL    string
+	api       *slackgo.Client
+	socket    *socketmode.Client
+	botUserID string // Slack user ID of the bot itself (U...), resolved via auth.test
+	// threadStarters caches who opened each thread ("C…/ts" → U…), for
+	// directListenReply.
+	threadStarters sync.Map
 	botUserName    string           // Slack handle of the bot (resp.User)
 	teamName       string           // Workspace display name (resp.Team)
 	teamDomain     string           // Workspace subdomain extracted from resp.URL
@@ -394,6 +448,15 @@ type Channel struct {
 	listenDispatchHook func(sessionID string, ev *slackevents.MessageEvent, waited time.Duration, others bool)
 	// heldFn records where a held reply stands for the web UI (SetHeldFn).
 	heldFn HeldFn
+	// replyHeldFn is told about a reply finalReply held: [silent] after
+	// real text in a turn nobody typed (SetReplyHeldFn).
+	replyHeldFn func(sessionID, text string)
+	// emptyNetFn is told when a person's turn stayed empty even after its
+	// [silent] follow-up and emptyNetLine was posted (SetEmptyNetFn).
+	emptyNetFn func(sessionID, why string)
+	// stopFn stops a session's running turn on a Stop button click
+	// (SetStopFn, session_stop.go).
+	stopFn StopFn
 	// heardFn records each reply a listening thread hears (SetHeardFn).
 	heardFn HeldFn
 	// heardNames caches the display names heardName looked up (guarded by
@@ -453,7 +516,7 @@ type Channel struct {
 
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
-	runWg     sync.WaitGroup
+	runWg     runTracker
 	runGen    uint64 // bumped per run, so a stale watchdog cannot restart a newer run
 
 	// reloadMu serializes Reload: a config save and a health-check
@@ -649,7 +712,7 @@ func (s *Channel) ensureTurn(sessionKey string) *turn {
 	}
 	t := &turn{
 		channelID: b.ChatID, threadTS: threadTS,
-		running: true, lastActivity: time.Now(),
+		running: true, lastActivity: time.Now(), untyped: true,
 	}
 	s.turns[sessionKey] = t
 	log.Info().Str("channel", "slack").Str("session", sessionKey).
@@ -811,7 +874,7 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	teamName, teamDomain := s.teamName, s.teamDomain
 	s.cfgMu.Unlock()
 
-	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
+	api := newBotAPI(cfg.BotToken, cfg.AppToken)
 	socket := newSocketClient(api)
 
 	// The identity is CACHED — seeded from the channel row at boot and
@@ -993,11 +1056,11 @@ func (s *Channel) beginRun(ctx context.Context) (context.Context, uint64, func()
 	s.runCancel = runCancel
 	s.runGen++
 	gen := s.runGen
-	s.runWg.Add(1)
+	s.runWg.add()
 	s.runMu.Unlock()
 	return runCtx, gen, func() {
 		runCancel()
-		s.runWg.Done()
+		s.runWg.done()
 	}
 }
 
@@ -1051,6 +1114,12 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	s.socketCycled.Store(false)
 
 	go s.watchStart(runCtx, gen)
+	go s.watchConnected(runCtx, gen)
+
+	// Events API events are handled by a worker off the socket loop, so a
+	// handler stuck on a slow Slack call never stalls the connection.
+	events, stopEvents := s.startEventWorker(ctx)
+	defer stopEvents()
 
 	// A rotating app token with no known expiry (freshly pasted) is
 	// refreshed before connecting so its expiry becomes known; then the
@@ -1095,7 +1164,7 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 		s.cfgMu.Lock()
 		s.socketCancel = sockCancel
 		s.cfgMu.Unlock()
-		err := s.runSocket(ctx, sockCtx, socket)
+		err := s.runSocket(ctx, sockCtx, socket, events)
 		sockCancel()
 		s.cfgMu.Lock()
 		s.socketCancel = nil
@@ -1165,7 +1234,7 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 // runSocket runs one socket client until it stops for good, handling its
 // events meanwhile. Events still buffered when it stops are handled too,
 // so a request Slack already delivered is not dropped.
-func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Client) error {
+func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Client, events chan<- slackevents.EventsAPIEvent) error {
 	done := make(chan error, 1)
 	go func() { done <- socketRunner(runCtx, socket) }()
 	for {
@@ -1182,7 +1251,7 @@ func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Clie
 			for {
 				select {
 				case evt := <-socket.Events:
-					s.handleSocketEvent(ctx, evt)
+					s.dispatchSocketEvent(ctx, evt, events)
 				default:
 					return err
 				}
@@ -1191,7 +1260,7 @@ func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Clie
 			if !ok {
 				return <-done
 			}
-			s.handleSocketEvent(ctx, evt)
+			s.dispatchSocketEvent(ctx, evt, events)
 		}
 	}
 }
@@ -1622,7 +1691,12 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	s.stopRun()
-	s.runWg.Wait()
+	if !waitRuns(&s.runWg, reloadWaitTimeout) {
+		// The old run is cancelled but stuck (a handler or a dial); it ends
+		// on its own once unblocked. Waiting for it kept the bot offline.
+		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Dur("waited", reloadWaitTimeout).
+			Msg("reload: previous run still stopping, starting the new one anyway")
+	}
 
 	s.applyConfig(cfg, pubURL)
 
@@ -1847,7 +1921,8 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				// listen like a person's reply: it is often part of the
 				// information (a form, a status) or an answer meant for this
 				// agent without a mention, so the agent hears it and decides.
-				// queueListenMessage caps turns that only bots start.
+				// queueListenMessage caps turns that only bots start; an
+				// ignored bot or a bare notification never gets that far.
 				if ev.ThreadTimeStamp != "" && ev.ThreadTimeStamp != ev.TimeStamp {
 					sid := s.sessionKey(ev.ThreadTimeStamp)
 					if s.listening(sid, ev.Channel) {
@@ -1855,7 +1930,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 						if ev.Message != nil {
 							files = ev.Message.Files
 						}
-						s.queueListenMessage(ctx, sid, ev, files)
+						if !listenIgnoresBot(s.snapshot(), ev, files) {
+							s.queueListenMessage(ctx, sid, ev, files)
+						}
 					}
 				}
 				return
@@ -1939,6 +2016,8 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			})
 		case *slackevents.AssistantThreadStartedEvent:
 			s.handleAssistantThreadStarted(ctx, ev)
+		case *AgentSessionStoppedEvent:
+			s.handleAgentSessionStopped(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
 			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, true)
 			s.handleReactionAdded(ctx, ev)
@@ -2216,6 +2295,10 @@ func (s *Channel) reactionThreadParent(channelID, itemTS string) (parentTS strin
 // greets the user instead of reacting to an empty turn.
 const pingFallbackText = "(The user greeted you with no message — greet them briefly and ask how you can help.)"
 
+// threadPingText stands in for an empty mention in a thread that already
+// holds messages: the mention points at the thread, not a greeting.
+const threadPingText = "(The user mentioned you with no message in a thread that already has messages — read the thread above, work out what they need from you and act on it; do not just greet.)"
+
 // listenEmptyText stands in for a heard reply that carries no text.
 const listenEmptyText = "(No text: only a bot card or attachments.)"
 
@@ -2277,7 +2360,7 @@ func (s *Channel) resolveSender(userID string) *store.Sender {
 	// Distinct from the ID above: it is what the turn RUNS as, while the
 	// Slack fields are who the agent is talking to. They differ for a Slack
 	// user with no wick account, whose turns run as the channel owner.
-	if wickID, ok := s.resolveSessionOwner(userID); ok {
+	if wickID, ok, _ := s.resolveSessionOwner(userID); ok {
 		sender.WickUserID = wickID
 	}
 
@@ -2646,10 +2729,17 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp,
 		running: true, lastActivity: time.Now(), mentionFrom: mentionFrom,
 	}
+	t.human = personTurn(isListen, listenT)
+	t.quiet = t.human && asksQuiet(routedText)
 	if old != nil {
 		t.carryOver(old)
 		if mentionFrom == "" && old.running {
 			t.mentionFrom = old.mentionFrom
+		}
+		if old.running && old.human {
+			// A listen reply joining a person's turn: that person still
+			// waits on the answer.
+			t.human, t.quiet = true, old.quiet || t.quiet
 		}
 		listenT.pendingMention = t.mentionFrom
 		// A new turn supersedes the old one: stop its status heartbeat so the
@@ -2757,9 +2847,22 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	callerUserID := ""
 	// A bot is never resolved (that could auto-register it as a wick user):
 	// it falls through to the channel owner, or is refused when there is none.
-	wickUserID, resolved := "", false
+	wickUserID, resolved, lookupFailed := "", false, false
 	if !fromBot {
-		wickUserID, resolved = s.resolveSessionOwner(ev.User)
+		wickUserID, resolved, lookupFailed = s.resolveSessionOwner(ev.User)
+	}
+	if lookupFailed {
+		// The gate above passed, but users.info failed on this second
+		// lookup: the sender is unknown again, and falling back to the
+		// channel owner would run the turn with someone else's access.
+		log.Warn().Str("channel", "slack").
+			Str("user", ev.User).
+			Str("session", sessionID).
+			Msg("users.info failed, refusing message instead of running as the channel owner")
+		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
+		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+		s.postReply(ev.Channel, threadTS, identityLookupFailedMessage)
+		return
 	}
 	if resolved {
 		callerUserID = wickUserID
@@ -2798,6 +2901,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if hook := s.onSessionStart; hook != nil {
 			hook(sessionID, "slack", ctxText)
 		}
+		// A new session woken inside an existing thread (a reset, a provider
+		// failover) has never seen it: open with what was said so far, or an
+		// empty mention reads as a greeting.
+		// DMs included: a reply in a DM thread under a bot post (a report,
+		// a scheduled result) is meaningless without that post.
+		if !dmMain && ev.TimeStamp != threadTS {
+			if block := s.threadHistory(sessionID, ev.Channel, threadTS, ev.TimeStamp); block != "" {
+				if userText == pingFallbackText {
+					userText = threadPingText
+				}
+				userText = block + "\n\n" + userText
+			}
+		}
 	} else if isListen && !dmMain {
 		// A listening turn always reads the thread, up to now: what was said
 		// before the reply AND during its delay (someone else's answer is
@@ -2814,6 +2930,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		// session gets buildSessionContext instead (thread metadata, not
 		// its messages) and no catch-up.
 		if block := s.threadCatchUp(sessionID, ev.Channel, threadTS, ev.TimeStamp, prevSeen); block != "" {
+			if userText == pingFallbackText {
+				userText = threadPingText
+			}
+			userText = block + "\n\n" + userText
+		}
+	}
+	// A main chat answers every DM thread of its sender, so a reply in one
+	// of them arrives without the post it answers. Open with that thread.
+	if dmMain && ev.TimeStamp != threadTS {
+		if block := s.dmThreadContext(sessionID, ev.Channel, threadTS, ev.TimeStamp); block != "" {
+			if userText == pingFallbackText {
+				userText = threadPingText
+			}
 			userText = block + "\n\n" + userText
 		}
 	}
@@ -2822,6 +2951,11 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 
 	userCtx := agentchannels.WithSender(baseCtx, sender)
+	s.mu.Lock()
+	if s.turns[sessionID] == t {
+		t.sendCtx = userCtx
+	}
+	s.mu.Unlock()
 	if err := s.sendFn(userCtx, sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
@@ -3067,13 +3201,244 @@ func (t *turn) cutSegment() {
 }
 
 // replyText is the turn's reply: the text after its last tool call, or
-// the last non-empty text before it when the turn ended on a tool.
+// the last non-empty text before it when the turn ended on a tool and
+// did not already post into the thread through a tool (postedInThread).
+// An untyped turn has no fallback: its earlier text is narration.
 // Caller holds s.mu.
 func (t *turn) replyText() string {
 	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
 		return seg
 	}
+	if t.postedInThread || t.untyped {
+		return ""
+	}
 	return t.lastSeg
+}
+
+// closingReply is what a turn that is not a person's own would post: the
+// text after its last tool call, else the last text before it (unless a
+// tool already wrote into the thread). Unlike replyText it ignores
+// untyped, so the held check sees the report an untyped turn wrote
+// before its last tools. Caller holds s.mu.
+func (t *turn) closingReply() string {
+	if seg := t.buf.String()[t.segStart:]; !blankSegment(seg) {
+		return seg
+	}
+	if t.postedInThread {
+		return ""
+	}
+	return t.lastSeg
+}
+
+// finalReply decides what the turn posts at its Done and what it holds.
+//
+// The registry already dropped a turn that OPENS with [silent], unless a
+// person started it (HumanTurn). Here:
+//   - a person's turn posts its reply, markers stripped, unless that
+//     person asked for no reply and the agent wrote [silent] anywhere;
+//     one that ends with nothing to show returns emptyHumanReply (never
+//     posted: the Done keeps the thread working, armEmptyReply), only
+//     while nothing of the agent reached the thread since that
+//     person's message (answered);
+//   - any other turn that wrote [silent] after real text is ambiguous: a
+//     report (not a one-line narration) is held, neither posted nor
+//     lost, and a narration closing on [silent] posts nothing (6a14faef);
+//   - everything else is replyText, as before.
+//
+// Caller holds s.mu.
+func (t *turn) finalReply() (text, held string) {
+	// The text after the last tool is checked on its own too: the buffer
+	// joins it to the text before with no line break ("…done.[silent]").
+	full := t.buf.String()
+	marked := hasSilentMarker(full) || hasSilentMarker(full[t.segStart:])
+	if t.human {
+		if t.quiet && marked {
+			return "", ""
+		}
+		text := t.replyText()
+		if strings.TrimSpace(stripSilentMarker(text)) == "" && !t.postedTextInThread && !t.quiet && t.running && !t.answered {
+			t.emptyWhy = emptyReason(full, marked)
+			t.emptySilent = marked
+			return emptyHumanReply, ""
+		}
+		return text, ""
+	}
+	if !marked {
+		return t.replyText(), ""
+	}
+	if c := strings.TrimSpace(stripSilentMarker(t.closingReply())); c != "" && !isNarration(c) {
+		return "", c
+	}
+	return "", ""
+}
+
+// HumanTurn reports whether sessionKey's running turn answers a person
+// who wrote in the thread, and whether that person asked for no reply.
+// The registry reads it before taking a leading [silent] as silent.
+func (s *Channel) HumanTurn(sessionKey string) (human, quiet bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.turns[sessionKey]
+	if t == nil || !t.running {
+		return false, false
+	}
+	return t.human, t.quiet
+}
+
+// personTurn reports whether a message starts a person's turn: a
+// mention or DM, a reply in a thread set to auto-reply, or a direct
+// listen reply (directListenReply) — all answered as a mention, never
+// [silent]. Any other listen reply is not.
+func personTurn(isListen bool, lt listenTurn) bool { return !isListen || lt.auto || lt.direct }
+
+// quietAsk matches a person asking the agent not to answer in the thread.
+var quietAsk = regexp.MustCompile(`(?i)silent|diam aja|jangan (di)?balas|(ga|gak|nggak|ngga|tidak|tak) (usah|perlu) (di)?balas|don'?t reply|no reply`)
+
+// asksQuiet reports whether a person's message asks for no reply.
+func asksQuiet(text string) bool { return quietAsk.MatchString(text) }
+
+// hasSilentMarker reports whether text uses the [silent] marker anywhere
+// stripSilentMarker would take it out.
+func hasSilentMarker(text string) bool { return stripSilentMarker(text) != text }
+
+// narrationMaxLen is the longest single line still read as narration.
+const narrationMaxLen = 160
+
+// isNarration reports whether seg reads as an in-between line rather
+// than an answer: one short line. Several lines or a long line is an
+// answer, whatever tools ran after it.
+func isNarration(seg string) bool {
+	seg = strings.TrimSpace(stripSilentMarker(seg))
+	return !strings.Contains(seg, "\n") && utf8.RuneCountInString(seg) <= narrationMaxLen
+}
+
+// threadWriteOp matches a tool input that writes a Slack message: the
+// connector's send/update/upload ops or a raw chat.postMessage/update.
+var threadWriteOp = regexp.MustCompile(`(send_message|update_message|upload_file|chat\.postMessage|chat\.update)`)
+
+// threadTextOp is the part of threadWriteOp that writes a message, not a file.
+var threadTextOp = regexp.MustCompile(`(send_message|update_message|chat\.postMessage|chat\.update)`)
+
+// emptyHumanReply marks a person's turn that ended with nothing to show
+// (only [silent], or narration before its last tools) and did not answer
+// through a tool message. It is never posted: the thread keeps reading as
+// working for emptyReplyWait, since the real answer often follows (a
+// resumed process closes a queued event's turn first), then the working
+// marks just come off. The session keeps the details.
+const emptyHumanReply = "\x00empty-reply"
+
+// emptyReason says, for the log, why a person's turn ended with nothing
+// to post: what the turn's buffer closed on.
+func emptyReason(full string, marked bool) string {
+	switch {
+	case strings.TrimSpace(full) == "":
+		return "no text at all (an empty result, e.g. a queued event's turn)"
+	case marked && strings.TrimSpace(stripSilentMarker(full)) == "":
+		return "only a [silent] marker"
+	case marked:
+		return "[silent] after its text"
+	default:
+		return "text only before its last tool call (narration, not an answer)"
+	}
+}
+
+// emptyReplyWait is how long the thread keeps reading as working after
+// a person's turn ended with nothing (armEmptyReply).
+var emptyReplyWait = 60 * time.Second
+
+// emptyNetLine is posted when a person's turn closed on [silent], was
+// asked once more for its answer (nudgeText) and still gave nothing: the
+// person learns the message was handled, the notifier (SetEmptyNetFn)
+// learns someone must look.
+const emptyNetLine = "Sudah diproses, tapi balasannya kosong. Detailnya ada di sesi."
+
+// nudgeText is the one follow-up a person's turn gets when it closed on
+// [silent]: a direct question is never answered with silence.
+func nudgeText(from string) string {
+	if from == "" {
+		from = "someone"
+	}
+	return "You were mentioned with a direct question from " + from + " in this Slack thread; [silent] does not apply to this turn. " +
+		"Answer it now, or write one line saying why you cannot."
+}
+
+// armEmptyReply settles a person's turn that ended with nothing once
+// emptyReplyWait has passed. A later answer (a turn of the same process,
+// a message tool) or a new message that took the turn settles it first;
+// a turn still running then is waited out again, since its own Done may
+// answer. Otherwise:
+//   - a turn that closed on [silent] and was not nudged yet gets one
+//     follow-up turn in the same session (nudgeText), the thread still
+//     working;
+//   - a nudged turn that is still empty posts emptyNetLine and tells the
+//     empty-net notifier;
+//   - anything else (no text at all, narration only) settles quietly:
+//     the status line and ⏳ come off, nothing is posted.
+func (s *Channel) armEmptyReply(sessionKey string, t *turn, wait time.Duration) {
+	time.AfterFunc(wait, func() {
+		s.mu.Lock()
+		if s.turns[sessionKey] != t || t.answered || t.postedTextInThread {
+			s.mu.Unlock()
+			return
+		}
+		if t.running {
+			s.mu.Unlock()
+			s.armEmptyReply(sessionKey, t, wait)
+			return
+		}
+		channelID, threadTS, why := t.channelID, t.threadTS, t.emptyWhy
+		if t.emptySilent && !t.nudged && t.sendCtx != nil && s.sendFn != nil {
+			t.nudged = true
+			t.running = true
+			t.lastActivity = time.Now()
+			ctx, from, send := t.sendCtx, t.mentionFrom, s.sendFn
+			s.mu.Unlock()
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).
+				Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+				Msg("slack: person's turn closed on [silent]; asking the agent once more for its answer")
+			s.startStatusAnimation(sessionKey)
+			if err := send(ctx, sessionKey, "main", "slack", "user", nudgeText(from)); err != nil {
+				log.Error().Str("channel", "slack").Str("session", sessionKey).Err(err).Msg("slack: [silent] follow-up could not be sent")
+				s.mu.Lock()
+				if s.turns[sessionKey] == t {
+					t.running = false
+					s.stopStatusAnimation(t)
+				}
+				s.mu.Unlock()
+				s.armEmptyReply(sessionKey, t, 0)
+			}
+			return
+		}
+		t.answered = true
+		net := t.nudged
+		netFn := s.emptyNetFn
+		s.mu.Unlock()
+		s.setAssistantStatus(channelID, threadTS, "")
+		s.clearWorking(sessionKey)
+		if net {
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).
+				Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+				Msg("slack: person's turn stayed empty after the [silent] follow-up; net line posted")
+			s.postReply(channelID, threadTS, emptyNetLine)
+			if netFn != nil {
+				go netFn(sessionKey, why)
+			}
+			return
+		}
+		log.Warn().Str("channel", "slack").Str("session", sessionKey).
+			Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+			Dur("waited", wait).Msg("slack: person's turn ended with no reply and nothing followed; nothing posted, working marks cleared")
+	})
+}
+
+// postsToThread reports whether a tool input writes a message into the
+// thread channelID/threadTS. A read of the same thread names both too,
+// so the op must be a write.
+func postsToThread(input, channelID, threadTS string) bool {
+	if channelID == "" || threadTS == "" {
+		return false
+	}
+	return strings.Contains(input, channelID) && strings.Contains(input, threadTS) && threadWriteOp.MatchString(input)
 }
 
 // blankSegment reports whether seg has nothing a reader would see once
@@ -3088,6 +3453,7 @@ func blankSegment(seg string) bool {
 func (t *turn) resetText() {
 	t.buf.Reset()
 	t.segStart, t.lastSeg = 0, ""
+	t.postedInThread, t.postedTextInThread = false, false
 }
 
 // startEditTicker launches a goroutine that flushes the accumulated text
@@ -3150,7 +3516,11 @@ var silentMarkerPrefix = regexp.MustCompile(`(?i)^\s*\[silent\]\s*`)
 // Only spaces/tabs are allowed before it so the paragraph break ahead of it
 // survives, and a marker mid-sentence is left alone — that one is the agent
 // talking ABOUT the marker, not using it.
-var silentMarkerLine = regexp.MustCompile(`(?im)^[ \t]*\[silent\][ \t]*`)
+var silentMarkerLine = regexp.MustCompile(`(?im)^[ \t]*[*_~]*\[silent\][*_~]*[ \t]*`)
+
+// silentMarkerEmph matches an emphasized marker (**[silent]**, _[silent]_)
+// anywhere: nobody bolds a word they are only talking about.
+var silentMarkerEmph = regexp.MustCompile(`(?i)[ \t]*[*_~]+\[silent\][*_~]+`)
 
 // stripSilentMarker removes [silent] markers from reply text.
 //
@@ -3169,7 +3539,8 @@ var silentMarkerLine = regexp.MustCompile(`(?im)^[ \t]*\[silent\][ \t]*`)
 // it rather than inventing separate rules for the two surfaces.
 func stripSilentMarker(text string) string {
 	out := silentMarkerPrefix.ReplaceAllString(text, "")
-	return silentMarkerLine.ReplaceAllString(out, "")
+	out = silentMarkerLine.ReplaceAllString(out, "")
+	return silentMarkerEmph.ReplaceAllString(out, "")
 }
 
 // flushLiveMessage posts (first call) or edits (subsequent calls) the live
@@ -3410,6 +3781,17 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	text, cards := actioncard.Split(text, cardPointer)
 	if len(cards) > 0 {
 		defer s.postCards(channelID, threadTS, sessionKey, cards)
+	}
+	// Images (imagecard fences, markdown image lines) go out as image
+	// blocks right after the text, before any card.
+	text, images := imagecard.Split(text)
+	if len(images) > 0 {
+		defer s.postImages(channelID, threadTS, images)
+		if text == "" && liveTS != "" {
+			// The reply was only images: the live message still shows
+			// the raw fence streamed so far, so drop it.
+			s.deleteMessage(channelID, liveTS)
+		}
 	}
 	defer func() {
 		s.mu.Lock()
@@ -3655,6 +4037,8 @@ func (s *Channel) reopenTurn(sessionKey string) {
 		return
 	}
 	t.running = true
+	t.untyped = true
+	t.human, t.quiet = false, false
 	t.lastActivity = time.Now()
 	t.staleShown = false
 	t.statusLabel = ""
@@ -3720,6 +4104,26 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		// real change, so this is cheap on every delta.
 		s.setStatusLabel(sessionKey, statusLabelThinking)
 
+	case event.TextReplace:
+		// The reply so far was taken back (a Stop hook refused the text
+		// the turn ended on): only what follows is posted. A tool post
+		// into the thread already made stays counted.
+		s.mu.Lock()
+		t := s.turns[sessionKey]
+		if t == nil {
+			s.mu.Unlock()
+			return
+		}
+		posted, postedText := t.postedInThread, t.postedTextInThread
+		t.resetText()
+		t.postedInThread, t.postedTextInThread = posted, postedText
+		t.buf.WriteString(ev.Text)
+		live := t.liveTS != ""
+		s.mu.Unlock()
+		if live {
+			s.dropLiveReply(sessionKey, ev.Text)
+		}
+
 	case event.Thinking:
 		// Reasoning delta → "Thinking" phase (animated banner shows the dots).
 		s.setStatusLabel(sessionKey, statusLabelThinking)
@@ -3736,6 +4140,12 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		if t := s.turns[sessionKey]; t != nil {
 			t.interim.Tool(ev.ToolName, ev.ToolInput, ev.ToolUseID, hide)
 			t.cutSegment()
+			if postsToThread(ev.ToolInput, t.channelID, t.threadTS) {
+				t.postedInThread = true
+				if threadTextOp.MatchString(ev.ToolInput) {
+					t.postedTextInThread = true
+				}
+			}
 		}
 		s.mu.Unlock()
 
@@ -3768,19 +4178,15 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Unlock()
 		s.dropLiveReply(sessionKey, "")
 
-	case event.Compaction, event.Notice:
-		// Something happened TO the session rather than in the reply. The
-		// web UI has a row for it; a thread has nothing unless we post it,
-		// so /compact asked for from Slack would otherwise finish in
-		// silence. Posted as its own small message, not folded into the
-		// reply buffer: the turn's text belongs to the agent.
+	case event.Notice:
+		// wick's own notice about the session, not part of the reply.
+		// Posted as its own small message, not folded into the reply
+		// buffer: the turn's text belongs to the agent. A compaction
+		// boundary is deliberately not posted (see SystemNoticeText).
 		if text, ok := agentchannels.SystemNoticeText(ev); ok {
-			if ev.Type == event.Notice {
-				// wick's notice can quote a teammate's reply: plain text,
-				// never a <!channel> or <@U…> ping or a link.
-				text = escapeMrkdwn(text)
-			}
-			s.postSystemNotice(sessionKey, text)
+			// wick's notice can quote a teammate's reply: plain text,
+			// never a <!channel> or <@U…> ping or a link.
+			s.postSystemNotice(sessionKey, escapeMrkdwn(text))
 		}
 
 	case event.Done:
@@ -3794,11 +4200,30 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		}
 		s.stopStatusAnimation(t)
 		s.stopEditTicker(t)
-		defer s.clearWorking(sessionKey)
+		keepWorking := false
+		defer func() {
+			if !keepWorking {
+				s.clearWorking(sessionKey)
+			}
+		}()
 		text = t.buf.String()
+		var held string
 		if !liveStreamText {
-			text = t.replyText()
+			text, held = t.finalReply()
 		}
+		// An empty Done is often not the end of the answer: a resumed
+		// process closes a queued event's turn first and the real reply
+		// follows seconds later. Wait before saying "empty", and only if
+		// nothing reached the thread meanwhile (armEmptyReply).
+		deferEmpty := text == emptyHumanReply
+		why := t.emptyWhy
+		if deferEmpty {
+			text = ""
+		}
+		if strings.TrimSpace(text) != "" || t.postedTextInThread {
+			t.answered = true
+		}
+		heldFn := s.replyHeldFn
 		t.resetText()
 		t.hasStarted = false
 		t.running = false
@@ -3806,6 +4231,29 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		t.interim = agentchannels.InterimTurn{}
 		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
+		if deferEmpty {
+			// Still reads as working (⏳ and the status line) while the
+			// answer may follow; armEmptyReply settles it either way.
+			keepWorking = true
+			log.Info().Str("channel", "slack").Str("session", sessionKey).
+				Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+				Dur("wait", emptyReplyWait).Msg("slack: person's turn ended with nothing to post; thread stays working while an answer may follow")
+			s.setAssistantStatus(channelID, threadTS, statusLabelThinking)
+			if _, dm := s.dmMain.Load(sessionKey); !dm {
+				s.persistThreadBinding(sessionKey, channelID, threadTS)
+			}
+			s.armEmptyReply(sessionKey, t, emptyReplyWait)
+			return
+		}
+		if held != "" {
+			// Neither posted nor dropped unseen: the session records it
+			// and someone decides (finalReply).
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).
+				Int("len", len(held)).Msg("slack: reply held, [silent] after text in a turn nobody typed")
+			if heldFn != nil {
+				go heldFn(sessionKey, held)
+			}
+		}
 		// The lead's in-between line while a teammate of the turn still
 		// works stays out of the thread: the banner says who works, the
 		// answer comes in a later turn. A live message that showed part
@@ -3917,8 +4365,8 @@ func escapeMrkdwn(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
-// postSystemNotice posts a session-level notice — a compaction boundary
-// today — into the thread the session is bound to.
+// postSystemNotice posts a session-level notice from wick into the thread
+// the session is bound to.
 //
 // It goes out as a muted context block, the same weight the web UI gives
 // these: visible, but plainly not the agent talking. And it is posted the
@@ -3928,8 +4376,8 @@ func escapeMrkdwn(s string) string {
 //
 // Posting does cost the loading bubble (Slack clears the status on any
 // message in the thread), but the status ticker re-asserts it within a
-// tick while the turn is still running, so a mid-turn auto-compaction
-// does not leave the thread looking finished.
+// tick while the turn is still running, so a mid-turn notice does not
+// leave the thread looking finished.
 //
 // No turn, no thread, no API: a session this instance never opened a
 // thread for belongs to another channel or to the web UI, and has nowhere
@@ -4436,10 +4884,19 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 	// caring about the gate-approval channel-side hijack below.
 	s.emitInteractionWorkflow(ctx, cb)
 
+	if cb.Type == slackgo.InteractionTypeViewSubmission &&
+		(cb.View.CallbackID == accessDecideCallback || cb.View.CallbackID == accessDenyCallback) {
+		s.handleAccessSubmit(ctx, cb)
+		return
+	}
 	if len(cb.ActionCallback.BlockActions) == 0 {
 		return
 	}
 	action := cb.ActionCallback.BlockActions[0]
+	if action.BlockID == accessBlockID {
+		s.handleAccessClick(ctx, cb, action)
+		return
+	}
 	if action.BlockID == cardBlockID {
 		s.handleCardClick(ctx, cb, action)
 		return

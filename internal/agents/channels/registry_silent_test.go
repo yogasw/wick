@@ -318,3 +318,47 @@ func TestSyntheticTextNotForwarded(t *testing.T) {
 		t.Fatalf("forwarded %q", got)
 	}
 }
+
+// Text a Stop hook refused before the silent verdict never reaches a
+// channel; the verdict is made on what follows.
+func TestStopHookReplaceDropsHeldText(t *testing.T) {
+	reg, rec := setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "wait"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextReplace})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "real answer"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if got := strings.Join(rec.texts(), ""); got != "real answer" {
+		t.Fatalf("texts = %q, want only the answer after the hook", got)
+	}
+}
+
+// A [silent] reply a Stop hook refused does not silence the answer after it.
+func TestStopHookReplaceUndoesSilent(t *testing.T) {
+	reg, rec := setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "[silent] nothing"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextReplace})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "real answer"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	if got := strings.Join(rec.texts(), ""); got != "real answer" {
+		t.Fatalf("texts = %q, want the answer", got)
+	}
+	if reg.WasLastTurnSilent("s1") {
+		t.Fatal("turn should not be silent")
+	}
+}
+
+// Text already shown gets the replace, and the turn's Done still arrives.
+func TestStopHookReplaceForwardedWhenShown(t *testing.T) {
+	reg, rec := setup()
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextDelta, Text: "a long interim line\n"})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.TextReplace})
+	reg.DispatchAgentEvent("s1", event.AgentEvent{Type: event.Done})
+	var replaced, done bool
+	for _, e := range rec.got {
+		replaced = replaced || e.Type == event.TextReplace
+		done = done || e.Type == event.Done
+	}
+	if !replaced || !done {
+		t.Fatalf("want TextReplace and Done forwarded, got %+v", rec.got)
+	}
+}

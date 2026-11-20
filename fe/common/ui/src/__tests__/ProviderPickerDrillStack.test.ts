@@ -4,7 +4,7 @@ import ProviderPicker from "../ProviderPicker.svelte";
 import type { ComposerModelOption } from "../composer-types.js";
 import { decodePin, encodePath, encodePin } from "../model-path.js";
 
-const OMP = { value: "omp/yoga", label: "omp/yoga", models: [] as ComposerModelOption[] };
+const OMP = { value: "omp/acme", label: "omp/acme", models: [] as ComposerModelOption[] };
 
 // Instance → Provider → Account → Model, served by entry path.
 const levels: Record<string, ComposerModelOption[]> = {
@@ -17,6 +17,7 @@ const levels: Record<string, ComposerModelOption[]> = {
     { id: "2", label: "akun B", default: false, live: true },
   ],
   "openai-codex/2": [
+    { id: "auto", label: "Auto", default: false, desc: "Picks a model this account can use — now gpt-5.4" },
     { id: "openai-codex/gpt-5.5", label: "gpt-5.5", default: false, unavailable: true },
     { id: "openai-codex/gpt-5.4", label: "gpt-5.4", default: true },
   ],
@@ -26,7 +27,7 @@ const loadModels = () =>
 
 async function openAndDrill() {
   await fireEvent.click(screen.getByRole("button", { name: /select provider|omp/i }));
-  await fireEvent.click(screen.getByRole("button", { name: /omp\/yoga/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /omp\/acme/i }));
 }
 
 describe("model path grammar", () => {
@@ -49,13 +50,13 @@ describe("ProviderPicker drill stack", () => {
 
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
-    expect(lm).toHaveBeenLastCalledWith("omp/yoga", { entry: "openai-codex" });
+    expect(lm).toHaveBeenLastCalledWith("omp/acme", { entry: "openai-codex" });
     await fireEvent.click(await screen.findByText("akun B"));
-    expect(lm).toHaveBeenLastCalledWith("omp/yoga", { entry: "openai-codex/2" });
+    expect(lm).toHaveBeenLastCalledWith("omp/acme", { entry: "openai-codex/2" });
     // Breadcrumb names every level.
-    expect(screen.getByText("omp/yoga · openai-codex · akun B")).toBeTruthy();
+    expect(screen.getByText("omp/acme · openai-codex · akun B")).toBeTruthy();
     await fireEvent.click(await screen.findByText("gpt-5.4"));
-    expect(onChange).toHaveBeenCalledWith("omp/yoga::openai-codex/2@openai-codex/gpt-5.4");
+    expect(onChange).toHaveBeenCalledWith("omp/acme::openai-codex/2@openai-codex/gpt-5.4");
   });
 
   test("an unavailable model is greyed out and cannot be picked", async () => {
@@ -71,14 +72,32 @@ describe("ProviderPicker drill stack", () => {
     expect(screen.getByText("unavailable")).toBeTruthy();
   });
 
+  // An account row opens its model level; its "Auto" row pins the account
+  // and lets it pick a model it can use.
+  test("an account opens its models; Auto pins the account", async () => {
+    const onChange = vi.fn();
+    render(ProviderPicker, { options: [OMP], value: "", onChange, loadModels: loadModels() });
+    await openAndDrill();
+    await fireEvent.click(await screen.findByText("openai-codex"));
+    await fireEvent.click(await screen.findByText("akun B"));
+    expect(onChange).not.toHaveBeenCalled();
+    await fireEvent.click(await screen.findByText("Auto"));
+    expect(onChange).toHaveBeenCalledWith("omp/acme::openai-codex/2@auto");
+  });
+
+  test("names an account pin from its levels on the closed trigger", async () => {
+    render(ProviderPicker, { options: [OMP], value: "omp/acme::openai-codex@auto", onChange: vi.fn(), loadModels: loadModels() });
+    expect(await screen.findByRole("button", { name: "omp/acme · openai-codex · Auto (rotation)" })).toBeTruthy();
+  });
+
   test("back pops one level at a time", async () => {
     render(ProviderPicker, { options: [OMP], value: "", onChange: vi.fn(), loadModels: loadModels() });
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
     await fireEvent.click(await screen.findByText("akun B"));
-    await fireEvent.click(screen.getByText("omp/yoga · openai-codex · akun B"));
+    await fireEvent.click(screen.getByRole("button", { name: "Back to models" }));
     expect(await screen.findByText("Auto (rotation)")).toBeTruthy();
-    await fireEvent.click(screen.getByText("omp/yoga · openai-codex"));
+    await fireEvent.click(screen.getByRole("button", { name: "Back to models" }));
     expect(await screen.findByText("anthropic")).toBeTruthy();
   });
 });
@@ -97,7 +116,7 @@ describe("ProviderPicker last updated + Refresh", () => {
     const line = await screen.findByTestId("picker-models-updated");
     expect(line.textContent).toContain("files");
     await fireEvent.click(screen.getByTestId("picker-models-refresh"));
-    expect(lm).toHaveBeenLastCalledWith("omp/yoga", { refresh: true });
+    expect(lm).toHaveBeenLastCalledWith("omp/acme", { refresh: true });
     await vi.waitFor(() => expect(screen.getByTestId("picker-models-updated").textContent).toContain("cli"));
   });
 

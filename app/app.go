@@ -41,6 +41,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/daemon"
 	"github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/internal/pkg/logfiles"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/internal/pkg/worker"
@@ -434,6 +435,10 @@ func bootSelfUpdate(ctx context.Context) {
 
 // Blocks until shutdown.
 func Run() {
+	// Before anything spawns: a Termux glibc loader override in our own env
+	// would reach a detached daemon, a graceful-upgrade successor and every
+	// provider child (see envscrub/termux.go).
+	envscrub.ScrubProcessLoaderEnv()
 	defaultPort := config.Load().App.Port
 	var port int
 

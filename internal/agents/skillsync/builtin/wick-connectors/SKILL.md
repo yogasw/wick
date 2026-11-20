@@ -7,7 +7,15 @@ description: Use when the user asks to look something up or act on an external s
 
 A **connector** is wick's bridge to an external system (Slack, Notion, a database, an HTTP API). Each connector instance holds its own credentials and exposes a set of **operations**. You reach them over MCP.
 
-Never guess a `tool_id` or a parameter name. Discovery is cheap; a wrong call is not.
+Never invent a `tool_id` or a parameter name. Use one you were given, or discover it.
+
+## Fastest path: ops you already know
+
+- A Team agent's prompt carries a **Frequent ops** block: its most used and pinned ops as `conn:<id>/<op>(param: type, opt?: type)`. Call those with `wick_execute` directly — no `wick_list`, no `wick_get`.
+- `wick_get({id})` also returns `frequent` for that connector (tool_id + `signature` + `note`).
+- A param that does not fit the op is refused **before anything runs**; the error carries the full `input_schema`. Fix it and retry once.
+- **Destructive ops** (⚠) always get their schema fetched first, even when you think you know the params.
+- An op's `note` is a curated pitfall (pagination, id formats, what the response drops). Follow it.
 
 ## The discovery cycle
 
@@ -26,10 +34,25 @@ Four tools, used in order:
 
 ```
 wick_list()                          → find the connector, note its id
-wick_get({id})                       → see its operations
-wick_get({tool_id})                  → input schema for the one you want
+wick_get({id})                       → groups (+ what each can do) and frequent ops
+wick_get({id, selector: group})      → the group's operations
+wick_get({id, selector: op_key})     → input schema for the one you want
 wick_execute({tool_id, params})      → run it
 ```
+
+A connector with few ops (≤ 15) lists every op at the first `wick_get`, skipping the group step. A group's `summary` ("list · get · logs · rollback · delete⚠") names every op it holds, so an op nobody has used yet is still visible without opening the group.
+
+## Curating ops (pins, notes, grouping)
+
+Through the `custom-connector` connector:
+
+| Op | Use |
+|---|---|
+| `op_pref_set` | Pin / mute an op for Frequent, set its one-line `note` or search `keywords` (any connector; admins, or the creator of a custom connector). |
+| `op_prefs_list` | Every op's 30-day usage, prefs, the current Frequent pick and orphaned prefs. |
+| `grouping_suggest` → `grouping_preview` → `grouping_set` | Group a large MCP connector's tools by pins, regex rules and `{group}` templates; tools no rule catches land in `Other`. Show the preview to the user before `grouping_set`. |
+
+When you learn a pitfall about an op (a format, a pagination rule), store it with `op_pref_set note=…` instead of a private notes file: every agent then sees it next to the op.
 
 Shortcut when you already know roughly what you need:
 

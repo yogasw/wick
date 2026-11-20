@@ -430,3 +430,29 @@ func TestScopeLend(t *testing.T) {
 		t.Error("deny-all lends nothing")
 	}
 }
+
+// A lend that lists exactly one named account runs as it; none, several,
+// the instance's own identity or an unlent connector leave the choice to
+// the caller.
+func TestScopeLentAccount(t *testing.T) {
+	reach := Reach{"a": {Key: "k"}, "b": {Key: "k"}, "c": {Key: "k"}, "d": {Key: "k"}, "e": {Key: "k"}}
+	grants := `[` +
+		`{"connector_id":"a","level":"all","lend":true,"accounts":["acc-1"]},` +
+		`{"connector_id":"b","level":"all","lend":true,"accounts":[]},` +
+		`{"connector_id":"c","level":"all","lend":true,"accounts":["acc-1","acc-2"]},` +
+		`{"connector_id":"d","level":"all","lend":true,"accounts":[""]},` +
+		`{"connector_id":"e","level":"all","accounts":["acc-1"]}]`
+	s := ScopeOf(entity.AgentPersona{ID: "a1", OwnerUserID: "owner-1", AccessMode: AccessChoose, AllowedConnectors: grants}, reach)
+
+	if id, ok := s.LentAccount("a"); !ok || id != "acc-1" {
+		t.Errorf("one named account must be the lend's account, got %q %v", id, ok)
+	}
+	for _, c := range []string{"b", "c", "d", "e"} {
+		if id, ok := s.LentAccount(c); ok {
+			t.Errorf("%s: must leave the account to the caller, got %q", c, id)
+		}
+	}
+	if _, ok := DenyAll().LentAccount("a"); ok {
+		t.Error("a deny-all scope lends nothing")
+	}
+}

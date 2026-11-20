@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	slackgo "github.com/slack-go/slack"
 )
 
 // IsAppToken reports whether t looks like a Slack app-level token, legacy
@@ -337,7 +336,7 @@ func (s *Channel) setPairLocked(p rotatedPair) {
 	if !p.expiresAt.IsZero() {
 		s.cfg.AppTokenExpiresAt = p.expiresAt.UTC().Format(time.RFC3339)
 	}
-	s.api = slackgo.New(s.cfg.BotToken, slackgo.OptionAppLevelToken(p.access))
+	s.api = newBotAPI(s.cfg.BotToken, p.access)
 }
 
 // adoptStored switches to the stored pair when it is newer than the one in

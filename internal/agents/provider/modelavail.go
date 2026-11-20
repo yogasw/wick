@@ -116,6 +116,11 @@ func AvailabilityAccount(prov, account string) string {
 // AutoAccount is the path segment of the "Auto (rotation)" row.
 const AutoAccount = "auto"
 
+// AutoModel is the model id of the "Auto" row that opens a provider's or an
+// account's model level: run whatever model that account can use (its last
+// working one, else the default, else the first not refused).
+const AutoModel = "auto"
+
 // MarkModelUnavailable records that account was refused model. A model that
 // was the last one to work stops being the default.
 func MarkModelUnavailable(ins Instance, account, model, reason string) {

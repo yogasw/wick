@@ -60,11 +60,46 @@ export function itemLabel(it: TodoItem): string {
 export function parseTodoItems(block: Extract<ThreadBlock, { kind: "tool" }>): TodoItem[] {
   if (!block.toolInput) return [];
   try {
-    const parsed = JSON.parse(block.toolInput) as { items?: TodoItem[] };
-    return Array.isArray(parsed.items) ? parsed.items : [];
+    const parsed = JSON.parse(block.toolInput) as { items?: unknown; op?: unknown };
+    if (Array.isArray(parsed.items) && parsed.items.every((it) => it && typeof it === "object")) return parsed.items as TodoItem[];
+    // omp's own `todo` tool sends ops (init / start / done / view …), not
+    // the list: the list is in its result.
+    if (typeof parsed.op === "string") return parseOmpTodoResult(block.result ?? "");
+    return [];
   } catch {
     return [];
   }
+}
+
+/** The checklist an omp `todo` result prints, one item per task:
+      Audit:
+        - [X] Read the instructions
+        - [ ] Review recent commits (in progress)
+    A phase name rides as the description when there is more than one
+    phase. [] when the text has no such section (a call still running). */
+export function parseOmpTodoResult(text: string): TodoItem[] {
+  const items: TodoItem[] = [];
+  const phases = new Set<string>();
+  let phase = "";
+  for (const line of text.split("\n")) {
+    const head = /^ {2}(\S.*):\s*$/.exec(line);
+    if (head) {
+      phase = head[1].trim();
+      continue;
+    }
+    const m = /^\s{4,}- \[([ xX\-~])\] (.+?)\s*$/.exec(line);
+    if (!m || !phase) continue;
+    let title = m[2];
+    let status: TodoItem["status"] = m[1] === " " ? "pending" : "completed";
+    if (/\(in progress\)$/.test(title)) {
+      title = title.replace(/\s*\(in progress\)$/, "");
+      status = "in_progress";
+    }
+    phases.add(phase);
+    items.push({ id: `${phase}/${title}`, title, description: phase, status });
+  }
+  if (phases.size <= 1) for (const it of items) delete it.description;
+  return items;
 }
 
 /** The goal latch state a todo call reported, or null if it touched no

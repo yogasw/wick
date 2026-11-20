@@ -14,7 +14,6 @@ import (
 
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/cliserver"
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 )
 
 // useServer reports whether a turn goes to the session's RPC process
@@ -109,7 +108,7 @@ var startRPCFn startFn = startRPC
 // is compared against.
 func (s Spawner) spawnRPC(ctx context.Context, opt provider.SpawnOptions, ins provider.Instance, bin, resume, soul, overlay string, mcpVars, brokerVars []string, releaseBroker func()) (provider.Process, error) {
 	args := buildRPCArgs(ins, withResume(opt, resume), soul, overlay, s.ExtraArgs)
-	env := append(envscrub.ScrubOSEnv(), opt.ExtraEnv...)
+	env := append(baseEnv(), opt.ExtraEnv...)
 	env = append(env, mcpVars...)
 	// Same as -p: no ~/.claude MCP/config source, no config overlays from
 	// wick's own environment.

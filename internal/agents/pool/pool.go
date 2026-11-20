@@ -213,6 +213,13 @@ type PoolConfig struct {
 	// existed.
 	SenderFrom func(ctx context.Context) *store.Sender
 
+	// TurnRole is told, before a person's message reaches the agent, who
+	// sent it (sender nil = unknown) and whether the agent is mid-turn.
+	// It sets that person's native-tool limits for the session (By role):
+	// mid-turn it may only add limits, since the running turn now carries
+	// both people's words. nil = no per-person tool limits.
+	TurnRole func(ctx context.Context, sessionID string, sender *store.Sender, working bool)
+
 	// SenderVisibilityLoader reports how much of the sender to write into the
 	// text handed to the model: SenderOff / SenderName / SenderNameID /
 	// SenderFull. nil or an empty result means SenderName.
@@ -1052,6 +1059,12 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		entry = nil
 	}
 
+	// Per-person tool limits follow whoever sent this message.
+	if role == "user" && p.cfg.TurnRole != nil {
+		working := alive && entry != nil && entry.state != nil && entry.state.Lifecycle() == state.LifecycleWorking
+		p.cfg.TurnRole(ctx, sessionID, sender, working)
+	}
+
 	// A session whose agent's default moved follows it, and one on a
 	// failover stand-in goes back to its home (or up the home's chain),
 	// before a new message, when that is usable again.
@@ -1596,7 +1609,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		// contributes no model (it is a bare instance key).
 		prov := p.cfg.DefaultProvider
 		provModel := ""
-		if sess.Meta.ProjectID != "" {
+		// A pin written before this agent name existed (session_init pins
+		// before the first send, and channels and workflow nodes spawn
+		// under different names) carries over to the new entry.
+		pinned := false
+		if !hasEntry {
+			for _, a := range sess.Agents {
+				if a.Pinned && strings.TrimSpace(a.Provider) != "" {
+					prov, provModel, pinned = a.Provider, a.ModelID, true
+					break
+				}
+			}
+		}
+		if !pinned && sess.Meta.ProjectID != "" {
 			if proj, perr := project.Load(p.cfg.Layout, sess.Meta.ProjectID); perr == nil && proj.Meta.Defaults.Provider != "" {
 				prov = proj.Meta.Defaults.Provider
 				provModel = proj.Meta.Defaults.Model
@@ -1616,6 +1641,11 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		// provModel must not blank an existing pin.
 		if provModel != "" {
 			if err := session.SetModelIDIfEmpty(p.cfg.Layout, sessionID, agentName, provModel); err != nil {
+				return err
+			}
+		}
+		if pinned {
+			if err := session.SetPinned(p.cfg.Layout, sessionID, agentName, true); err != nil {
 				return err
 			}
 		}
@@ -2253,6 +2283,13 @@ func (p *Pool) SetThinkingTokens(sessionID, agentName, v string) error {
 // exist — create it first (SetMaxTurns does).
 func (p *Pool) SetNodeProvider(sessionID, agentName, providerKey, modelID string) error {
 	return session.SetNodeProvider(p.cfg.Layout, sessionID, agentName, providerKey, modelID)
+}
+
+// PinSession pins sessionID's primary agent to providerKey + modelID
+// (provider.PinSession): the agent's default no longer moves it until
+// the pin is cleared. Takes effect at the next spawn.
+func (p *Pool) PinSession(ctx context.Context, sessionID, providerKey, modelID string) (provider.PinResult, error) {
+	return provider.PinSession(ctx, p.cfg.Layout, sessionID, "", providerKey, modelID, provider.SwitchOptions{Source: "workflow"})
 }
 
 // SetModelID pins a model id on the session's agent entry (creating it if

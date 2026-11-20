@@ -214,8 +214,8 @@ func daemonReloadCmd() *cobra.Command {
 			"running binary (wick module, app identity, architecture, version direction),\n" +
 			"shown for confirmation, swapped in atomically, and verified once the\n" +
 			"successor takes over. The candidate is never executed to identify it.\n\n" +
-			"Requires the daemon to run with WICK_GRACEFUL_UPGRADE=1; otherwise the signal\n" +
-			"is ignored and you should use `restart` instead.",
+			"Graceful handover is on by default; a daemon started with\n" +
+			"WICK_GRACEFUL_UPGRADE=0 (or false) ignores the signal, so use `restart` there.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := daemon.ResolvePaths(BuildAppName)
 			if err != nil {

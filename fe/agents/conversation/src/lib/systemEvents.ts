@@ -75,6 +75,11 @@ registerSystemEvent("access_changed", { icon: "key" });
 registerSystemEvent("access_change_declined", { icon: "ban", tone: "warn" });
 registerSystemEvent("persona_changed", { icon: "info" });
 registerSystemEvent("hop_limit", { icon: "stop", tone: "warn" });
+registerSystemEvent("reply_held", {
+  icon: "stop",
+  tone: "warn",
+  parts: (t) => [`Held, not sent to Slack: ${t.text ?? ""}`],
+});
 registerSystemEvent("mention_refused", { icon: "ban", tone: "warn" });
 registerSystemEvent("group_member_added", { icon: "user-plus" });
 registerSystemEvent("group_member_removed", { icon: "ban" });
@@ -116,6 +121,7 @@ const FOLD_KEY: Record<string, string> = {
   mention_handoff: "task_id",
   input_request: "ask_id",
   approval_request: "approval_id",
+  access_request: "request_id",
   remote_queue: "queue_id",
   listen_held: "hold_id",
 };

@@ -53,12 +53,12 @@ import (
 type Config struct {
 	// Browser — the essentials, always visible. Everything else is grouped into
 	// collapsed cards so the page opens clean; expand a card to tweak.
-	Browser  string `wick:"html=browser_status;default=chromium;group=Browser|Pick an engine. Each shows install status; download a missing one right here.;desc=Browser engine to launch."`
+	Browser  string `wick:"html=browser_status;default=chromium;group=Browser|Pick an engine. Each shows install status; download a missing one right here.;desc=Browser engine to launch. moli = DOM-first and light, for reading pages. chromium/cloakbrowser = for human-like flows and live viewing."`
 	Headless bool   `wick:"bool;default=true;group=Browser;desc=Run without a visible window. Turn off only for local debugging."`
 
 	// Display — viewport + emulation.
-	ViewportWidth  int    `wick:"default=1280;group=Display|Viewport size, user agent, and device emulation.|collapsed;desc=Viewport width in pixels. Ignored when a device is set."`
-	ViewportHeight int    `wick:"default=800;group=Display;desc=Viewport height in pixels. Ignored when a device is set."`
+	ViewportWidth  int    `wick:"default=1280;group=Display|Viewport size, user agent, and device emulation.|collapsed;desc=Browser window width in pixels (default 1280). Live sessions open at this size and keep it between steps, so the live view never changes shape. A set_viewport action overrides it for that session. Ignored when a device is set."`
+	ViewportHeight int    `wick:"default=800;group=Display;desc=Browser window height in pixels (default 800). See Viewport width. Ignored when a device is set."`
 	UserAgent      string `wick:"group=Display;desc=Override the User-Agent header. Leave empty for the browser default."`
 	Device         string `wick:"group=Display;desc=Emulate a named device (e.g. \"iPhone 15\", \"Pixel 7\"). Sets viewport, UA, and touch. Overrides the viewport fields when set."`
 	// ShowCursor paints a virtual pointer that follows the mouse_* actions, so
@@ -169,7 +169,9 @@ type getContentInput struct {
 type getMarkdownInput struct {
 	URL          string `wick:"url;required;desc=Page URL to open."`
 	Format       string `wick:"dropdown=markdown|semantic_tree_text;default=markdown;desc=Output format. markdown is the page as Markdown, semantic_tree_text is a compact accessibility-style outline of the page structure."`
-	WaitSelector string `wick:"desc=Optional CSS selector to wait for before reading. Useful for JS-rendered content."`
+	WaitSelector string `wick:"desc=Optional CSS selector to wait for before reading, e.g. the element that holds the article body."`
+	Wait         string `wick:"dropdown=done|networkidle|domstable|load|domcontentloaded;default=done;desc=When the page counts as ready. done (default) suits server-rendered pages. A page that renders its text with JavaScript comes back empty with done: use networkidle or domstable. An empty result with done is retried once with networkidle on its own."`
+	ExtraArgs    string `wick:"desc=Optional JSON array of extra moli fetch flags, e.g. [\"--wait-script\",\"document.querySelectorAll('p').length>5\",\"--with-frames\"]. Allowed: page-scoped flags (--eval, --wait-*, --delay-ms, --redirect-wait-ms, --header, --strip-mode, --document-start-script, --with-frames, --with-base, --disable-js, --disable-css, --disable-subframes, --image, --font, --scrollbars, --timeout, --fail, --fail-with-body) and any new --wait-* flag. Flags that read host files or change network, proxy, TLS or profile settings are refused."`
 }
 
 // pdfInput is the argument schema for the "pdf" operation.
@@ -193,7 +195,7 @@ type evalInput struct {
 
 // runInput is the argument schema for the "run" script-runner operation.
 type runInput struct {
-	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?} (no selector = the focused element, e.g. a field inside an iframe), check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. FRAMES (the page itself or an iframe, also cross-origin, pick it with frame:\"main\" or frame_index:0 for the page, frame:<url substring> / frame_url_contains or frame_index for an iframe, neither = first child frame). frame_click, frame_type and frame_fill work on the main page too and scroll the element into view (wait for it to stop moving) before the natural click, nth picks a match: 0 first (default), 1 second, -1 last, -2 second to last: frame_eval{script} returns the JSON result, frame_type{selector|text,value,per_char_delay_ms?[min,max]} clicks the field like a hand and types key by key (frame_fill clears it first), frame_text also takes compact (only text,cx,cy,value,disabled,checked), only_interactive (drop the page text), only_added (diff since the previous call, like observe) and max_items — observe takes the same, frame{} is shorthand for frame_url_contains, frame_text{selector?} returns the frame text plus every visible interactive element (tag, role, text, value, x,y,w,h in page viewport pixels, cx,cy centre), frame_click{selector|text,hover_dwell_ms?} clicks an element (text: exact match first, then substring, then an element whose aria-label or title equals it — icon controls such as a WA Flow header Back arrow, <div title=Back> inside the Flow iframe) with the natural mouse at a random point inside its box, selector accepts CSS and Playwright selectors (a:text-is('OK'), button:has-text('Back')), when the element is not actionable within ~1.5s it is measured from the DOM (its own box, or its painted children for a zero-size wrapper) and that box is clicked, reported as fallback=dom_box. There are no coordinate params on frame_click: for raw coordinates use mouse_click{x,y}. REAL MOUSE (viewport pixels, reaches inside cross-origin iframes, human-like curved path + timing): mouse_move{x,y,steps?}, mouse_click{x,y,button?,delay_ms?,hover_dwell_ms?,steps?}, mouse_wheel{delta_x?,delta_y?,steps?}. WAIT: wait_for{selector}, wait{ms}. WAIT ON THE SCREEN (main page, or an iframe via frame_url_contains/frame_index, selector? narrows the area, timeout_ms default 10000, a larger value is clamped to 40000 with a warning on the step, the run still goes ahead) instead of a fixed wait + screenshot: wait_for_text{text|pattern(regex),fresh?,baseline?,include_values?} returns the match with context, text and pattern are matched with whitespace and newlines collapsed to single spaces, so a heading wrapped over lines still matches (fresh=true matches only NEW text: a visible element that did not exist at the baseline and holds the text (works on virtualised lists such as a WhatsApp chat, where old messages leave the DOM), or more occurrences than at the baseline, the result says which (by: new_element | count), baseline trigger (default) = the frame just before the last page-changing action earlier in this run (click, frame_click, frame_type, press, goto, eval…, the run start if none), run_start, or call_start = when the wait begins, a fresh wait reads the whole frame, include_values=true also reads the values typed in inputs/selects, which page text never contains — include_values works on wait_for_change and observe too), wait_for_change{} returns the added/removed lines once the text changes, observe{until_stable_ms?(default 600)} waits until the area stops changing, then returns only what changed since the previous observe (added/removed lines + new or changed interactive elements with boxes), first call = everything. READ: screenshot{full_page?,selector?,clip?{x,y,width,height},type?(png|jpeg),quality?,save_dir?} (save_dir = an existing absolute folder, e.g. your working folder: the image is written there and its path returned instead of base64), set_viewport{width,height} (pins the viewport for the rest of the live session, re-applied at the start of every run, so coordinates stay stable), content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
+	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?} (no selector = the focused element, e.g. a field inside an iframe), check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. FRAMES (the page itself or an iframe, also cross-origin, pick it with frame:\"main\" or frame_index:0 for the page, frame:<url substring> / frame_url_contains or frame_index for an iframe, neither = first child frame). frame_click, frame_type and frame_fill work on the main page too and scroll the element into view (wait for it to stop moving) before the natural click, nth picks a match: 0 first (default), 1 second, -1 last, -2 second to last: frame_eval{script} returns the JSON result, frame_type{selector|text,value,per_char_delay_ms?[min,max]} clicks the field like a hand and types key by key (frame_fill clears it first), frame_text also takes compact (only text,cx,cy,value,disabled,checked), only_interactive (drop the page text), only_added (diff since the previous call, like observe) and max_items — observe takes the same, frame{} is shorthand for frame_url_contains, frame_text{selector?} returns the frame text plus every visible interactive element (tag, role, text, value, x,y,w,h in page viewport pixels, cx,cy centre), frame_click{selector|text,hover_dwell_ms?} clicks an element (text: exact match first, then substring, then an element whose aria-label or title equals it — icon controls such as a WA Flow header Back arrow, <div title=Back> inside the Flow iframe) with the natural mouse at a random point inside its box, selector accepts CSS and Playwright selectors (a:text-is('OK'), button:has-text('Back')), when the element is not actionable within ~1.5s it is measured from the DOM (its own box, or its painted children for a zero-size wrapper) and that box is clicked, reported as fallback=dom_box. On the moli engine, whose layout refreshes lazily, frame_click waits (up to 1.5s) for a point moli resolves to the element and clicks it with the real mouse, through the DOM (via=dom, untrusted events) only when none shows up. frame_click also takes menu (text of the menu or dropdown to open first when the target is not on screen yet, e.g. menu:\"Produk\" text:\"Pricing\") and expect_url (a glob like **/login**: the step waits until the page is there, clicks once more through the DOM if it is not, then opens the link address itself for a plain link (retried=goto_href), and otherwise fails with the address it is on, so no separate wait_for_url is needed). There are no coordinate params on frame_click: for raw coordinates use mouse_click{x,y}. REAL MOUSE (viewport pixels, reaches inside cross-origin iframes, human-like curved path + timing): mouse_move{x,y,steps?}, mouse_click{x,y,button?,delay_ms?,hover_dwell_ms?,steps?}, mouse_wheel{delta_x?,delta_y?,steps?}. WAIT: wait_for{selector}, wait{ms}. WAIT ON THE SCREEN (main page, or an iframe via frame_url_contains/frame_index, selector? narrows the area, timeout_ms default 10000, a larger value is clamped to 40000 with a warning on the step, the run still goes ahead) instead of a fixed wait + screenshot: wait_for_text{text|pattern(regex),fresh?,baseline?,include_values?} returns the match with context, text and pattern are matched with whitespace and newlines collapsed to single spaces, so a heading wrapped over lines still matches (fresh=true matches only NEW text: a visible element that did not exist at the baseline and holds the text (works on virtualised lists such as a WhatsApp chat, where old messages leave the DOM), or more occurrences than at the baseline, the result says which (by: new_element | count), baseline trigger (default) = the frame just before the last page-changing action earlier in this run (click, frame_click, frame_type, press, goto, eval…, the run start if none), run_start, or call_start = when the wait begins, a fresh wait reads the whole frame, include_values=true also reads the values typed in inputs/selects, which page text never contains — include_values works on wait_for_change and observe too), wait_for_change{} returns the added/removed lines once the text changes, observe{until_stable_ms?(default 600)} waits until the area stops changing, then returns only what changed since the previous observe (added/removed lines + new or changed interactive elements with boxes), first call = everything. READ: screenshot{full_page?,selector?,clip?{x,y,width,height},type?(png|jpeg),quality?,save_dir?} (save_dir = an existing absolute folder, e.g. your working folder: the image is written there and its path returned instead of base64), set_viewport{width,height} (resizes the real browser window for the rest of the live session, so it holds between runs and coordinates stay stable, without it the window is the configured Viewport width x height, 1280x800 by default), content{selector?}, eval{script}, cdp{method,params?,save_dir?} (one raw DevTools protocol command on the page, for a method the connector does not wrap yet, on chromium, the cloak engines and moli, e.g. Page.printToPDF for a PDF on any engine, save_dir writes a base64 data result such as a PDF or an image to a file and returns its path: the Browser, Target, Storage, SystemInfo, Tethering and Memory domains and cookie or stored-data reads are refused, 10s per command, all cdp steps of one run share a session so Emulation overrides, extra headers and new-document scripts hold for the later steps of that run only), get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. One run has a 45s budget: split a longer flow into several runs on the same live session, or chain them in one wick_run_code script. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
 	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
 	// Network-capture opt-in. Decided up front (before the actions run) so the
@@ -212,7 +214,8 @@ type runInput struct {
 // persist across sessions under that name) — empty means an anonymous,
 // swept-on-close session, the original behavior.
 type sessionOpenInput struct {
-	Profile string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty to use the instance's default profile, or a throwaway anonymous session when no default is configured."`
+	Profile    string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty to use the instance's default profile, or a throwaway anonymous session when no default is configured."`
+	LaunchArgs string `wick:"desc=Optional JSON array of extra Chromium flags for this browser (chromium and cloakbrowser engines, refused on moli), e.g. [\"--lang=id-ID\",\"--enable-features=X\"]. Use it for a flag the connector does not expose yet, values go as --flag=value. Flags the connector owns are refused: CDP/debugging, profile/user-data dir, sandbox, headless, extensions, proxy/network, certificate/TLS, logging, anything naming a path, dir, file or helper launcher. Ignored when an existing session is reused."`
 }
 
 // sessionListInput lists live sessions and their tabs. No arguments.
@@ -304,7 +307,7 @@ func Module() connector.Module {
 		Meta: connector.Meta{
 			Key:         pluginKey,
 			Name:        "Playwright Browser",
-			Description: "Drive a real browser (Chromium/Firefox/WebKit, or the lightweight Moli engine) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
+			Description: "Drive a real browser (Chromium/Firefox/WebKit, or the lightweight Moli engine) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process. Moli is DOM-first: best for reading pages (get_markdown, scrape, content) at low memory, its live view is low frame rate. For flows that should move and click like a person, or that someone watches live, use a chromium or cloakbrowser instance.",
 			Icon:        "🎭",
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Browser},
 		},
@@ -331,7 +334,7 @@ func Module() connector.Module {
 				visibleWhen(connector.Op(
 					"get_markdown",
 					"Get Page Markdown",
-					"Fast page-to-markdown with the Moli engine: open {url} and return it as Markdown (or a semantic tree outline). No screenshot or JS interaction, but ~10x faster than get_content. Needs browser=moli on this instance.",
+					"Fast page-to-markdown with the Moli engine: open {url} and return it as Markdown (or a semantic tree outline). No browser session, no JS interaction, ~10x faster than get_content. A page that renders its text with JavaScript is empty at the default wait=done: pass wait=networkidle (an empty result is retried that way once on its own, see note). Reading many pages: call it from one wick_run_code script, a few URLs at a time, and write each page to a file. The plugin runs at most 3 fetches at once and queues the rest. Needs browser=moli on this instance.",
 					getMarkdownInput{},
 					getMarkdown, wickdocs.Docs{},
 				), "browser:"+moliEngine),
@@ -381,14 +384,14 @@ func Module() connector.Module {
 				connector.OpDestructive(
 					"session_open",
 					"Open Live Session",
-					"Launch a persistent browser and return its session_id. If the requested (or default) named profile already has a live browser, that session is returned with reused=true instead of opening a second one. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. Destructive because it holds an OS browser process open.",
+					"Launch a persistent browser and return its session_id. If the requested (or default) named profile already has a live browser, that session is returned with reused=true instead of opening a second one. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. launch_args adds Chromium flags the connector does not expose yet. Destructive because it holds an OS browser process open.",
 					sessionOpenInput{},
 					sessionOpen, wickdocs.Docs{},
 				),
 				connector.Op(
 					"session_list",
 					"List Live Sessions",
-					"List every live session with its open tabs (index, url, title), how long it has been idle (idle_seconds), and how long until it auto-closes (auto_close_in_seconds). Dead sessions are swept automatically. Call this before session_open to reuse an existing session, or to decide between closing one now and waiting for it to expire.",
+					"List this instance's live sessions with their open tabs (index, url, title), how long it has been idle (idle_seconds), and how long until it auto-closes (auto_close_in_seconds). Dead sessions are swept automatically. Call this before session_open to reuse an existing session, or to decide between closing one now and waiting for it to expire. Sessions of other instances are not listed but share the cap, others_live counts them.",
 					sessionListInput{},
 					sessionListOp, wickdocs.Docs{},
 				),
@@ -503,10 +506,14 @@ func Module() connector.Module {
 					browserInstallInput{},
 					browserInstallOp, wickdocs.Docs{},
 				),
-				connector.OpConfigOnly(
+				// Agent-callable on purpose: an engine left versions behind
+				// (moli moves fast) is a common cause of broken runs, and the
+				// fix should not wait for someone to open the manager page.
+				// Destructive, so every call is confirmed.
+				connector.OpDestructive(
 					"browser_update",
 					"Update Browser",
-					"Re-fetch a browser engine's binary to the newest available build (cloakbrowser pulls the latest GitHub release). Used by the manager UI's ⋮ menu.",
+					"Update one browser engine (chromium/firefox/webkit/cloakbrowser/cloakbrowser-pro/moli) to the newest available build. moli and cloakbrowser pull the latest GitHub release. Returns the version before and after where the engine reports one. Live sessions keep the binary they started with: close and reopen them to use the new one. Also the manager UI's ⋮ menu.",
 					browserInstallInput{},
 					browserUpdateOp, wickdocs.Docs{},
 				),
@@ -646,7 +653,9 @@ func runLive(c *connector.Ctx, sid string, actions []action) (any, error) {
 		default:
 		}
 	}
-	return withDeadline("live run", teardown, func() (any, error) {
+	runProgress.Delete(sid)
+	res, err := withDeadline("live run", teardown, func() (any, error) {
+		runProgress.Store(sid, "stuck connecting to the browser (before step 0)")
 		lc, err := connectSession(c, sid)
 		if err != nil {
 			return nil, err
@@ -657,7 +666,9 @@ func runLive(c *connector.Ctx, sid string, actions []action) (any, error) {
 			lc.close()
 			return nil, err
 		}
+		runProgress.Store(sid, "stuck preparing the page: window size, cursor (before step 0)")
 		res, err := runActionsInContext(c, bctx, actions, c.InputInt("tab"))
+		runProgress.Store(sid, "all steps done, stuck disconnecting")
 		// Quiesce before disconnecting so the live-view screencast / in-flight CDP
 		// events drain — disconnecting with a frame still queued is what crashed
 		// the Node driver with EPIPE.
@@ -665,6 +676,12 @@ func runLive(c *connector.Ctx, sid string, actions []action) (any, error) {
 		lc.close() // disconnect only — the detached browser stays alive
 		return res, err
 	})
+	if err != nil && res == nil {
+		if p, ok := runProgress.LoadAndDelete(sid); ok {
+			err = fmt.Errorf("%w: %v", err, p)
+		}
+	}
+	return res, err
 }
 
 // ── Live session handlers ────────────────────────────────────────────

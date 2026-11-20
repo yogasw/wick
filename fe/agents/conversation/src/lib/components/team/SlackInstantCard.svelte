@@ -203,6 +203,6 @@
       </ul>
     </div>
 
-    <div><Button size="sm" variant="ghost" disabled={busy} onclick={turnOff}>Turn off Instant</Button></div>
+    <div><Button size="sm" variant="secondary" disabled={busy} onclick={turnOff}>Turn off Instant</Button></div>
   {/if}
 </div>

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionlink"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/agents/ticket"
@@ -186,5 +188,50 @@ func TestTeamReadChatPaging(t *testing.T) {
 	}
 	if msgs := pageMessages(t, res); msgs[0].Text != "turn 50" {
 		t.Fatalf("oldest page from 50: %q", msgs[0].Text)
+	}
+}
+
+// read_chat refuses the chat that sent the caller a task: the asker's
+// conversation stays its own, unless the caller is on the asker agent's
+// ReachAllow.
+func TestTeamReadChatRefusesAsker(t *testing.T) {
+	withTeamWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	seedTeamProject(t, "p2", "u1")
+	asker := seedTeamAgent(t, "u1", "asker", "p1")
+	helper := seedTeamAgent(t, "u1", "helper", "p2")
+	newSlackSession(t, "asker-chat", "p1", "u1", "")
+	newSlackSession(t, "asker-other", "p1", "u1", "")
+	newSlackSession(t, "helper-chat", "p2", "u1", "")
+	writeTurns(t, "asker-chat", 2)
+	writeTurns(t, "asker-other", 2)
+	if err := sessionlink.LinkTeam(globalLayout, "asker-chat", "helper-chat"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := session.Load(globalLayout, "helper-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Meta.LinkedFromSession = "asker-chat"
+	if err := session.SaveMeta(globalLayout, "helper-chat", s.Meta); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readChat(t, helper.ID, "helper-chat", map[string]string{"to": "@asker", "chat": "asker-chat"}); !errors.Is(err, teamlink.ErrAskerChat) {
+		t.Fatalf("asker's chat: %v", err)
+	}
+	if _, err := readChat(t, helper.ID, "helper-chat", map[string]string{"to": "@asker", "chat": "asker-other"}); err != nil {
+		t.Fatalf("another chat of the asker agent: %v", err)
+	}
+	if _, err := readChat(t, asker.ID, "asker-chat", map[string]string{"to": "@helper", "chat": "helper-chat"}); err != nil {
+		t.Fatalf("asker reading the chat it messaged: %v", err)
+	}
+
+	asker.ReachAllow = fmt.Sprintf("[%q]", helper.ID)
+	if err := globalTeam.Update(context.Background(), &asker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readChat(t, helper.ID, "helper-chat", map[string]string{"to": "@asker", "chat": "asker-chat"}); err != nil {
+		t.Fatalf("overseer on ReachAllow: %v", err)
 	}
 }

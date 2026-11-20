@@ -75,6 +75,9 @@ type Ctx struct {
 	// from the execute params (empty for internal/system calls). Read via
 	// CallerUserID() by connectors that scope data per owner.
 	callerUserID string
+	// lentBy / lendRequester are set when the call runs on a lend: who
+	// lends the connector (the effective caller) and who actually asked.
+	lentBy, lendRequester string
 	// accountID is the ConnectorAccount the framework resolved for this
 	// call (explicit @accountId on the tool id), "" when none.
 	accountID string
@@ -352,6 +355,20 @@ func (c *Ctx) SetCallerUserID(userID string) { c.callerUserID = userID }
 // CallerUserID returns the user id set by SetCallerUserID, or "" when the call
 // has no associated user (internal/system context).
 func (c *Ctx) CallerUserID() string { return c.callerUserID }
+
+// SetLend records that this call runs on a lend: lenderID lends the
+// connector and is the effective caller, requesterID is the person who
+// actually asked (the session owner, or the PAT holder). Framework-only.
+func (c *Ctx) SetLend(lenderID, requesterID string) {
+	c.lentBy, c.lendRequester = lenderID, requesterID
+}
+
+// LentBy returns the lender of a lent call, "" when the call is not lent.
+func (c *Ctx) LentBy() string { return c.lentBy }
+
+// LendRequester returns who asked for a lent call, "" when not lent or
+// unknown.
+func (c *Ctx) LendRequester() string { return c.lendRequester }
 
 // SetAccountID stamps the connected account the framework resolved for this
 // call. Connectors that manage their own token lifecycle per account (the

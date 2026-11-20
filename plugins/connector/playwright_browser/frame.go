@@ -291,6 +291,9 @@ func rawLocator(f playwright.Frame, a action) playwright.Locator {
 }
 
 func locate(f playwright.Frame, a action, filter string) playwright.Locator {
+	if a.pinned != nil {
+		return a.pinned
+	}
 	if sel := strings.TrimSpace(a.Selector); sel != "" {
 		return f.Locator(sel + filter)
 	}
@@ -316,6 +319,17 @@ func locate(f playwright.Frame, a action, filter string) playwright.Locator {
 // the matching elements itself (see boxFromDOM) and clicks the first one that
 // is painted, so no coordinates have to be passed.
 func findBox(f playwright.Frame, a action) (*playwright.Rect, string, error) {
+	box, via, err := findBoxOnce(f, a)
+	// Moli now and then reports the page's script context destroyed without
+	// any navigation. The page is still there: look again.
+	for try := 0; err != nil && try < 2 && contextLost(err); try++ {
+		time.Sleep(500 * time.Millisecond)
+		box, via, err = findBoxOnce(f, a)
+	}
+	return box, via, err
+}
+
+func findBoxOnce(f playwright.Frame, a action) (*playwright.Rect, string, error) {
 	loc := locateInFrame(f, a)
 	_ = loc.ScrollIntoViewIfNeeded(playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(1000)})
 	box, err := settledBox(loc)
@@ -480,15 +494,295 @@ func frameClick(page playwright.Page, env mouseEnv, a action) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(a.Menu) != "" {
+		if a, err = openMenu(page, env, f, a); err != nil {
+			return nil, err
+		}
+	}
+	res, err := clickTarget(page, env, f, a)
+	if err != nil {
+		return nil, err
+	}
+	if a.Menu != "" {
+		res["menu"] = a.Menu
+	}
+	if strings.TrimSpace(a.ExpectURL) != "" {
+		if err := expectURL(page, f, a, res); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// openMenu clicks the menu that holds the target and waits up to 3s for a
+// match that was not on screen before (the same label can sit elsewhere on
+// the page, a hero heading or a footer link). It returns the action pinned
+// to that match with nth.
+func openMenu(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (action, error) {
+	before := map[string]bool{}
+	if _, boxes := visibleBoxes(f, a); boxes != nil {
+		for _, b := range boxes {
+			before[b] = true
+		}
+	}
+	m := a
+	m.Selector, m.Text, m.Nth, m.Menu, m.ExpectURL = "", a.Menu, nil, "", ""
+	if _, err := clickTarget(page, env, f, m); err != nil {
+		return a, fmt.Errorf("open menu %q: %w", a.Menu, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		els, boxes := visibleBoxes(f, a)
+		for i, b := range boxes {
+			if b != "" && !before[b] {
+				a.pinned = els[i]
+				return a, nil
+			}
+		}
+		time.Sleep(pollEvery)
+	}
+	return a, fmt.Errorf("menu %q opened but %q did not show within 3s", a.Menu, a.Text+a.Selector)
+}
+
+// visibleBoxes returns every match of the action with its box ("" when
+// hidden or empty), so openMenu can tell which one the menu revealed. One
+// evaluate for all matches: a per-element round trip is slow on moli and a
+// label like a product name can match dozens of elements.
+func visibleBoxes(f playwright.Frame, a action) ([]playwright.Locator, []string) {
+	q := a
+	q.Nth = nil
+	loc := rawLocator(f, q)
+	v, err := loc.EvaluateAll(visibleBoxesJS)
+	if err != nil {
+		return nil, nil
+	}
+	raw, _ := v.([]any)
+	els := make([]playwright.Locator, len(raw))
+	out := make([]string, len(raw))
+	for i, r := range raw {
+		els[i] = loc.Nth(i)
+		out[i], _ = r.(string)
+	}
+	return els, out
+}
+
+const visibleBoxesJS = `els => els.map(el => {
+  const r = el.getBoundingClientRect();
+  const st = getComputedStyle(el);
+  if (r.width < 1 || r.height < 1 || st.visibility === "hidden" || st.display === "none" || Number(st.opacity) === 0) return "";
+  return [r.x, r.y, r.width, r.height].map(Math.round).join(",");
+})`
+
+// expectURL waits for the click to reach the address. When it does not, the
+// element is clicked once more through the DOM (a click the page swallowed)
+// and the wait repeats, so a run never moves on from the wrong page.
+func expectURL(page playwright.Page, f playwright.Frame, a action, res map[string]any) error {
+	first := 5 * time.Second
+	if a.TimeoutMS > 0 {
+		first = waitTimeout(a.TimeoutMS)
+	}
+	if err := pollURL(page, a.ExpectURL, first); err == nil {
+		res["url"] = currentURL(page)
+		return nil
+	}
+	href := ""
+	if h, herr := rawLocator(f, a).First().ElementHandle(playwright.LocatorElementHandleOptions{Timeout: playwright.Float(1000)}); herr == nil {
+		v, _ := within(2*time.Second, func() (any, error) {
+			return h.Evaluate(`el => { const a = el.closest("a[href]"); el.click(); return a ? a.href : "" }`)
+		})
+		href, _ = v.(string)
+		_ = h.Dispose()
+		res["retried"] = "dom_click"
+	}
+	if err := pollURL(page, a.ExpectURL, 5*time.Second); err == nil {
+		res["url"] = currentURL(page)
+		return nil
+	}
+	// A plain link whose click the page (or engine) swallowed: open its
+	// address, which is where the click was meant to go.
+	if strings.HasPrefix(href, "http") {
+		res["retried"] = "goto_href"
+		if _, err := page.Goto(href, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateCommit}); err == nil {
+			if err := pollURL(page, a.ExpectURL, 10*time.Second); err == nil {
+				res["url"] = currentURL(page)
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("click on %q did not lead to %s (now %s)", a.Text+a.Selector, a.ExpectURL, currentURL(page))
+}
+
+func currentURL(page playwright.Page) string {
+	if v, err := within(2*time.Second, func() (any, error) { return page.Evaluate(`location.href`) }); err == nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return page.URL()
+}
+
+// clickTarget is one frame_click on f: find the box, click it like a hand,
+// and on moli finish a click that landed elsewhere.
+func clickTarget(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (map[string]any, error) {
+	if env.moli {
+		if res, err := moliClick(page, env, f, a); err == nil {
+			return res, nil
+		}
+		// No handle in time: fall through to the measured box and the mouse.
+	}
 	box, via, err := findBox(f, a)
 	if err != nil {
 		return nil, err
+	}
+	// A handle, not a locator: a missed click often closes the menu the
+	// element sits in, and a visible-only locator would no longer find it.
+	var target playwright.ElementHandle
+	if env.moli {
+		if h := hitTarget(f, a); h != nil {
+			if _, aerr := within(2*time.Second, func() (any, error) { return h.Evaluate(armHitJS) }); aerr == nil {
+				target = h
+			}
+			defer func() { _ = h.Dispose() }()
+		}
 	}
 	res, err := clickBox(page, env, a, box)
 	if err == nil && via != "" {
 		res["fallback"] = via
 	}
+	if err == nil && target != nil && missedHit(target) {
+		res["fallback"] = "dom_click"
+	}
 	return res, err
+}
+
+// within runs a call into the page with a deadline. Calls on an element or
+// page carry no timeout of their own, and moli can leave one unanswered
+// when it drops the script context; the step must still move on.
+func within(d time.Duration, call func() (any, error)) (any, error) {
+	type out struct {
+		v   any
+		err error
+	}
+	ch := make(chan out, 1)
+	go func() {
+		v, err := call()
+		ch <- out{v, err}
+	}()
+	select {
+	case o := <-ch:
+		return o.v, o.err
+	case <-time.After(d):
+		return nil, fmt.Errorf("no answer from the page within %s", d)
+	}
+}
+
+func contextLost(err error) bool {
+	return strings.Contains(err.Error(), "Execution context was destroyed")
+}
+
+// moliClick is frame_click on moli. Moli hit-tests a lazily refreshed layout,
+// so the element's box is not enough: it asks the page for a point inside the
+// element that moli itself resolves to it, and clicks there with the real
+// mouse (trusted events, like a person). Only when no such point shows up
+// within 1.5s is the element clicked through the DOM, reported as via=dom.
+func moliClick(page playwright.Page, env mouseEnv, f playwright.Frame, a action) (map[string]any, error) {
+	h := hitTarget(f, a)
+	if h == nil {
+		return nil, fmt.Errorf("element not found")
+	}
+	defer func() { _ = h.Dispose() }()
+	// Moli's layout is an on-demand snapshot: right after a menu opens, hit
+	// testing can still see the page as it was for ~0.5s. Ask again until a
+	// point resolves to the element, then click it with the mouse.
+	var p map[string]any
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for {
+		v, err := within(2*time.Second, func() (any, error) { return h.Evaluate(moliPointJS) })
+		if err != nil {
+			return nil, err
+		}
+		p, _ = v.(map[string]any)
+		if _, ok := p["px"]; ok || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	box := map[string]any{"x": p["x"], "y": p["y"], "w": p["w"], "h": p["h"]}
+	px, okx := p["px"].(float64)
+	py, oky := p["py"].(float64)
+	if okx && oky && f == page.MainFrame() {
+		pa := a
+		pa.X, pa.Y = &px, &py
+		out, err := humanClick(page, env, pa)
+		if err != nil {
+			return nil, err
+		}
+		res, _ := out.(map[string]any)
+		if res == nil {
+			res = map[string]any{}
+		}
+		res["box"] = box
+		return res, nil
+	}
+	if _, err := within(2*time.Second, func() (any, error) { return h.Evaluate(`el => el.click()`) }); err != nil {
+		return nil, err
+	}
+	return map[string]any{"box": box, "via": "dom"}, nil
+}
+
+// moliPointJS scrolls the element into view and looks for a point inside it
+// (centre first, then a grid) that elementFromPoint resolves to the element,
+// a child, or the control wrapping it.
+const moliPointJS = `el => {
+  let r = el.getBoundingClientRect();
+  // Scroll only when off screen: a scroll closes many dropdown menus.
+  if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) {
+    el.scrollIntoView({block: "center"});
+    r = el.getBoundingClientRect();
+  }
+  const out = {x: r.x, y: r.y, w: r.width, h: r.height};
+  // The element, a child, or the control wrapping it (moli resolves a label
+  // inside a link to the link itself, which is what the click is meant for).
+  const ctl = el.closest("a,button,label,summary,select,input,textarea,[role],[onclick],[tabindex]");
+  const hits = (x, y) => { const t = document.elementFromPoint(x, y); return !!t && (t === el || el.contains(t) || t === ctl); };
+  const fr = [[.5,.5],[.3,.5],[.7,.5],[.5,.3],[.5,.7],[.2,.2],[.8,.2],[.2,.8],[.8,.8]];
+  for (const [fx, fy] of fr) {
+    const x = r.x + r.width * fx, y = r.y + r.height * fy;
+    if (x >= 0 && y >= 0 && x < innerWidth && y < innerHeight && hits(x, y)) { out.px = x; out.py = y; break; }
+  }
+  return out;
+}`
+
+// hitTarget is the element frame_click means, as a handle: the visible match,
+// else the first match at all (the same candidates findBox measures when
+// the visible one is not actionable in time).
+func hitTarget(f playwright.Frame, a action) playwright.ElementHandle {
+	opt := playwright.LocatorElementHandleOptions{Timeout: playwright.Float(1000)}
+	if h, err := locateInFrame(f, a).ElementHandle(opt); err == nil {
+		return h
+	}
+	if h, err := rawLocator(f, a).First().ElementHandle(opt); err == nil {
+		return h
+	}
+	return nil
+}
+
+// armHitJS marks the element so missedHit can tell whether the mouse click
+// reached it (or a child). Capture on the element itself sees both.
+const armHitJS = `el => { el.__wickHit = false; el.addEventListener("click", () => { el.__wickHit = true }, { once: true, capture: true }) }`
+
+// missedHit clicks the element through the DOM when the mouse click landed
+// elsewhere, and reports whether it had to. A page that navigated or dropped
+// the element counts as reached: the click did something.
+func missedHit(target playwright.ElementHandle) bool {
+	v, err := within(2*time.Second, func() (any, error) {
+		return target.Evaluate(`el => { if (el.__wickHit !== false) return false; el.click(); return true }`)
+	})
+	if err != nil {
+		return false
+	}
+	missed, _ := v.(bool)
+	return missed
 }
 
 // frameType clicks an input in the frame like a hand, then types value one

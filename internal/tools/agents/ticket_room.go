@@ -1066,6 +1066,11 @@ func cancelRoomRuns(roomID, sender string, queuedOnly bool) int {
 	return n
 }
 
+// goRoomRun starts a room run's background goroutine. A variable so tests
+// can wait for every run they started before tearing down the package
+// globals the run reads; production simply starts the goroutine.
+var goRoomRun = func(f func()) { go f() }
+
 // forgetRoom drops a deleted room's run slots and locks.
 func forgetRoom(roomID string) {
 	prefix := roomID + "\x00"
@@ -1221,10 +1226,10 @@ func sendRoomMessage(c *tool.Ctx, sess session.Session, text string) {
 		run := newRoomRun(c.Context(), sess, tk, sender, peers, backing)
 		run.started = runStarted
 		queued = true
-		go func() {
+		goRoomRun(func() {
 			defer runRelease()
 			run.play(runCtx, sess.ID, targets)
-		}()
+		})
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "sent"})
 }

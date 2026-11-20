@@ -160,8 +160,28 @@ var (
 
 type ompUsageEntry struct {
 	at   time.Time
+	bin  string // ompBinStamp at fetch time
 	data *ompUsageJSON
 	err  error
+}
+
+// ompBinStamp identifies the omp binary env runs: its resolved path and
+// mtime. A download or an Activate changes it, and a listing taken with
+// the previous binary (above all a failed one: a broken binary is the
+// usual reason the listing failed) must not outlive it.
+func ompBinStamp(env []string) string {
+	bin := envValue(env, provider.AccountBinEnvKey)
+	if bin == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(bin); err == nil {
+		bin = real
+	}
+	st, err := os.Stat(bin)
+	if err != nil {
+		return bin
+	}
+	return bin + "@" + st.ModTime().UTC().Format(time.RFC3339Nano)
 }
 
 func fetchOMPUsage(env []string, fresh bool) (*ompUsageJSON, error) {
@@ -181,7 +201,7 @@ func fetchOMPUsage(env []string, fresh bool) (*ompUsageJSON, error) {
 		data, err = parseOMPUsage(out)
 	}
 	ompUsageMu.Lock()
-	ompUsageCache[key] = ompUsageEntry{at: time.Now(), data: data, err: err}
+	ompUsageCache[key] = ompUsageEntry{at: time.Now(), bin: ompBinStamp(env), data: data, err: err}
 	ompUsageMu.Unlock()
 	return data, err
 }
@@ -189,8 +209,12 @@ func fetchOMPUsage(env []string, fresh bool) (*ompUsageJSON, error) {
 // ompUsageCacheValid: a failure is retried after ompUsageCacheTTL; a good
 // listing is served until agent.db changes (a login, logout or token
 // refresh rewrites it) or a usage probe replaces it (fresh). So opening a
-// card or the /usage popover never re-execs omp on its own.
+// card or the /usage popover never re-execs omp on its own. Either is
+// dropped as soon as the omp binary itself changes.
 func ompUsageCacheValid(e ompUsageEntry, env []string) bool {
+	if e.bin != ompBinStamp(env) {
+		return false
+	}
 	if e.err != nil || e.data == nil {
 		return time.Since(e.at) < ompUsageCacheTTL
 	}

@@ -77,3 +77,25 @@ func (s *Channel) releaseDMTurn(sessionID string) {
 		s.stopStatusAnimation(t)
 	}
 }
+
+// dmThreadKey names one DM thread inside one main chat.
+func dmThreadKey(sessionID, channelID, threadTS string) string {
+	return sessionID + "|" + channelID + "|" + threadTS
+}
+
+// dmThreadContext is the block a main-chat turn woken by a DM thread reply
+// opens with: the whole thread (parent pinned) the first time the chat
+// meets that thread, then only what others posted since its last turn
+// there. The main chat cannot carry a thread binding (it is shared with the
+// web app), so what it read is remembered here; after a restart it simply
+// reads the whole thread again.
+func (s *Channel) dmThreadContext(sessionID, channelID, threadTS, triggerTS string) string {
+	key := dmThreadKey(sessionID, channelID, threadTS)
+	prev, seen := s.dmThreadSeen.Load(key)
+	s.dmThreadSeen.Store(key, triggerTS)
+	if !seen {
+		return s.threadHistory(sessionID, channelID, threadTS, triggerTS)
+	}
+	last, _ := prev.(string)
+	return s.threadCatchUp(sessionID, channelID, threadTS, triggerTS, last)
+}

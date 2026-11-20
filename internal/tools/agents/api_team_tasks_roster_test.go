@@ -289,6 +289,8 @@ func TestRosterReceiverSettledPreview(t *testing.T) {
 // The roster is signalled when a task's state moves, not on a "Needs
 // you" refresh that repeats it; settling always signals.
 func TestRosterTaskMoved(t *testing.T) {
+	rosterTaskState.Delete("t-moved-1")
+	t.Cleanup(func() { rosterTaskState.Delete("t-moved-1") })
 	v := teamlink.TaskView{TaskID: "t-moved-1", State: "working"}
 	if !rosterTaskMoved(v) || rosterTaskMoved(v) {
 		t.Fatal("working: first signals, repeat does not")

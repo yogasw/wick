@@ -394,3 +394,52 @@ func TestProviderLockIsOneSetting(t *testing.T) {
 		t.Fatal("force on must store switching off too")
 	}
 }
+
+// A chat pinned to its own provider + model keeps them while its agent
+// locks chats to the default: neither a default change nor the lazy hold
+// at the next message moves it. Clearing the pin puts it back on the
+// default.
+func TestPinnedChatKeepsItsModelUnderLockedDefault(t *testing.T) {
+	withTeamWorld(t)
+	withFollowProviders(t)
+	owner := &entity.User{ID: "u1", Role: entity.RoleUser, Approved: true}
+	seedTeamProject(t, "p-fixed", owner.ID)
+	setProjectDefault(t, "p-fixed", "claude/old", "")
+	fixed := seedSwitchAgent(t, owner.ID, "fixed", "p-fixed", false)
+	ctx := context.Background()
+	// The owner's provider access is the guard's business, tested on its
+	// own; here every provider is open.
+	prevGuard := provider.FailoverGuard
+	provider.FailoverGuard = func(context.Context, string, string) error { return nil }
+	t.Cleanup(func() { provider.FailoverGuard = prevGuard })
+
+	pinned := openChat(t, owner, fixed.ID, false)
+	other := openChat(t, owner, fixed.ID, true)
+	if _, err := provider.PinSession(ctx, globalLayout, pinned, "", "claude/mine", "opus", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := agentDefaultFor(ctx, pinned); ok {
+		t.Fatal("a pinned chat must not be held to the agent's default")
+	}
+
+	patchAgentProvider(t, owner, fixed.ID, "claude/new", "sonnet")
+	if a := chatAgent(t, pinned); a.Provider != "claude/mine" || a.ModelID != "opus" || !a.Pinned {
+		t.Fatalf("pinned chat = %q/%q pinned=%v, want claude/mine/opus kept", a.Provider, a.ModelID, a.Pinned)
+	}
+	if a := chatAgent(t, other); a.Provider != "claude/new" || a.ModelID != "sonnet" {
+		t.Fatalf("unpinned chat = %q/%q, want claude/new/sonnet", a.Provider, a.ModelID)
+	}
+
+	if prov, model, ok := sessionDefaultFor(ctx, pinned); !ok || prov != "claude/new" || model != "sonnet" {
+		t.Fatalf("session default = %q %q %v", prov, model, ok)
+	}
+	if _, err := provider.UnpinSession(ctx, globalLayout, pinned, "", provider.SwitchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if a := chatAgent(t, pinned); a.Provider != "claude/new" || a.ModelID != "sonnet" || a.Pinned {
+		t.Fatalf("cleared chat = %q/%q pinned=%v, want claude/new/sonnet unpinned", a.Provider, a.ModelID, a.Pinned)
+	}
+	if _, _, ok := agentDefaultFor(ctx, pinned); !ok {
+		t.Fatal("a cleared chat is held to the default again")
+	}
+}
