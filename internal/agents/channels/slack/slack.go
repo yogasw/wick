@@ -169,6 +169,16 @@ type turn struct {
 	// emptyWhy is why the last Done had nothing to post (emptyReason),
 	// logged when the thread settles (armEmptyReply).
 	emptyWhy string
+	// emptySilent: that empty Done closed on a [silent] marker, so the
+	// agent chose silence for a person's turn (armEmptyReply nudges it).
+	emptySilent bool
+	// nudged is set once the turn was sent its one follow-up asking for
+	// the answer it closed with [silent] instead (armEmptyReply). A second
+	// empty Done then posts emptyNetLine.
+	nudged bool
+	// sendCtx is the context the person's message was sent to the pool
+	// with (who, as which wick user), reused for that follow-up.
+	sendCtx context.Context
 	// running is true while this turn is still in flight. The turn ENTRY
 	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
 	// approvals and the status heartbeat after the reply lands — so presence
@@ -441,6 +451,9 @@ type Channel struct {
 	// replyHeldFn is told about a reply finalReply held: [silent] after
 	// real text in a turn nobody typed (SetReplyHeldFn).
 	replyHeldFn func(sessionID, text string)
+	// emptyNetFn is told when a person's turn stayed empty even after its
+	// [silent] follow-up and emptyNetLine was posted (SetEmptyNetFn).
+	emptyNetFn func(sessionID, why string)
 	// stopFn stops a session's running turn on a Stop button click
 	// (SetStopFn, session_stop.go).
 	stopFn StopFn
@@ -2938,6 +2951,11 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 
 	userCtx := agentchannels.WithSender(baseCtx, sender)
+	s.mu.Lock()
+	if s.turns[sessionID] == t {
+		t.sendCtx = userCtx
+	}
+	s.mu.Unlock()
 	if err := s.sendFn(userCtx, sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
@@ -3240,6 +3258,7 @@ func (t *turn) finalReply() (text, held string) {
 		text := t.replyText()
 		if strings.TrimSpace(stripSilentMarker(text)) == "" && !t.postedTextInThread && !t.quiet && t.running && !t.answered {
 			t.emptyWhy = emptyReason(full, marked)
+			t.emptySilent = marked
 			return emptyHumanReply, ""
 		}
 		return text, ""
@@ -3327,11 +3346,34 @@ func emptyReason(full string, marked bool) string {
 // a person's turn ended with nothing (armEmptyReply).
 var emptyReplyWait = 60 * time.Second
 
+// emptyNetLine is posted when a person's turn closed on [silent], was
+// asked once more for its answer (nudgeText) and still gave nothing: the
+// person learns the message was handled, the notifier (SetEmptyNetFn)
+// learns someone must look.
+const emptyNetLine = "Sudah diproses, tapi balasannya kosong. Detailnya ada di sesi."
+
+// nudgeText is the one follow-up a person's turn gets when it closed on
+// [silent]: a direct question is never answered with silence.
+func nudgeText(from string) string {
+	if from == "" {
+		from = "someone"
+	}
+	return "You were mentioned with a direct question from " + from + " in this Slack thread; [silent] does not apply to this turn. " +
+		"Answer it now, or write one line saying why you cannot."
+}
+
 // armEmptyReply settles a person's turn that ended with nothing once
-// emptyReplyWait has passed: the status line and ⏳ come off, nothing is
-// posted. A later answer (a turn of the same process, a message tool) or
-// a new message that took the turn settles it first; a turn still running
-// then is waited out again, since its own Done may answer.
+// emptyReplyWait has passed. A later answer (a turn of the same process,
+// a message tool) or a new message that took the turn settles it first;
+// a turn still running then is waited out again, since its own Done may
+// answer. Otherwise:
+//   - a turn that closed on [silent] and was not nudged yet gets one
+//     follow-up turn in the same session (nudgeText), the thread still
+//     working;
+//   - a nudged turn that is still empty posts emptyNetLine and tells the
+//     empty-net notifier;
+//   - anything else (no text at all, narration only) settles quietly:
+//     the status line and ⏳ come off, nothing is posted.
 func (s *Channel) armEmptyReply(sessionKey string, t *turn, wait time.Duration) {
 	time.AfterFunc(wait, func() {
 		s.mu.Lock()
@@ -3344,14 +3386,48 @@ func (s *Channel) armEmptyReply(sessionKey string, t *turn, wait time.Duration) 
 			s.armEmptyReply(sessionKey, t, wait)
 			return
 		}
-		t.answered = true
 		channelID, threadTS, why := t.channelID, t.threadTS, t.emptyWhy
+		if t.emptySilent && !t.nudged && t.sendCtx != nil && s.sendFn != nil {
+			t.nudged = true
+			t.running = true
+			t.lastActivity = time.Now()
+			ctx, from, send := t.sendCtx, t.mentionFrom, s.sendFn
+			s.mu.Unlock()
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).
+				Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+				Msg("slack: person's turn closed on [silent]; asking the agent once more for its answer")
+			s.startStatusAnimation(sessionKey)
+			if err := send(ctx, sessionKey, "main", "slack", "user", nudgeText(from)); err != nil {
+				log.Error().Str("channel", "slack").Str("session", sessionKey).Err(err).Msg("slack: [silent] follow-up could not be sent")
+				s.mu.Lock()
+				if s.turns[sessionKey] == t {
+					t.running = false
+					s.stopStatusAnimation(t)
+				}
+				s.mu.Unlock()
+				s.armEmptyReply(sessionKey, t, 0)
+			}
+			return
+		}
+		t.answered = true
+		net := t.nudged
+		netFn := s.emptyNetFn
 		s.mu.Unlock()
+		s.setAssistantStatus(channelID, threadTS, "")
+		s.clearWorking(sessionKey)
+		if net {
+			log.Warn().Str("channel", "slack").Str("session", sessionKey).
+				Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
+				Msg("slack: person's turn stayed empty after the [silent] follow-up; net line posted")
+			s.postReply(channelID, threadTS, emptyNetLine)
+			if netFn != nil {
+				go netFn(sessionKey, why)
+			}
+			return
+		}
 		log.Warn().Str("channel", "slack").Str("session", sessionKey).
 			Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("why", why).
 			Dur("waited", wait).Msg("slack: person's turn ended with no reply and nothing followed; nothing posted, working marks cleared")
-		s.setAssistantStatus(channelID, threadTS, "")
-		s.clearWorking(sessionKey)
 	})
 }
 

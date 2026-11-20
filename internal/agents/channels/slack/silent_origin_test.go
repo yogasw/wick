@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -377,5 +378,88 @@ func TestEmptyReplyWaitsAndPostsNothing(t *testing.T) {
 	}
 	if got := postedText(f2); got != "" {
 		t.Fatalf("no answer: posted %q", got)
+	}
+}
+
+// A person's turn that closes on a bare [silent] is asked once more for
+// its answer; an answer then posts, and a second [silent] posts the net
+// line and tells the notifier. A listen reply is never asked.
+func TestSilentHumanTurnNudgedOnce(t *testing.T) {
+	prevWait := emptyReplyWait
+	emptyReplyWait = 30 * time.Millisecond
+	t.Cleanup(func() { emptyReplyWait = prevWait })
+	done := event.AgentEvent{Type: event.Done}
+
+	setup := func(tr *turn) (*fakeSlack, *Channel, *agentchannels.Registry, chan string, chan string) {
+		f := newFakeSlack(t)
+		tr.channelID, tr.threadTS, tr.running = "C1", "1700000000.000100", true
+		tr.mentionFrom, tr.sendCtx = "Dana", context.Background()
+		c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": tr}}
+		sent := make(chan string, 4)
+		c.SetSendFunc(func(_ context.Context, _, _, _, _, text string) error { sent <- text; return nil })
+		net := make(chan string, 2)
+		c.SetEmptyNetFn(func(sid, _ string) { net <- sid })
+		reg := agentchannels.NewRegistry()
+		reg.Add(c, nil)
+		return f, c, reg, sent, net
+	}
+	wait := func(ch chan string) string {
+		select {
+		case v := <-ch:
+			return v
+		case <-time.After(2 * time.Second):
+			return ""
+		}
+	}
+
+	// Answers after the nudge.
+	tr := turn{human: true}
+	f, _, reg, sent, net := setup(&tr)
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "\n\n[silent]"})
+	reg.DispatchAgentEvent("slack-t1", done)
+	if got := wait(sent); !strings.Contains(got, "Dana") || !strings.Contains(got, "[silent] does not apply") {
+		t.Fatalf("nudge = %q", got)
+	}
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Here is the answer."})
+	reg.DispatchAgentEvent("slack-t1", done)
+	time.Sleep(150 * time.Millisecond)
+	if got := postedText(f); !strings.Contains(got, "Here is the answer.") || strings.Contains(got, emptyNetLine) {
+		t.Fatalf("posted %q", got)
+	}
+	if len(sent) != 0 || len(net) != 0 {
+		t.Fatalf("extra nudge or net: %d %d", len(sent), len(net))
+	}
+
+	// Stays silent after the nudge: net line once, notifier told, no second nudge.
+	tr2 := turn{human: true}
+	f2, _, reg2, sent2, net2 := setup(&tr2)
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg2.DispatchAgentEvent("slack-t1", done)
+	if wait(sent2) == "" {
+		t.Fatal("no nudge")
+	}
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg2.DispatchAgentEvent("slack-t1", done)
+	if wait(net2) != "slack-t1" {
+		t.Fatal("net notifier not told")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := postedText(f2); strings.Count(got, emptyNetLine) != 1 {
+		t.Fatalf("posted %q", got)
+	}
+	if len(sent2) != 0 {
+		t.Fatal("nudged twice")
+	}
+
+	// Asked for no reply, or a listen reply: no nudge.
+	for name, base := range map[string]turn{"quiet": {human: true, quiet: true}, "listen": {}} {
+		b := base
+		f3, _, reg3, sent3, _ := setup(&b)
+		reg3.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+		reg3.DispatchAgentEvent("slack-t1", done)
+		time.Sleep(150 * time.Millisecond)
+		if len(sent3) != 0 || postedText(f3) != "" {
+			t.Fatalf("%s: nudged or posted %q", name, postedText(f3))
+		}
 	}
 }

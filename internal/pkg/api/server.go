@@ -2382,6 +2382,9 @@ func NewServer() *Server {
 			// A reply held at its end ([silent] after text in a turn nobody
 			// typed) shows in its session and goes to whoever decides.
 			slackCh.SetReplyHeldFn(agentstool.NotifyHeldReply)
+			// A person's turn that stayed empty after its [silent]
+			// follow-up goes to the same handle.
+			slackCh.SetEmptyNetFn(agentstool.NotifyEmptyReply)
 			// Slack's native Stop button stops the thread's turn the way the
 			// web UI's stop does.
 			if agentsPool != nil {

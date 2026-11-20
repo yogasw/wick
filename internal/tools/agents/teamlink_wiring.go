@@ -1742,6 +1742,22 @@ func teamMentionCaller(ctx context.Context, sessionID string, human bool) string
 // when the message cannot be sent.
 func NotifyHeldReply(sessionID, text string) {
 	EmitSystemEvent(sessionID, store.KindReplyHeld, text, nil)
+	notifyHeldReplyHandle(sessionID, "A Slack reply was held, not posted: the turn was not started by a person in the thread and ended with [silent] after this text.\n"+
+		"session_id: "+sessionID+"\n\n"+text)
+}
+
+// NotifyEmptyReply tells the held_reply_notify handle, when set, that a
+// person's Slack turn closed on [silent], got its one follow-up and still
+// answered nothing, so the thread only got the empty-reply line.
+func NotifyEmptyReply(sessionID, why string) {
+	notifyHeldReplyHandle(sessionID, "A person mentioned an agent in a Slack thread and got no answer: the turn closed on [silent], "+
+		"was asked once more to answer, and stayed empty ("+why+"). The thread got the empty-reply line; someone should follow up.\n"+
+		"session_id: "+sessionID)
+}
+
+// notifyHeldReplyHandle sends body to the held_reply_notify handle, best
+// effort.
+func notifyHeldReplyHandle(sessionID, body string) {
 	if globalConfigs == nil || globalTeamHub == nil || InTicketRoom(sessionID) {
 		return
 	}
@@ -1754,14 +1770,12 @@ func NotifyHeldReply(sessionID, text string) {
 		to = "@" + to
 	}
 	ctx := context.Background()
-	body := "A Slack reply was held, not posted: the turn was not started by a person in the thread and ended with [silent] after this text.\n" +
-		"session_id: " + sessionID + "\n\n" + text
 	if _, err := h.Send(ctx, teamlink.SendInput{
 		CallerSession: sessionID, CallerAgentID: teamAgentOfSession(ctx, sessionID),
 		SessionUser: sessionUserOf(sessionID),
 		To:          to, Text: body, Wait: -1, Group: teamlink.GroupNone,
 	}); err != nil {
-		log.Warn().Err(err).Str("session", sessionID).Str("to", to).Msg("held reply: notify failed")
+		log.Warn().Err(err).Str("session", sessionID).Str("to", to).Msg("held/empty reply: notify failed")
 	}
 }
 
