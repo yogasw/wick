@@ -158,12 +158,18 @@ func (h handlers) deploy(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Return the same trace fields as status immediately. This makes the
+	// initial deploy result useful to callers that persist the run in a
+	// progress panel before the first status refresh.
+	st := h.svc.status(r, 20)
 	return map[string]any{
 		"run_id":  r.ID,
 		"state":   r.State,
 		"profile": r.Profile,
 		"script":  r.Script,
 		"args":    r.Args,
+		"stage":   st.Stage,
+		"tail":    st.Tail,
 		"note":    "running in the background, outside wick: completion is published directly on source_deploy:run/<run_id>; status (run_id) remains available for details.",
 	}, nil
 }
