@@ -99,8 +99,15 @@ type Service struct {
 func New(dir string) *Service {
 	s := &Service{dir: dir, Fetch: httpFetch, publish: publishRun}
 	// A plugin process started by a wick that just took over from the one
-	// that ran a deploy delivers that deploy's completion event.
-	go s.FlushNotifications()
+	// that ran a deploy delivers that deploy's completion event. The host API
+	// may still be coming up, so retry instead of losing the event on the
+	// first connection-refused response.
+	go func() {
+		for i := 0; i < 30; i++ {
+			s.FlushNotifications()
+			time.Sleep(2 * time.Second)
+		}
+	}()
 	return s
 }
 
