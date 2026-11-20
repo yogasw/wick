@@ -373,3 +373,35 @@ describe("latestTodoGoal", () => {
     expect(result[0].relatedBlocks).toEqual([shellCall]);
   });
 });
+
+describe("omp's own todo tool", () => {
+  const result = [
+    "Remaining items (2):",
+    "  - Review the changes [in_progress] (Audit)",
+    "  - Run the checks [pending] (Verify)",
+    "Overall: 1/3 done, 2 open.",
+    "  Audit:",
+    "    - [X] Read the instructions",
+    "    - [ ] Review the changes (in progress)",
+    "  Verify:",
+    "    - [ ] Run the checks",
+  ].join("\n");
+  const call = (input: object, res?: string): ThreadBlock => ({
+    kind: "tool", toolUseId: "t1", toolName: "todo", toolInput: JSON.stringify(input), result: res,
+  } as ThreadBlock);
+
+  test("reads the checklist from the result, phase as description", () => {
+    expect(parseTodoItems(call({ i: "Marking the task complete", op: "done", task: "Read the instructions", items: null }, result))).toEqual([
+      { id: "Audit/Read the instructions", title: "Read the instructions", description: "Audit", status: "completed" },
+      { id: "Audit/Review the changes", title: "Review the changes", description: "Audit", status: "in_progress" },
+      { id: "Verify/Run the checks", title: "Run the checks", description: "Verify", status: "pending" },
+    ]);
+  });
+
+  test("a call still running adds nothing; the last finished one is the list", () => {
+    expect(parseTodoItems(call({ op: "view" }))).toEqual([]);
+    const items = mergeTodoItems([call({ op: "init", list: [] }, result), call({ op: "view" })]);
+    expect(todoProgress(items)).toEqual({ done: 1, total: 3, current: "Review the changes" });
+    expect(stripTodoBlocks([call({ op: "view" }, result)])).toEqual([]);
+  });
+});

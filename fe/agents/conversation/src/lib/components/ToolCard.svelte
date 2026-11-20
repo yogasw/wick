@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
+  import { toolIntent } from "../activityLabel.js";
   import { TraceBody, classifyCall, classifyResult, isBinaryKind, type TraceDisplay, type TraceMedia } from "@wick-fe/common-ui";
   import type { TraceFiles } from "../api/files.js";
   import MediaLightbox from "./MediaLightbox.svelte";
@@ -276,12 +277,8 @@
       const calls = codeModeRun.split(" · ")[1];
       return calls ? `${base} · ${calls}` : base;
     }
-    try {
-      const d = (JSON.parse(displayInput) as { description?: unknown }).description;
-      return typeof d === "string" ? d.trim() : (inputDisplay?.summary ?? "");
-    } catch {
-      return inputDisplay?.summary ?? "";
-    }
+    // `description` (Bash, Agent) or omp's per-call intent (`i`).
+    return toolIntent(displayInput, true) || (inputDisplay?.summary ?? "");
   });
 
   // Spilled, not-yet-fetched input gets a size hint in the description slot
