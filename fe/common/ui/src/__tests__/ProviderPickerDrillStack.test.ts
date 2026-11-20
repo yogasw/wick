@@ -17,6 +17,7 @@ const levels: Record<string, ComposerModelOption[]> = {
     { id: "2", label: "akun B", default: false, live: true },
   ],
   "openai-codex/2": [
+    { id: "auto", label: "Auto", default: false, desc: "Picks a model this account can use — now gpt-5.4" },
     { id: "openai-codex/gpt-5.5", label: "gpt-5.5", default: false, unavailable: true },
     { id: "openai-codex/gpt-5.4", label: "gpt-5.4", default: true },
   ],
@@ -50,7 +51,7 @@ describe("ProviderPicker drill stack", () => {
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
     expect(lm).toHaveBeenLastCalledWith("omp/acme", { entry: "openai-codex" });
-    await fireEvent.click(await screen.findByRole("button", { name: "Models of akun B" }));
+    await fireEvent.click(await screen.findByText("akun B"));
     expect(lm).toHaveBeenLastCalledWith("omp/acme", { entry: "openai-codex/2" });
     // Breadcrumb names every level.
     expect(screen.getByText("omp/acme · openai-codex · akun B")).toBeTruthy();
@@ -63,7 +64,7 @@ describe("ProviderPicker drill stack", () => {
     render(ProviderPicker, { options: [OMP], value: "", onChange, loadModels: loadModels() });
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
-    await fireEvent.click(await screen.findByRole("button", { name: "Models of akun B" }));
+    await fireEvent.click(await screen.findByText("akun B"));
     const row = (await screen.findByText("gpt-5.5")).closest("button")!;
     expect(row.hasAttribute("disabled")).toBe(true);
     await fireEvent.click(row);
@@ -71,15 +72,17 @@ describe("ProviderPicker drill stack", () => {
     expect(screen.getByText("unavailable")).toBeTruthy();
   });
 
-  // Same as the chat picker: an account row (or "Auto (rotation)") commits
-  // on click with the provider's default model; only the chevron goes deeper.
-  test("an account row commits on click like the chat picker", async () => {
+  // An account row opens its model level; its "Auto" row pins the account
+  // and lets it pick a model it can use.
+  test("an account opens its models; Auto pins the account", async () => {
     const onChange = vi.fn();
     render(ProviderPicker, { options: [OMP], value: "", onChange, loadModels: loadModels() });
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
-    await fireEvent.click(await screen.findByText("Auto (rotation)"));
-    expect(onChange).toHaveBeenCalledWith("omp/acme::openai-codex@auto");
+    await fireEvent.click(await screen.findByText("akun B"));
+    expect(onChange).not.toHaveBeenCalled();
+    await fireEvent.click(await screen.findByText("Auto"));
+    expect(onChange).toHaveBeenCalledWith("omp/acme::openai-codex/2@auto");
   });
 
   test("names an account pin from its levels on the closed trigger", async () => {
@@ -91,7 +94,7 @@ describe("ProviderPicker drill stack", () => {
     render(ProviderPicker, { options: [OMP], value: "", onChange: vi.fn(), loadModels: loadModels() });
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
-    await fireEvent.click(await screen.findByRole("button", { name: "Models of akun B" }));
+    await fireEvent.click(await screen.findByText("akun B"));
     await fireEvent.click(screen.getByRole("button", { name: "Back to models" }));
     expect(await screen.findByText("Auto (rotation)")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Back to models" }));

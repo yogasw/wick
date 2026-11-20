@@ -422,13 +422,12 @@
             <div class="mx-3 my-1 border-t border-white-300 dark:border-navy-600"></div>
           {/if}
           {#each drillModels as m (m.id)}
-            <!-- At the instance's own level a live row names a SET, so it opens
-                 one level deeper instead of committing. Deeper live rows (an
-                 omp account, "Auto (rotation)") commit on click like the chat
-                 picker; the chevron still opens their model list. Inside a
-                 set, picks pack as "<entryID>@<vendorModelID>". -->
+            <!-- A live row (wick set, omp/opencode provider or account) opens
+                 one level deeper; an account's level starts with "Auto" (the
+                 account picks a model it can use) then its own models. Picks
+                 pack as "<path>@<model>". -->
             {@const live = isLiveSet(m)}
-            {@const opensSet = live && drillStack.length === 0}
+            {@const opensSet = live}
             {@const pinned = `${d.value}::${drillStack.length ? encodePin(drillPath, m.id) : m.id}`}
             {@const isSel = !opensSet && (value === pinned || (value === d.value && m.default))}
             <div class="flex w-full items-stretch {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} {m.unavailable && !live ? 'opacity-50' : ''}">
@@ -443,7 +442,7 @@
                     <span class="truncate">{m.label}</span>
                     {#if m.unavailable && !live}<span class="shrink-0 rounded-full bg-black-500/10 px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">unavailable</span>
                     {:else if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
-                    {#if opensSet}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
+                    {#if opensSet && drillStack.length === 0}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
                   </span>
                   {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
                 </span>
@@ -451,17 +450,6 @@
                   <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 {:else if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
               </button>
-              {#if live && !opensSet}
-                <button
-                  type="button"
-                  onclick={() => pushDrill(m)}
-                  aria-label={`Models of ${m.label}`}
-                  title="Pick a model"
-                  class="shrink-0 px-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
-                >
-                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-              {/if}
             </div>
           {:else}
             <div class="px-3 py-3 text-xs text-black-700 dark:text-black-600">

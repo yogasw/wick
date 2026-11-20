@@ -21,6 +21,7 @@
   import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption, ComposerMentionAgent } from "./composer-types.js";
   import { agentMentionRows, fileMentionRows } from "./mention-menu.js";
   import { matchModelFilter } from "./modelFilter.js";
+  import { decodePath, decodePin, encodePath, encodePin } from "./model-path.js";
 
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
@@ -777,7 +778,7 @@
   function closeModelDrill() {
     modelDrillOpt = null;
     modelDrillSearch = "";
-    setDrill = null;
+    setStack = [];
   }
   function closeTypeDrill() {
     typeDrillKey = "";
@@ -818,14 +819,17 @@
   let modelDrillSearch = $state("");
   let modelDrillSearchEl = $state<HTMLInputElement | undefined>();
 
-  // Level 4: a LIVE SET row inside the model drill was opened. setDrill holds
-  // the set's model row; its expansion is cached under a per-set key so
-  // reopening is instant. Back from a set returns to the provider model list.
-  let setDrill = $state<ComposerModelOption | null>(null);
+  // Level 4+: LIVE rows opened inside the model drill, as a stack (wick: a
+  // live set; omp/opencode: provider, then account). setDrill is the deepest
+  // one; each level's list is cached under its path so reopening is instant.
+  // Back pops one level.
+  let setStack = $state<ComposerModelOption[]>([]);
+  const setDrill = $derived<ComposerModelOption | null>(setStack.length ? setStack[setStack.length - 1] : null);
+  const setPath = $derived(setStack.map((x) => x.id));
   // Which model row's full capability breakdown is open (ⓘ on a chip).
   let capsModalFor = $state<ComposerModelOption | null>(null);
-  function setCacheKey(optValue: string, m: ComposerModelOption): string {
-    return `${optValue}::set::${m.id}`;
+  function setCacheKey(optValue: string, path: string[]): string {
+    return `${optValue}::set::${encodePath(path)}`;
   }
   function isLiveSet(m: ComposerModelOption): boolean {
     return !!m.live;
@@ -835,7 +839,7 @@
   // otherwise the drilled provider's models (fetched or static).
   const drillBaseModels = $derived.by<ComposerModelOption[]>(() => {
     if (!modelDrillOpt) return [];
-    if (setDrill) return modelCache[setCacheKey(modelDrillOpt.value, setDrill)] ?? [];
+    if (setDrill) return modelCache[setCacheKey(modelDrillOpt.value, setPath)] ?? [];
     return modelCache[modelDrillOpt.value] ?? modelDrillOpt.models ?? [];
   });
   function modelRowMatches(m: ComposerModelOption, q: string): boolean {
@@ -861,8 +865,8 @@
         rows.push({ run: () => { provider?.onChange(drill.value); closeModelDrill(); plusView = "root"; plusOpen = false; } });
       }
       for (const m of drillModels) {
-        // A live-set row opens its expansion (level 4); a plain model selects.
-        if (!setDrill && isLiveSet(m)) rows.push({ run: () => openSetDrill(m) });
+        // A live row opens one level deeper; a plain model selects.
+        if (isLiveSet(m)) rows.push({ run: () => openSetDrill(m) });
         else rows.push({ run: () => selectModel(drill, m.id) });
       }
       return rows;
@@ -880,7 +884,7 @@
     return [];
   });
   // Reset the highlight whenever the view/list changes.
-  $effect(() => { void plusRows.length; void plusView; void modelDrillOpt; void setDrill; plusIndex = 0; });
+  $effect(() => { void plusRows.length; void plusView; void modelDrillOpt; void setStack.length; plusIndex = 0; });
 
   function handlePlusKeys(e: KeyboardEvent) {
     if (e.key === "Escape") { e.preventDefault(); plusOpen = false; return; }
@@ -913,7 +917,7 @@
   // drill into a provider's model list.
   function openModelDrill(o: ComposerSelectOption) {
     modelDrillSearch = "";
-    setDrill = null;
+    setStack = [];
     modelDrillOpt = o;
     void loadModelsFor(o);
   }
@@ -951,23 +955,22 @@
   // Level 4: open a live-set row and load its expansion (vendor list narrowed
   // by the set's filter), cached under a per-set key.
   function openSetDrill(m: ComposerModelOption) {
-    // Second click on the same live set collapses it back to the model list.
-    if (setDrill && setDrill.id === m.id) { closeSetDrill(); return; }
     modelDrillSearch = "";
-    setDrill = m;
-    void loadSetModels(m);
+    setStack = [...setStack, m];
+    void loadSetModels(setStack.map((x) => x.id));
   }
-  function closeSetDrill() { setDrill = null; modelDrillSearch = ""; }
-  async function loadSetModels(m: ComposerModelOption, refresh = false) {
+  function closeSetDrill() { setStack = setStack.slice(0, -1); modelDrillSearch = ""; }
+  async function loadSetModels(path: string[], refresh = false) {
     const o = modelDrillOpt;
-    if (!o || !provider?.loadModels) return;
-    const key = setCacheKey(o.value, m);
+    if (!o || !provider?.loadModels || path.length === 0) return;
+    const key = setCacheKey(o.value, path);
+    const entry = encodePath(path);
     if ((modelCache[key] && !refresh) || modelLoading.has(key)) return;
     const next = new Set(modelLoading);
     next.add(key);
     modelLoading = next;
     try {
-      const live = await provider.loadModels(o.value, refresh ? { entry: m.id, refresh: true } : { entry: m.id });
+      const live = await provider.loadModels(o.value, refresh ? { entry, refresh: true } : { entry });
       noteMeta(key, live);
       modelCache = { ...modelCache, [key]: live ?? [] };
     } catch {
@@ -987,21 +990,21 @@
   function reloadDrill() {
     const o = modelDrillOpt;
     if (!o) return;
-    const key = setDrill ? setCacheKey(o.value, setDrill) : o.value;
+    const key = setDrill ? setCacheKey(o.value, setPath) : o.value;
     const refresh = !!levelMeta(key, o)?.canRefresh;
     const next = { ...modelCache };
     delete next[key];
     modelCache = next;
-    if (setDrill) void loadSetModels(setDrill, refresh);
+    if (setDrill) void loadSetModels(setPath, refresh);
     else void loadModelsFor(o, refresh);
   }
 
-  // Commit a model selection and close the whole menu. Inside a live-set
-  // (setDrill), the picked vendor model is encoded as "<entryID>@<vendorID>"
-  // so the backend resolves the set entry (key/kind/base) then overrides the
-  // concrete model — a raw vendor id alone isn't a registered model.
+  // Commit a model selection and close the whole menu. Inside live rows the
+  // pick is "<path>@<model>" (model-path.ts): wick "<entryID>@<vendorID>",
+  // omp/opencode "<provider>/<account>@<model>" — the backend resolves the
+  // path, then the concrete model.
   function selectModel(o: ComposerSelectOption, modelID: string) {
-    const pin = setDrill ? `${setDrill.id}@${modelID}` : modelID;
+    const pin = encodePin(setPath, modelID);
     provider?.onChange(`${o.value}::${pin}`);
     closeModelDrill();
     plusView = "root";
@@ -1077,8 +1080,8 @@
   // default). Returns "" for a plain model id (no "@", not a set).
   function liveSetEntryOf(modelID: string): string {
     if (modelID === "") return "";
-    const at = modelID.indexOf("@");
-    return at < 0 ? modelID : modelID.slice(0, at);
+    const { path, grouped } = decodePin(modelID);
+    return grouped ? encodePath(path) : modelID;
   }
 
   // openModelDrillTo opens the provider's model list (level 3) and, if the
@@ -1088,9 +1091,14 @@
     openModelDrill(o);
     if (entryHint === "") return;
     await loadModelsFor(o);
-    // drillBaseModels reflects the freshly-loaded (or static) list now.
-    const set = drillBaseModels.find((m) => m.id === entryHint && isLiveSet(m));
-    if (set) openSetDrill(set);
+    // Walk the pinned path one level at a time (wick: one set; omp/opencode:
+    // provider, then account), stopping where a level no longer has it.
+    for (const seg of decodePath(entryHint)) {
+      const set = drillBaseModels.find((m) => m.id === seg && isLiveSet(m));
+      if (!set) break;
+      setStack = [...setStack, set];
+      await loadSetModels(setStack.map((x) => x.id));
+    }
   }
 
   // Selecting a provider TYPE at level 1: if it collapses to a single flat
@@ -1415,7 +1423,7 @@
           {:else if modelDrillOpt}
             {@const drill = modelDrillOpt}
             {@const inSet = setDrill}
-            {@const loading = inSet ? modelLoading.has(setCacheKey(drill.value, inSet)) : modelLoading.has(drill.value)}
+            {@const loading = inSet ? modelLoading.has(setCacheKey(drill.value, setPath)) : modelLoading.has(drill.value)}
             {@const showDefaultRow = !inSet && !modelDrillSearch.trim()}
             <!-- Header: back + breadcrumb trail + inline search. The trail shows
                  how deep the drill is — "wick › <set>" — with each crumb
@@ -1439,14 +1447,20 @@
               <div class="flex items-center gap-1 shrink-0 max-w-[45%] text-xs font-medium">
                 <button
                   type="button"
-                  onclick={inSet ? closeSetDrill : undefined}
+                  onclick={inSet ? () => { setStack = []; modelDrillSearch = ""; } : undefined}
                   class="truncate {inSet ? 'text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100' : 'text-black-900 dark:text-white-100 cursor-default'}"
                   title={drill.label}
                 >{drill.label}</button>
-                {#if inSet}
+                {#each setStack as crumb, ci (ci)}
+                  {@const last = ci === setStack.length - 1}
                   <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  <span class="truncate text-black-900 dark:text-white-100" title={inSet.label}>{inSet.label}</span>
-                {/if}
+                  <button
+                    type="button"
+                    onclick={last ? undefined : () => { setStack = setStack.slice(0, ci + 1); modelDrillSearch = ""; }}
+                    class="truncate {last ? 'text-black-900 dark:text-white-100 cursor-default' : 'text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
+                    title={crumb.label}
+                  >{crumb.label}</button>
+                {/each}
               </div>
               <span class="shrink-0 text-black-400 dark:text-navy-500">·</span>
               <input
@@ -1493,8 +1507,8 @@
                 <div class="mx-3 my-1 border-t border-white-300 dark:border-navy-600"></div>
               {/if}
               {#each drillModels as m, mi (m.id)}
-                {@const live = !inSet && isLiveSet(m)}
-                {@const pinnedValue = `${drill.value}::${m.id}`}
+                {@const live = isLiveSet(m)}
+                {@const pinnedValue = `${drill.value}::${encodePin(setPath, m.id)}`}
                 {@const isSel = !live && (provider?.value === pinnedValue || (provider?.value === drill.value && m.default))}
                 {@const rowIdx = (showDefaultRow ? 1 : 0) + mi}
                 {@const hi = plusIndex === rowIdx}
@@ -1509,7 +1523,7 @@
                     <span class="flex items-center gap-2 text-sm">
                       <span class="truncate">{m.label}</span>
                       {#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
-                      {#if live}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
+                      {#if live && !inSet}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
                     </span>
                     {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
                     <!-- Capability chips (vendor-declared) — gated on the
@@ -1528,7 +1542,7 @@
                 </div>
               {/each}
             </div>
-            {@const drillMeta = levelMeta(inSet ? setCacheKey(drill.value, inSet) : drill.value, drill, !!inSet)}
+            {@const drillMeta = levelMeta(inSet ? setCacheKey(drill.value, setPath) : drill.value, drill, !!inSet)}
             {#if drillMeta}
               <div class="flex items-center justify-between gap-2 border-t border-white-300 dark:border-navy-600 px-3 py-1.5 text-[11px] text-black-700 dark:text-black-600" data-testid="composer-models-updated">
                 <span>{describeModelListMeta(drillMeta)}</span>

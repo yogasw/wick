@@ -59,6 +59,8 @@ var (
 		models, _, err := provider.CachedCLIModels(ctx, ins, false)
 		return models, err
 	}
+	// modelSetsPeek is the cache-only list Resolve reads (spawn path: no CLI).
+	modelSetsPeek     = provider.PeekCLIModels
 	modelSetsAccounts = func(ins provider.Instance) []PoolAccount {
 		if ins.Type == provider.TypeOpencode {
 			return opencodeFolderAccounts(ins)
@@ -134,7 +136,13 @@ func (s cliModelSets) Sets(ctx context.Context, ins provider.Instance) ([]provid
 		defProv = order[0]
 	}
 	if len(order) == 1 {
-		return s.Expand(ctx, ins, []string{order[0]})
+		rows, err := s.Expand(ctx, ins, []string{order[0]})
+		// The instance level already has its own "use the default" pick,
+		// and a path-less "auto" pin would read as a model id.
+		if len(rows) > 0 && !rows[0].Live && rows[0].ID == provider.AutoModel {
+			rows = rows[1:]
+		}
+		return rows, err
 	}
 	accts := providerAccounts(ins)
 	out := make([]provider.ModelChoice, 0, len(order))
@@ -173,6 +181,29 @@ func (cliModelSets) Expand(ctx context.Context, ins provider.Instance, path []st
 	if err != nil && len(models) == 0 {
 		return nil, err
 	}
+	return withAutoRow(modelRows(ins, models, prov, account)), nil
+}
+
+// withAutoRow puts the level's "Auto" pick first: the account runs whatever
+// model it can use, named in the description. No usable model → no row.
+func withAutoRow(rows []provider.ModelChoice) []provider.ModelChoice {
+	pick := ""
+	for _, r := range rows {
+		if r.Default && !r.Unavailable {
+			pick = r.Label
+			break
+		}
+	}
+	if pick == "" {
+		return rows
+	}
+	auto := provider.ModelChoice{ID: provider.AutoModel, Label: "Auto", Desc: "Picks a model this account can use — now " + pick}
+	return append([]provider.ModelChoice{auto}, rows...)
+}
+
+// modelRows is prov's model level for account ("" or Auto = rotation):
+// refusals marked, one row flagged Default — the model Auto runs.
+func modelRows(ins provider.Instance, models []provider.LiveModel, prov, account string) []provider.ModelChoice {
 	pinned := account != "" && account != provider.AutoAccount
 	var rows []provider.ModelChoice
 	hasDefault := false
@@ -202,7 +233,7 @@ func (cliModelSets) Expand(ctx context.Context, ins provider.Instance, path []st
 	}
 	if pinned {
 		// One pinned account: its own refusals and last-worked model.
-		return provider.ApplyAvailability(ins, provider.AvailabilityAccount(prov, account), rows), nil
+		return provider.ApplyAvailability(ins, provider.AvailabilityAccount(prov, account), rows)
 	}
 	if !hasDefault {
 		// The instance default is under another provider: this level's
@@ -214,7 +245,7 @@ func (cliModelSets) Expand(ctx context.Context, ins provider.Instance, path []st
 			}
 		}
 	}
-	return rows, nil
+	return rows
 }
 
 // autoDesc explains who rotates: omp does it natively; for opencode wick
@@ -239,8 +270,12 @@ func (cliModelSets) Resolve(ins provider.Instance, path []string, model string) 
 	if len(path) == 1 && model != "" && !strings.Contains(model, "/") {
 		path, model = []string{prov, model}, ""
 	}
-	if model == "" {
-		model = providerDefaultModel(ins, prov)
+	account := ""
+	if len(path) == 2 {
+		account = path[1]
+	}
+	if model == "" || model == provider.AutoModel {
+		model = autoModel(ins, prov, account)
 	}
 	if model == "" || (prov != "" && !strings.HasPrefix(model, prov+"/")) {
 		return provider.SpawnPin{}, fmt.Errorf("model pin: %q is not a %s model", model, prov)
@@ -250,6 +285,26 @@ func (cliModelSets) Resolve(ins provider.Instance, path []string, model string) 
 		sp.Account = path[1]
 	}
 	return sp, nil
+}
+
+// autoModel is what an "Auto" pick runs on prov/account: the row its model
+// level flags Default (last worked for that account, else the instance
+// default, else the first not refused), else providerDefaultModel. Reads
+// the cache only, never the CLI.
+func autoModel(ins provider.Instance, prov, account string) string {
+	if prov == "" {
+		return ""
+	}
+	if provider.LiveModelsEnabled(ins) {
+		if seeds := modelSetsPeek(ins); len(seeds) > 0 {
+			for _, r := range modelRows(ins, provider.EffectiveLiveModels(ins, seeds), prov, account) {
+				if r.Default && !r.Unavailable {
+					return r.ID
+				}
+			}
+		}
+	}
+	return providerDefaultModel(ins, prov)
 }
 
 // providerDefaultModel is the model a provider-level pick runs: the

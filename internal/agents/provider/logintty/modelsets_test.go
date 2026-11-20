@@ -13,11 +13,12 @@ import (
 
 func fakeModelSets(t *testing.T, models []provider.ModelSeed, accts []PoolAccount) {
 	t.Helper()
-	pm, pa := modelSetsModels, modelSetsAccounts
+	pm, pa, pp := modelSetsModels, modelSetsAccounts, modelSetsPeek
 	modelSetsModels = func(context.Context, provider.Instance) ([]provider.ModelSeed, error) { return models, nil }
 	modelSetsAccounts = func(provider.Instance) []PoolAccount { return accts }
+	modelSetsPeek = func(provider.Instance) []provider.ModelSeed { return models }
 	t.Cleanup(provider.SetModelStateDirForTest(t.TempDir()))
-	t.Cleanup(func() { modelSetsModels, modelSetsAccounts = pm, pa })
+	t.Cleanup(func() { modelSetsModels, modelSetsAccounts, modelSetsPeek = pm, pa, pp })
 }
 
 func ids(rows []provider.ModelChoice) []string {
@@ -26,6 +27,15 @@ func ids(rows []provider.ModelChoice) []string {
 		out = append(out, r.ID)
 	}
 	return out
+}
+
+// noAuto drops a model level's leading "Auto" pick.
+func noAuto(t *testing.T, rows []provider.ModelChoice) []provider.ModelChoice {
+	t.Helper()
+	if len(rows) == 0 || rows[0].ID != provider.AutoModel || rows[0].Live {
+		t.Fatalf("model level must start with Auto: %+v", rows)
+	}
+	return rows[1:]
 }
 
 var liveIns = provider.Instance{Type: provider.TypeOMP, Name: "t", ModelSelect: true, LiveModels: true}
@@ -55,27 +65,40 @@ func TestCLIModelSetsProviderAndAccountLevels(t *testing.T) {
 	}
 	// anthropic has ONE active account (the other is disabled) → models directly.
 	m, _ := s.Expand(ctx, liveIns, []string{"anthropic"})
+	m = noAuto(t, m)
 	if got := ids(m); !reflect.DeepEqual(got, []string{"anthropic/claude-x"}) || m[0].Live {
 		t.Fatalf("single-account provider must list models: %v", m)
 	}
 	// provider/account → models of that provider only.
 	m, _ = s.Expand(ctx, liveIns, []string{"openai-codex", "2"})
+	m = noAuto(t, m)
 	if got := ids(m); !reflect.DeepEqual(got, []string{"openai-codex/gpt-5.5", "openai-codex/gpt-5.4"}) || m[0].Label != "gpt-5.5" {
 		t.Fatalf("model level: %v", m)
 	}
 	// Refused on account 2 only → greyed there, default moves; Auto untouched.
 	provider.MarkModelUnavailable(liveIns, provider.AvailabilityAccount("openai-codex", "2"), "openai-codex/gpt-5.5", "free")
 	m, _ = s.Expand(ctx, liveIns, []string{"openai-codex", "2"})
+	auto := m[0]
+	m = noAuto(t, m)
+	if auto.Desc != "Picks a model this account can use — now gpt-5.4" {
+		t.Fatalf("auto row names the model it runs: %+v", auto)
+	}
+	// Auto on account 2 runs what that account can use.
+	if sp, err := s.Resolve(liveIns, []string{"openai-codex", "2"}, provider.AutoModel); err != nil || sp.Model != "openai-codex/gpt-5.4" || sp.Account != "2" {
+		t.Fatalf("auto on account 2: %+v %v", sp, err)
+	}
 	if !m[0].Unavailable || m[0].Default || !m[1].Default {
 		t.Fatalf("refused model: %+v", m)
 	}
 	m, _ = s.Expand(ctx, liveIns, []string{"openai-codex", "auto"})
+	m = noAuto(t, m)
 	if m[0].Unavailable {
 		t.Fatalf("refusal leaked to auto: %+v", m)
 	}
 	// Refused on Auto only → account 1 still offers it, as its default.
 	provider.MarkModelUnavailable(liveIns, provider.AvailabilityAccount("openai-codex", "auto"), "openai-codex/gpt-5.4", "quota")
 	m, _ = s.Expand(ctx, liveIns, []string{"openai-codex", "1"})
+	m = noAuto(t, m)
 	if m[1].Unavailable || !m[0].Default {
 		t.Fatalf("auto refusal leaked to a pinned account: %+v", m)
 	}
@@ -87,6 +110,7 @@ func TestCLIModelSetsSkipsTrivialLevels(t *testing.T) {
 	ins := liveIns
 	ins.Type = provider.TypeOpencode
 	sets, _ := s.Sets(context.Background(), ins)
+	// No path-less "auto" row at the instance level.
 	if got := ids(sets); !reflect.DeepEqual(got, []string{"openai/gpt-5", "openai/gpt-5-mini"}) {
 		t.Fatalf("one provider, one account → models at level 1: %v", got)
 	}
@@ -158,7 +182,7 @@ func TestOpencodeAccountFoldersAndRotation(t *testing.T) {
 	if got := ids(acc); !reflect.DeepEqual(got, []string{"auto", "main", "a2"}) {
 		t.Fatalf("openai has two folders → account level: %v", got)
 	}
-	if m, _ := s.Expand(context.Background(), ins, []string{"anthropic"}); len(m) != 1 || m[0].Live {
+	if m, _ := s.Expand(context.Background(), ins, []string{"anthropic"}); len(m) != 2 || m[0].ID != provider.AutoModel || m[1].Live {
 		t.Fatalf("anthropic has one folder → models: %v", ids(m))
 	}
 
@@ -288,5 +312,19 @@ func TestCLIModelSetsResolveAccountWithoutModel(t *testing.T) {
 	// No model known for the provider: refused, never another provider's.
 	if _, err := s.Resolve(ins, []string{"other"}, "1"); err == nil {
 		t.Fatal("a provider with no known model must be refused")
+	}
+}
+
+func TestCLIModelSetsFlattenSkipsAutoRow(t *testing.T) {
+	fakeModelSets(t, []provider.ModelSeed{{ID: "acme/a"}, {ID: "acme/b"}, {ID: "beta/c"}}, nil)
+	s, _ := provider.ModelSetsFor(provider.TypeOMP)
+	rows, err := provider.FlattenModelSets(context.Background(), s, liveIns)
+	if err != nil || !reflect.DeepEqual(ids(rows), []string{"acme/a", "acme/b", "beta/c"}) {
+		t.Fatalf("flatten: %v %v", ids(rows), err)
+	}
+	// "<provider>@auto" from a single-account provider level.
+	sp, err := s.Resolve(liveIns, []string{"beta"}, provider.AutoModel)
+	if err != nil || sp.Model != "beta/c" || sp.Account != "" {
+		t.Fatalf("provider-level auto: %+v %v", sp, err)
 	}
 }
