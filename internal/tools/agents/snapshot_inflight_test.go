@@ -41,7 +41,8 @@ func TestSnapshotEventsInflightFallbackEndsKilled(t *testing.T) {
 		}
 	}
 	evs := snapshotEvents(sid)
-	if len(evs) != 3 || evs[0].Type != "thinking" || evs[1].Type != "text_snapshot" || evs[1].Data != "half done" {
+	// trace_reset first: the FE drops the trace it holds, the replay rebuilds it.
+	if len(evs) != 4 || evs[0].Type != "trace_reset" || evs[1].Type != "thinking" || evs[2].Type != "text_snapshot" || evs[2].Data != "half done" {
 		t.Fatalf("replay = %#v", evs)
 	}
 	if last := evs[len(evs)-1]; last.Type != "lifecycle" || last.Lifecycle != "killed" {

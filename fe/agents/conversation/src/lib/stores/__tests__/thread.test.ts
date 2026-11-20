@@ -272,6 +272,19 @@ describe("createThreadStore", () => {
 
   /* ── thinking ───────────────────────────────────────────────────── */
 
+  test("a snapshot replay after trace_reset does not repeat thinking", () => {
+    const replay = () => {
+      store.handleEvent(ev("trace_reset", {}));
+      store.handleEvent(ev("thinking", { data: "plan the fix" }));
+      store.handleEvent(ev("tool_use", { tool_use_id: "t1", tool_name: "bash", tool_input: "{}" }));
+      store.handleEvent(ev("tool_result", { tool_use_id: "t1", data: "ok" }));
+    };
+    replay();
+    replay(); // the tab came back: the same in-flight trace again
+    const blocks = get(store.live)!.blocks;
+    expect(blocks.map((b) => b.kind)).toEqual(["thinking", "tool"]);
+  });
+
   test("thinking event pushes a thinking block to live", () => {
     store.handleEvent(ev("thinking", { data: "deep thought" }));
     const live = get(store.live);
