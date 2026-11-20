@@ -82,6 +82,7 @@ internal/**/dist/*/assets/
 
 # Build output binaries — anchored to root so source dirs named the
 # same (e.g. internal/agents/provider/wick/) are not swallowed.
+/.wick-fe-stamps/
 /lab-server
 /lab-server.exe
 /wick
