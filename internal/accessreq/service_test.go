@@ -684,3 +684,23 @@ func TestDeniedEarlierActionSkipsLaterOne(t *testing.T) {
 		t.Fatalf("runs %+v item %+v", e.cat.runs, out.Items[1])
 	}
 }
+
+// A connector with an action waiting for a person is held; once decided
+// (or on another connector or session) it is not.
+func TestHoldsConnectorWhileWaiting(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	if !e.svc.HoldsConnector(ctx, "sess-1", "c-notes") {
+		t.Fatal("a waiting action must hold its connector")
+	}
+	if e.svc.HoldsConnector(ctx, "sess-1", "c-chat") || e.svc.HoldsConnector(ctx, "sess-2", "c-notes") {
+		t.Fatal("only the waiting action's own connector in its own session is held")
+	}
+	if _, _, err := e.svc.Decide(ctx, v.ID, "owner-a", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if e.svc.HoldsConnector(ctx, "sess-1", "c-notes") {
+		t.Fatal("a decided action no longer holds its connector")
+	}
+}

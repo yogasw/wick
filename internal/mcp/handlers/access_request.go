@@ -66,7 +66,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 						},
 					},
 				},
-				"reason":     map[string]any{"type": "string", "description": "create: why these actions are needed, in one or two plain sentences. Shown to the approver as your claim."},
+				"reason":     map[string]any{"type": "string", "description": "create (required): one or two plain sentences for the approver: WHAT each action changes (which record, field or draft, from what to what) and WHY (the case it fixes). Shown on the card as your claim, so the approver can decide without opening the web."},
 				"request_id": map[string]any{"type": "string", "description": "status / cancel: the request id create returned."},
 			},
 		},
@@ -109,6 +109,11 @@ func WickRequestAccess(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 	raw, _ := args["actions"].([]any)
 	in := accessreq.CreateInput{SessionID: sessionID, AgentID: connectors.AgentIDOf(ctx)}
 	in.Reason, _ = args["reason"].(string)
+	in.Reason = strings.TrimSpace(in.Reason)
+	if in.Reason == "" {
+		rsp.ToolError(w, req.ID, "reason is required: one or two sentences saying what the actions change and why, for the approver", accessRequestTool)
+		return
+	}
 	for i, a := range raw {
 		m, _ := a.(map[string]any)
 		toolID, _ := m["tool_id"].(string)

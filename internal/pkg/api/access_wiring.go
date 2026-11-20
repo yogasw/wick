@@ -49,7 +49,7 @@ func (a accessCatalog) sessionTarget(ctx context.Context, connectorID string) (*
 		return nil, true, err
 	}
 	if !ok {
-		return nil, true, fmt.Errorf("session connector %q not found in this session", connectorID)
+		return nil, true, fmt.Errorf("the session connector %q is gone from the session (removed, or deleted while the session sat idle); the agent has to add it again and file a new request", connectorID)
 	}
 	return &connectors.SessionInstanceTarget{BaseKey: inst.BaseKey, Label: inst.Label, Config: inst.Config, LockSeals: inst.LockSeals}, true, nil
 }
@@ -272,6 +272,13 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 			log.Warn().Err(err).Str("session", sessionID).Str("connector", instanceID).Msg("access: forget removed session connector")
 		}
 		agentstool.ForgetSessionConnector(sessionID, instanceID)
+	})
+	// ...and one with actions still waiting for a person is not reaped
+	// while its session sits idle waiting for that person.
+	sessionworkspace.SetHeld(func(sessionID, instanceID string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return ar.HoldsConnector(ctx, sessionID, instanceID)
 	})
 	mcphandlers.AccessRequestsOn = ar.Enabled
 	svc.SetAccessCheck(func(ctx context.Context, q connectors.AccessQuery) (string, string, error) {

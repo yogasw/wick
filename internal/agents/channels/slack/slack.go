@@ -348,6 +348,10 @@ type Channel struct {
 	customizeDenied atomic.Bool
 	// botAvatar caches this bot's own name and avatar (bot user id → [name, icon]).
 	botAvatar sync.Map
+	// mainThreads remembers, per session thread ("chat/ts"), the thread a
+	// mirror thread links to ([chat, ts], empty when none): its access
+	// cards go there.
+	mainThreads sync.Map
 
 	// eventsSeen is event subscription name → last receipt, for the
 	// health matrix's "never received since boot" warning.

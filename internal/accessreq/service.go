@@ -983,6 +983,18 @@ func (s *Service) ConnectorRemoved(ctx context.Context, sessionID, connectorID, 
 	return nil
 }
 
+// HoldsConnector reports whether a session connector still has actions
+// waiting for an approver (or running) on it, so it must outlive an idle
+// session: the person may take longer to click than the session's idle
+// window. Unknown (a DB error) holds, to stay on the safe side.
+func (s *Service) HoldsConnector(ctx context.Context, sessionID, connectorID string) bool {
+	if sessionID == "" || connectorID == "" {
+		return false
+	}
+	n, err := s.store.openItemsOn(ctx, sessionID, connectorID)
+	return err != nil || n > 0
+}
+
 // RevokeSessionGrant ends a "this session" grant from the session's own
 // Workspace panel: whoever may use the session may take it back (the web
 // layer checked the session access).

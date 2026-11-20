@@ -59,6 +59,19 @@ var onRemoved func(sessionID, instanceID string)
 // SetOnRemoved registers the removal listener. Set once at boot.
 func SetOnRemoved(fn func(sessionID, instanceID string)) { onRemoved = fn }
 
+// heldFn reports that something still waits on an instance (an action
+// filed for approval on it), so the idle reaper leaves it alone: a card
+// waiting for a person must still find its connector when approved.
+var heldFn func(sessionID, instanceID string) bool
+
+// SetHeld registers the hold check. Set once at boot; nil holds nothing.
+func SetHeld(fn func(sessionID, instanceID string) bool) { heldFn = fn }
+
+func held(sessionID, instanceID string) bool {
+	fn := heldFn
+	return fn != nil && fn(sessionID, instanceID)
+}
+
 // Instance is one ephemeral connector clone scoped to a session.
 type Instance struct {
 	ID      string `json:"id"`       // "sw_<uuid>"
@@ -311,14 +324,14 @@ func Add(layout agentconfig.Layout, sessionID string, in Instance) (Instance, er
 // later Add of the same label clears its matching tombstone.
 func reapIdle(layout agentconfig.Layout, sessionID, reason string, idle time.Duration, now time.Time) (int, error) {
 	return reapWhere(layout, sessionID, reason, now, func(in Instance) bool {
-		return !in.Pinned() && idle > in.IdleWindow()
+		return !in.Pinned() && idle > in.IdleWindow() && !held(sessionID, in.ID)
 	})
 }
 
 // reapAll removes every unpinned instance of a session regardless of idle
 // windows — the session is gone, or the caller wants it emptied.
 func reapAll(layout agentconfig.Layout, sessionID, reason string, now time.Time) (int, error) {
-	return reapIdle(layout, sessionID, reason, time.Duration(1<<62-1), now)
+	return reapWhere(layout, sessionID, reason, now, func(in Instance) bool { return !in.Pinned() })
 }
 
 // reapExpired removes the pinned instances of a session whose expiry passed.
@@ -331,15 +344,27 @@ func reapExpired(layout agentconfig.Layout, sessionID string, now time.Time) (in
 const ReasonExpired = "expired"
 
 func reapWhere(layout agentconfig.Layout, sessionID, reason string, now time.Time, drop func(Instance) bool) (int, error) {
+	gone, err := reapLocked(layout, sessionID, reason, now, drop)
+	// A reaped instance takes what was tied to it along, like a removal:
+	// its pending approvals end with a reason instead of failing later.
+	if fn := onRemoved; fn != nil {
+		for _, id := range gone {
+			go fn(sessionID, id)
+		}
+	}
+	return len(gone), err
+}
+
+func reapLocked(layout agentconfig.Layout, sessionID, reason string, now time.Time, drop func(Instance) bool) ([]string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	ws, err := Load(layout, sessionID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	stamp := now.UTC().Format(time.RFC3339)
 	kept := make([]Instance, 0, len(ws.Instances))
-	n := 0
+	var gone []string
 	for _, in := range ws.Instances {
 		if !drop(in) {
 			kept = append(kept, in)
@@ -351,16 +376,16 @@ func reapWhere(layout agentconfig.Layout, sessionID, reason string, now time.Tim
 			DeletedAt: stamp,
 			Reason:    reason,
 		})
-		n++
+		gone = append(gone, in.ID)
 	}
-	if n == 0 {
-		return 0, nil
+	if len(gone) == 0 {
+		return nil, nil
 	}
 	ws.Instances = kept
 	if err := save(layout, sessionID, ws); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return n, nil
+	return gone, nil
 }
 
 // SetLifetime sets how an instance dies: pinned to expiresAt (RFC3339), or

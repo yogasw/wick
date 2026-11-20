@@ -1,9 +1,11 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -32,6 +34,7 @@ const (
 	accessBlockID        = "access_req"
 	accessReviewAction   = "access_review"
 	accessDenyAction     = "access_deny"
+	accessApproveAll     = "access_approve_all"
 	accessOpenWebAction  = "access_open_web"
 	accessDecideCallback = "access_req_decide"
 	accessDenyCallback   = "access_req_deny"
@@ -79,13 +82,17 @@ func (s *Channel) PublishAccessRequest(ctx context.Context, v accessreq.View) (m
 		})
 		return nil, uerr
 	}
+	// Post as the thread's agent (its name and avatar), like its replies;
+	// without chat:write.customize fall back to the bot. Resolved from the
+	// session's own thread, also when the card goes to the main thread.
+	extra := s.personaOpts(threadTS)
+	if mainChat, mainThread, ok := s.mainThreadOf(ctx, api, chatID, threadTS); ok {
+		chatID, threadTS = mainChat, mainThread
+	}
 	opts := []slackgo.MsgOption{slackgo.MsgOptionText(fallback, false), slackgo.MsgOptionBlocks(blocks...)}
 	if threadTS != "" {
 		opts = append(opts, slackgo.MsgOptionTS(threadTS))
 	}
-	// Post as the thread's agent (its name and avatar), like its replies;
-	// without chat:write.customize fall back to the bot.
-	extra := s.personaOpts(threadTS)
 	_, ts, err := api.PostMessageContext(ctx, chatID, append(opts, extra...)...)
 	if err != nil && len(extra) > 0 && isCustomizeDenied(err) {
 		s.customizeDenied.Store(true)
@@ -95,6 +102,72 @@ func (s *Channel) PublishAccessRequest(ctx context.Context, v accessreq.View) (m
 		return nil, fmt.Errorf("post access request card: %w", err)
 	}
 	return map[string]string{"slack_channel": chatID, "slack_ts": ts, "slack_thread": threadTS}, nil
+}
+
+// threadLinkRe finds a Slack message link: channel, message ts and the
+// thread_ts query a reply's link carries.
+var threadLinkRe = regexp.MustCompile(`https://[a-zA-Z0-9.-]*slack\.com/archives/([CG][A-Z0-9]+)/p(\d{10})(\d{6})(?:\?[^|>\s"]*?thread_ts=(\d+\.\d+))?`)
+
+// linkedThread reads the thread a message links to ("" when none).
+func linkedThread(text string) (chatID, threadTS string) {
+	m := threadLinkRe.FindStringSubmatch(text)
+	if m == nil {
+		return "", ""
+	}
+	if m[4] != "" {
+		return m[1], m[4]
+	}
+	return m[1], m[2] + "." + m[3]
+}
+
+// mainThreadOf is where a session's access card goes when its thread is a
+// mirror: a thread this bot itself opened with a link to another thread
+// (a first-check card on an inquiry). The approvers watch the inquiry
+// thread, so the card goes there and the case moves on sooner. A thread a
+// person opened stays where it is, link or not. Looked up once per
+// thread.
+func (s *Channel) mainThreadOf(ctx context.Context, api *slackgo.Client, chatID, threadTS string) (string, string, bool) {
+	if chatID == "" || threadTS == "" {
+		return "", "", false
+	}
+	key := chatID + "/" + threadTS
+	if v, ok := s.mainThreads.Load(key); ok {
+		t := v.([2]string)
+		return t[0], t[1], t[0] != ""
+	}
+	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slackgo.GetConversationRepliesParameters{
+		ChannelID: chatID, Timestamp: threadTS, Limit: 1, Inclusive: true, Latest: threadTS,
+	})
+	if err != nil {
+		log.Debug().Str("channel", "slack").Err(err).Msg("access request: thread starter not readable; card stays in the session thread")
+		return "", "", false // not remembered: the next card tries again
+	}
+	var found [2]string
+	if len(msgs) > 0 {
+		found = s.mirrorTarget(msgs[0].Msg, chatID, threadTS)
+	}
+	s.mainThreads.Store(key, found)
+	return found[0], found[1], found[0] != ""
+}
+
+// mirrorTarget is the thread a mirror's starter links to: the starter is
+// this bot's own message and links to a different thread.
+func (s *Channel) mirrorTarget(m slackgo.Msg, chatID, threadTS string) [2]string {
+	s.cfgMu.Lock()
+	botID := s.botUserID
+	s.cfgMu.Unlock()
+	if botID == "" || m.User != botID || m.Timestamp != threadTS {
+		return [2]string{}
+	}
+	text := m.Text
+	if raw, err := json.Marshal(m.Blocks); err == nil {
+		text += " " + string(raw)
+	}
+	c, t := linkedThread(text)
+	if c == "" || (c == chatID && t == threadTS) {
+		return [2]string{}
+	}
+	return [2]string{c, t}
 }
 
 func blocksFromJSON(raw []map[string]any) ([]slackgo.Block, error) {
@@ -216,10 +289,14 @@ func accessCardBlocks(v accessreq.View) []map[string]any {
 	}
 	blocks := []map[string]any{section(title)}
 	if v.Reason != "" {
-		blocks = append(blocks, contextBlock("_Agent's claim (unverified):_ "+escapeMrkdwn(clipText(v.Reason, 500))))
+		blocks = append(blocks, section(whyLine(v.Reason)))
 	}
+	waiting := v.Status == accessreq.StatusPending && v.Pending > 0
 	for _, it := range v.Items {
 		text := accessStatusIcon(it.Status) + " " + itemHeading(it)
+		if it.OpName != "" && it.OpName != it.OpKey {
+			text += "\n_" + escapeMrkdwn(it.OpName) + "_"
+		}
 		if it.Target != "" {
 			text += "\n" + escapeMrkdwn(it.Target)
 		}
@@ -232,10 +309,28 @@ func accessCardBlocks(v accessreq.View) []map[string]any {
 			text += "\n" + itemStatusLine(it)
 		}
 		blocks = append(blocks, section(text))
+		// While it waits, the payload itself: approvers check it here
+		// without opening the web page.
+		if it.Status == accessreq.ItemPending && waiting {
+			blocks = append(blocks, section("```"+escapeMrkdwn(payloadPreview(it, cardPayloadChars(len(v.Items))))+"```"))
+		}
 	}
-	if v.Status == accessreq.StatusPending && v.Pending > 0 {
+	if waiting {
+		approve := "Approve once"
+		confirm := "Run this action once, now, with your own access?"
+		if v.Pending > 1 {
+			approve = fmt.Sprintf("Approve all (%d)", v.Pending)
+			confirm = fmt.Sprintf("Run all %d waiting actions once, now, with your own access? Actions you may not approve stay waiting.", v.Pending)
+		}
 		elems := []any{
-			map[string]any{"type": "button", "action_id": accessReviewAction, "value": v.ID, "style": "primary", "text": plain("Review & decide")},
+			map[string]any{"type": "button", "action_id": accessApproveAll, "value": v.ID, "style": "primary", "text": plain(approve),
+				"confirm": map[string]any{
+					"title":   plain("Approve"),
+					"text":    map[string]any{"type": "plain_text", "text": confirm},
+					"confirm": plain("Approve"),
+					"deny":    plain("Cancel"),
+				}},
+			map[string]any{"type": "button", "action_id": accessReviewAction, "value": v.ID, "text": plain("Review & decide")},
 			map[string]any{"type": "button", "action_id": accessDenyAction, "value": v.ID, "style": "danger", "text": plain("Deny")},
 		}
 		blocks = append(blocks, map[string]any{"type": "actions", "block_id": accessBlockID, "elements": elems})
@@ -251,20 +346,88 @@ func shortID(id string) string {
 	return id
 }
 
-// paramsText is the parameter list for the modal, masked by the service.
-func paramsText(it accessreq.ItemView) string {
-	var b strings.Builder
-	for _, p := range it.Params {
-		v := p.Value
-		if p.Long {
-			v = clipText(v, 280) + " (cut, full text on the web page)"
-		}
-		fmt.Fprintf(&b, "%s: %s\n", p.Name, strings.ReplaceAll(v, "```", "'''"))
+// whyLine is the agent's explanation as the card and the modal show it.
+func whyLine(reason string) string {
+	return "*Why:* " + escapeMrkdwn(clipText(reason, 500)) + " _(agent's words, unverified)_"
+}
+
+// cardPayloadChars is how much of each action's payload the thread card
+// shows: room for one action's draft, less each when there are many, so
+// the card stays readable and within Slack's limits.
+func cardPayloadChars(items int) int {
+	switch {
+	case items <= 1:
+		return 1800
+	case items <= 3:
+		return 900
 	}
-	if b.Len() == 0 {
+	return 400
+}
+
+// modalPayloadChars fits one Slack section (3000) with room to spare.
+const modalPayloadChars = 2700
+
+// payloadPreview is an action's parameters as readable JSON (masked by
+// the service): a JSON document passed as a string (a bot draft, a
+// config) is unfolded so it reads as structure, not as one escaped line.
+// Cut at max with a note saying where the rest is.
+func payloadPreview(it accessreq.ItemView, max int) string {
+	var params map[string]any
+	if it.ParamsJSON != "" {
+		_ = json.Unmarshal([]byte(it.ParamsJSON), &params)
+	}
+	if params == nil && len(it.Params) > 0 {
+		params = map[string]any{}
+		for _, p := range it.Params {
+			params[p.Name] = p.Value
+		}
+	}
+	if len(params) == 0 {
 		return "(no parameters)"
 	}
-	return clipText(b.String(), 1500)
+	for k, v := range params {
+		params[k] = unfoldJSON(v)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(params); err != nil {
+		return "(parameters not readable)"
+	}
+	text := strings.ReplaceAll(strings.TrimRight(buf.String(), "\n"), "```", "'''")
+	r := []rune(text)
+	if len(r) <= max {
+		return text
+	}
+	return string(r[:max]) + fmt.Sprintf("\n… cut: %d more characters, the full payload is on the web page", len(r)-max)
+}
+
+// unfoldJSON parses a string holding a JSON object or array, all the way
+// down; anything else is returned as it is.
+func unfoldJSON(v any) any {
+	switch x := v.(type) {
+	case string:
+		t := strings.TrimSpace(x)
+		if len(t) > 1 && (t[0] == '{' || t[0] == '[') {
+			var inner any
+			if json.Unmarshal([]byte(t), &inner) == nil {
+				return unfoldJSON(inner)
+			}
+		}
+		return x
+	case map[string]any:
+		for k, vv := range x {
+			x[k] = unfoldJSON(vv)
+		}
+		return x
+	case []any:
+		for i, vv := range x {
+			x[i] = unfoldJSON(vv)
+		}
+		return x
+	}
+	return v
 }
 
 func modalBase(title, callback, meta string, blocks []map[string]any, submit string) map[string]any {
@@ -314,7 +477,7 @@ func reviewModal(v accessreq.View, meta string) map[string]any {
 		blocks = append(blocks, contextBlock("Asked in a conversation of "+escapeMrkdwn(v.Requester)))
 	}
 	if v.Reason != "" {
-		blocks = append(blocks, contextBlock("_Agent's claim (unverified):_ "+escapeMrkdwn(clipText(v.Reason, 500))))
+		blocks = append(blocks, section(whyLine(v.Reason)))
 	}
 	if !v.ViewerCanDecide {
 		blocks = append(blocks, section("⛔ *"+escapeMrkdwn(v.ViewerReason)+"*"))
@@ -329,7 +492,7 @@ func reviewModal(v accessreq.View, meta string) map[string]any {
 			text += "\n*Runs as:* your own account ✅"
 		}
 		blocks = append(blocks, section(text))
-		blocks = append(blocks, section("```"+escapeMrkdwn(paramsText(it))+"```"))
+		blocks = append(blocks, section("```"+escapeMrkdwn(payloadPreview(it, modalPayloadChars))+"```"))
 		if it.Note != "" && it.Status == accessreq.ItemPending {
 			blocks = append(blocks, contextBlock("ℹ️ "+escapeMrkdwn(it.Note)))
 		}
@@ -461,6 +624,10 @@ func (s *Channel) handleAccessClick(ctx context.Context, cb slackgo.InteractionC
 	if action.ActionID == accessOpenWebAction {
 		return // a URL button: Slack opens the page itself
 	}
+	if action.ActionID == accessApproveAll {
+		s.handleAccessApproveAll(ctx, cb, action.Value)
+		return
+	}
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
@@ -519,6 +686,69 @@ func (s *Channel) handleAccessClick(ctx context.Context, cb slackgo.InteractionC
 	if _, err := api.UpdateViewContext(ctx, req, "", resp.View.Hash, resp.View.ID); err != nil {
 		log.Warn().Str("channel", "slack").Err(err).Msg("access request: update modal failed")
 	}
+}
+
+// handleAccessApproveAll approves, once, every waiting action the clicker
+// may decide (Slack already asked them to confirm). What they may not
+// decide stays waiting; they are told why, only them.
+func (s *Channel) handleAccessApproveAll(ctx context.Context, cb slackgo.InteractionCallback, reqID string) {
+	chatID, threadTS := cb.Channel.ID, threadOf(cb)
+	if AccessRequests == nil {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Approvals are not available on this wick.")
+		return
+	}
+	viewer := s.accessViewerID(ctx, cb.User.ID)
+	if viewer == "" {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Your Slack account is not linked to an approved wick user, so nothing was approved.")
+		return
+	}
+	v, err := AccessRequests.ViewFor(ctx, reqID, viewer)
+	if err != nil {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "This request could not be found: "+err.Error())
+		return
+	}
+	ds, locked := approveAllDecisions(v)
+	if len(ds) == 0 {
+		msg := "Nothing was approved."
+		if len(locked) > 0 {
+			msg += "\n• " + strings.Join(locked, "\n• ")
+		} else if v.ViewerReason != "" {
+			msg += " " + v.ViewerReason
+		}
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, msg)
+		return
+	}
+	_, results, err := AccessRequests.Decide(ctx, reqID, viewer, ds)
+	if err != nil {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Could not save your approval: "+err.Error())
+		return
+	}
+	for _, r := range results {
+		if !r.OK {
+			locked = append(locked, r.Error)
+		}
+	}
+	if len(locked) > 0 {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Some actions were not approved:\n• "+strings.Join(locked, "\n• "))
+	}
+}
+
+// approveAllDecisions is "once" for every waiting action the viewer may
+// decide, plus why each waiting one they may not decide stays.
+func approveAllDecisions(v accessreq.View) (ds []accessreq.Decision, locked []string) {
+	for _, it := range v.Items {
+		if it.Status != accessreq.ItemPending {
+			continue
+		}
+		if !it.CanDecide {
+			if it.LockedReason != "" {
+				locked = append(locked, fmt.Sprintf("Action %d: %s", it.Idx+1, it.LockedReason))
+			}
+			continue
+		}
+		ds = append(ds, accessreq.Decision{ItemID: it.ID, Mode: accessreq.ModeOnce})
+	}
+	return ds, locked
 }
 
 func threadOf(cb slackgo.InteractionCallback) string {

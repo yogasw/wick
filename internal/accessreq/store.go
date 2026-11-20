@@ -211,6 +211,17 @@ func (s *Store) pendingItemsFor(ctx context.Context, sessionID, connectorID stri
 	return out, s.db.WithContext(ctx).Where("request_id IN (?) AND connector_id = ? AND status = ?", open, connectorID, "pending").Find(&out).Error
 }
 
+// openItemsOn counts the items on connectorID still waiting for a person
+// or running, in a session's open requests.
+func (s *Store) openItemsOn(ctx context.Context, sessionID, connectorID string) (int64, error) {
+	var n int64
+	open := s.db.Model(&entity.AccessRequest{}).Select("id").Where("session_id = ? AND status = ?", sessionID, StatusPending)
+	err := s.db.WithContext(ctx).Model(&entity.AccessRequestItem{}).
+		Where("request_id IN (?) AND connector_id = ? AND status IN ?", open, connectorID, []string{ItemPending, ItemRunning}).
+		Count(&n).Error
+	return n, err
+}
+
 func (s *Store) pruneFinished(ctx context.Context, cutoff time.Time) (int64, error) {
 	var n int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
