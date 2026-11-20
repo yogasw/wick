@@ -2382,6 +2382,13 @@ func NewServer() *Server {
 			// A reply held at its end ([silent] after text in a turn nobody
 			// typed) shows in its session and goes to whoever decides.
 			slackCh.SetReplyHeldFn(agentstool.NotifyHeldReply)
+			// Slack's native Stop button stops the thread's turn the way the
+			// web UI's stop does.
+			if agentsPool != nil {
+				slackCh.SetStopFn(func(sessionID, by string) error {
+					return agentsPool.KillBy(sessionID, "", by, "stopped from Slack")
+				})
+			}
 			// Each reply a listening thread hears lands in its session at once.
 			slackCh.SetHeardFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindThreadHeard, text, extras)

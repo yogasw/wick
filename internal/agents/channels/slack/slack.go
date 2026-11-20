@@ -437,6 +437,9 @@ type Channel struct {
 	// replyHeldFn is told about a reply finalReply held: [silent] after
 	// real text in a turn nobody typed (SetReplyHeldFn).
 	replyHeldFn func(sessionID, text string)
+	// stopFn stops a session's running turn on a Stop button click
+	// (SetStopFn, session_stop.go).
+	stopFn StopFn
 	// heardFn records each reply a listening thread hears (SetHeardFn).
 	heardFn HeldFn
 	// heardNames caches the display names heardName looked up (guarded by
@@ -1996,6 +1999,8 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			})
 		case *slackevents.AssistantThreadStartedEvent:
 			s.handleAssistantThreadStarted(ctx, ev)
+		case *AgentSessionStoppedEvent:
+			s.handleAgentSessionStopped(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
 			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, true)
 			s.handleReactionAdded(ctx, ev)
