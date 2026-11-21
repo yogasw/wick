@@ -44,10 +44,10 @@ const maxIdleRetries = 2
 // so tests need not sleep.
 var idleRetryBackoff = []time.Duration{3 * time.Second, 30 * time.Second}
 
-// DefaultTurnIdleTimeout is the mid-turn idle ceiling wick runs with
-// (PoolConfig.TurnIdleTimeout): long enough for a model thinking over a long context or a slow
-// background job, short enough that a hung CLI still gives its slot back.
-const DefaultTurnIdleTimeout = 20 * time.Minute
+// DefaultTurnIdleTimeout is the maximum silence permitted during an active
+// foreground turn. A provider that claims it is working without emitting an
+// event beyond this limit is treated as stalled and its message is retried.
+const DefaultTurnIdleTimeout = 90 * time.Second
 
 // crashState tracks recent unexplained deaths for one agent.
 //

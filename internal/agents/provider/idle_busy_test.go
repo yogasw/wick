@@ -67,3 +67,37 @@ func TestAgentIdleTTLSparesBusyProcess(t *testing.T) {
 		t.Fatal("idle TTL did not fire once the process went idle")
 	}
 }
+
+// A busy server cannot keep an otherwise silent foreground model turn alive
+// beyond its configured ceiling. This is the provider-stall path: a long tool
+// remains safe because ToolUse stops the timer before this check runs.
+func TestAgentIdleCeilingStopsBusySilentTurn(t *testing.T) {
+	pr, pw := makePipePair()
+	busy := &atomic.Bool{}
+	busy.Store(true)
+	exited := make(chan ExitReason, 1)
+	a := New(Options{
+		Workspace:       t.TempDir(),
+		IdleTimeout:     30 * time.Millisecond,
+		TurnIdleTimeout: 180 * time.Millisecond,
+		ParserFactory:   func() event.Parser { return event.NewClaudeParser() },
+		Spawner:         &busySpawner{keepAliveSpawner: keepAliveSpawner{stdoutR: pr, stdoutW: pw}, busy: busy},
+		State:           state.New(nil),
+		OnExit:          func(r ExitReason, _ string) { exited <- r },
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Stop() })
+	if err := a.Send("stalled model"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-exited:
+		if got != ExitIdle {
+			t.Fatalf("exit reason: %v, want %v", got, ExitIdle)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("busy silent turn exceeded the ceiling")
+	}
+}

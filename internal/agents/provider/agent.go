@@ -1416,6 +1416,14 @@ func (a *Agent) run(ctx context.Context) {
 		for {
 			select {
 			case <-idle.C:
+				// A provider may keep reporting itself busy after its stream
+				// has wedged. The foreground-turn ceiling is authoritative:
+				// Busy still protects tools and background work, but cannot
+				// make a silent model turn live forever.
+				if a.turnTimedOut() {
+					a.idleKill()
+					return
+				}
 				if a.procBusy() {
 					idle.Reset(a.cfg.IdleTimeout)
 					continue
@@ -1432,6 +1440,11 @@ func (a *Agent) run(ctx context.Context) {
 				grace := time.NewTimer(a.cfg.KillAfterIdle)
 				select {
 				case <-grace.C:
+					if a.turnTimedOut() {
+						a.idleKill()
+						grace.Stop()
+						return
+					}
 					if a.procBusy() {
 						grace.Stop()
 						idle.Reset(a.cfg.IdleTimeout)
@@ -2113,6 +2126,18 @@ func (a *Agent) procBusy() bool {
 	a.mu.Unlock()
 	b, ok := proc.(BusyReporter)
 	return ok && b.Busy()
+}
+
+// turnTimedOut reports a foreground turn whose silence reached the configured
+// ceiling even though its provider still claims to be busy. Background work
+// and foreground tools are excluded: the latter stops the idle timer, and the
+// former is allowed to await its later report.
+func (a *Agent) turnTimedOut() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ceiling := a.cfg.TurnIdleTimeout
+	return a.turnOpen && !a.bgPending && ceiling > a.cfg.IdleTimeout &&
+		!a.lastOutput.IsZero() && time.Since(a.lastOutput) >= ceiling
 }
 
 // turnWait is how much longer a silent stream may stay silent before the
