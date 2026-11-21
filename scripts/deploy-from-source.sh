@@ -385,12 +385,13 @@ install_build() {
     graceful)
       if [ -d /data/data/com.termux/files/usr ]; then
         say "stage + Termux auto-detect handover"
-        # Termux is the one platform where the running daemon's Admin safety
-        # gate must own the trigger: wait for a stable binary and unresumable
-        # work to clear before it calls tableflip. The CLI only validates and
-        # stages the candidate, then observes the resulting receipt.
-        run "$PWD/$bin" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --stage --wait || \
-          die "staged handover did not complete — the candidate remains available to the admin auto-detect gate"
+        # The daemon owns the trigger: it waits for a stable binary and for
+        # unresumable work to clear before it calls tableflip. Do not wait
+        # here. The source-deploy RPC is itself active work, so --wait would
+        # keep that gate closed until its own timeout.
+        run "$PWD/$bin" reload --binary "$PWD/$bin" ${sudo:+--sudo} -y --stage || \
+          die "could not stage the candidate for the admin auto-detect gate"
+        echo "   candidate staged; the daemon will hand over after this deploy call returns"
       else
         say "swap + zero-downtime reload"
         # reload checks the candidate (wick module, app, arch, version direction), swaps it

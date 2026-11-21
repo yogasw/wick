@@ -2,11 +2,11 @@ package upgrade
 
 import (
 	"os"
-	"os/exec"
 	"sync"
 
 	"github.com/rs/zerolog/log"
 	wickenv "github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // tableflip launches a successor in its parent's session. Android may reclaim
@@ -15,6 +15,7 @@ import (
 // descriptors and tableflip's readiness pipe survive exec unchanged.
 var successorArgsMu sync.Mutex
 
+
 func spawnInOwnSession(fn func() error) error {
 	termux := wickenv.IsTermux()
 	log.Info().Bool("termux", termux).Msg("upgrade: preparing successor spawn")
@@ -22,7 +23,9 @@ func spawnInOwnSession(fn func() error) error {
 		return fn()
 	}
 
-	setsid, err := exec.LookPath("setsid")
+	// Android's seccomp policy rejects the faccessat2 path used by
+	// os/exec.LookPath. safeexec checks the executable bit with os.Stat.
+	setsid, err := safeexec.LookPath("setsid")
 	if err != nil {
 		log.Warn().Err(err).Msg("upgrade: setsid unavailable; successor stays in the current Termux session")
 		return fn()
