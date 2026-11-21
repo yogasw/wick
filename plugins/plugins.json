@@ -31,11 +31,11 @@
     "key": "codemode_goja",
     "name": "Code Mode runner (JS/TS)",
     "description": "Runs wick_run_code scripts in JavaScript or TypeScript on goja. Scripts reach connectors only through wick; this process holds no credential.",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "kind": "service",
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/codemode_goja/v0.4.0/codemode_goja-0.4.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/codemode_goja/v0.4.0/codemode_goja-0.4.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/codemode_goja/v0.5.0/codemode_goja-0.5.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/codemode_goja/v0.5.0/codemode_goja-0.5.0-linux-arm64.zip"
     }
   },
   {
@@ -365,8 +365,8 @@
   {
     "key": "playwright_browser",
     "name": "Playwright Browser",
-    "description": "Drive a real browser (Chromium/Firefox/WebKit, or the lightweight Moli engine) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
-    "version": "0.14.18",
+    "description": "Drive a real browser (Chromium/Firefox/WebKit, or the lightweight Moli engine) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process. Moli is DOM-first: best for reading pages (get_markdown, scrape, content) at low memory, its live view is low frame rate. For flows that should move and click like a person, or that someone watches live, use a chromium or cloakbrowser instance.",
+    "version": "0.14.47",
     "default_tags": [
       {
         "Name": "Connector",
@@ -386,15 +386,15 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.18/playwright_browser-0.14.18-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.18/playwright_browser-0.14.18-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.47/playwright_browser-0.14.47-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.14.47/playwright_browser-0.14.47-linux-arm64.zip"
     }
   },
   {
     "key": "source_deploy",
     "name": "Deploy from Source",
     "description": "Update THIS wick from source — a branch (develop, a feature branch), a fork or a local checkout — without a release. Runs the deploy-from-source script (.sh on Linux/macOS/Termux, .ps1 on Windows) in the background, outside wick, so it survives the reload it performs. Save a profile once, then deploy with no input.",
-    "version": "0.1.0",
+    "version": "0.2.1",
     "default_tags": [
       {
         "Name": "Connector",
@@ -414,8 +414,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/source_deploy/v0.1.0/source_deploy-0.1.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/source_deploy/v0.1.0/source_deploy-0.1.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/source_deploy/v0.2.1/source_deploy-0.2.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/source_deploy/v0.2.1/source_deploy-0.2.1-linux-arm64.zip"
     }
   }
 ]
