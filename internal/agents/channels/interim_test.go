@@ -56,7 +56,7 @@ func withTasksActive(t *testing.T, f TasksActiveFn) {
 }
 
 func TestIsTeamMessageTool(t *testing.T) {
-	for _, n := range []string{"team_message", "mcp__wick__team_message", "wick.team_message"} {
+	for _, n := range []string{"team_message", "mcp__wick__team_message", "wick.team_message", "mcp__wick_team_message"} {
 		if !IsTeamMessageTool(n) {
 			t.Errorf("%s must match", n)
 		}
@@ -69,7 +69,7 @@ func TestIsTeamMessageTool(t *testing.T) {
 }
 
 func TestIsNeutralTool(t *testing.T) {
-	for _, n := range []string{"ToolSearch", "todo", "mcp__wick__todo", "TodoWrite", "wick_set_title", "mcp__wick__wick_set_title", "set_title", "wick.set_title"} {
+	for _, n := range []string{"ToolSearch", "todo", "mcp__wick__todo", "TodoWrite", "wick_set_title", "mcp__wick__wick_set_title", "set_title", "wick.set_title", "mcp__wick_todo", "mcp__wick_set_title"} {
 		if !IsNeutralTool(n) {
 			t.Errorf("%s must be neutral", n)
 		}

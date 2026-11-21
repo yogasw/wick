@@ -19,11 +19,12 @@ const InterimMax = 600
 
 var (
 	// interimTeamTool is team_message under any namespace
-	// (mcp__wick__team_message, wick.team_message).
-	interimTeamTool = regexp.MustCompile(`(^|__|\.)team_message$`)
+	// (claude mcp__wick__team_message, omp mcp__wick_team_message,
+	// codex wick.team_message).
+	interimTeamTool = regexp.MustCompile(`(^|__|\.|^mcp__wick_)team_message$`)
 	// interimNeutralTool is bookkeeping that does no work of its own:
 	// it neither starts nor cancels the hold.
-	interimNeutralTool = regexp.MustCompile(`(^|__|\.)(ToolSearch|todo|TodoWrite|wick_set_title|set_title)$`)
+	interimNeutralTool = regexp.MustCompile(`(^|__|\.|^mcp__wick_)(ToolSearch|todo|TodoWrite|wick_set_title|set_title)$`)
 	// interimAnswer is a team_message input that answers a task rather
 	// than sending a new one.
 	interimAnswer = regexp.MustCompile(`"task_id"\s*:\s*"[^"\s]`)

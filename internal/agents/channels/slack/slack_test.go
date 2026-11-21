@@ -311,6 +311,18 @@ func TestToolStatusLabel(t *testing.T) {
 		{"empty tool falls back to Working", "", ``, statusLabelWorking},
 		{"unknown mcp tool", "mcp__foo__bar", `{}`, "Running mcp__foo__bar"},
 		{"bad json falls back", "Read", `{not json`, "Reading"},
+		// Non-claude providers name tools and arguments differently.
+		{"omp write", "write", `{"path":"src/app.go","content":"x"}`, "Editing app.go"},
+		{"omp edit", "edit", `{"path":"a/b.ts","old_string":"a","new_string":"b"}`, "Editing b.ts"},
+		{"omp read", "read", `{"path":"/x/notes.md"}`, "Reading notes.md"},
+		{"omp bash", "bash", `{"command":"ls -la"}`, "Running: ls -la"},
+		{"omp grep", "grep", `{"pattern":"TODO"}`, "Searching: TODO"},
+		{"omp task", "task", `{"description":"scan repo"}`, "Delegating: scan repo"},
+		{"omp todo", "todo", `{}`, "Updating plan"},
+		{"codex exec_command", "exec_command", `{"cmd":"go test ./..."}`, "Running: go test ./..."},
+		{"codex shell argv", "shell", `{"command":["git","status"]}`, "Running: git status"},
+		{"opencode edit", "edit", `{"filePath":"pkg/x.go"}`, "Editing x.go"},
+		{"omp mcp keeps name", "mcp__wick_execute", `{}`, "Running mcp__wick_execute"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

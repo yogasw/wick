@@ -273,4 +273,9 @@ var ompControlFrames = map[string]bool{
 	"message_start": true, "tool_execution_update": true, "tool_stream_update": true,
 	"auto_compaction_start": true, "auto_retry_end": true, "model_changed": true,
 	"thinking_level_changed": true, "config_warnings_changed": true,
+	// omp 19.x session bookkeeping: cache keep-alive, follow-up queue,
+	// advisor spend, goal/todo nudges.
+	"cache_warming_start": true, "cache_warming_end": true, "queue_update": true,
+	"advisor_cost_changed": true, "goal_updated": true, "todo_reminder": true,
+	"todo_auto_clear": true, "manual_compaction_start": true, "retry_fallback_succeeded": true,
 }

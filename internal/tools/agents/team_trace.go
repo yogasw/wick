@@ -34,8 +34,9 @@ var (
 	// teamTraceAnswer is a team_message input that answers a task.
 	teamTraceAnswer = regexp.MustCompile(`"task_id"\s*:\s*"[^"\s]`)
 	// teamTraceTool is team_message under any namespace
-	// (mcp__wick__team_message, wick.team_message).
-	teamTraceTool = regexp.MustCompile(`(^|__|\.)team_message$`)
+	// (claude mcp__wick__team_message, omp mcp__wick_team_message,
+	// codex wick.team_message).
+	teamTraceTool = regexp.MustCompile(`(^|__|\.|^mcp__wick_)team_message$`)
 )
 
 // teamTraceEvent is one event of the trace index, as the web reads it.

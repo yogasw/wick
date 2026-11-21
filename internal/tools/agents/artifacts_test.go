@@ -129,6 +129,41 @@ func TestDeriveArtifacts(t *testing.T) {
 	}
 }
 
+// Providers other than claude name the tools in lowercase and the file
+// argument path / filePath; their writes are artifacts all the same.
+func TestDeriveArtifactsOtherProviders(t *testing.T) {
+	base := t.TempDir()
+	layout := agentconfig.NewLayout(base)
+	const sid, tid = "S2", "T2"
+	cwd := filepath.Join(layout.SessionDir(sid), "cwd")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(cwd, "report.html"), []byte("<p/>"), 0o644)
+	_ = os.WriteFile(filepath.Join(cwd, "plot.svg"), []byte("<svg/>"), 0o644)
+	in := func(key, path string) string {
+		b, _ := json.Marshal(map[string]string{key: path})
+		return string(b)
+	}
+	idx := agentstore.TurnTraceIndex{
+		TurnID: tid,
+		Events: []agentstore.TurnEventIndex{
+			{Type: "tool_use", ToolName: "write", ToolInput: in("path", filepath.Join(cwd, "report.html"))},
+			{Type: "tool_use", ToolName: "edit", ToolInput: in("filePath", filepath.Join(cwd, "plot.svg"))},
+		},
+	}
+	writeJSON(t, layout.SessionThinking(sid, tid), idx)
+	turn := agentstore.ConversationTurn{TurnID: tid, Role: "assistant", HasTrace: true}
+	got := deriveArtifacts(layout, sid, "/base", cwd, turn)
+	names := map[string]bool{}
+	for _, a := range got {
+		names[a.Path] = true
+	}
+	if !names["report.html"] || !names["plot.svg"] || len(got) != 2 {
+		t.Fatalf("want report.html + plot.svg, got %v", got)
+	}
+}
+
 func TestAttachArtifactsToTurns(t *testing.T) {
 	base := t.TempDir()
 	layout := agentconfig.NewLayout(base)

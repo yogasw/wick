@@ -6,9 +6,10 @@
 import type { ConversationTurn, TeamTaskItem, ThreadBlock, TurnEvent } from "./types/agents.js";
 
 /** A team_message call, whatever namespace the provider puts on it
-    (mcp__wick__team_message, wick.team_message, team_message). */
+    (mcp__wick__team_message, omp mcp__wick_team_message, wick.team_message,
+    team_message). */
 export function isTeamMessageTool(name?: string): boolean {
-  return !!name && /(^|__|\.)team_message$/.test(name);
+  return !!name && /(^|__|\.|^mcp__wick_)team_message$/.test(name);
 }
 
 /** A team_message input that answers an existing task (task_id set)

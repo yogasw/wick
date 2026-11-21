@@ -114,7 +114,7 @@ export function interimGuards(text: string, tasks: TeamTaskItem[], laterAnswer: 
     break a pure delegation. The same rule as the channels' IsNeutralTool
     (internal/agents/channels/interim.go). */
 export function isNeutralTool(name?: string): boolean {
-  return !!name && /(^|__|\.)(ToolSearch|todo|TodoWrite|wick_set_title|set_title)$/.test(name);
+  return !!name && /(^|__|\.|^mcp__wick_)(ToolSearch|todo|TodoWrite|wick_set_title|set_title)$/.test(name);
 }
 
 /** isInterimText reads one assistant turn: its tool calls are team_message

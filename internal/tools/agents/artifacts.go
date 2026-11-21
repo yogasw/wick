@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/event"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 )
 
@@ -67,8 +68,21 @@ func resolveWithinCwd(cwd, p string) (string, bool) {
 // a file_path. Bigger payloads (huge Write content) are skipped.
 const largeEventReadCap = 256 * 1024
 
+// toolFilePath reads the file argument of a read/write/edit call under the
+// name each provider uses: claude file_path, omp/codex path, opencode filePath.
 type toolFilePath struct {
-	FilePath string `json:"file_path"`
+	FilePath  string `json:"file_path"`
+	Path      string `json:"path"`
+	FilePathC string `json:"filePath"`
+}
+
+func (t toolFilePath) path() string {
+	for _, p := range []string{t.FilePath, t.Path, t.FilePathC} {
+		if p != "" {
+			return p
+		}
+	}
+	return ""
 }
 
 // deriveArtifacts reads the turn's trace index and returns the displayable
@@ -106,8 +120,9 @@ func deriveArtifacts(layout agentconfig.Layout, sessionID, base, cwd string, tur
 		if ev.Type != "tool_use" {
 			continue
 		}
-		written := ev.ToolName == "Write" || ev.ToolName == "Edit"
-		if !written && ev.ToolName != "Read" {
+		fam := event.ToolFamily(ev.ToolName)
+		written := fam == event.ToolWrite || fam == event.ToolEdit
+		if !written && fam != event.ToolRead {
 			continue
 		}
 		raw := ev.ToolInput
@@ -123,10 +138,10 @@ func deriveArtifacts(layout agentconfig.Layout, sessionID, base, cwd string, tur
 			continue
 		}
 		var tf toolFilePath
-		if json.Unmarshal([]byte(raw), &tf) != nil || tf.FilePath == "" {
+		if json.Unmarshal([]byte(raw), &tf) != nil || tf.path() == "" {
 			continue
 		}
-		rel, ok := resolveWithinCwd(cwd, tf.FilePath)
+		rel, ok := resolveWithinCwd(cwd, tf.path())
 		if !ok {
 			continue
 		}

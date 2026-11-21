@@ -5158,37 +5158,67 @@ func toolStatusLabel(toolName, toolInput string) string {
 		return verb
 	}
 
+	// first returns the first non-empty field among keys: providers name
+	// the same argument differently (claude file_path, omp/codex path,
+	// opencode filePath; codex cmd).
+	first := func(keys ...string) string {
+		for _, k := range keys {
+			if v := str(k); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	fileVerb := func(verb string) string {
+		if f := base(first("file_path", "path", "filePath", "notebook_path")); f != "" {
+			return verb + " " + f
+		}
+		return verb
+	}
+
+	// Claude-only names first, then the provider-neutral family, so omp's
+	// "write", codex's "exec_command" and opencode's "edit" read the same
+	// as claude's Write / Bash / Edit.
 	switch toolName {
-	case "Bash":
-		return withSummary("Running", str("command"))
-	case "Read":
-		if f := base(str("file_path")); f != "" {
-			return "Reading " + f
-		}
-		return "Reading"
-	case "Edit", "Write", "NotebookEdit":
-		if f := base(str("file_path")); f != "" {
-			return "Editing " + f
-		}
-		return "Editing"
-	case "Grep":
-		return withSummary("Searching", str("pattern"))
-	case "Glob":
-		return withSummary("Finding files", str("pattern"))
-	case "WebFetch":
-		return withSummary("Fetching", str("url"))
-	case "WebSearch":
-		return withSummary("Searching the web", str("query"))
-	case "Task", "Agent":
-		return withSummary("Delegating", str("description"))
-	case "TodoWrite":
+	case "Task", "Agent", "task":
+		return withSummary("Delegating", first("description", "prompt"))
+	case "TodoWrite", "todo", "todowrite", "update_plan":
 		return "Updating plan"
 	case "":
 		return statusLabelWorking
-	default:
-		// Unknown/MCP tool — show its name so the operator still sees activity.
-		return "Running " + toolName
 	}
+	switch event.ToolFamily(toolName) {
+	case event.ToolBash:
+		cmd := first("command", "cmd")
+		if cmd == "" {
+			if argv, ok := args["command"].([]any); ok {
+				parts := make([]string, 0, len(argv))
+				for _, a := range argv {
+					if s, ok := a.(string); ok {
+						parts = append(parts, s)
+					}
+				}
+				cmd = strings.Join(parts, " ")
+			}
+		}
+		return withSummary("Running", cmd)
+	case event.ToolRead:
+		return fileVerb("Reading")
+	case event.ToolWrite, event.ToolEdit:
+		return fileVerb("Editing")
+	case event.ToolPatch:
+		return "Editing"
+	case event.ToolGrep:
+		return withSummary("Searching", first("pattern", "query", "regex"))
+	case event.ToolGlob:
+		return withSummary("Finding files", first("pattern", "glob", "path"))
+	case event.ToolFetch:
+		return withSummary("Fetching", first("url"))
+	case event.ToolWebSearch:
+		return withSummary("Searching the web", first("query", "q"))
+	}
+	// Unknown/MCP tool — show its name so the operator still sees activity.
+	return "Running " + toolName
 }
 
 // subAgentStatusLabel renders a relayed sub-agent event as one banner line,
