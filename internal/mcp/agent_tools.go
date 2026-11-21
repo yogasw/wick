@@ -61,6 +61,7 @@ func (h *Handler) AgentToolDescriptorsAs(ctx context.Context, id AgentIdentity) 
 	tools = append(tools, handlers.WickManagerToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
 	tools = append(tools, handlers.SubAgentsToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
 	tools = append(tools, handlers.TeamToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
+	tools = accessRequestTools(tools, handlers.SessionIDFrom(ctx))
 	return featureAllowedTools(ctx, tools)
 }
 

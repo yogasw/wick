@@ -340,7 +340,23 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rp
 		tools = append(tools, handlers.SubAgentsToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 		tools = append(tools, handlers.TeamToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 	}
+	tools = accessRequestTools(tools, handlers.SessionOf(r))
 	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: featureAllowedTools(r.Context(), tools)})
+}
+
+// accessRequestTools drops wick_request_access unless the session's
+// project turned access requests on: elsewhere nothing about them shows.
+func accessRequestTools(tools []handlers.ToolDescriptor, sessionID string) []handlers.ToolDescriptor {
+	if handlers.AccessRequestListed(sessionID) {
+		return tools
+	}
+	kept := tools[:0:0]
+	for _, t := range tools {
+		if t.Name != "wick_request_access" {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 // featureAllowedTools drops the tools an agent's switched-off features
@@ -451,6 +467,14 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSlackListen(w, r, hreq, rsp, h.layout, h.threadListen, args)
 	case "wick_session_link":
 		handlers.WickSessionLink(w, r, hreq, rsp, h.layout, h.refreshSession, args)
+	case "wick_session_model":
+		handlers.WickSessionModel(w, r, hreq, rsp, h.layout, args)
+	case "wick_roles":
+		handlers.WickRoles(w, r, hreq, rsp)
+	case "wick_roles_set":
+		handlers.WickRolesSet(w, r, hreq, rsp, args)
+	case "wick_request_access":
+		handlers.WickRequestAccess(w, r, hreq, rsp, args)
 	// Tickets, notes and the source-repo selection are connectors
 	// (internal/connectors/{tickets,notes,source}), not meta-tools: a
 	// connector is taggable and auditable per user, which a hard-coded

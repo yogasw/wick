@@ -59,14 +59,20 @@ const (
 	// owner reaches, new ones included, with write ops. Platform and System
 	// rows still follow their tier defaults and overrides.
 	AccessOwner = "owner"
+	// AccessRoles ("By role") is AccessChoose's checklist as the agent's
+	// ceiling (a music bot reaches its music connector, not the owner's
+	// whole catalog), with what each caller may borrow of those connectors
+	// decided by their role (RBACDoc). Grants' Lend flags do not apply in
+	// this mode; the role document's lend table does.
+	AccessRoles = "roles"
 )
 
 // NormalizeAccessMode maps a stored value to a mode. Empty (a row saved
 // before the column existed) and anything unknown read as AccessChoose,
 // the mode that never widens what an agent had.
 func NormalizeAccessMode(v string) string {
-	if v == AccessOwner {
-		return AccessOwner
+	if v == AccessOwner || v == AccessRoles {
+		return v
 	}
 	return AccessChoose
 }

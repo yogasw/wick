@@ -1,0 +1,465 @@
+package slack
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/agents/event"
+)
+
+// silentRun is what one turn played through the registry gave: the
+// thread's posts and the reply held, if any.
+type silentRun struct {
+	posted, held string
+}
+
+// playOrigin plays parts through a registry holding the channel, for a
+// turn started as tr says (human, quiet, untyped, …). "" is a tool call;
+// "!failover" a provider failover. It returns what the thread got.
+func playOrigin(t *testing.T, tr turn, parts ...string) silentRun {
+	t.Helper()
+	f := newFakeSlack(t)
+	tr.channelID, tr.threadTS, tr.running = "C1", "1700000000.000100", true
+	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
+	heldCh := make(chan string, 1)
+	c.SetReplyHeldFn(func(_, text string) { heldCh <- text })
+	reg := agentchannels.NewRegistry()
+	reg.Add(c, nil)
+	for i, p := range parts {
+		switch p {
+		case "":
+			id := string(rune('a' + i))
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: `{"command":"ls"}`, ToolUseID: id})
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: id, Text: "ok"})
+		case "!upload", "!send":
+			op := map[string]string{"!upload": "upload_file", "!send": "send_message"}[p]
+			in := `{"tool_id":"conn:x/` + op + `","params":{"channel":"C1","thread_ts":"1700000000.000100"}}`
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "mcp__wick__wick_execute", ToolInput: in, ToolUseID: p})
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolResult, ToolUseID: p, Text: "ok"})
+		case "!failover":
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.Warning, ErrorMsg: "a stopped", FailedOver: true})
+		default:
+			reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: p})
+		}
+	}
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.Done})
+	run := silentRun{posted: postedText(f)}
+	select {
+	case run.held = <-heldCh:
+	case <-time.After(200 * time.Millisecond):
+	}
+	return run
+}
+
+const report = "Test 1 passed: room 1001 waits for an agent.\n• step one\n• step two"
+
+var (
+	humanTurn   = turn{human: true}
+	quietTurn   = turn{human: true, quiet: true}
+	untypedRun  = turn{untyped: true}
+	listenReply = turn{} // a listen reply: typed, not a person's mention
+)
+
+// A person's turn always posts, the marker gone, wherever it sits.
+func TestSilentHumanTurnAlwaysPosts(t *testing.T) {
+	for name, parts := range map[string][]string{
+		"no marker":       {report},
+		"leading":         {"[silent] " + report},
+		"trailing":        {report + "\n\n[silent]"},
+		"trailing tools":  {report, "", "\n\n[silent]"},
+		"bare after tool": {report, "", "[silent]"},
+		"middle":          {"first part\n[silent]\nsecond part"},
+		"bold":            {"**[silent]** " + report},
+		"bold trailing":   {report + "\n**[silent]**"},
+	} {
+		got := playOrigin(t, humanTurn, parts...)
+		if got.held != "" || strings.Contains(strings.ToLower(got.posted), "[silent]") {
+			t.Errorf("%s: posted %q held %q", name, got.posted, got.held)
+		}
+		want := "step two"
+		if name == "middle" {
+			want = "second part"
+		}
+		if !strings.Contains(got.posted, want) {
+			t.Errorf("%s: posted %q, want it to hold %q", name, got.posted, want)
+		}
+	}
+
+	// Nothing left to show once the marker is gone: nothing is posted (the
+	// thread keeps working, armEmptyReply). Narration is not the answer.
+	for name, parts := range map[string][]string{
+		"marker only":               {"[silent]"},
+		"empty after tool":          {"", ""},
+		"files, then marker":        {"Account format: op@id.", "!upload", "!upload", "\n\n[silent]"},
+		"after failover, bare mark": {"partial\n", "!failover", "", "[silent]"},
+	} {
+		got := playOrigin(t, humanTurn, parts...)
+		if got.posted != "" || got.held != "" {
+			t.Errorf("%s: posted %q held %q, want nothing", name, got.posted, got.held)
+		}
+	}
+	// A typed turn closing on a tool keeps its last text (as without the
+	// marker, TestTurnEndingOnToolPostsLastText): not lost either.
+	if got := playOrigin(t, humanTurn, "Account format: op@id.", "", "\n\n[silent]"); !strings.Contains(got.posted, "Account format") || strings.Contains(got.posted, "[silent]") {
+		t.Errorf("last text: posted %q", got.posted)
+	}
+	// Answered through a message tool: no extra line.
+	if got := playOrigin(t, humanTurn, "Posting.", "!send", "[silent]"); got.posted != "" {
+		t.Errorf("answered by tool: posted %q", got.posted)
+	}
+	// Asked for silence: still nothing.
+	if got := playOrigin(t, quietTurn, "", "[silent]"); got.posted != "" {
+		t.Errorf("quiet: posted %q", got.posted)
+	}
+}
+
+// A person who asked for no reply gets none when the agent used the
+// marker, at the start or at the end; the web UI still has the reply
+// (the registry never gates it, see TestSilentReplySuppressedFromChannel).
+func TestSilentHumanAskedQuiet(t *testing.T) {
+	for name, parts := range map[string][]string{
+		"leading":  {"[silent] noted"},
+		"trailing": {report + "\n[silent]"},
+		"tools":    {report, "", "[silent]"},
+	} {
+		if got := playOrigin(t, quietTurn, parts...); got.posted != "" || got.held != "" {
+			t.Errorf("%s: posted %q held %q", name, got.posted, got.held)
+		}
+	}
+	// Asked for quiet, but the agent answered without the marker: posted.
+	if got := playOrigin(t, quietTurn, "Done, nothing to add."); !strings.Contains(got.posted, "Done, nothing") {
+		t.Errorf("unmarked: posted %q", got.posted)
+	}
+}
+
+// A turn nobody typed: a leading marker stays silent, a report with the
+// marker after it is held (never posted, never lost), a narration that
+// closes on the marker posts nothing (6a14faef).
+func TestSilentInternalTurn(t *testing.T) {
+	cases := []struct {
+		name  string
+		parts []string
+		held  bool
+	}{
+		{"marker only", []string{"[silent]"}, false},
+		{"marker with trace", []string{"[silent] run 3/5 ok", "", "still nothing"}, false},
+		{"report then marker", []string{report + "\n\n[silent]"}, true},
+		{"report, tools, marker", []string{report, "", "", "\n\n[silent]"}, true},
+		{"report, tools, bare marker", []string{report, "", "[silent]"}, true},
+		{"narration then marker", []string{"Now the docs.", "", "\n\n[silent]"}, false},
+		{"narration then bare marker", []string{"Now the docs.", "", "[silent]"}, false},
+	}
+	for _, tc := range cases {
+		got := playOrigin(t, untypedRun, tc.parts...)
+		if got.posted != "" {
+			t.Errorf("%s: posted %q", tc.name, got.posted)
+		}
+		if tc.held != (got.held != "") {
+			t.Errorf("%s: held %q, want held=%v", tc.name, got.held, tc.held)
+		}
+		if tc.held && (!strings.Contains(got.held, "step two") || strings.Contains(got.held, "[silent]")) {
+			t.Errorf("%s: held %q", tc.name, got.held)
+		}
+	}
+	// No marker at all: posted as before.
+	if got := playOrigin(t, untypedRun, report); !strings.Contains(got.posted, "step two") || got.held != "" {
+		t.Errorf("unmarked: %+v", got)
+	}
+}
+
+// A listen reply (no mention) that opens with the marker stays silent.
+func TestSilentListenTurn(t *testing.T) {
+	if got := playOrigin(t, listenReply, "[silent]"); got.posted != "" || got.held != "" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// After a provider failover the same rules hold: the failed provider's
+// text is gone and the new one's reply is decided afresh.
+func TestSilentRulesAfterFailover(t *testing.T) {
+	got := playOrigin(t, humanTurn, "You've hit your limit\n", "!failover", "[silent] "+report)
+	if !strings.Contains(got.posted, "step two") || strings.Contains(got.posted, "[silent]") || strings.Contains(got.posted, "hit your limit") {
+		t.Errorf("human: %+v", got)
+	}
+	got = playOrigin(t, untypedRun, "partial\n", "!failover", report, "", "[silent]")
+	if got.posted != "" || !strings.Contains(got.held, "step two") {
+		t.Errorf("internal held: %+v", got)
+	}
+	got = playOrigin(t, untypedRun, "partial\n", "!failover", "[silent] ok")
+	if got.posted != "" || got.held != "" {
+		t.Errorf("internal leading: %+v", got)
+	}
+}
+
+// What a person wrote decides whether they asked for no reply.
+func TestAsksQuiet(t *testing.T) {
+	for in, want := range map[string]bool{
+		"@bot just [silent] please":  true,
+		"stay SILENT on this":        true,
+		"diam aja ya":                true,
+		"jangan dibalas":             true,
+		"ga usah dibalas":            true,
+		"don't reply here":           true,
+		"can you check room 1001?":   false,
+		"why did the bot not reply?": false,
+	} {
+		if got := asksQuiet(in); got != want {
+			t.Errorf("asksQuiet(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// An emphasized marker is stripped anywhere; a plain one mid-sentence is
+// still the agent talking about it.
+func TestStripEmphasizedSilentMarker(t *testing.T) {
+	for in, want := range map[string]string{
+		"**[silent]** done":        "done",
+		"done\n**[silent]**":       "done\n",
+		"done **[silent]**":        "done",
+		"see the [silent] marker":  "see the [silent] marker",
+		"_[SILENT]_ quiet run ok.": "quiet run ok.",
+	} {
+		if got := stripSilentMarker(in); got != want {
+			t.Errorf("stripSilentMarker(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An auto-reply thread answers like a mention: a person's turn. A plain
+// listen reply is not.
+func TestPersonTurn(t *testing.T) {
+	if !personTurn(false, listenTurn{}) {
+		t.Error("mention: not a person's turn")
+	}
+	if !personTurn(true, listenTurn{auto: true}) {
+		t.Error("auto-reply: not a person's turn")
+	}
+	if personTurn(true, listenTurn{}) {
+		t.Error("listen reply: counted as a person's turn")
+	}
+	if !personTurn(true, listenTurn{direct: true}) {
+		t.Error("direct listen reply: not a person's turn")
+	}
+}
+
+// A listen reply from the person who opened the thread with the agent,
+// naming no one else, is meant for the agent; anyone else's, or one that
+// names someone else, is not.
+func TestDirectListenReply(t *testing.T) {
+	const bot, starter = "UBOT", "UOPENER"
+	cases := []struct {
+		name     string
+		text     string
+		sender   string
+		topLevel bool
+		want     bool
+	}{
+		{"opener, a link, no mention", "play this <https://example.com/v|example.com/v>", starter, false, true},
+		{"opener mentions the agent", "<@UBOT> next one", starter, false, true},
+		{"opener names someone else", "your turn <@UOTHER>", starter, false, false},
+		{"opener pings the channel", "<!here> lunch", starter, false, false},
+		{"someone else, no mention", "nice song", "UOTHER", false, false},
+		{"someone else names a third person", "go play it <@U09TEST>", "UOTHER", false, false},
+		{"new top-level message", "play this", starter, true, false},
+		{"starter unknown", "play this", starter, false, false},
+	}
+	for _, tc := range cases {
+		st := starter
+		if tc.name == "starter unknown" {
+			st = ""
+		}
+		if got := directListenReply(tc.text, tc.sender, st, bot, tc.topLevel); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A direct listen reply tells the agent to answer, never [silent], and
+// then follows a person's rules: an empty answer posts nothing.
+func TestDirectListenReplyAnswered(t *testing.T) {
+	note := listenNote(listenTurn{direct: true, waited: 6 * time.Second})
+	if !strings.HasPrefix(note, "[listen mode · direct · held 6s]") || !strings.Contains(note, "never [silent]") {
+		t.Fatalf("note = %q", note)
+	}
+	if plain := listenNote(listenTurn{}); strings.Contains(plain, "direct") || !strings.Contains(plain, "else [silent]") {
+		t.Fatalf("plain listen note changed: %q", plain)
+	}
+	direct := turn{human: personTurn(true, listenTurn{direct: true})}
+	if got := playOrigin(t, direct, "[silent]"); got.posted != "" {
+		t.Fatalf("direct reply closing on [silent]: posted %q", got.posted)
+	}
+	if got := playOrigin(t, direct, "The video is over an hour, the limit; send a title instead."); !strings.Contains(got.posted, "over an hour") {
+		t.Fatalf("direct reply answer: posted %q", got.posted)
+	}
+	// A plain listen reply may still stay out.
+	if got := playOrigin(t, listenReply, "[silent]"); got.posted != "" {
+		t.Fatalf("listen reply: posted %q", got.posted)
+	}
+}
+
+// The empty-reply line answers a person who got nothing, never a turn
+// that already answered: a queued event's empty result after the answer,
+// or an event turn nobody typed, posts nothing.
+func TestEmptyReplyLineOnlyWhenUnanswered(t *testing.T) {
+	f := newFakeSlack(t)
+	tr := turn{human: true, channelID: "C1", threadTS: "1700000000.000100", running: true}
+	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
+	reg := agentchannels.NewRegistry()
+	reg.Add(c, nil)
+	done := event.AgentEvent{Type: event.Done}
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Queued six songs for you."})
+	reg.DispatchAgentEvent("slack-t1", done)
+	// A queued event's result: no text at all, then [silent] only.
+	reg.DispatchAgentEvent("slack-t1", done)
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg.DispatchAgentEvent("slack-t1", done)
+	got := postedText(f)
+	if !strings.Contains(got, "Queued six songs") || strings.Contains(got, emptyHumanReply) {
+		t.Fatalf("posted %q", got)
+	}
+
+	// An event turn nobody typed (reopened) that closes on [silent].
+	f2 := newFakeSlack(t)
+	c2 := &Channel{api: f2.client(), turns: map[string]*turn{"slack-t1": {human: true, answered: true, channelID: "C1", threadTS: "1700000000.000100"}}}
+	reg2 := agentchannels.NewRegistry()
+	reg2.Add(c2, nil)
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: `{}`, ToolUseID: "a"})
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg2.DispatchAgentEvent("slack-t1", done)
+	if got := postedText(f2); got != "" {
+		t.Fatalf("event turn posted %q", got)
+	}
+}
+
+// An empty Done right after a person's message keeps the thread working
+// and posts nothing: the real answer that follows is posted on its own,
+// and with nothing following the turn just settles, still posting nothing.
+func TestEmptyReplyWaitsAndPostsNothing(t *testing.T) {
+	prevWait := emptyReplyWait
+	emptyReplyWait = 50 * time.Millisecond
+	t.Cleanup(func() { emptyReplyWait = prevWait })
+	done := event.AgentEvent{Type: event.Done}
+
+	f := newFakeSlack(t)
+	tr := turn{human: true, channelID: "C1", threadTS: "1700000000.000100", running: true}
+	c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": &tr}}
+	reg := agentchannels.NewRegistry()
+	reg.Add(c, nil)
+	reg.DispatchAgentEvent("slack-t1", done)
+	c.reopenTurn("slack-t1")
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Still checking, two more minutes."})
+	reg.DispatchAgentEvent("slack-t1", done)
+	time.Sleep(200 * time.Millisecond)
+	if got := postedText(f); !strings.Contains(got, "two more minutes") || strings.Contains(got, emptyHumanReply) {
+		t.Fatalf("late answer: posted %q", got)
+	}
+
+	f2 := newFakeSlack(t)
+	tr2 := turn{human: true, channelID: "C1", threadTS: "1700000000.000100", running: true}
+	c2 := &Channel{api: f2.client(), turns: map[string]*turn{"slack-t1": &tr2}}
+	reg2 := agentchannels.NewRegistry()
+	reg2.Add(c2, nil)
+	reg2.DispatchAgentEvent("slack-t1", done)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c2.mu.Lock()
+		settled := tr2.answered
+		c2.mu.Unlock()
+		if settled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("empty turn never settled")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := postedText(f2); got != "" {
+		t.Fatalf("no answer: posted %q", got)
+	}
+}
+
+// A person's turn that closes on a bare [silent] is asked once more for
+// its answer; an answer then posts, and a second [silent] posts the net
+// line and tells the notifier. A listen reply is never asked.
+func TestSilentHumanTurnNudgedOnce(t *testing.T) {
+	prevWait := emptyReplyWait
+	emptyReplyWait = 30 * time.Millisecond
+	t.Cleanup(func() { emptyReplyWait = prevWait })
+	done := event.AgentEvent{Type: event.Done}
+
+	setup := func(tr *turn) (*fakeSlack, *Channel, *agentchannels.Registry, chan string, chan string) {
+		f := newFakeSlack(t)
+		tr.channelID, tr.threadTS, tr.running = "C1", "1700000000.000100", true
+		tr.mentionFrom, tr.sendCtx = "Dana", context.Background()
+		c := &Channel{api: f.client(), turns: map[string]*turn{"slack-t1": tr}}
+		sent := make(chan string, 4)
+		c.SetSendFunc(func(_ context.Context, _, _, _, _, text string) error { sent <- text; return nil })
+		net := make(chan string, 2)
+		c.SetEmptyNetFn(func(sid, _ string) { net <- sid })
+		reg := agentchannels.NewRegistry()
+		reg.Add(c, nil)
+		return f, c, reg, sent, net
+	}
+	wait := func(ch chan string) string {
+		select {
+		case v := <-ch:
+			return v
+		case <-time.After(2 * time.Second):
+			return ""
+		}
+	}
+
+	// Answers after the nudge.
+	tr := turn{human: true}
+	f, _, reg, sent, net := setup(&tr)
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "\n\n[silent]"})
+	reg.DispatchAgentEvent("slack-t1", done)
+	if got := wait(sent); !strings.Contains(got, "Dana") || !strings.Contains(got, "[silent] does not apply") {
+		t.Fatalf("nudge = %q", got)
+	}
+	reg.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "Here is the answer."})
+	reg.DispatchAgentEvent("slack-t1", done)
+	time.Sleep(150 * time.Millisecond)
+	if got := postedText(f); !strings.Contains(got, "Here is the answer.") || strings.Contains(got, emptyNetLine) {
+		t.Fatalf("posted %q", got)
+	}
+	if len(sent) != 0 || len(net) != 0 {
+		t.Fatalf("extra nudge or net: %d %d", len(sent), len(net))
+	}
+
+	// Stays silent after the nudge: net line once, notifier told, no second nudge.
+	tr2 := turn{human: true}
+	f2, _, reg2, sent2, net2 := setup(&tr2)
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg2.DispatchAgentEvent("slack-t1", done)
+	if wait(sent2) == "" {
+		t.Fatal("no nudge")
+	}
+	reg2.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+	reg2.DispatchAgentEvent("slack-t1", done)
+	if wait(net2) != "slack-t1" {
+		t.Fatal("net notifier not told")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := postedText(f2); strings.Count(got, emptyNetLine) != 1 {
+		t.Fatalf("posted %q", got)
+	}
+	if len(sent2) != 0 {
+		t.Fatal("nudged twice")
+	}
+
+	// Asked for no reply, or a listen reply: no nudge.
+	for name, base := range map[string]turn{"quiet": {human: true, quiet: true}, "listen": {}} {
+		b := base
+		f3, _, reg3, sent3, _ := setup(&b)
+		reg3.DispatchAgentEvent("slack-t1", event.AgentEvent{Type: event.TextDelta, Text: "[silent]"})
+		reg3.DispatchAgentEvent("slack-t1", done)
+		time.Sleep(150 * time.Millisecond)
+		if len(sent3) != 0 || postedText(f3) != "" {
+			t.Fatalf("%s: nudged or posted %q", name, postedText(f3))
+		}
+	}
+}

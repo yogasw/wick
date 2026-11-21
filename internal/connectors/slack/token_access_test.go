@@ -27,7 +27,7 @@ func authStub(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		case fakeBot:
-			w.Header().Set("X-OAuth-Scopes", "channels:read,chat:write,users:read")
+			w.Header().Set("X-OAuth-Scopes", "channels:read,chat:write,users:read,usergroups:read")
 			_, _ = w.Write([]byte(`{"ok":true,"team":"Acme","user":"wickbot","user_id":"UBOT1","team_id":"T1","bot_id":"B1"}`))
 		case fakeUser:
 			w.Header().Set("X-OAuth-Scopes", "channels:read,chat:write")
@@ -124,7 +124,7 @@ func TestTokenAccess_FullyPassingCategoryCollapses(t *testing.T) {
 	// The bot stub holds channels:read only for the read side of Channels,
 	// so history ops fail and the category expands …
 	assert.Contains(t, h, `<td class="op">get_channel_history</td>`)
-	// … while Users (users:read covers all three) collapses to one row.
-	assert.Contains(t, h, "<td>Users</td><td>✅ 3/3</td>")
+	// … while Users (users:read + usergroups:read cover all four) collapses to one row.
+	assert.Contains(t, h, "<td>Users</td><td>✅ 4/4</td>")
 	assert.NotContains(t, h, `<td class="op">list_users</td>`)
 }

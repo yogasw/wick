@@ -8,12 +8,11 @@ import (
 // event that is ABOUT the session rather than part of the agent's reply,
 // and reports whether this event is one of those at all.
 //
-// The web UI gets these for free: it reads the conversation file, so a
-// system turn (a compaction boundary today) shows up as its own row next
-// to the messages. A chat thread has no such row — it only ever sees what
-// a channel decides to post — so from Slack or Telegram the same event is
-// simply invisible. Someone who asks for /compact from a thread watches
-// the agent say it queued one and then never hears that it happened.
+// Only wick's own notices qualify. A compaction boundary does not: it is
+// bookkeeping about the agent's context window, which means nothing to
+// the people in a Slack or Telegram thread and reads there as a stray
+// system line wedged above the agent's answer. The web UI still shows it
+// as its own row, read from the conversation file, so nothing is lost.
 //
 // Keeping the mapping here rather than in each channel means the next
 // system event worth surfacing is added once and reaches every transport,
@@ -22,11 +21,6 @@ import (
 // channel's own business and must not be duplicated as a notice.
 func SystemNoticeText(ev event.AgentEvent) (string, bool) {
 	switch ev.Type {
-	case event.Compaction:
-		if ev.Compaction == nil {
-			return "", false
-		}
-		return ev.Compaction.Summary(), true
 	case event.Notice:
 		return ev.Text, ev.Text != ""
 	default:

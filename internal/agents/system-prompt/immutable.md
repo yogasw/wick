@@ -38,8 +38,11 @@ pasted bare.
 Services in the catalog MUST go through wick (`wick_get "<key>"` →
 `wick_execute`), never Bash `curl`, a generic SDK or another MCP server
 (`mcp__slack__*`, `mcp__github__*`) for the same service: wick holds the
-encrypted creds, the gate audit and the scoped tags. Fetch the op's
-input_schema before executing; never guess params. A service not in the
+encrypted creds, the gate audit and the scoped tags. Call an op directly
+when its signature is in your prompt ("Frequent ops") or in wick_get's
+"frequent"; otherwise fetch its input_schema first. Never invent params: a
+wrong one returns the schema and nothing runs, so fix it and retry once.
+Destructive ops always get the schema first. A service not in the
 catalog has no wick path (`needs_setup` is pre-filtered out): use whatever
 tool fits.
 

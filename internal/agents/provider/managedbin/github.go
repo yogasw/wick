@@ -57,7 +57,23 @@ func defaultAllowed(u *url.URL) bool {
 	return u.Scheme == "https" && allowedHosts[strings.ToLower(u.Hostname())]
 }
 
+// statusError is a non-200 answer; download retries the 5xx ones.
+type statusError struct {
+	url  string
+	code int
+	text string
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("GET %s: %s", e.url, e.text) }
+
 func (c *client) get(ctx context.Context, rawURL string) (*http.Response, error) {
+	return c.getAccept(ctx, rawURL, "")
+}
+
+// getAccept is get with an explicit Accept header ("" = the default for
+// the host): an API asset URL needs application/octet-stream to answer
+// with the file instead of its JSON description.
+func (c *client) getAccept(ctx context.Context, rawURL, accept string) (*http.Response, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -70,7 +86,9 @@ func (c *client) get(ctx context.Context, rawURL string) (*http.Response, error)
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "wick-managed-binaries")
-	if strings.Contains(u.Host, "api.") || strings.HasPrefix(rawURL, c.apiBase) {
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	} else if strings.Contains(u.Host, "api.") || strings.HasPrefix(rawURL, c.apiBase) {
 		req.Header.Set("Accept", "application/vnd.github+json")
 	}
 	resp, err := c.http.Do(req)
@@ -79,13 +97,14 @@ func (c *client) get(ctx context.Context, rawURL string) (*http.Response, error)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+		return nil, &statusError{url: rawURL, code: resp.StatusCode, text: resp.Status}
 	}
 	return resp, nil
 }
 
 type ghAsset struct {
 	Name               string `json:"name"`
+	URL                string `json:"url"` // API asset URL, the download fallback
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
 	Digest             string `json:"digest"`
@@ -106,7 +125,7 @@ func (r ghRelease) toRelease() Release {
 		if strings.HasPrefix(a.Digest, "sha256:") {
 			sum = strings.ToLower(strings.TrimPrefix(a.Digest, "sha256:"))
 		}
-		out.Assets = append(out.Assets, Asset{Name: a.Name, URL: a.BrowserDownloadURL, Size: a.Size, SHA256: sum})
+		out.Assets = append(out.Assets, Asset{Name: a.Name, URL: a.BrowserDownloadURL, APIURL: a.URL, Size: a.Size, SHA256: sum})
 	}
 	return out
 }
@@ -171,11 +190,45 @@ func (c *client) FetchSmall(ctx context.Context, rawURL string, max int64) ([]by
 	return b, nil
 }
 
+// downloadAsset fetches a release asset. github.com's release download URL
+// sometimes answers 504 for minutes while the same file is served fine
+// through the API asset URL, so a 5xx there is retried once and then the
+// API URL is tried. Every route is checked against the same sha256 by the
+// caller, so the fallback changes where the bytes come from, not what is
+// accepted.
+func (c *client) downloadAsset(ctx context.Context, a Asset, dest string, max int64, progress func(done, total int64)) (string, error) {
+	sum, err := c.download(ctx, a.URL, "", dest, max, progress)
+	if !isServerError(err) {
+		return sum, err
+	}
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(retryDelay):
+	}
+	if sum, err = c.download(ctx, a.URL, "", dest, max, progress); !isServerError(err) || a.APIURL == "" {
+		return sum, err
+	}
+	sum, apiErr := c.download(ctx, a.APIURL, "application/octet-stream", dest, max, progress)
+	if apiErr != nil {
+		return "", fmt.Errorf("%w; API asset URL: %v", err, apiErr)
+	}
+	return sum, nil
+}
+
+// retryDelay is the pause before the release URL is tried again.
+var retryDelay = 3 * time.Second
+
+func isServerError(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && se.code >= 500
+}
+
 // download streams rawURL into dest (created 0600), hashing as it goes,
 // and returns the hex sha256. It stops past max bytes. progress receives
 // (done, total) — total may be -1 when unknown.
-func (c *client) download(ctx context.Context, rawURL, dest string, max int64, progress func(done, total int64)) (string, error) {
-	resp, err := c.get(ctx, rawURL)
+func (c *client) download(ctx context.Context, rawURL, accept, dest string, max int64, progress func(done, total int64)) (string, error) {
+	resp, err := c.getAccept(ctx, rawURL, accept)
 	if err != nil {
 		return "", err
 	}

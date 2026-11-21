@@ -979,6 +979,7 @@ var opScopes = map[string][][]string{
 	"list_users":             {{"users:read"}},
 	"get_user_info":          {{"users:read"}},
 	"get_user_by_email":      {{"users:read", "users:read.email"}},
+	"list_usergroup_members": {{"usergroups:read"}},
 	"get_permalink":          {{"chat:write"}},
 	"send_message":           {{"chat:write"}},
 	"send_ephemeral":         {{"chat:write"}},

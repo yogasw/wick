@@ -710,6 +710,15 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		}
 		t.mu.Unlock()
 
+	case event.TextReplace:
+		// The reply so far was taken back (a Stop hook refused it).
+		t.mu.Lock()
+		if tn := t.turns[sessionID]; tn != nil {
+			tn.buf.Reset()
+			tn.buf.WriteString(ev.Text)
+		}
+		t.mu.Unlock()
+
 	case event.Warning:
 		// A failover took the turn elsewhere: the failed provider's text
 		// is not sent, only the next provider's reply.
@@ -791,11 +800,9 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		t.postMessage(tn.chatID, "Agent error: "+msg)
 
 	default:
-		// Events that are ABOUT the session rather than part of the reply
-		// (a compaction boundary today). The web UI renders them as their
-		// own row; a chat has no such row, so unless the channel posts the
-		// line the event is invisible here — a /compact asked for from
-		// Telegram would simply never report back.
+		// wick's own notices about the session rather than part of the
+		// reply. A compaction boundary is not one of them: it stays in the
+		// web UI only (see SystemNoticeText).
 		text, ok := agentchannels.SystemNoticeText(ev)
 		if !ok {
 			return

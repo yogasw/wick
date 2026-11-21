@@ -39,6 +39,10 @@ func teamWorldDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An open connection keeps the named DB alive past the test.
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	return db
 }
 

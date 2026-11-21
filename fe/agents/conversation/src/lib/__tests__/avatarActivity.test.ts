@@ -56,3 +56,13 @@ describe("mainChatOpen", () => {
     expect(rosterActivity(st, mainChatOpen(a, "a", { session: null }))).toBe("idle");
   });
 });
+
+import { toolIntent } from "../activityLabel.js";
+describe("toolIntent", () => {
+  test("omp's per-call intent; description only when asked", () => {
+    expect(toolIntent('{"i":"Designing the helper","path":"a.go"}')).toBe("Designing the helper");
+    expect(toolIntent('{"description":"List files"}')).toBe("");
+    expect(toolIntent('{"description":"List files"}', true)).toBe("List files");
+    expect(toolIntent("not json")).toBe("");
+  });
+});

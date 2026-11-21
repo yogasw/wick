@@ -41,18 +41,18 @@ const (
 // display order. SourceMeta keeps provenance (chosen category tag, MCP
 // server id). Raw AI-parser pastes are never persisted.
 type CustomConnector struct {
-	ID          string                `gorm:"type:varchar(36);primaryKey"`
-	Key         string                `gorm:"type:varchar(100);uniqueIndex;not null"`
-	Name        string                `gorm:"type:varchar(255);not null"`
-	Description string                `gorm:"type:text"`
+	ID          string `gorm:"type:varchar(36);primaryKey"`
+	Key         string `gorm:"type:varchar(100);uniqueIndex;not null"`
+	Name        string `gorm:"type:varchar(255);not null"`
+	Description string `gorm:"type:text"`
 	// Icon is an emoji, an inline <svg>, or a data:image/...;base64
 	// payload (validated to 32KB) — rendered as text or <img> by the UI.
-	Icon string `gorm:"type:text"`
-	Source      CustomConnectorSource `gorm:"type:varchar(16);not null"`
-	SourceMeta  string                `gorm:"type:text"`
-	Configs     string                `gorm:"type:text;not null;default:'[]'"`
-	Ops         string                `gorm:"type:text;not null;default:'[]'"`
-	CreatedBy   string                `gorm:"type:varchar(36)"`
+	Icon       string                `gorm:"type:text"`
+	Source     CustomConnectorSource `gorm:"type:varchar(16);not null"`
+	SourceMeta string                `gorm:"type:text"`
+	Configs    string                `gorm:"type:text;not null;default:'[]'"`
+	Ops        string                `gorm:"type:text;not null;default:'[]'"`
+	CreatedBy  string                `gorm:"type:varchar(36)"`
 	// SingleInstance locks the def to one row (Meta.Fixed). Default off:
 	// custom connectors behave like built-ins — admins add/duplicate
 	// instance rows, each with its own credentials.
@@ -65,8 +65,8 @@ type CustomConnector struct {
 	// oauth/sso-backed MCP defs whose config is a user token.
 	AllowSessionConfig bool `gorm:"default:false"`
 	Disabled           bool `gorm:"default:false"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (CustomConnector) TableName() string { return "custom_connectors" }
@@ -123,14 +123,20 @@ type CustomConnectorMCPServer struct {
 	// expose. The exclusion model is opt-out: everything the server
 	// lists is an operation unless its name is in here.
 	ExcludedTools string `gorm:"type:text;not null;default:'[]'"`
+	// GroupRules is the JSON grouping recipe (custom.GroupRules) that sorts
+	// the server's tools into sections when the server ships no
+	// _meta.category of its own: pins, regex rules, {group} templates,
+	// titles, keywords and the catch-all section. Re-applied on every
+	// tools/list sync, so new tools land in a group without an edit.
+	GroupRules string `gorm:"type:text"`
 	// ServerInfo is the JSON {name, version} the server reported on the
 	// last successful initialize — admin-facing only (edit form,
 	// def_get); deliberately never exposed to the LLM via wick_list.
 	ServerInfo string `gorm:"type:text"`
-	LastTestAt    *time.Time
-	LastTestOK    bool `gorm:"default:false"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	LastTestAt *time.Time
+	LastTestOK bool `gorm:"default:false"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func (CustomConnectorMCPServer) TableName() string { return "custom_connector_mcp_servers" }

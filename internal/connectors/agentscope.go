@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -64,6 +65,77 @@ type LendingScope interface {
 	LentIDs() []string
 }
 
+// RoleScope is the optional part of an AgentScope whose access depends on
+// who is calling (an agent in "By role" access). callerID is the person
+// asking, before any lend swaps in the lender.
+type RoleScope interface {
+	// CallerLevel is what callerID may do on connectorID: on their own
+	// access (lent false) or on the owner's lend (lent true). level is
+	// "all", "read", "pick" (ops lists the ops) or "off"; why says, in
+	// words for the caller, what limited them ("" when nothing did).
+	CallerLevel(ctx context.Context, callerID, connectorID string, lent bool) (level string, ops []string, why string)
+}
+
+// callerLevel asks the RoleScope on ctx, if any; no RoleScope permits all.
+func callerLevel(ctx context.Context, callerID, connectorID string, lent bool) (string, []string, string) {
+	rs, ok := AgentScopeFrom(ctx).(RoleScope)
+	if !ok {
+		return "all", nil, ""
+	}
+	return rs.CallerLevel(ctx, callerID, connectorID, lent)
+}
+
+// roleAllowsOp refuses an op the caller's role does not allow on
+// connectorID (see RoleScope), with the reason in words.
+func roleAllowsOp(ctx context.Context, callerID, connectorID, opKey string, destructive, lent bool) error {
+	lv, ops, why := callerLevel(ctx, callerID, connectorID, lent)
+	refuse := func(def string) error {
+		if why == "" {
+			why = def
+		}
+		return fmt.Errorf("operation %q is not allowed: %s", opKey, why)
+	}
+	switch lv {
+	case "all":
+		return nil
+	case "read":
+		if destructive {
+			return refuse("your role may only read this connector")
+		}
+		return nil
+	case "pick":
+		for _, k := range ops {
+			if k == opKey {
+				return nil
+			}
+		}
+		return refuse("your role may only run some operations of this connector")
+	}
+	return refuse("your role has no access to this connector")
+}
+
+// LentAccountScope is the optional part of a LendingScope that names the
+// one account a lend runs as. A lend that lists exactly one account
+// (not the instance's own identity) runs as it, instead of guessing
+// the account from whoever is calling.
+type LentAccountScope interface {
+	LentAccount(connectorID string) (accountID string, ok bool)
+}
+
+// lentAccountID is the account a lent connector runs as, "" when the
+// scope names none.
+func lentAccountID(ctx context.Context, connectorID string) string {
+	ls, ok := AgentScopeFrom(ctx).(LentAccountScope)
+	if !ok {
+		return ""
+	}
+	id, ok := ls.LentAccount(connectorID)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 type agentScopeKey struct{}
 
 // WithAgentScope attaches scope to ctx. A nil scope leaves ctx unchanged.
@@ -83,6 +155,52 @@ func WithoutAgentScope(ctx context.Context) context.Context {
 	}
 	return context.WithValue(ctx, agentScopeKey{}, nil)
 }
+
+// WithoutLending returns scope with its lending half removed: the same
+// checklist and feature switches, but nothing lent. For a caller that
+// named a session it may not use — the checklist still narrows them, the
+// owner's lend must not widen them. nil stays nil.
+func WithoutLending(scope AgentScope) AgentScope {
+	if scope == nil {
+		return nil
+	}
+	if fs, ok := scope.(AgentFeatureScope); ok {
+		return unlentFeatureScope{unlentScope{scope}, fs}
+	}
+	return unlentScope{scope}
+}
+
+// unlentScope forwards only the AgentScope methods, so a type assertion
+// to LendingScope or LentAccountScope fails on it.
+type unlentScope struct{ s AgentScope }
+
+func (u unlentScope) AllowConnector(id string) bool { return u.s.AllowConnector(id) }
+func (u unlentScope) AllowAccount(id, accountID string) bool {
+	return u.s.AllowAccount(id, accountID)
+}
+func (u unlentScope) AllowOp(id, opKey string, destructive bool) bool {
+	return u.s.AllowOp(id, opKey, destructive)
+}
+
+type unlentFeatureScope struct {
+	unlentScope
+	fs AgentFeatureScope
+}
+
+func (u unlentFeatureScope) AllowKey(key string) bool   { return u.fs.AllowKey(key) }
+func (u unlentFeatureScope) AllowTool(name string) bool { return u.fs.AllowTool(name) }
+
+// agentIDOf is the Team agent behind the scope on ctx, "" when the scope
+// does not name one.
+func agentIDOf(ctx context.Context) string {
+	if a, ok := AgentScopeFrom(ctx).(interface{ AgentID() string }); ok {
+		return a.AgentID()
+	}
+	return ""
+}
+
+// AgentIDOf is the Team agent whose scope is on ctx, "" when none.
+func AgentIDOf(ctx context.Context) string { return agentIDOf(ctx) }
 
 // AgentScopeFrom returns the scope on ctx, or nil when the caller is not
 // an agent.

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { WsInstance, WsBase, WsTombstone } from "../types/agents.js";
   import WsInstanceCard from "./WsInstanceCard.svelte";
+  import SessionConnectorAccess from "./SessionConnectorAccess.svelte";
 
   type TestResult = { ok: boolean; error?: string; no_health_check?: boolean } | null;
 
@@ -16,6 +17,9 @@
     onDuplicate: (cid: string) => void;
     onDelete: (cid: string) => void;
     onExpiry?: (cid: string, lifetime: { expires_in?: string; idle_after?: string }) => void;
+    /** With both set, the panel also shows the session's Connector access tab. */
+    base?: string;
+    sessionId?: string;
   };
 
   let {
@@ -30,7 +34,12 @@
     onDuplicate,
     onDelete,
     onExpiry,
+    base,
+    sessionId,
   }: Props = $props();
+
+  let tab = $state<"access" | "connectors">("access");
+  const hasAccess = $derived(!!base && !!sessionId);
 
   const INPUT_CLASS =
     "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none";
@@ -54,6 +63,22 @@
 </script>
 
 <div class="flex-1 overflow-y-auto p-3 space-y-2">
+  {#if hasAccess}
+    <div class="flex gap-1.5" role="tablist">
+      {#each [["access", "Connector access"], ["connectors", "Session connectors"]] as [key, label] (key)}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === key}
+          class="rounded-full border px-2.5 py-0.5 text-[11px] {tab === key ? 'border-green-500 bg-green-500 text-white-100' : 'border-white-400 dark:border-navy-600 text-black-800 dark:text-white-200'}"
+          onclick={() => (tab = key as "access" | "connectors")}
+        >{label}</button>
+      {/each}
+    </div>
+  {/if}
+  {#if hasAccess && tab === "access"}
+    <SessionConnectorAccess base={base ?? ""} sessionId={sessionId ?? ""} />
+  {:else}
   {#if instances.length === 0}
     <p class="text-xs text-black-700 dark:text-black-600">No session connectors yet.</p>
     {#if bases.length === 0}
@@ -111,5 +136,6 @@
         {/each}
       </select>
     </div>
+  {/if}
   {/if}
 </div>

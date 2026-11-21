@@ -105,6 +105,24 @@ type mcpSetExcludedInput struct {
 	Excluded string `wick:"textarea;required;desc=JSON array of tool names to exclude, replacing the current list. [] exposes everything."`
 }
 
+type groupingRulesInput struct {
+	Key   string `wick:"required;desc=Definition key of the MCP connector."`
+	Rules string `wick:"textarea;desc=Grouping recipe JSON: {strip_suffix, pins:{tool:group}, rules:[{match:name|description, pattern, group}], templates:[{from:name|description, pattern with {group}}], titles:{capture:label}, descriptions:{group:text}, keywords:{tool:[words]}, other}. First match wins: server _meta.category, pins, rules, templates, other. Empty: preview uses the stored recipe / set clears it."`
+}
+
+type opPrefsListInput struct {
+	ConnectorID string `wick:"required;desc=Connector instance id (any connector, not only custom)."`
+}
+
+type opPrefSetInput struct {
+	ConnectorID string `wick:"required;desc=Connector instance id."`
+	OpKey       string `wick:"required;desc=Operation key on that connector."`
+	Pinned      string `wick:"desc=true pins the op into Frequent (always shown, also when destructive in wick_get), false unpins. Empty = unchanged."`
+	Muted       string `wick:"desc=true keeps the op out of Frequent however often it is used. Empty = unchanged."`
+	Note        string `wick:"desc=One-line pitfall or usage note shown next to the op (Frequent, wick_get). '-' clears it. Empty = unchanged."`
+	Keywords    string `wick:"desc=Comma-separated extra words wick_search should match the op on (e.g. revert, undo deploy). '-' clears. Empty = unchanged."`
+}
+
 type instanceCreateInput struct {
 	Key   string `wick:"required;desc=Definition key to add an instance row to."`
 	Label string `wick:"desc=Optional row label. Defaults to '<name> (new)'."`
@@ -165,6 +183,26 @@ func Operations(deps Deps) []connector.Operation {
 		connector.OpDestructive("mcp_set_excluded", "Set Excluded Tools",
 			"Replace an MCP connector's excluded-tool list and re-sync the catalog. Returns {ok, key, excluded, operations}. Access: scoped — admins manage every definition, other callers only the ones they created.",
 			mcpSetExcludedInput{}, h.mcpSetExcluded, wickdocs.Docs{}),
+
+		// ── grouping & frequent ops ─────────────────────────────
+		connector.Op("grouping_get", "Get Grouping Rules",
+			"Read an MCP connector's grouping recipe (how its tools are sorted into groups when the server sends no _meta.category). Returns {key, server_id, rules}; rules is null when none is set. Access: scoped — admins manage every definition, other callers only the ones they created.",
+			defKeyInput{}, h.groupingGet, wickdocs.Docs{}),
+		connector.Op("grouping_suggest", "Suggest Grouping Rules",
+			"Guess a grouping recipe from the server's live tools (common name suffix, 'Requires <x>.' permission text, <verb>-<resource> names) and preview it. Saves nothing. Returns {rules, preview}. Start here, adjust, grouping_preview, then grouping_set. Access: scoped as above.",
+			defKeyInput{}, h.groupingSuggest, wickdocs.Docs{}),
+		connector.Op("grouping_preview", "Preview Grouping Rules",
+			"Dry-run a grouping recipe against the server's live tools/list. Saves nothing. Returns {groups:[{title, tools}], other (tools no rule caught), orphan_pins (pinned names the server no longer lists), placements:[{tool, group, by}], total}. Show this to the user before grouping_set. Access: scoped as above.",
+			groupingRulesInput{}, h.groupingPreview, wickdocs.Docs{}),
+		connector.OpDestructive("grouping_set", "Set Grouping Rules",
+			"Store an MCP connector's grouping recipe and re-sync so the groups are live (empty rules clears it). WORKFLOW: grouping_suggest / grouping_preview first, show the user the groups and the Other bucket, save only after they confirm. Returns {ok, key, groups}. Access: scoped as above.",
+			groupingRulesInput{}, h.groupingSet, wickdocs.Docs{}),
+		connector.Op("op_prefs_list", "List Op Prefs & Usage",
+			"For one connector instance: every op's curated prefs (pinned, muted, note, keywords), its 30-day agent usage, the ops currently picked as Frequent, and prefs whose op no longer exists (orphaned). Access: any caller who can see the connector.",
+			opPrefsListInput{}, h.opPrefsList, wickdocs.Docs{}),
+		connector.Op("op_pref_set", "Set Op Pref",
+			"Pin/unpin, mute/unmute an op for the Frequent list (shown in wick_get and in Team agents' prompts with a call signature), or set its one-line note / search keywords. Only the fields you pass change. Use a note for pitfalls an agent should know before calling (e.g. 'repeat with cursor until has_more=false'). Access: admins, or the creator of a custom connector for its own instances.",
+			opPrefSetInput{}, h.opPrefSet, wickdocs.Docs{}),
 
 		// ── instances ────────────────────────────────────────────
 		connector.Op("instance_list", "List Instances",

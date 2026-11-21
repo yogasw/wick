@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +22,18 @@ import (
 func SessionInstanceFor(layout agentconfig.Layout, args map[string]any, connectorID string) (*connectors.SessionInstanceTarget, bool, error) {
 	sid, _ := args["session_id"].(string)
 	return SessionInstanceForID(layout, sid, connectorID)
+}
+
+// SessionInstanceForCaller is SessionInstanceForID for a live call: a
+// session-workspace instance resolves only when the caller on ctx may use
+// that session (see SessionTrusted). A session_id argument or header that
+// names somebody else's session is refused instead of handing over the
+// instance and the credentials in its config.
+func SessionInstanceForCaller(ctx context.Context, layout agentconfig.Layout, sessionID, connectorID string) (*connectors.SessionInstanceTarget, bool, error) {
+	if sessionworkspace.IsInstanceID(connectorID) && strings.TrimSpace(sessionID) != "" && !SessionTrusted(ctx, sessionID) {
+		return nil, false, fmt.Errorf("session connector %q belongs to a session this credential does not own: call it from inside that session", connectorID)
+	}
+	return SessionInstanceForID(layout, sessionID, connectorID)
 }
 
 // SessionInstanceForID is SessionInstanceFor with the session id passed
@@ -231,7 +244,7 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 	for _, op := range mod.AllOps() {
 		shown[op.Key] = visible(op)
 		if !shown[op.Key] && !op.ConfigOnly {
-			off[op.Key] = connectors.ConfigOffReason(op)
+			off[op.Key] = connectors.ConfigOffReasonSession(op, instanceID, target.LockSeals)
 		}
 	}
 	detail, err := buildConnectorDetail(mod, instanceID, label, "", selector,

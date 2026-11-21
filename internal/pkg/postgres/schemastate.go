@@ -56,11 +56,21 @@ var migratedModels = []any{
 	&entity.Connector{},
 	&entity.ConnectorOperation{},
 	&entity.ConnectorRun{},
+	&entity.ConnectorRunLend{},
+	// Access requests: per-action approval cards, the standing grants a
+	// "session"/"always" decision leaves, and the rules + facts that
+	// decide an action without a card.
+	&entity.AccessRequest{},
+	&entity.AccessRequestItem{},
+	&entity.AccessGrant{},
+	&entity.AccessRule{},
+	&entity.AccessRuleRevision{},
 	&entity.CodeModeRun{},
 	&entity.ConnectorAccount{},
 	&entity.ConnectorCredentialPolicy{},
 	&entity.CustomConnector{},
 	&entity.CustomConnectorMCPServer{},
+	&entity.ConnectorOpPref{},
 	&entity.PersonalAccessToken{},
 	&entity.PluginTestRequest{},
 	&entity.PushSubscription{},
@@ -119,6 +129,7 @@ var migratedModels = []any{
 	&entity.TeamFolders{},
 	// Team agents shared with another user (chat only).
 	&entity.AgentShare{},
+	&entity.AgentRBAC{},
 	// Version history of the operator prompts and Team instructions, and
 	// the MCP proposals waiting for an admin's approval.
 	&entity.PromptChange{},

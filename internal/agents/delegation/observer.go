@@ -52,6 +52,17 @@ func (o *TurnObserver) OnEvent(sessionID, agentName string, ev event.AgentEvent)
 		b.WriteString(ev.Text)
 		o.mu.Unlock()
 
+	case event.TextReplace:
+		// The reply so far was taken back: its mentions route nothing.
+		o.mu.Lock()
+		delete(o.buf, key)
+		if ev.Text != "" {
+			b := &strings.Builder{}
+			b.WriteString(ev.Text)
+			o.buf[key] = b
+		}
+		o.mu.Unlock()
+
 	case event.Warning:
 		// A failover took the turn: the failed provider's text routes
 		// nothing.

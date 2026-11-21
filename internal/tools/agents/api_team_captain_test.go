@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -38,7 +40,7 @@ func withTeamWorld(t *testing.T) {
 	}
 	sqlDB, _ := db.DB()
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&entity.AgentPersona{}, &entity.AgentAvatarImage{}, &entity.TeamSettings{}, &entity.TeamFolders{}, &entity.AgentAccessHistory{}, &entity.AgentShare{}, &entity.Tag{}, &entity.ToolTag{}, &entity.UserTag{}); err != nil {
+	if err := db.AutoMigrate(&entity.AgentPersona{}, &entity.AgentAvatarImage{}, &entity.TeamSettings{}, &entity.TeamFolders{}, &entity.AgentAccessHistory{}, &entity.AgentShare{}, &entity.AgentRBAC{}, &entity.Tag{}, &entity.ToolTag{}, &entity.UserTag{}); err != nil {
 		t.Fatal(err)
 	}
 	reg := registry.New(layout)
@@ -50,6 +52,47 @@ func withTeamWorld(t *testing.T) {
 	globalPool = pool.New(pool.PoolConfig{Layout: layout})
 	globalTeam = team.NewService(db, layout)
 	t.Cleanup(func() { globalMgr, globalLayout, globalPool, globalTeam = prevMgr, prevLayout, prevPool, prevTeam })
+	// Every room run this test starts is tracked, and cleanups run
+	// last-in first-out: this one runs BEFORE the restore above, so no run
+	// is still reading the globals when they are swapped back.
+	var runs sync.WaitGroup
+	prevGo := goRoomRun
+	goRoomRun = func(f func()) {
+		runs.Add(1)
+		go func() {
+			defer runs.Done()
+			f()
+		}()
+	}
+	t.Cleanup(func() {
+		drainRoomRuns(t, &runs)
+		goRoomRun = prevGo
+	})
+}
+
+// drainRoomRuns cancels every ticket-room run still playing and waits for
+// the goroutines in runs to return. A room run outlives the request that
+// started it (a background goroutine by design), and its slot can be
+// dropped while it plays (forgetRoom), so the goroutines themselves are
+// what is waited on.
+func drainRoomRuns(t *testing.T, runs *sync.WaitGroup) {
+	t.Helper()
+	roomRunSlots.Range(func(_, v any) bool {
+		s := v.(*roomRunSlot)
+		s.mu.Lock()
+		for _, e := range s.runs {
+			e.cancel()
+		}
+		s.mu.Unlock()
+		return true
+	})
+	done := make(chan struct{})
+	go func() { runs.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Error("ticket-room runs still playing 10s after the test")
+	}
 }
 
 // seedTeamProject creates a project owned by owner.

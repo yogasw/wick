@@ -725,8 +725,13 @@ func (s *Service) persistInstanceTokens(ctx context.Context, instanceID string, 
 	if account != "" {
 		values[cfgOAuthAccount] = account
 	}
-	for k, v := range values {
-		if k == cfgOAuthRefresh && v == "" {
+	// Fixed order, expiry LAST: instanceAccessToken reads expiry before
+	// the access token without the refresh lock, so a reader that sees the
+	// new expiry is sure to see the new token (map order once let it pair
+	// a fresh expiry with the old, expired token).
+	for _, k := range []string{cfgOAuthRefresh, cfgOAuthAccess, cfgOAuthError, cfgOAuthAccount, cfgOAuthExpiry} {
+		v, ok := values[k]
+		if !ok || (k == cfgOAuthRefresh && v == "") {
 			continue
 		}
 		if err := s.keys.SetOwned(ctx, owner, k, v); err != nil {
@@ -927,7 +932,10 @@ var ErrOAuthAccountNotYours = fmt.Errorf("account belongs to another user")
 // framework's AccountVisibleTo gate alone: that gate runs against the MCP
 // principal and passes every account for an admin one. An explicit
 // @accountId may name the caller's own account, an ownerless legacy row,
-// or any account when the instance shares them (AllowOthersSeeAccounts).
+// any account when the instance shares them (AllowOthersSeeAccounts), or an
+// account the caller may use by the connector page's own rule
+// (connectors.Service.AccountUsableBy: shared with a tag the caller carries,
+// or an instance the caller owns).
 // Without an explicit account the call runs as the caller's own account
 // and never falls back to someone else's.
 func (s *Service) callerAccount(ctx context.Context, inst entity.Connector, accountID, callerUserID string) (*entity.ConnectorAccount, error) {
@@ -943,6 +951,15 @@ func (s *Service) callerAccount(ctx context.Context, inst entity.Connector, acco
 			owner := accs[i].WickUserID
 			if owner == "" || inst.AllowOthersSeeAccounts || (callerUserID != "" && owner == callerUserID) {
 				return &accs[i], nil
+			}
+			if callerUserID != "" && s.conns != nil {
+				ok, err := s.conns.AccountUsableBy(ctx, inst, accs[i], callerUserID)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					return &accs[i], nil
+				}
 			}
 			return nil, ErrOAuthAccountNotYours
 		}
@@ -1043,18 +1060,22 @@ func identityFromClaims(raw []byte) string {
 // row has no connected account.
 func (s *Service) instanceAccessToken(ctx context.Context, meta *oauthClientMeta, instanceID string) (string, error) {
 	owner := "connector:" + instanceID
+	// Expiry is read BEFORE the token: persistInstanceTokens writes it
+	// last, so a live expiry always comes with the token it belongs to.
+	live := instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry))
 	access := s.keys.GetOwned(owner, cfgOAuthAccess)
 	if access == "" {
 		return "", nil
 	}
-	if instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry)) {
+	if live {
 		return access, nil
 	}
 	// Serialized like accountAccessToken; re-read after the wait so the
 	// loser of a race uses the winner's token instead of a spent refresh.
 	defer s.lockRefresh("instance:" + instanceID)()
+	live = instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry))
 	access = s.keys.GetOwned(owner, cfgOAuthAccess)
-	if instanceTokenLive(s.keys.GetOwned(owner, cfgOAuthExpiry)) {
+	if live {
 		return access, nil
 	}
 	refresh := s.keys.GetOwned(owner, cfgOAuthRefresh)

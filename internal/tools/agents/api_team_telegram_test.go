@@ -39,7 +39,14 @@ func withAgentTelegramWorld(t *testing.T) {
 	}))
 	prevDB, prevEP := globalDB, telegramAPIEndpoint
 	globalDB, telegramAPIEndpoint = db, srv.URL+"/bot%s/%s"
-	t.Cleanup(func() { globalDB, telegramAPIEndpoint = prevDB, prevEP; srv.Close() })
+	t.Cleanup(func() {
+		globalDB, telegramAPIEndpoint = prevDB, prevEP
+		srv.Close()
+		// Close the named in-memory DB so a repeated run starts empty.
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 }
 
 func tgToken(id string) string { return id + ":AAH" + strings.Repeat("x", 30) }

@@ -416,7 +416,12 @@ func Register(r tool.Router) {
 	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
 	r.PATCH("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareUpdate)
 	r.GET("/api/team/share-users", apiTeamShareUsers)
+	r.GET("/api/team/role-tags", apiTeamRoleTags)
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
+	r.GET("/api/team/agents/{id}/access/effective", apiTeamAgentAccessEffective)
+	r.GET("/api/team/agents/{id}/access/trail", apiTeamAgentAccessTrail)
+	r.GET("/api/team/agents/{id}/rbac", apiTeamAgentRBAC)
+	r.PUT("/api/team/agents/{id}/rbac", apiTeamAgentRBACPut)
 	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
 	r.GET("/api/team/agents/{id}/slack/manifest", apiTeamAgentSlackManifest)
 	r.GET("/api/team/agents/{id}/slack", apiTeamAgentSlackGet)
@@ -616,6 +621,7 @@ func Register(r tool.Router) {
 	// Gate approval (Stage 5). Modal in the UI POSTs the user's
 	// decision here; revoke removes a previously-approved match key.
 	r.POST("/sessions/{id}/approve", approveCommand)
+	registerAccessRoutes(r)
 	r.GET("/sessions/{id}/approvals", approvalsSnapshot)
 	r.DELETE("/sessions/{id}/approve/{matchKey}", revokeApproval)
 
@@ -4108,6 +4114,14 @@ func snapshotEvents(sessionID string) []Event {
 				Data:      e.PartialText,
 			})
 		}
+		// The in-flight trace below is the WHOLE turn so far, sent again on
+		// every resubscribe (a tab back from the background, a page load
+		// while the stream is open). trace_reset tells the FE to drop the
+		// trace it already holds first: tool calls dedup by id, thinking
+		// blocks cannot, and were glued on once more per replay.
+		if len(e.InFlightEvents) > 0 {
+			out = append(out, Event{SessionID: e.SessionID, AgentName: e.AgentName, Type: "trace_reset"})
+		}
 		for _, te := range e.InFlightEvents {
 			ev := Event{
 				SessionID: e.SessionID,
@@ -4161,6 +4175,7 @@ func snapshotEvents(sessionID string) []Event {
 	// reload. The pool path above already learned this; the disk fallback had
 	// not, and it is the path taken whenever the process serving the page is
 	// not the one running the agent.
+	out = append(out, Event{SessionID: sessionID, Type: "trace_reset"})
 	replayFrom := len(out)
 	var textSoFar strings.Builder
 	for _, e := range entries {
@@ -4208,6 +4223,9 @@ func snapshotEvents(sessionID string) []Event {
 	// No pool entry means no process: close the replayed turn with the
 	// "killed" pill promised above. Without it the FE took the replay for a
 	// running turn and showed "thinking…" with no edge left to clear it.
+	if len(out) == replayFrom {
+		out = out[:replayFrom-1] // nothing replayed: no reset either
+	}
 	if len(out) > replayFrom {
 		out = append(out, Event{
 			SessionID: sessionID,

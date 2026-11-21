@@ -1,9 +1,11 @@
 package slack
 
 import (
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -28,6 +30,18 @@ const (
 // isFromBot reports whether a message event was posted by an app or bot.
 func isFromBot(ev *slackevents.MessageEvent) bool {
 	return ev != nil && (ev.BotID != "" || ev.SubType == "bot_message")
+}
+
+// listenIgnoresBot reports whether a bot's reply in a listening thread is
+// dropped before listen sees it, so it starts no turn: a bot listed in
+// ListenIgnoredBots, or one that posted no text and no files — an
+// attachment-only notification (a ticket closed, a status changed) that
+// tells the agent nothing it must answer.
+func listenIgnoresBot(cfg agentconfig.SlackChannelConfig, ev *slackevents.MessageEvent, files []slackgo.File) bool {
+	if pickerHas(cfg.ListenIgnoredBots, ev.User) || pickerHas(cfg.ListenIgnoredBots, ev.BotID) {
+		return true
+	}
+	return strings.TrimSpace(ev.Text) == "" && len(files) == 0
 }
 
 // allowedBotCfg is allowedCfg for bot senders. A bot passes the identity

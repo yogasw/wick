@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -535,6 +536,69 @@ func applyAccessChange(ctx context.Context, p entity.AgentPersona, ch team.Acces
 // applied without a card.
 const autoApprovedBy = "auto-approve (Captain policy)"
 
+// requestedByOwner reports whether the Captain turn filing a proposal
+// comes from owner, so the owner's auto-approve rule may apply it. The
+// Captain session must be the owner's, and the latest user turn must be
+// the owner's: a channel sender mapped to owner, or a web-chat turn in the
+// owner's own session. A turn with no sender from anywhere else — a
+// teammate agent's message, a schedule, a workflow, a listen-mode post —
+// may carry someone else's words, so it gets the card. Anything
+// unreadable is false too.
+func requestedByOwner(sessionID, owner string) bool {
+	if globalMgr == nil || owner == "" {
+		return false
+	}
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok || sess.Meta.UserID != owner {
+		return false
+	}
+	turn, found, err := lastUserTurn(globalLayout.SessionConversation(sessionID))
+	if err != nil {
+		return false
+	}
+	switch {
+	case !found:
+		// No user turn at all: nobody but the session (the owner's) asked.
+		return true
+	case turn.Sender != nil:
+		return turn.Sender.WickUserID == owner
+	default:
+		return turn.Source == "ui"
+	}
+}
+
+// userTurnOrigin is who and where a user turn came from.
+type userTurnOrigin struct {
+	Role   string        `json:"role"`
+	Source string        `json:"source"`
+	Sender *store.Sender `json:"sender"`
+}
+
+// lastUserTurn is the origin of the latest user turn in a
+// conversation.jsonl; found is false when there is none (or no file).
+func lastUserTurn(path string) (userTurnOrigin, bool, error) {
+	var last userTurnOrigin
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return last, false, nil
+	}
+	if err != nil {
+		return last, false, err
+	}
+	defer f.Close()
+	found := false
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+	for sc.Scan() {
+		var turn userTurnOrigin
+		if json.Unmarshal(sc.Bytes(), &turn) != nil || turn.Role != "user" {
+			continue
+		}
+		last, found = turn, true
+	}
+	return last, found, sc.Err()
+}
+
 // propose checks the proposal against the OWNER's own catalog (the same
 // check as Settings › Access) and records it. It then posts the approval
 // card in the manager's chat, or applies it at once when the owner's
@@ -569,7 +633,7 @@ func (o CaptainOps) propose(ctx context.Context, sessionID string, mgr, p entity
 		return nil, err
 	}
 	reason := prop.Reason
-	if team.DecodeCaptainPolicy(mgr.CaptainPolicy).AutoApproves(prop.Created) {
+	if team.DecodeCaptainPolicy(mgr.CaptainPolicy).AutoApproves(prop.Created) && requestedByOwner(sessionID, p.OwnerUserID) {
 		if err := globalTeam.SettleAccess(ctx, h.ID, team.AccessApplied, autoApprovedBy); err != nil {
 			return nil, err
 		}

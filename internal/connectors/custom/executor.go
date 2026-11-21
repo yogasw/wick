@@ -257,12 +257,12 @@ func (s *Service) serverRowForDef(parent context.Context, def *entity.CustomConn
 // servers may expose different tools per account, so the per-instance
 // re-sync passes the instance being viewed; "" falls back to the first
 // enabled instance with a connected account.
-func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector, preferInstance string) ([]DefCategory, bool) {
+func (s *Service) liveMCPRaw(parent context.Context, def *entity.CustomConnector, preferInstance string) (liveMCP, bool) {
 	l := log.Ctx(parent).With().Str("component", "custom-connector").Str("key", def.Key).Logger()
 	serverID := ParseSourceMeta(def.SourceMeta).ServerID
 	if serverID == "" {
 		l.Warn().Msg("mcp def has no server_id; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	// Derive from the caller so the request-scoped logger (request_id)
 	// reaches the outbound MCP logs and cancellation propagates.
@@ -271,12 +271,12 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 	row, err := s.store.GetServer(ctx, serverID)
 	if err != nil {
 		l.Warn().Err(err).Str("server_id", serverID).Msg("mcp server row missing; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	srv, err := resolveServerConfig(row.URL, row.AuthScheme, row.AuthSecret, row.AuthHeaders, row.AuthExtra, row.Headers)
 	if err != nil {
 		l.Warn().Err(err).Msg("resolve mcp server config; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	var claims *SSOClaims
 	if row.AuthScheme == "sso" {
@@ -293,14 +293,14 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 		}
 		if !s.borrowUserToken(ctx, def.Key, preferInstance, callerID, &srv) {
 			l.Warn().Msg("per-user token mcp def has no connected account; exposing zero operations")
-			return nil, false
+			return liveMCP{}, false
 		}
 	} else if len(configHeaderFields(row)) > 0 {
 		// Per-instance Config headers: sync under an instance that has
 		// its values filled in — the preferred one first.
 		if !s.borrowInstanceConfig(ctx, def.Key, preferInstance, &srv) {
 			l.Warn().Msg("mcp def has no instance with its config headers filled; exposing zero operations")
-			return nil, false
+			return liveMCP{}, false
 		}
 	}
 	if row.AuthScheme == "oauth" {
@@ -349,7 +349,7 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 		}
 		if srv.AccessToken == "" {
 			l.Warn().Msg("oauth mcp def has no connected account; exposing zero operations")
-			return nil, false
+			return liveMCP{}, false
 		}
 	}
 	res := s.mcp(nil).Probe(ctx, srv, claims)
@@ -365,10 +365,41 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 	_ = s.store.UpdateServer(ctx, row)
 	if !res.OK {
 		l.Warn().Str("error", res.Error).Msg("mcp tools/list probe failed; exposing zero operations")
-		return nil, false
+		return liveMCP{}, false
 	}
 	s.adoptServerDescription(ctx, def, res.Instructions)
-	return toolsToCats(toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools)), res.Categories), true
+	// A recipe that no longer parses is ignored rather than failing the
+	// catalog.
+	rules, rerr := ParseGroupRules(row.GroupRules)
+	if rerr != nil {
+		l.Warn().Err(rerr).Msg("mcp group rules invalid; ignoring them")
+		rules = nil
+	}
+	return liveMCP{
+		ops:    toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools)),
+		legend: res.Categories,
+		rules:  rules,
+	}, true
+}
+
+// liveMCP is one live tools/list read: the ungrouped ops, the server's
+// category legend and the row's grouping recipe.
+type liveMCP struct {
+	ops    []DefOp
+	legend []MCPCategory
+	rules  *GroupRules
+}
+
+// liveMCPOps is the live catalog in sections: the server's own
+// _meta.category first, then the row's grouping recipe (pins / rules /
+// templates / catch-all last).
+func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector, preferInstance string) ([]DefCategory, bool) {
+	live, ok := s.liveMCPRaw(parent, def, preferInstance)
+	if !ok {
+		return nil, false
+	}
+	ops := applyGroupRules(live.ops, live.rules)
+	return otherLast(toolsToCats(ops, legendFromRules(live.rules, live.legend)), live.rules), true
 }
 
 // toolsToCats groups a flat MCP op list into titled sections by each op's
@@ -670,7 +701,7 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 			// fallback to someone else's.
 			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
 			if err != nil {
-				return nil, perUserAccountError(err, *inst, c.AccountID(), "token")
+				return nil, perUserAccountError(err, *inst, c.AccountID(), "token", s.callDetails(c, *inst))
 			}
 			if err := s.applyUserToken(&srv, acc); err != nil {
 				return nil, err
@@ -693,7 +724,7 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 			// account — never a fallback to someone else's.
 			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
 			if err != nil {
-				return nil, perUserAccountError(err, *inst, c.AccountID(), "account")
+				return nil, perUserAccountError(err, *inst, c.AccountID(), "account", s.callDetails(c, *inst))
 			}
 			tok, err := s.accountAccessToken(c.Context(), &meta, acc)
 			if err != nil {
@@ -781,21 +812,50 @@ func coerceArgs(fields []DefField, c *connector.Ctx) map[string]any {
 	return out
 }
 
+// callDetails is who a per-user call on inst ran as, for the refusal
+// message: the effective caller, the lend if any, and the picked account
+// with its owner. No credential is read into it.
+func (s *Service) callDetails(c *connector.Ctx, inst entity.Connector) connector.CallDetails {
+	d := connector.CallDetails{
+		ConnectorLabel: inst.Label, ConnectorID: inst.ID,
+		CallerID: c.CallerUserID(), LenderID: c.LentBy(), RequesterID: c.LendRequester(),
+		AccountID: c.AccountID(), Name: c.UserName,
+	}
+	if d.AccountID != "" {
+		if accs, err := s.conns.ListAccounts(c.Context(), inst.ID); err == nil {
+			for _, a := range accs {
+				if a.ID == d.AccountID {
+					d.AccountOwnerID = a.WickUserID
+					break
+				}
+			}
+		}
+	}
+	return d
+}
+
 // perUserAccountError turns a callerAccount miss into the message the
-// agent relays: where the user connects their own account. what names
-// the credential ("account" for oauth, "token" for the token schemes).
-func perUserAccountError(err error, inst entity.Connector, accountID, what string) error {
+// agent relays: a short sentence saying what to do and who must do it,
+// then the technical details (see connector.CallDetails). what names the
+// credential ("account" for oauth, "token" for the token schemes).
+func perUserAccountError(err error, inst entity.Connector, accountID, what string, d connector.CallDetails) error {
 	page := "/manager/connectors/" + inst.Key + "/" + inst.ID
 	switch err {
 	case ErrNoOAuthAccount:
-		if what == "token" {
-			return fmt.Errorf("you have not added your own %s token yet — open %s, click Connect my account and enter your token, then retry", inst.Label, page)
+		if d.LenderID != "" {
+			// The asker cannot fix this: the call runs as the lender, and
+			// it is the lender's own credential that is missing.
+			return fmt.Errorf("%s is lent to %s by %s, but %s has not connected their own %s %s yet — ask them to open %s and connect it, then retry %s",
+				inst.Label, d.Who(d.RequesterID), d.Who(d.LenderID), d.Who(d.LenderID), inst.Label, what, page, d)
 		}
-		return fmt.Errorf("you have not connected your own %s account yet — open %s and click Connect to link it, then retry", inst.Label, page)
+		if what == "token" {
+			return fmt.Errorf("you have not added your own %s token yet — open %s, click Connect my account and enter your token, then retry %s", inst.Label, page, d)
+		}
+		return fmt.Errorf("you have not connected your own %s account yet — open %s and click Connect to link it, then retry %s", inst.Label, page, d)
 	case ErrOAuthAccountNotYours:
-		return fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at %s", accountID, inst.Label, page)
+		return fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at %s %s", accountID, inst.Label, page, d)
 	case ErrOAuthAccountGone:
-		return fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at %s", accountID, inst.Label, page)
+		return fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at %s %s", accountID, inst.Label, page, d)
 	}
 	return err
 }

@@ -164,6 +164,24 @@ func (s *Channel) SetHeldFn(fn HeldFn) {
 	s.mu.Unlock()
 }
 
+// SetReplyHeldFn wires who is told about a reply held at its Done: a
+// turn nobody typed that wrote [silent] after real text (finalReply). Nil
+// = the hold is only logged.
+func (s *Channel) SetReplyHeldFn(fn func(sessionID, text string)) {
+	s.mu.Lock()
+	s.replyHeldFn = fn
+	s.mu.Unlock()
+}
+
+// SetEmptyNetFn wires who is told when a person's turn closed on
+// [silent], got its one follow-up and still answered nothing, so the
+// thread got emptyNetLine. Nil = only logged.
+func (s *Channel) SetEmptyNetFn(fn func(sessionID, why string)) {
+	s.mu.Lock()
+	s.emptyNetFn = fn
+	s.mu.Unlock()
+}
+
 // SetHeardFn wires the recorder of the replies a listening thread hears:
 // each one lands in its session the moment it arrives, as the conversation
 // it is, before (and whether or not) the agent reads it. extras carry

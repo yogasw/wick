@@ -183,6 +183,47 @@ describe("Composer — toolbar dropdowns + bell", () => {
     expect(loadModels).toHaveBeenLastCalledWith("omp/waba", { refresh: true });
   });
 
+  test("omp: provider → account → model, Auto or a model per account", async () => {
+    const levels: Record<string, { id: string; label: string; default: boolean; live?: boolean; unavailable?: boolean }[]> = {
+      "": [
+        { id: "openai-codex", label: "openai-codex", default: true, live: true },
+        { id: "anthropic", label: "anthropic", default: false, live: true },
+      ],
+      "openai-codex": [
+        { id: "auto", label: "Auto (rotation)", default: true, live: true },
+        { id: "2", label: "akun B", default: false, live: true },
+      ],
+      "openai-codex/2": [
+        { id: "auto", label: "Auto", default: false },
+        { id: "openai-codex/gpt-5.5", label: "gpt-5.5", default: false },
+        { id: "openai-codex/gpt-5.4", label: "gpt-5.4", default: true },
+      ],
+    };
+    const loadModels = vi.fn(async (_v: string, o?: { entry?: string }) => levels[o?.entry ?? ""] ?? []);
+    const onChange = vi.fn();
+    const props = { onSend: vi.fn(), provider: { options: [{ label: "omp · acme", value: "omp/acme" }], value: "omp/acme", onChange, loadModels } };
+    const { unmount } = render(Composer, { props });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await fireEvent.click(await screen.findByText("openai-codex"));
+    await fireEvent.click(await screen.findByText("akun B"));
+    expect(loadModels).toHaveBeenLastCalledWith("omp/acme", { entry: "openai-codex/2" });
+    expect(onChange).not.toHaveBeenCalled();
+    await fireEvent.click(await screen.findByText("gpt-5.5"));
+    expect(onChange).toHaveBeenLastCalledWith("omp/acme::openai-codex/2@openai-codex/gpt-5.5");
+    unmount();
+
+    // Auto on the account, and back pops one level at a time.
+    render(Composer, { props });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await fireEvent.click(await screen.findByText("openai-codex"));
+    await fireEvent.click(await screen.findByText("akun B"));
+    await fireEvent.click(screen.getByRole("button", { name: "Back to models" }));
+    expect(await screen.findByText("Auto (rotation)")).toBeDefined();
+    await fireEvent.click(await screen.findByText("akun B"));
+    await fireEvent.click(await screen.findByText("Auto"));
+    expect(onChange).toHaveBeenLastCalledWith("omp/acme::openai-codex/2@auto");
+  });
+
   test("drilled provider offers a 'Use default' row that pins the provider without a model", async () => {
     const onChange = vi.fn();
     render(Composer, {

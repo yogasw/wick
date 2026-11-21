@@ -93,7 +93,18 @@ func parseGetMarkdown(c *connector.Ctx) (getMarkdownInput, error) {
 	default:
 		return getMarkdownInput{}, fmt.Errorf("format must be markdown or semantic_tree_text, got %q", format)
 	}
-	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector"))}, nil
+	wait := strings.TrimSpace(c.Input("wait"))
+	switch wait {
+	case "":
+		wait = "done"
+	case "done", "networkidle", "domstable", "load", "domcontentloaded":
+	default:
+		return getMarkdownInput{}, fmt.Errorf("wait must be done, networkidle, domstable, load or domcontentloaded, got %q", wait)
+	}
+	if _, err := parseMoliExtraArgs(c.Input("extra_args")); err != nil {
+		return getMarkdownInput{}, err
+	}
+	return getMarkdownInput{URL: url, Format: format, WaitSelector: strings.TrimSpace(c.Input("wait_selector")), Wait: wait, ExtraArgs: c.Input("extra_args")}, nil
 }
 
 func parsePDF(c *connector.Ctx) (pdfInput, error) {
@@ -198,6 +209,12 @@ type action struct {
 	Warning string `json:"-"`
 	// Frame is an alias of frame_url_contains; "main" means the page itself.
 	Frame string `json:"frame,omitempty"`
+	// frame_click: Menu is opened first when the target is not on screen
+	// yet; ExpectURL is the address the click must lead to.
+	Menu      string `json:"menu,omitempty"`
+	ExpectURL string `json:"expect_url,omitempty"`
+	// pinned is the exact match openMenu found; locate returns it as is.
+	pinned playwright.Locator
 	// frame_type / frame_fill: [min,max] ms between keys.
 	PerCharDelayMS []int `json:"per_char_delay_ms,omitempty"`
 	// frame_text / observe size knobs.
@@ -219,6 +236,9 @@ type action struct {
 	// set_viewport.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
+	// cdp: a raw DevTools protocol command on the page (see cdpBlocked).
+	Method string         `json:"method,omitempty"`
+	Params map[string]any `json:"params,omitempty"`
 	// SaveDir writes a screenshot to this directory and returns its path
 	// instead of base64.
 	SaveDir string `json:"save_dir,omitempty"`
@@ -242,7 +262,7 @@ var knownActions = map[string]bool{
 	"set_input_files": true, "drag_and_drop": true, "scroll": true,
 	"mouse_move": true, "mouse_click": true, "mouse_wheel": true,
 	"frame_eval": true, "frame_text": true, "frame_click": true,
-	"set_viewport": true, "frame_type": true, "frame_fill": true,
+	"set_viewport": true, "frame_type": true, "frame_fill": true, "cdp": true,
 	"wait_for_text": true, "wait_for_change": true, "observe": true,
 	// wait
 	"wait_for": true, "wait": true,
@@ -346,6 +366,13 @@ func validateActionArgs(i int, a action) error {
 		}
 		if a.UntilStableMS < 0 || a.UntilStableMS > maxWaitMS {
 			return fmt.Errorf("action[%d] %s: until_stable_ms must be between 0 and %d", i, a.Action, maxWaitMS)
+		}
+	case "cdp":
+		if err := cdpBlocked(a.Method); err != nil {
+			return fmt.Errorf("action[%d] cdp: %w", i, err)
+		}
+		if err := checkSaveDir(a.SaveDir); err != nil {
+			return fmt.Errorf("action[%d] cdp: %w", i, err)
 		}
 	case "set_viewport":
 		if a.Width < 200 || a.Height < 200 || a.Width > 7680 || a.Height > 4320 {
@@ -574,6 +601,56 @@ func headless(c *connector.Ctx) bool {
 		return true
 	}
 	return c.CfgBool("headless")
+}
+
+// windowSize is the size a browser window is locked to: viewport_width x
+// viewport_height from Config, 1280x800 when left unset. A live session opens
+// at this size and every run puts the window back to it (or to the size a
+// set_viewport chose), so the live view never swings between two shapes.
+func windowSize(c *connector.Ctx) (int, int) {
+	w, h := c.CfgInt("viewport_width"), c.CfgInt("viewport_height")
+	if w <= 0 {
+		w = defViewportW
+	}
+	if h <= 0 {
+		h = defViewportH
+	}
+	return w, h
+}
+
+// setWindowSize resizes the REAL browser window over CDP. Unlike
+// Page.SetViewportSize, which is a device-metrics override that lapses when the
+// CDP connection closes (the page then falls back to the window's own size),
+// the window keeps its size between runs, so the live view stays one shape. It
+// does nothing when the window is already that size, and returns an error when
+// the browser refuses (the caller falls back to the emulation).
+func setWindowSize(ctx playwright.BrowserContext, page playwright.Page, w, h int) error {
+	cdp, err := ctx.NewCDPSession(page)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = cdp.Detach() }()
+	res, err := cdp.Send("Browser.getWindowForTarget", nil)
+	if err != nil {
+		return err
+	}
+	m, _ := res.(map[string]any)
+	id, ok := m["windowId"].(float64)
+	if !ok {
+		return fmt.Errorf("browser returned no window id")
+	}
+	if b, ok := m["bounds"].(map[string]any); ok {
+		cw, _ := b["width"].(float64)
+		ch, _ := b["height"].(float64)
+		if state, _ := b["windowState"].(string); int(cw) == w && int(ch) == h && (state == "" || state == "normal") {
+			return nil
+		}
+	}
+	_, err = cdp.Send("Browser.setWindowBounds", map[string]any{
+		"windowId": int(id),
+		"bounds":   map[string]any{"windowState": "normal", "width": w, "height": h},
+	})
+	return err
 }
 
 // actionTimeout / navTimeout / maxTab read their config with the documented

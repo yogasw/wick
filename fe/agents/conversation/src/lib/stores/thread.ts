@@ -313,6 +313,21 @@ export function createThreadStore(): ThreadStore {
       // the SharedWorker's stream is still open, not just after a real
       // gap). Replaces live.text instead of appending — treating it as a
       // delta would re-glue the same paragraph onto itself each reload.
+      // The stream snapshot is about to replay the whole in-flight trace
+      // (a tab back from the background, a resubscribe): drop the trace
+      // this page already holds so the replay rebuilds it instead of
+      // appending every thinking block a second time. Connector-run cards
+      // are not part of that replay and stay.
+      case "trace_reset": {
+        const lt = get(live);
+        if (lt) {
+          lt.blocks = lt.blocks.filter((b) => b.kind === "tool" && !!b.runId);
+          live.set(lt);
+        }
+        thinkingTextMark = 0;
+        break;
+      }
+
       case "text_snapshot": {
         const lt = ensureLive();
         lt.text = ev.data ?? "";

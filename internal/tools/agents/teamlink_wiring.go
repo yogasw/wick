@@ -108,13 +108,16 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	}
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
+	// The base dir is read once: the orphan watcher calls this from its
+	// own goroutine, which must not read the global as it changes.
 	hub.SelfDraining = upgrade.Draining
+	baseDir := globalLayout.BaseDir
 	hub.PredecessorBusy = func(chat string) bool {
 		if chat == "" {
-			_, draining := upgrade.ReadDrainState(globalLayout.BaseDir)
+			_, draining := upgrade.ReadDrainState(baseDir)
 			return draining
 		}
-		return upgrade.PredecessorHolds(globalLayout.BaseDir, chat)
+		return upgrade.PredecessorHolds(baseDir, chat)
 	}
 	// Tasks are kept on disk, so get_task, list_tasks and late replies
 	// survive a restart.
@@ -1181,9 +1184,11 @@ func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, erro
 			}
 		}
 	}
-	// Titled like the main chat, so it reads as the agent's in every list.
+	// Titled like a fresh main chat, so it reads as the agent's in every
+	// list — not with the main chat's current title, which the agent may
+	// have set after a case and would make the new chat look like that one.
 	if sess, ok := globalMgr.Registry().Session(id); ok {
-		sess.Meta.Label = main.Meta.Label
+		sess.Meta.Label = agentChatLabel(projectID, agent.Handle)
 		sess.Meta.TitleCustom = true
 		if err := session.SaveMeta(globalLayout, id, sess.Meta); err == nil {
 			_ = globalMgr.RefreshSession(id)
@@ -1245,7 +1250,7 @@ func (poolTurns) Link(_ context.Context, agent teamlink.Peer, chat, callerSessio
 		if want {
 			// Both sides of a Team pairing know the other (sessionlink):
 			// the asker sees the chat it messaged, not only the reverse.
-			if err := sessionlink.Link(globalLayout, s.ID, callerSession, "team message"); err == nil {
+			if err := sessionlink.LinkTeam(globalLayout, callerSession, s.ID); err == nil {
 				_ = globalMgr.RefreshSession(s.ID)
 				_ = globalMgr.RefreshSession(callerSession)
 			}
@@ -1308,6 +1313,20 @@ func (poolTurns) CanTarget(ctx context.Context, agent teamlink.Peer, callerSessi
 		return false, nil
 	}
 	return false, teamlink.ErrUnknownChat
+}
+
+// AskedBy reports whether chat sent callerSession a team message, from
+// the sessions' pairing (teamlink.AskerChecker).
+func (poolTurns) AskedBy(callerSession, chat string) bool {
+	self, err := session.Load(globalLayout, callerSession)
+	if err != nil {
+		return false
+	}
+	peer, err := session.Load(globalLayout, chat)
+	if err != nil {
+		return false
+	}
+	return sessionlink.AskedBy(self, peer)
 }
 
 // isSlackThreadSession is whether a turn in the session m describes is
@@ -1715,6 +1734,49 @@ func teamMentionCaller(ctx context.Context, sessionID string, human bool) string
 		return TeamAgentOf(ctx, sessionID)
 	}
 	return teamAgentOfSession(ctx, sessionID)
+}
+
+// NotifyHeldReply records a Slack reply held at its Done (KindReplyHeld)
+// and tells the held_reply_notify handle, when set, so a person or an
+// agent decides whether it goes out. Best effort: the record stays even
+// when the message cannot be sent.
+func NotifyHeldReply(sessionID, text string) {
+	EmitSystemEvent(sessionID, store.KindReplyHeld, text, nil)
+	notifyHeldReplyHandle(sessionID, "A Slack reply was held, not posted: the turn was not started by a person in the thread and ended with [silent] after this text.\n"+
+		"session_id: "+sessionID+"\n\n"+text)
+}
+
+// NotifyEmptyReply tells the held_reply_notify handle, when set, that a
+// person's Slack turn closed on [silent], got its one follow-up and still
+// answered nothing, so the thread only got the empty-reply line.
+func NotifyEmptyReply(sessionID, why string) {
+	notifyHeldReplyHandle(sessionID, "A person mentioned an agent in a Slack thread and got no answer: the turn closed on [silent], "+
+		"was asked once more to answer, and stayed empty ("+why+"). The thread got the empty-reply line; someone should follow up.\n"+
+		"session_id: "+sessionID)
+}
+
+// notifyHeldReplyHandle sends body to the held_reply_notify handle, best
+// effort.
+func notifyHeldReplyHandle(sessionID, body string) {
+	if globalConfigs == nil || globalTeamHub == nil || InTicketRoom(sessionID) {
+		return
+	}
+	to := strings.TrimSpace(globalConfigs.GetOwned("agents", "held_reply_notify"))
+	h := globalTeamHub()
+	if to == "" || h == nil {
+		return
+	}
+	if !strings.HasPrefix(to, "@") {
+		to = "@" + to
+	}
+	ctx := context.Background()
+	if _, err := h.Send(ctx, teamlink.SendInput{
+		CallerSession: sessionID, CallerAgentID: teamAgentOfSession(ctx, sessionID),
+		SessionUser: sessionUserOf(sessionID),
+		To:          to, Text: body, Wait: -1, Group: teamlink.GroupNone,
+	}); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Str("to", to).Msg("held/empty reply: notify failed")
+	}
 }
 
 // TeamHandlesFor is TeamHandles for a person's line (human) or the

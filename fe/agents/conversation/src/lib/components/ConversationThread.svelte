@@ -6,7 +6,7 @@
   import type { TraceFiles } from "../api/files.js";
   import { renderLive } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
-  import { activityLabel, THINKING_LABEL } from "../activityLabel.js";
+  import { activityLabel, toolIntent, THINKING_LABEL } from "../activityLabel.js";
   import type { ThreadBlock } from "../types/agents.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
@@ -91,6 +91,18 @@
      substate: "thinking…" is technically true during a /compact, but it
      tells the reader nothing about the thing that is actually happening
      to their conversation. */
+  /* The intent the running tool call names (omp sends one with every call:
+     "Designing the validation helper"), so the label says what the agent
+     is doing instead of a bare tool name or "thinking…". */
+  const liveIntent = $derived.by(() => {
+    const blocks = live?.blocks ?? [];
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.kind !== "tool") continue;
+      return b.result === undefined && !b.hasResult ? toolIntent(b.toolInput) : "";
+    }
+    return "";
+  });
   const activityText = $derived(
     !typing.active
       ? undefined
@@ -98,7 +110,7 @@
         ? "compacting the conversation…"
         : waitNote?.replaces
           ? waitNote.label
-          : ((!typing.toolName && progressLabel) || activityLabel(typing.substate, typing.toolName)) + (waitNote ? ` · ${waitNote.label}` : ""),
+          : ((!typing.toolName && progressLabel) || (typing.toolName && liveIntent) || activityLabel(typing.substate, typing.toolName)) + (waitNote ? ` · ${waitNote.label}` : ""),
   );
 
   /* The working bubble stays up through a turn: typing can drop for an

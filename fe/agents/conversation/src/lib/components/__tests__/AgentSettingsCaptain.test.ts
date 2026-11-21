@@ -14,6 +14,9 @@ vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   updateAgent: (b: string, id: string, body: unknown) => updateAgent(b, id, body),
   getAccessHistory: () => getAccessHistory(),
+  listShareUsers: () => Promise.resolve({ users: [] }),
+  getAccessTrail: () => Promise.resolve({ items: [] }),
+  getAccessEffective: () => Promise.resolve({ items: [] }),
   listAgentConnectors: () => Promise.resolve([]),
   getAgent: () => Promise.resolve(null),
   getProjectPersona: () => Promise.resolve(null),
@@ -124,6 +127,8 @@ describe("AgentSettings › Captain", () => {
     const p = props(worker, "access");
     const { rerender } = render(AgentSettings, { props: p });
     await fireEvent.click(await screen.findByRole("radio", { name: "All" }));
+    // Settings asks before switching the access mode.
+    await fireEvent.click(await screen.findByTestId("access-mode-confirm-ok"));
     await waitFor(() => expect(updateAgent).toHaveBeenCalledWith("/tools/agents", "a1", expect.objectContaining({ access_mode: "owner" })));
     await rerender({ ...p, tab: "captain" });
     const btn = screen.getByRole("button", { name: "Make Captain" });

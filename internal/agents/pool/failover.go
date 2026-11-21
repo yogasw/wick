@@ -316,7 +316,21 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 		job.pending = job.agent.TakePending()
 	}
 	l.Info().Str("from", failedKey).Str("to", t.Instance).Str("reason", reason).Msg("pool.failover: moving the turn")
-	go p.runFailover(job)
+	// Join p.wg under the lock Stop() sets p.closed under, so Stop waits
+	// for the switch's session writes instead of returning mid-switch. A
+	// pool already closed stays out: its Send/spawn refuse anyway.
+	p.mu.Lock()
+	tracked := !p.closed
+	if tracked {
+		p.wg.Add(1)
+	}
+	p.mu.Unlock()
+	go func() {
+		if tracked {
+			defer p.wg.Done()
+		}
+		p.runFailover(job)
+	}()
 	return provider.FailoverVerdict{
 		Rerun:   true,
 		Target:  t.Instance,
@@ -393,7 +407,11 @@ func (p *Pool) runFailover(j failoverJob) {
 		MsgKey:         j.msgKey,
 		ExpectFrom:     j.from,
 		ContinueFor: func(r provider.SwitchResult) string {
-			return provider.ContinueMessage(provider.ContinueInputFrom(r, kind, resetAt, snap))
+			in := provider.ContinueInputFrom(r, kind, resetAt, snap)
+			if !r.HistoryCarries {
+				in.Opening = provider.OpeningContext(p.cfg.Layout, sid)
+			}
+			return provider.ContinueMessage(in)
 		},
 		Notify: func(tag string, steps []string) {
 			if p.cfg.OnFailoverNotify != nil {
@@ -409,6 +427,7 @@ func (p *Pool) runFailover(j failoverJob) {
 		cont = provider.ContinueMessage(provider.ContinueInput{
 			From: j.from, To: normProviderKey(a.Provider), Reason: kind, ResetAt: resetAt,
 			UserMsg: snap.UserMsg, Produced: snap.Produced, PartialText: snap.Text, Tools: snap.Tools,
+			Opening: provider.OpeningContext(p.cfg.Layout, sid),
 		})
 		l.Info().Str("to", a.Provider).Msg("pool.failover: switched by hand meanwhile, re-sending there")
 	case err != nil:

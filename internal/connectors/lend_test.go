@@ -94,3 +94,80 @@ func TestLentConnectorRunsAsLender(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+// The caller an op sees: the session's owner normally, the lender when the
+// connector is lent (the owner must not win back after the swap).
+func TestEffectiveCaller(t *testing.T) {
+	svc := &Service{}
+	svc.SetSessionOwnerUserResolver(func(sid string) (string, bool) {
+		if sid == "sess-1" {
+			return "u-owner", true
+		}
+		return "", false
+	})
+
+	assert.Equal(t, "u-owner", svc.effectiveCaller("u-principal", "sess-1", false), "session owner is the caller")
+	assert.Equal(t, "u-lender", svc.effectiveCaller("u-lender", "sess-1", true), "a lent call keeps the lender")
+	assert.Equal(t, "u-principal", svc.effectiveCaller("u-principal", "", false), "no session keeps the principal")
+	assert.Equal(t, "u-principal", svc.effectiveCaller("u-principal", "sess-x", false), "unknown session keeps the principal")
+}
+
+type lendAccountScope struct {
+	lendScope
+	account string
+}
+
+func (s lendAccountScope) LentAccount(id string) (string, bool) {
+	return s.account, id == s.conn && s.account != ""
+}
+
+// A lend that names its account hands it to the call; one that names none
+// leaves the account to the caller.
+func TestLentAccountID(t *testing.T) {
+	bg := context.Background()
+	named := WithAgentScope(bg, lendAccountScope{lendScope: lendScope{conn: "c1", lender: "u1"}, account: "acc-1"})
+	assert.Equal(t, "acc-1", lentAccountID(named, "c1"))
+	assert.Equal(t, "", lentAccountID(named, "other"), "another connector is not that lend")
+	assert.Equal(t, "", lentAccountID(bg, "c1"), "no scope names nothing")
+	plain := WithAgentScope(bg, lendScope{conn: "c1", lender: "u1"})
+	assert.Equal(t, "", lentAccountID(plain, "c1"), "a scope without accounts names nothing")
+}
+
+// A per-user row the caller reaches on their own, but with no connected
+// account of theirs: the lend still applies when the lender has one, so
+// the call runs on the lender's account instead of asking the caller to
+// connect. A caller with their own account keeps it.
+func TestLendFillsMissingPerUserAccount(t *testing.T) {
+	bg := context.Background()
+	svc, _ := newSvcAccountVisDB(t)
+	row, err := svc.Create(bg, "acct-vis", "Per User Row", nil, "u-lender")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(bg, row.ID, AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	require.NoError(t, svc.SaveAccount(bg, row.ID, "u-lender", "ext-lender", "lender", "tok-lender"))
+	svc.SetIdentityLookup(func(_ context.Context, id string) (*entity.User, []string, error) {
+		return &entity.User{ID: id}, nil, nil
+	})
+	ctx := lendScope{conn: row.ID}.withLender("u-lender").ctx(bg)
+
+	// Admin bypass stands in for "reaches the row on their own".
+	lender, _, ok := svc.lendIdentity(ctx, row.ID, "u-guest", nil, true)
+	require.True(t, ok, "a caller without an account of their own must get the lend")
+	assert.Equal(t, "u-lender", lender.ID)
+
+	require.NoError(t, svc.SaveAccount(bg, row.ID, "u-guest", "ext-guest", "guest", "tok-guest"))
+	_, _, ok = svc.lendIdentity(ctx, row.ID, "u-guest", nil, true)
+	assert.False(t, ok, "a caller with their own account keeps it")
+}
+
+// A turn that already runs as the lender (a bot's message runs as the
+// channel owner) is recognised, so Execute keeps the lender as the caller
+// instead of falling back to the session's owner.
+func TestIsLenderOf(t *testing.T) {
+	bg := context.Background()
+	ctx := lendScope{conn: "c1"}.withLender("u-lender").ctx(bg)
+	assert.True(t, isLenderOf(ctx, "c1", "u-lender"))
+	assert.False(t, isLenderOf(ctx, "c1", "u-guest"), "another caller is not the lender")
+	assert.False(t, isLenderOf(ctx, "c2", "u-lender"), "another connector is not lent")
+	assert.False(t, isLenderOf(bg, "c1", "u-lender"), "no scope lends nothing")
+	assert.False(t, isLenderOf(ctx, "c1", ""), "no caller is nobody")
+}

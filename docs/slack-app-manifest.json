@@ -49,6 +49,7 @@
         "reaction_added",
         "reaction_removed",
         "app_home_opened",
+        "agent_session_stopped",
         "message.groups"
       ]
     },

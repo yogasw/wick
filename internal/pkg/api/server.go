@@ -1105,6 +1105,9 @@ func NewServer() *Server {
 			}
 			return nil
 		},
+		// By role: the native tools the sender's role may not use, written
+		// where the gate hook reads them, before the message is delivered.
+		TurnRole: agentstool.SessionTurnRole,
 		// Read live so the operator can dial sender detail up or down without
 		// a restart, matching how the other agents settings behave.
 		SenderVisibilityLoader: func() string {
@@ -1887,6 +1890,11 @@ func NewServer() *Server {
 		return connectorsSvc.AgentCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
 	}
 	teamSvc.SetOwnerCatalog(ownerCatalog)
+	// "Frequent ops" in a Team agent's spawn prompt: its most used and
+	// pinned ops, callable without discovery.
+	teamSvc.SetFrequent(func(ctx context.Context, agentID string, allow map[string]func(string) bool) string {
+		return connectorsSvc.FrequentBlock(connectors.WithoutAgentScope(ctx), agentID, allow)
+	})
 	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (team.Reach, error) {
 		cat, err := ownerCatalog(ctx, userID)
 		if err != nil {
@@ -1946,7 +1954,7 @@ func NewServer() *Server {
 	// so per-owner connector ops (data tables) attribute create/access to the
 	// human behind the session — agent spawns authenticate with a shared
 	// internal token, so the token's principal is not the real owner.
-	connectorsSvc.SetSessionOwnerUserResolver(func(sessionID string) (string, bool) {
+	sessionOwner := func(sessionID string) (string, bool) {
 		if sessionID == "" {
 			return "", false
 		}
@@ -1954,7 +1962,11 @@ func NewServer() *Server {
 			return sess.Meta.UserID, true
 		}
 		return "", false
-	})
+	}
+	connectorsSvc.SetSessionOwnerUserResolver(sessionOwner)
+	// The same owner decides whether an MCP caller that names a session by
+	// header or session_id argument may use what that session lends.
+	mcphandlers.SetSessionOwnerResolver(sessionOwner)
 
 	// Name people to the model instead of handing it a uuid. The id stays the
 	// stored value (a name freezes at write time and goes stale on a rename);
@@ -1969,6 +1981,10 @@ func NewServer() *Server {
 		}
 		return u.Name, true
 	})
+
+	// Filter tags per user, so a connector's own account gate (custom
+	// connectors) honours per-account tag shares like the account list does.
+	connectorsSvc.SetUserFilterTagResolver(authSvc.GetUserFilterTagIDs)
 
 	// Surface connector run start/finish to the conversation SSE stream so a
 	// running tool call can show a per-run Cancel button (the FE needs the run
@@ -2151,6 +2167,19 @@ func NewServer() *Server {
 		ReadChat: func(sessionID string, offset, limit int, order, detail string) (map[string]any, error) {
 			return ticketconn.ReadConversation(agentsLayout, sessionID, ticketconn.ConversationPage{Offset: offset, Limit: limit, Order: order, Detail: detail})
 		}}))
+	// wick_roles / wick_roles_set: an agent's own roles, on every Team agent.
+	mcphandlers.RolesRead = agentstool.SessionRolesGet
+	mcphandlers.RolesWrite = agentstool.SessionRolesSet
+	// Access requests: an agent asks a person to approve actions its own
+	// access cannot run; approved ones run with the approver's access.
+	{
+		d := poolDeliverer{pool: agentsPool, channels: channelReg}
+		wireAccessRequests(db, connectorsSvc, authSvc, teamSvc, channelReg,
+			func(ctx context.Context, sessionID, text string) error {
+				return d.DeliverToSession(ctx, sessionID, "", text)
+			},
+			configsSvc.AppURL, agentsLayout)
+	}
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
@@ -2350,6 +2379,19 @@ func NewServer() *Server {
 			slackCh.SetHeldFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindListenHeld, text, extras)
 			})
+			// A reply held at its end ([silent] after text in a turn nobody
+			// typed) shows in its session and goes to whoever decides.
+			slackCh.SetReplyHeldFn(agentstool.NotifyHeldReply)
+			// A person's turn that stayed empty after its [silent]
+			// follow-up goes to the same handle.
+			slackCh.SetEmptyNetFn(agentstool.NotifyEmptyReply)
+			// Slack's native Stop button stops the thread's turn the way the
+			// web UI's stop does.
+			if agentsPool != nil {
+				slackCh.SetStopFn(func(sessionID, by string) error {
+					return agentsPool.KillBy(sessionID, "", by, "stopped from Slack")
+				})
+			}
 			// Each reply a listening thread hears lands in its session at once.
 			slackCh.SetHeardFn(func(sessionID, text string, extras map[string]string) {
 				agentstool.EmitSystemEvent(sessionID, store.KindThreadHeard, text, extras)
@@ -2756,7 +2798,7 @@ func NewServer() *Server {
 		// bearer to carry, so the principal is resolved here and passed
 		// directly. Ownerless session → zero identity → synthetic admin.
 		id := agentToolIdentity(ctx, agentsMgr, authSvc, scope.SessionID)
-		descs := mcpHandler.AgentToolDescriptorsAs(ctx, id)
+		descs := mcpHandler.AgentToolDescriptorsAs(mcphandlers.WithSessionID(ctx, scope.SessionID), id)
 		out := make([]wickprovider.ExternalTool, 0, len(descs))
 		for _, d := range descs {
 			name := d.Name
@@ -2784,7 +2826,8 @@ func NewServer() *Server {
 		"wick_list": true, "wick_search": true, "wick_get": true, "wick_info": true,
 		"wick_list_providers": true, "wick_skill_list": true, "wick_session_info": true,
 		"wick_set_title": true, "wick_session_workspace": true, "ask_user": true,
-		"todo": true, // wick's own task-list tool — no side effects outside the session
+		"todo":       true, // wick's own task-list tool — no side effects outside the session
+		"wick_roles": true, // read-only: who is who on this agent
 	}
 	// Command gate for the wick provider's in-process tool dispatch.
 	// Enforced natively (no subprocess PreToolUse hook), covering every
@@ -2919,6 +2962,12 @@ func NewServer() *Server {
 	}
 
 	tagsSvc := tags.NewService(db)
+	// Who owns a connector instance, for who may approve a per-call
+	// config override.
+	connectorsSvc.SetOwnerCheck(func(ctx context.Context, userID, connectorID string) bool {
+		owns, _ := tagsSvc.UserOwnsConnector(ctx, userID, connectorID)
+		return owns
+	})
 	// Late-bind tags into the custom-connector service and link the
 	// per-def access tags ([custom:<key> filter, Connector, category])
 	// onto existing instance rows. Idempotent — rows that already carry

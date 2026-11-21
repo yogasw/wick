@@ -65,6 +65,11 @@ type Meta struct {
 	// Ticket is this project's ticket-mode configuration. Zero value =
 	// off (see TicketConfig) — sessions stay plain chat sessions.
 	Ticket TicketConfig `json:"ticket,omitempty"`
+
+	// AccessRequests turns access requests on for this project's sessions:
+	// approval cards, the project's access rules and per-call config
+	// overrides. Off (default) = a refused op stays refused, as before.
+	AccessRequests bool `json:"access_requests,omitempty"`
 }
 
 // Project is the in-memory view: meta only (no session list — that lives

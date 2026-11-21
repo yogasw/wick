@@ -6,7 +6,7 @@
 
      Scope-agnostic — the caller owns `profile.project_id` and decides
      which surface is showing. This component only edits what it is given. */
-  import { untrack } from "svelte";
+  import { untrack, type ComponentProps } from "svelte";
   import type { AgentProfile, ProviderListItem } from "@wick-fe/common-api";
   import { canLeadDelegation, normalizeProviderKey } from "@wick-fe/common-api";
   import Button from "./Button.svelte";
@@ -23,6 +23,10 @@
     profile: AgentProfile;
     /** Provider instances this role may run on, with their models. */
     providerList?: ProviderListItem[];
+    /** Lazy model loader for the provider picker (ProviderPicker.loadModels).
+        Without it the picker only knows the models baked into providerList,
+        so omp/opencode live lists show up empty. */
+    loadModels?: ComponentProps<typeof ProviderPicker>["loadModels"];
     tags?: TagOption[];
     /** Read-only mode: every control disabled, Save and Delete hidden.
         How a non-admin sees a global role. */
@@ -38,6 +42,7 @@
   let {
     profile,
     providerList = [],
+    loadModels,
     tags = [],
     readonly = false,
     saving = false,
@@ -206,6 +211,7 @@
             value={pickerValue}
             onChange={pickProvider}
             placeholder="Select provider"
+            {loadModels}
           />
         </div>
       {:else}
@@ -214,6 +220,7 @@
           value={pickerValue}
           onChange={pickProvider}
           placeholder="Select provider"
+          {loadModels}
         />
       {/if}
     </LabeledInput>

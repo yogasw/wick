@@ -293,6 +293,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/advanced/software-update/serving", admin(h.systemServingInfo))
 	mux.Handle("GET /admin/advanced/software-update/serving/stream", admin(h.systemServingStream))
 	mux.Handle("POST /admin/advanced/software-update/swap", admin(h.systemSwapNow))
+	mux.Handle("POST /admin/advanced/software-update/restart", admin(h.systemRestartNow))
 	mux.Handle("POST /admin/advanced/software-update/auto-update", admin(h.systemSetAutoUpdate))
 
 	// Variables (app-level configs)

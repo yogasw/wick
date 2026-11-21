@@ -128,6 +128,14 @@ func (h *Handler) execBrowserOp(ctx context.Context, user *entity.User, r *http.
 	return ""
 }
 
+// browserOpFailed answers a failed browser op. The plugin's message is logged,
+// since the panel may never show it, and sent as a 500: a proxy in front of
+// wick (Cloudflare) swaps a 502 for its own error page and drops the body.
+func browserOpFailed(w http.ResponseWriter, connID, op, errMsg string) {
+	log.Warn().Str("component", "browser-proxy").Str("connector", connID).Str("op", op).Str("error", errMsg).Msg("browser op failed")
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": errMsg})
+}
+
 // apiBrowserOpen opens a live session (session_open op) and returns its id.
 func (h *Handler) apiBrowserOpen(w http.ResponseWriter, r *http.Request) {
 	row, ok := h.resolveBrowserSession(w, r)
@@ -136,7 +144,7 @@ func (h *Handler) apiBrowserOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	var out map[string]any
 	if errMsg := h.execBrowserOp(r.Context(), login.GetUser(r.Context()), r, row.ID, "session_open", map[string]string{}, &out); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})
+		browserOpFailed(w, row.ID, "session_open", errMsg)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -162,7 +170,7 @@ func (h *Handler) apiBrowserClose(w http.ResponseWriter, r *http.Request) {
 	h.connectors.CancelSession(sid)
 	var out map[string]any
 	if errMsg := h.execBrowserOp(r.Context(), login.GetUser(r.Context()), r, row.ID, "session_close", map[string]string{"session_id": sid}, &out); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})
+		browserOpFailed(w, row.ID, "session_close", errMsg)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -188,7 +196,7 @@ func (h *Handler) apiBrowserTabNew(w http.ResponseWriter, r *http.Request) {
 		"session_id": sid,
 		"url":        strings.TrimSpace(body.URL),
 	}, &out); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})
+		browserOpFailed(w, row.ID, "tab_new", errMsg)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -211,7 +219,7 @@ func (h *Handler) apiBrowserTabClose(w http.ResponseWriter, r *http.Request) {
 		"session_id": sid,
 		"index":      idx,
 	}, &out); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})
+		browserOpFailed(w, row.ID, "tab_close", errMsg)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -225,7 +233,7 @@ func (h *Handler) apiBrowserSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	var out map[string]any
 	if errMsg := h.execBrowserOp(r.Context(), login.GetUser(r.Context()), r, row.ID, "session_list", map[string]string{}, &out); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})
+		browserOpFailed(w, row.ID, "session_list", errMsg)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -256,7 +264,7 @@ func (h *Handler) apiBrowserWS(w http.ResponseWriter, r *http.Request) {
 	// here should be a plain HTTP response, not a WS close.
 	var eps endpointsResult
 	if errMsg := h.execBrowserOp(r.Context(), login.GetUser(r.Context()), r, row.ID, "session_endpoints", map[string]string{"session_id": sid}, &eps); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})
+		browserOpFailed(w, row.ID, "session_endpoints", errMsg)
 		return
 	}
 	wsURL := pickTabWS(eps.Tabs, tabIdx)

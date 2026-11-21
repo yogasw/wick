@@ -317,20 +317,20 @@ func (h *Handler) servingPayload() map[string]any {
 		}
 	}
 	body := map[string]any{
-		"pid":       os.Getpid(),
-		"version":   version,
-		"graceful":  upgrade.Armed(),
-		"forced":    upgrade.Forced(),
-		"settle":    upgrade.DrainQuiet().String(),
-		"busy":      upgrade.Busy(),
+		"pid":      os.Getpid(),
+		"version":  version,
+		"graceful": upgrade.Armed(),
+		"forced":   upgrade.Forced(),
+		"settle":   upgrade.DrainQuiet().String(),
+		"busy":     upgrade.Busy(),
 		// The same thing in words, for the panel and the confirm dialog.
 		"busy_label": upgrade.BusyHuman(),
-		"swap":      h.pendingSwap(),
-		"auto_swap": upgrade.AutoSwapStatus(),
+		"swap":       h.pendingSwap(),
+		"auto_swap":  upgrade.AutoSwapStatus(),
 		// How long a boot took here last time, so the UI can say "usually
 		// about this long" instead of leaving a minute of silence unexplained.
 		"typical_boot_seconds": upgrade.TypicalBootSeconds(),
-		"inherited": upgrade.Inherited(),
+		"inherited":            upgrade.Inherited(),
 	}
 	// What the PREVIOUS process is still finishing, if it is still around.
 	// Without this the UI can only say a previous process is finishing — the
@@ -389,6 +389,32 @@ func (h *Handler) pendingSwap() pendingSwap {
 // force=1 additionally tells the outgoing process not to wait for its
 // in-flight work. That is a human decision, made while looking at the list
 // the page shows, so it is a separate parameter rather than a timeout.
+// systemRestartNow applies a build installed at the exec path when this
+// process cannot hand over (graceful handover off): it re-execs in place
+// from the new file. The port closes for the restart and running work is
+// cut off — the card says so before the click. With handover available the
+// swap endpoint is the right one, so this refuses.
+func (h *Handler) systemRestartNow(w http.ResponseWriter, r *http.Request) {
+	if upgrade.Armed() {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": "graceful handover is available — use Swap instead of a restart",
+		})
+		return
+	}
+	log.Warn().Strs("interrupting", upgrade.Busy()).
+		Msg("restart now: re-exec from the installed build requested from the admin UI")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restart": true})
+	_ = http.NewResponseController(w).Flush()
+	go func() {
+		// Let the response reach the page before the listener goes away.
+		time.Sleep(300 * time.Millisecond)
+		if err := updater.RestartInPlace(func() { _ = processctl.StopServer() }); err != nil {
+			log.Error().Err(err).Msg("restart now: re-exec failed — continuing on the current build")
+		}
+	}()
+}
+
 // swapNowGrace is how long the swap click waits for Trigger to fail fast
 // before answering "handing over" and leaving the boot to run on its own.
 const swapNowGrace = 2 * time.Second

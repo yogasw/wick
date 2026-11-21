@@ -63,14 +63,17 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		Describe: func(toolID string) (string, bool) { return describeTool(r.Context(), svc, toolID) },
 	}
 	started := time.Now()
-	res, err := host.Run(r.Context(), codemode.Request{Lang: lang, Code: code, Input: input, Timeout: timeout, Dir: dir, NoDir: noDir})
+	res, err := host.Run(r.Context(), codemode.Request{Lang: lang, Code: code, Input: input, Timeout: timeout, Dir: dir, NoDir: noDir, CacheScope: CodeCacheScope(user, sessionID)})
 	scriptPath, _ := args["script_path"].(string)
 	recordCodeRun(r.Context(), svc, layout, codeRunOrigin{via: entity.CodeModeViaMCP, script: scriptPath}, lang, sessionID, user, started, res, err)
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), "")
 		return
 	}
-	out, err := json.Marshal(res)
+	// The audit above keeps every call; the model gets them folded.
+	shown := *res
+	shown.Calls = codemode.CompactCalls(res.Calls)
+	out, err := json.Marshal(shown)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "failed to encode result: "+err.Error(), "")
 		return
@@ -149,10 +152,22 @@ func RunCodeAs(ctx context.Context, svc *connectors.Service, layout agentconfig.
 		},
 		Describe: func(toolID string) (string, bool) { return describeTool(ctx, svc, toolID) },
 	}
+	if req.CacheScope == "" {
+		req.CacheScope = CodeCacheScope(user, sessionID)
+	}
 	started := time.Now()
 	res, err := host.Run(ctx, req)
 	recordCodeRun(ctx, svc, layout, codeRunOriginOf(ctx), req.Lang, sessionID, user, started, res, err)
 	return res, err
+}
+
+// CodeCacheScope is who owns a run's cached call answers: the user, and
+// the session (whose connectors and agent the calls resolve through).
+func CodeCacheScope(user *entity.User, sessionID string) string {
+	if user == nil {
+		return ""
+	}
+	return "u:" + user.ID + "|s:" + sessionID
 }
 
 // checkToolAccess is the pre-flight of one tool_id: it parses, names an
@@ -164,7 +179,7 @@ func checkToolAccess(ctx context.Context, svc *connectors.Service, layout agentc
 	if err != nil {
 		return err
 	}
-	_, isSession, err := SessionInstanceForID(layout, sessionID, connectorID)
+	_, isSession, err := SessionInstanceForCaller(ctx, layout, sessionID, connectorID)
 	if err != nil {
 		return err
 	}

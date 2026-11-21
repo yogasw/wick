@@ -11,6 +11,17 @@ import (
 	provider "github.com/yogasw/wick/internal/agents/provider"
 )
 
+func TestBaseEnvDropsInheritedGlibcLoaderOverrides(t *testing.T) {
+	t.Setenv("LD_PRELOAD", "/termux/glibc/lib/libc.so")
+	t.Setenv("LD_LIBRARY_PATH", "/termux/glibc/lib")
+	env := baseEnv()
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "LD_PRELOAD=") || strings.HasPrefix(kv, "LD_LIBRARY_PATH=") {
+			t.Fatalf("unsafe loader override survived: %s", strings.SplitN(kv, "=", 2)[0])
+		}
+	}
+}
+
 func TestBuildArgsProfileFirstAndResume(t *testing.T) {
 	ins := provider.Instance{Type: provider.TypeOMP, Name: "work", OMPConfig: &provider.OMPConfig{Profile: "wick-old-name"}}
 	opt := provider.SpawnOptions{Workspace: "/w", ResumeID: "sid-1", ModelID: "openai-codex/gpt-5.2", Instance: &ins}

@@ -218,4 +218,31 @@ describe("ConnectorChecklist", () => {
     await tick();
     expect(screen.queryByTestId("runs-as-owner")).toBeNull();
   });
+
+  test("By role: a mode switch asks first in Settings, then shows the picked list without Lend from me", async () => {
+    const r = render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner", confirmMode: true } });
+    expect(screen.getByTestId("lend")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("access-mode-roles"));
+    expect(screen.getByTestId("access-mode-confirm").textContent).toContain("Switch to By role?");
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("access-mode-confirm")).toBeNull();
+    expect(screen.getByTestId("access-mode-owner").getAttribute("aria-checked")).toBe("true");
+    await fireEvent.click(screen.getByTestId("access-mode-roles"));
+    await fireEvent.click(screen.getByTestId("access-mode-confirm-ok"));
+    await tick();
+    expect(screen.getByTestId("access-mode-roles").getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByTestId("lend")).toBeNull();
+    expect(screen.queryByTestId("who-gets-what")).toBeNull();
+    // The picked list is the ceiling, as in Selected: no All-style Turned off.
+    expect(screen.queryByTestId("turned-off")).toBeNull();
+    expect(screen.getByTestId("access-empty")).toBeTruthy();
+    r.unmount();
+  });
+
+  test("the wizard switches modes without a dialog", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "choose" } });
+    await fireEvent.click(screen.getByTestId("access-mode-owner"));
+    expect(screen.queryByTestId("access-mode-confirm")).toBeNull();
+    expect(screen.getByTestId("access-mode-owner").getAttribute("aria-checked")).toBe("true");
+  });
 });

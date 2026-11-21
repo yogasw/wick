@@ -123,6 +123,23 @@ type Service struct {
 	// connector as its lender — see SetIdentityLookup. nil lends nothing.
 	identity IdentityLookup
 
+	// accessCheck is asked when an agent's own access refuses an op:
+	// a standing approval or an access rule may let it run as a person —
+	// see SetAccessCheck. nil changes nothing.
+	accessCheck AccessCheck
+
+	// ownerCheck tells whether a user owns an instance (its owner tag),
+	// for who may approve a config override — see SetOwnerCheck.
+	ownerCheck OwnerCheck
+
+	// accessGate tells whether a session's project turned access
+	// requests on — see SetAccessGate. nil = off everywhere.
+	accessGate AccessGate
+
+	// sessionPolicyFn reads a session's per-connector policy (Workspace
+	// panel) — see SetSessionPolicy. nil = allow everywhere.
+	sessionPolicyFn SessionPolicyLookup
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
@@ -180,6 +197,11 @@ type Service struct {
 	// Lets an op report "written by Yoga" to the model instead of a uuid it
 	// can neither read nor use.
 	userName func(userID string) (name string, ok bool)
+
+	// userTags resolves a wick user id to its filter tag ids. Wired at boot
+	// via SetUserFilterTagResolver; nil means no per-account tag share can be
+	// proven for a caller known only by id (see AccountUsableBy).
+	userTags func(ctx context.Context, userID string) []string
 
 	// runObserver, when set, is notified as a run enters "running" and again when
 	// it reaches a terminal status, so the agent conversation UI can surface a
@@ -239,6 +261,19 @@ func (s *Service) SetSessionOwnerBotResolver(fn func(sessionID string) (string, 
 	s.sessionOwnerBot = fn
 }
 
+// effectiveCaller is the user id an op sees as its caller. An agent turn
+// authenticates with a shared principal, so the session's owner is the
+// real person; a lent connector overrides that and keeps the lender.
+func (s *Service) effectiveCaller(userID, sessionID string, lent bool) string {
+	if lent || s.sessionOwnerUser == nil || sessionID == "" {
+		return userID
+	}
+	if uid, ok := s.sessionOwnerUser(sessionID); ok && uid != "" {
+		return uid
+	}
+	return userID
+}
+
 // SetSessionOwnerUserResolver wires the hook that maps an agent session id to
 // the wick user id that owns it. Called once at boot from the API server where
 // the agents registry is available. Lets per-owner connector ops (data tables)
@@ -254,6 +289,31 @@ func (s *Service) SetSessionOwnerUserResolver(fn func(sessionID string) (string,
 // handing it a uuid — see Ctx.UserName.
 func (s *Service) SetUserNameResolver(fn func(userID string) (string, bool)) {
 	s.userName = fn
+}
+
+// SetUserFilterTagResolver wires the hook that maps a wick user id to its
+// filter tag ids. Called once at boot from the API server.
+func (s *Service) SetUserFilterTagResolver(fn func(ctx context.Context, userID string) []string) {
+	s.userTags = fn
+}
+
+// AccountUsableBy reports whether userID may run as acc on row, by the same
+// rule the account list uses (AccountVisibleTo): their own account, the
+// shared pool, an account shared with a tag they carry, or an instance they
+// own. Admin rights are deliberately not consulted: callers that only know
+// the effective user id (a connector's own second gate) must not widen
+// access past what that user could pick on the connector page as a
+// non-admin.
+func (s *Service) AccountUsableBy(ctx context.Context, row entity.Connector, acc entity.ConnectorAccount, userID string) (bool, error) {
+	caller := AccountAccess{UserID: userID, Privileged: OwnsConnector(row, userID)}
+	if s.userTags != nil && userID != "" {
+		caller.TagIDs = s.userTags(ctx, userID)
+	}
+	accTags, err := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+	if err != nil {
+		return false, fmt.Errorf("resolve account tags: %w", err)
+	}
+	return AccountVisibleTo(row, acc, accTags[acc.ID], caller), nil
 }
 
 // RunEvent is emitted to the runObserver as a run starts and finishes, so the
@@ -362,6 +422,41 @@ type IdentityLookup func(ctx context.Context, userID string) (*entity.User, []st
 // (see LendingScope). Set once at boot.
 func (s *Service) SetIdentityLookup(f IdentityLookup) { s.identity = f }
 
+// internalAgentUserID mirrors mcp.InternalAgentUserID (not imported here to
+// keep connectors free of the mcp package): the synthetic principal of
+// wick's own internal token, which is nobody in particular.
+const internalAgentUserID = "wick-agent-internal"
+
+// lendRequester is who really asked for a lent call. The token principal
+// (the caller before the lend swapped in the lender) is that person: a
+// per-sender spawn's token is minted for whoever triggered it, so in a
+// shared thread it names the person who spoke, not the session owner.
+// Only when the principal is wick itself (or absent) does the session
+// owner stand in.
+func (s *Service) lendRequester(principal, sessionID string) string {
+	if principal != "" && principal != internalAgentUserID {
+		return principal
+	}
+	return s.effectiveCaller(principal, sessionID, false)
+}
+
+// callDetails describes a refused call for its error message: the
+// effective caller, the lend if any, and the account with its owner.
+func (s *Service) callDetails(c entity.Connector, p ExecuteParams, lent bool, requester string, acc *entity.ConnectorAccount) connector.CallDetails {
+	d := connector.CallDetails{ConnectorLabel: c.Label, ConnectorID: c.ID, CallerID: p.UserID, AccountID: p.AccountID}
+	if lent {
+		d.LenderID = p.UserID
+		d.RequesterID = s.lendRequester(requester, p.SessionID)
+	}
+	if acc != nil {
+		d.AccountOwnerID = acc.WickUserID
+	}
+	if s.userName != nil {
+		d.Name = func(id string) string { n, _ := s.userName(id); return n }
+	}
+	return d
+}
+
 // lendIdentity is who a call on connectorID runs as when the agent scope
 // on ctx lends it and the caller cannot reach it on their own: the
 // lender, with their tags. false keeps the caller — nothing is lent, the
@@ -376,7 +471,11 @@ func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, 
 	if !ok || lenderID == "" || lenderID == userID {
 		return nil, nil, false
 	}
-	if own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin); err != nil || own {
+	own, err := s.isVisibleDirect(ctx, connectorID, userID, userTagIDs, isAdmin)
+	if err != nil || (own && !s.lendFillsMissingAccount(ctx, connectorID, userID, lenderID)) {
+		return nil, nil, false
+	}
+	if lv, _, _ := callerLevel(ctx, userID, connectorID, true); lv == "off" {
 		return nil, nil, false
 	}
 	lender, tags, err := s.identity(ctx, lenderID)
@@ -387,6 +486,36 @@ func (s *Service) lendIdentity(ctx context.Context, connectorID, userID string, 
 		return nil, nil, false
 	}
 	return lender, tags, true
+}
+
+// isLenderOf reports whether userID is who the agent scope on ctx lends
+// connectorID from.
+func isLenderOf(ctx context.Context, connectorID, userID string) bool {
+	ls, ok := AgentScopeFrom(ctx).(LendingScope)
+	if !ok || userID == "" {
+		return false
+	}
+	lender, ok := ls.LentBy(connectorID)
+	return ok && lender == userID
+}
+
+// lendFillsMissingAccount reports whether a caller who reaches a connector
+// on their own still needs the lend: the instance runs every call on the
+// caller's own connected account (per-user / SSO), the caller has none and
+// the lender has one. Without this, reaching the row would win over the
+// lend and the call would fail asking the caller to connect an account the
+// owner already lends them. The shared-credential policy is not consulted:
+// custom per-user rows never fall back to it, and the owner chose to lend.
+func (s *Service) lendFillsMissingAccount(ctx context.Context, connectorID, userID, lenderID string) bool {
+	row, err := s.repo.Get(ctx, connectorID)
+	if err != nil || row == nil || !row.EnableSSO {
+		return false
+	}
+	if mine, err := s.OwnAccount(ctx, connectorID, userID); err != nil || mine != nil {
+		return false
+	}
+	theirs, err := s.OwnAccount(ctx, connectorID, lenderID)
+	return err == nil && theirs != nil
 }
 
 // NewServiceFromDB is a convenience constructor for the web server and
@@ -987,6 +1116,9 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, u
 // narrowed by the agent scope.
 func (s *Service) isVisibleDirect(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
 	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
+		return false, nil
+	}
+	if lv, _, _ := callerLevel(ctx, userID, connectorID, false); lv == "off" {
 		return false, nil
 	}
 	if fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope); ok {
@@ -1695,12 +1827,13 @@ func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, ful
 // VisibleWhen is not met) to the reason, limited to ops that would
 // otherwise be live for the caller. wick_get lists them as unavailable so
 // the agent knows they exist and why it cannot call them.
-func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map[string]string {
+func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key, sessionID string) map[string]string {
 	full, err := s.OperationStatesFull(ctx, connectorID, key)
 	if err != nil {
 		return nil
 	}
 	mod, _ := s.Module(key)
+	row, rowErr := s.repo.Get(ctx, connectorID)
 	scope := AgentScopeFrom(ctx)
 	var out map[string]string
 	for _, op := range mod.AllOps() {
@@ -1714,16 +1847,40 @@ func (s *Service) ConfigOffOps(ctx context.Context, connectorID, key string) map
 		if out == nil {
 			out = map[string]string{}
 		}
-		out[op.Key] = ConfigOffReason(op)
+		if rowErr == nil {
+			out[op.Key] = s.configOffReasonFor(*row, op, s.accessOn(sessionID))
+		} else {
+			out[op.Key] = ConfigOffReason(op)
+		}
 	}
 	return out
 }
 
-// ConfigOffReason is the note shown for an op its instance's config has
-// switched off.
+// ConfigOffReason is the note shown for an op a saved connector's config
+// has switched off. Running (or borrowing) a connector never includes
+// changing its config: that is for an admin, the instance's owner, or
+// anyone it lets configure it ("Allow others to configure").
 func ConfigOffReason(op connector.Operation) string {
-	field, values, _ := strings.Cut(op.VisibleWhen, ":")
-	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); ask an admin to change the config to use it", strings.TrimSpace(field), strings.TrimSpace(values))
+	field, values := configOffNeed(op)
+	return fmt.Sprintf("turned off by this connector's config (needs %s = %s); its config can be changed by an admin, the connector's owner, or anyone it allows to configure it, so ask one of them (or use a session connector you can configure)", field, values)
+}
+
+// ConfigOffReasonSession is the same note for a session connector. It
+// never tells the agent to open the gate itself: a person with access to
+// the session switches it in the Session Workspace tab, or (where access
+// requests are on) approves one call with a config override.
+func ConfigOffReasonSession(op connector.Operation, instanceID string, lockSeals map[string]string) string {
+	field, values := configOffNeed(op)
+	if _, locked := lockSeals[field]; locked {
+		return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); a person locked %s, so ask them to change it in the Session Workspace tab", field, values, field)
+	}
+	first, _, _ := strings.Cut(values, "|")
+	return fmt.Sprintf("turned off by this session connector's config (needs %s = %s); do not switch it yourself: a person with access to this session can change it in the Session Workspace tab, or, where access requests are on, ask with wick_request_access adding %s {%q: %q} to the action's params (tool_id %s)", field, values, ConfigOverrideParam, field, first, instanceID)
+}
+
+func configOffNeed(op connector.Operation) (field, values string) {
+	f, v, _ := strings.Cut(op.VisibleWhen, ":")
+	return strings.TrimSpace(f), strings.TrimSpace(v)
 }
 
 // OpState bundles the effective state of one operation on one connector
@@ -2009,6 +2166,11 @@ type ExecuteParams struct {
 	// whose access token overrides the row's user_token config. Used by
 	// the test panel when multiple accounts are connected to one instance.
 	AccountID string
+	// ConfigOverride sets a few config keys differently for this call
+	// only (see config_override.go). The instance must list each key as
+	// overridable, and the caller must be allowed to configure it (an
+	// agent gets there only through an approval or a rule).
+	ConfigOverride map[string]string
 	// SessionInstance, when non-nil, runs against a session-workspace
 	// instance instead of a DB connector row: there is no row to load,
 	// so the base module is cloned and the instance's own Config map is
@@ -2133,6 +2295,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// lent: the call runs as the lender (see lendIdentity), so the
 	// session's own human never picks the account below.
 	lent := false
+	// asLender: not lent, but the caller already is this connector's
+	// lender, so the call keeps them as its caller like a lent one.
+	asLender := false
+	// requester is who asked for this call, kept before a lend swaps the
+	// identity to the lender (see lendIdentity).
+	requester := p.UserID
 	if virtual {
 		// Session-workspace instance: clone the base module, no DB row.
 		m, ok := s.Module(p.SessionInstance.BaseKey)
@@ -2158,6 +2326,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if lender, tags, ok := s.lendIdentity(ctx, c.ID, p.UserID, p.TagIDs, p.IsAdmin); ok {
 			p.UserID, p.IsAdmin, p.TagIDs = lender.ID, lender.IsAdmin(), tags
 			lent = true
+			if p.AccountID == "" {
+				p.AccountID = lentAccountID(ctx, c.ID)
+			}
+		} else if isLenderOf(ctx, c.ID, p.UserID) {
+			// The turn already runs as the person who lends this connector
+			// (a bot's message runs as the channel owner): keep them, so the
+			// session owner below does not win back and the call looks for
+			// an account the lender never asked them to have.
+			asLender = true
 		}
 		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
 			return nil, err
@@ -2203,6 +2380,22 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("operation %q is a config-only helper and cannot be called as a tool", p.OperationKey)
 	}
 
+	// Agent calls are checked against the op's declared inputs before
+	// anything runs: a wrong guess comes back as an InputError (the MCP
+	// layer attaches the schema) instead of reaching the upstream service.
+	if validatesInput(p.Source) {
+		raw := p.RawInput
+		if raw == nil {
+			raw = make(map[string]any, len(p.Input))
+			for k, v := range p.Input {
+				raw[k] = v
+			}
+		}
+		if ierr := ValidateInput(*op, raw); ierr != nil {
+			return nil, ierr
+		}
+	}
+
 	// Resolve the named account BEFORE the per-row op gate, not after. The
 	// gate used to reject an operation the instance had turned off and
 	// return before any account was loaded — which made a per-account
@@ -2222,7 +2415,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
 			}
 			if !AccountVisibleTo(*c, *acc, accTags[acc.ID], caller) {
-				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
+				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private %s", p.AccountID, s.callDetails(*c, p, lent, requester, acc))
 			}
 			acct = acc
 		}
@@ -2244,7 +2437,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 		if !shared {
 			owner := p.UserID
-			if !lent && s.sessionOwnerUser != nil && p.SessionID != "" {
+			if !lent && !asLender && s.sessionOwnerUser != nil && p.SessionID != "" {
 				if uid, ok := s.sessionOwnerUser(p.SessionID); ok && uid != "" {
 					owner = uid
 				}
@@ -2265,10 +2458,27 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 
+	// A per-call config override: only on a saved instance, only keys it
+	// lists, only values the field offers.
+	if len(p.ConfigOverride) > 0 {
+		if AgentScopeFrom(ctx) != nil && !s.accessOn(p.SessionID) {
+			return nil, fmt.Errorf("%s is part of access requests, which are off for this session's project (its owner can turn them on in the project settings, Access requests)", ConfigOverrideParam)
+		}
+		if err := s.checkOverride(mod, *c, p.ConfigOverride); err != nil {
+			return nil, err
+		}
+	}
+
 	// An agent feature switched off takes every instance of its connector
 	// type with it, session instances included.
 	if !KeyAllowed(ctx, c.Key) {
 		return nil, fmt.Errorf("connector %q is switched off for this agent", c.Key)
+	}
+
+	// The session's own say over this connector (Workspace panel): blocked
+	// refuses every agent call.
+	if AgentScopeFrom(ctx) != nil && s.sessionPolicy(p.SessionID, c.ID) == SessionPolicyBlock {
+		return nil, fmt.Errorf("connector %q is blocked for this session (Workspace panel, Connector access)", c.Label)
 	}
 
 	// Agent checklist: the instance, the identity it runs as, and the op
@@ -2281,8 +2491,21 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance", op.Key, c.Key)
+		if !ok || len(p.ConfigOverride) > 0 {
+			// A session connector runs on its own config (its app, its
+			// tokens), so a rule or a standing approval only decides
+			// whether it may run; the call keeps its identity. A config
+			// override is never the agent's own to use.
+			who, err := s.accessOverride(ctx, p, c, op)
+			if err != nil {
+				return nil, err
+			}
+			if who == nil {
+				if len(p.ConfigOverride) > 0 {
+					return nil, fmt.Errorf("operation %q with a %s needs approval%s", op.Key, ConfigOverrideParam, s.requestHint(p.SessionID))
+				}
+				return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance%s", op.Key, c.Key, s.requestHint(p.SessionID))
+			}
 		}
 	}
 	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
@@ -2296,9 +2519,56 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		if !scope.AllowAccount(c.ID, accountID) {
 			return nil, fmt.Errorf("this agent may not run connector %q as that account", c.ID)
 		}
+		var refusal error
 		if !scope.AllowOp(c.ID, op.Key, op.Destructive) {
-			return nil, fmt.Errorf("operation %q is not allowed for this agent", op.Key)
+			refusal = fmt.Errorf("operation %q is not allowed for this agent", op.Key)
+		} else if err := roleAllowsOp(ctx, requester, c.ID, op.Key, op.Destructive, lent); err != nil {
+			refusal = err
+		} else if len(p.ConfigOverride) > 0 {
+			// An agent never uses an override on its own, whoever it works
+			// for: someone who may configure the instance approves it on a
+			// card (or a rule they wrote does).
+			refusal = fmt.Errorf("operation %q with a %s needs approval", op.Key, ConfigOverrideParam)
 		}
+		if refusal != nil {
+			// The agent's own access said no. A standing approval (an
+			// access request decided "this session"/"always") or an
+			// auto_approve rule may still let it run, as the person who
+			// approved it; a deny rule refuses outright.
+			who, err := s.accessOverride(ctx, p, c, op)
+			if err != nil {
+				return nil, err
+			}
+			if who == nil {
+				return nil, fmt.Errorf("%w%s", refusal, s.requestHint(p.SessionID))
+			}
+			if len(p.ConfigOverride) > 0 && !s.CanConfigure(ctx, who.user.ID, c.ID) {
+				return nil, fmt.Errorf("operation %q: the person who approved it may not configure connector %q, so its %s cannot run as them", op.Key, c.Label, ConfigOverrideParam)
+			}
+			p.UserID, p.IsAdmin, p.TagIDs = who.user.ID, who.user.IsAdmin(), who.tags
+			lent = true
+			if acct != nil {
+				accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acct.ID})
+				if tagErr != nil || !AccountVisibleTo(*c, *acct, accTags[acct.ID], s.AccountAccessFor(*c, p.UserID, p.IsAdmin, p.TagIDs)) {
+					acct, p.AccountID = nil, ""
+				}
+			}
+			if acct == nil && p.AccountID == "" && mod.OAuth != nil && c.EnableSSO {
+				if shared, err := s.SharedCredentialAllowed(ctx, *c); err == nil && !shared {
+					if own, err := s.OwnAccount(ctx, c.ID, p.UserID); err == nil && own != nil {
+						acct = own
+					}
+				}
+			}
+		}
+	}
+
+	// Without an agent, the caller itself must be allowed to configure the
+	// instance to change its config, even for one call.
+	// (A session connector belongs to its session: whoever may use the
+	// session may set its config, so there is nothing more to check.)
+	if len(p.ConfigOverride) > 0 && !virtual && AgentScopeFrom(ctx) == nil && !s.CanConfigure(ctx, p.UserID, c.ID) {
+		return nil, fmt.Errorf("you may not configure connector %q, so you cannot override its config", c.Label)
 	}
 
 	// Per-row state checks (op enable/disable, admin-only) only apply to
@@ -2343,8 +2613,14 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	var configs map[string]string
 	if virtual {
 		configs = s.ResolveSessionConfig(mod, p.ConnectorID, p.SessionInstance.Config, p.SessionInstance.LockSeals)
+		for k, v := range p.ConfigOverride {
+			configs[k] = v
+		}
 	} else {
 		configs = s.LoadConfigs(*c)
+		for k, v := range p.ConfigOverride {
+			configs[k] = v
+		}
 	}
 
 	// No account resolved and the instance credential is off: fail here with
@@ -2369,7 +2645,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	testPath := p.Source == entity.ConnectorRunSourceTest || p.Source == entity.ConnectorRunSourcePluginTest
 	if op.VisibleWhen != "" && (virtual || !testPath) &&
 		!connector.OpVisible(*op, connector.EffectiveConfigValues(mod, configs)) {
-		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReason(*op))
+		if virtual {
+			return nil, fmt.Errorf("operation %q is %s", p.OperationKey, ConfigOffReasonSession(*op, p.ConnectorID, p.SessionInstance.LockSeals))
+		}
+		return nil, fmt.Errorf("operation %q is %s", p.OperationKey, s.configOffReasonFor(*c, *op, s.accessOn(p.SessionID)))
 	}
 
 	// Inject the selected account's token. Ownership and per-account op
@@ -2411,6 +2690,16 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// audit log stores wick_enc_ tokens (not plaintext) in
 	// request_json, so a retry can re-decrypt under the retrier's key.
 	reqBytes, _ := json.Marshal(p.Input)
+	if len(p.ConfigOverride) > 0 {
+		// The override is part of what ran: keep it in the run's record so
+		// the session's Workspace panel and the audit show it.
+		rec := make(map[string]any, len(p.Input)+1)
+		for k, v := range p.Input {
+			rec[k] = v
+		}
+		rec[ConfigOverrideParam] = p.ConfigOverride
+		reqBytes, _ = json.Marshal(rec)
+	}
 
 	// Auto-decrypt: scan configs + input for wick_enc_ tokens and
 	// replace each with its plaintext. The connector only ever sees
@@ -2477,6 +2766,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		UserID:       p.UserID,
 		SessionID:    sessionID,
 		AccountID:    runAccountID,
+		AgentID:      agentIDOf(ctx),
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,
@@ -2487,6 +2777,18 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 	if err := s.repo.CreateRun(ctx, run); err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
+	}
+	if lent {
+		// The run row names the lender; this names who actually asked.
+		// Best effort: the run itself is already recorded, and refusing a
+		// call because its audit side-row failed would break the lend.
+		l := &entity.ConnectorRunLend{
+			RunID: run.ID, OnBehalfOf: p.UserID, CallerUserID: s.lendRequester(requester, sessionID),
+			AgentID: agentIDOf(ctx), SessionID: sessionID,
+		}
+		if err := s.repo.CreateRunLend(ctx, l); err != nil {
+			log.Warn().Err(err).Str("run", run.ID).Msg("connectors: record lend of run failed")
+		}
 	}
 
 	// Make the op's context cancelable AND time-bounded, then register it under
@@ -2561,13 +2863,13 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// token (a synthetic admin, NOT the human), so the SESSION's owner — not
 	// p.UserID — is the true principal. Fall back to p.UserID for direct PAT
 	// calls with no session. Empty result → unrestricted (internal/system).
-	callerUID := p.UserID
-	if s.sessionOwnerUser != nil && sessionID != "" {
-		if uid, ok := s.sessionOwnerUser(sessionID); ok && uid != "" {
-			callerUID = uid
-		}
+	// A lent connector already runs as its lender (p.UserID was swapped
+	// above): the session owner must not win back here, or the lender's
+	// own account is looked up under the owner's id and never found.
+	cctx.SetCallerUserID(s.effectiveCaller(p.UserID, sessionID, lent || asLender))
+	if lent {
+		cctx.SetLend(p.UserID, s.lendRequester(requester, sessionID))
 	}
-	cctx.SetCallerUserID(callerUID)
 	if acct != nil {
 		cctx.SetAccountID(acct.ID)
 	}
@@ -2745,6 +3047,16 @@ func (s *Service) Retry(ctx context.Context, originalRunID, userID, ipAddr, user
 
 // GetRun loads a single ConnectorRun by ID. Backs the test page's
 // prefill flow when a Retry link is followed from the history view.
+// RecentRunLendsByAgent returns the latest lent runs of a Team agent.
+func (s *Service) RecentRunLendsByAgent(ctx context.Context, agentID string, limit int) ([]RunLendView, error) {
+	return s.repo.RecentRunLendsByAgent(ctx, agentID, limit)
+}
+
+// RunLends returns who asked for each lent run in runIDs, keyed by run id.
+func (s *Service) RunLends(ctx context.Context, runIDs []string) (map[string]entity.ConnectorRunLend, error) {
+	return s.repo.RunLends(ctx, runIDs)
+}
+
 func (s *Service) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
 	return s.repo.GetRun(ctx, runID)
 }

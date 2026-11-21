@@ -54,6 +54,9 @@ type SlackChannelConfig struct {
 	// ListenManualChannels: client-facing channels where listening is only
 	// ever switched on by a person, thread by thread.
 	ListenManualChannels string `wick:"picker=slack.channels;hidden;key=listen_manual_channels;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Channels where a new thread does NOT start listening on its own and an agent's channel/all listen scope never applies: someone has to put 🤖 on the thread or ask the agent to listen. Use it for client-facing channels. A channel rule with mode manual does the same."`
+	// ListenIgnoredBots: bots whose replies in a listening thread never wake
+	// the agent (ticket/status notifiers that only echo what happened).
+	ListenIgnoredBots string `wick:"picker=slack.bots;hidden;key=listen_ignored_bots;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Bots a listening thread never hears: their replies start no turn at all. Matched against the bot user ID or bot ID. A bot reply with no text and no files (an attachment-only notification) is skipped without being listed here."`
 	// ReplyMode is what a 🤖 thread does with a reply that does not mention
 	// the agent. Empty (every row saved before the field existed) = listen.
 	ReplyMode string `wick:"dropdown=listen|auto_reply;default=listen;hidden;key=reply_mode;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=What a 🤖 thread does with a reply that does not mention the agent. listen = held for the listen delay, then the agent answers only what is meant for it. auto_reply = held only for the merge delay, then always answered, like a mention. A channel rule below wins over it."`

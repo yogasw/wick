@@ -3,6 +3,7 @@ package nodes
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -43,7 +44,7 @@ func (e *SessionInitExecutor) Descriptor() engine.NodeDescriptor {
 		Label:       "Session Init",
 		Badge:       "session",
 		Description: "Resolve the AI session id early so downstream agent nodes share it and the sidebar row appears before the first turn.",
-		WhenToUse:   "Workflow uses agent nodes and you want the session sidebar entry visible immediately, or you want to pin a specific session id.",
+		WhenToUse:   "Workflow uses agent nodes and you want the session sidebar entry visible immediately, or you want to pin a specific session id. Set provider (\"type/name\") and optionally model to pin the session to that provider + model for all its later turns too, over the agent's default, until an agent calls wick_session_model action=clear.",
 	}
 }
 
@@ -75,6 +76,14 @@ func (e *SessionInitExecutor) Execute(ctx context.Context, n workflow.Node, rc *
 		// workflow (CreatedBy empty) stays ownerless rather than being guessed
 		// at — the fallback is narrower access, never wider.
 		e.Pool.EnsureSessionOwner(ctx, sessionID, rc.Workflow.CreatedBy)
+		// provider (+ model) pins the session there for every turn, not
+		// just this run's: the agent's default stops moving it until an
+		// agent clears the pin (wick_session_model action=clear).
+		if key, model := sessionInitPin(n); key != "" {
+			if _, err := e.Pool.PinSession(ctx, sessionID, key, model); err != nil {
+				return workflow.NodeOutput{}, fmt.Errorf("pin session provider: %w", err)
+			}
+		}
 	}
 
 	return workflow.NodeOutput{
@@ -84,6 +93,20 @@ func (e *SessionInitExecutor) Execute(ctx context.Context, n workflow.Node, rc *
 			"preset":     n.Preset,
 		},
 	}, nil
+}
+
+// sessionInitPin is the provider key and model a session_init node pins
+// its session to; "" = no pin. Provider may carry the editor's
+// "type/name::model" form, as an agent node's does.
+func sessionInitPin(n workflow.Node) (key, model string) {
+	key, model = strings.TrimSpace(n.Provider), strings.TrimSpace(n.Model)
+	if i := strings.Index(key, "::"); i >= 0 {
+		if model == "" {
+			model = strings.TrimSpace(key[i+2:])
+		}
+		key = strings.TrimSpace(key[:i])
+	}
+	return key, model
 }
 
 // resolveSessionInitID picks the sessionID per node config. SessionID

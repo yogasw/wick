@@ -30,6 +30,10 @@ const (
 // they speak the "file" event.
 const FeatureFile = "file"
 
+// FeatureCache is announced by a runner that forwards wick.call's cache
+// option; an older runner drops it and its calls are simply not cached.
+const FeatureCache = "cache"
+
 // ErrFileDenied marks a path refused for where it leads (absolute, ..,
 // a symlink out of codemode/); errors.Is reports it.
 var ErrFileDenied = errors.New("wick.file path denied")

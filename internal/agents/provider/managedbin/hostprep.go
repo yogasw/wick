@@ -142,16 +142,31 @@ func ensureSymlink(target, link string) error {
 	return nil
 }
 
-// writeLauncher is the fallback when PT_INTERP cannot be pointed at the
-// loader: the binary moves to <bin>.real and bin becomes a script that
-// runs it through the loader explicitly. /proc/self/exe is then ld.so,
-// which opencode tolerates; the recorded sha256 covers the script only.
+// loaderGuard is the first line of every Termux launcher. Termux's own
+// LD_PRELOAD (libtermux-exec*.so) is a bionic library whose NEEDED entry is
+// bionic's "libc.so"; a glibc binary that inherits it makes glibc's loader
+// look that name up in $PREFIX/glibc/lib, where libc.so is a linker script,
+// and the binary dies with "libc.so: invalid ELF header" before main. Every
+// spawn path (agent RPC, login terminal, usage/account helpers) inherits
+// the daemon's env, so the binary drops the variables itself, the way
+// glibc-runner's grun does.
+const loaderGuard = "unset LD_PRELOAD LD_LIBRARY_PATH\n"
+
+// writeLauncher moves the binary to <bin>.real and makes bin a script that
+// clears the loader variables and runs it. With loader set (PT_INTERP could
+// not be pointed at it) the script runs .real through the loader; then
+// /proc/self/exe is ld.so, which opencode tolerates. The recorded sha256
+// covers the script only.
 func writeLauncher(bin, loader, shell string) error {
 	real := bin + ".real"
 	if err := os.Rename(bin, real); err != nil {
 		return err
 	}
-	script := "#!" + shell + "\nexec " + shQuote(loader) + ` "${0%/*}/` + filepath.Base(real) + `" "$@"` + "\n"
+	run := `"${0%/*}/` + filepath.Base(real) + `" "$@"`
+	if loader != "" {
+		run = shQuote(loader) + " " + run
+	}
+	script := "#!" + shell + "\n" + loaderGuard + "exec " + run + "\n"
 	return os.WriteFile(bin, []byte(script), 0o755)
 }
 
@@ -161,9 +176,10 @@ func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) 
 // sandboxed --version. Off Termux it is a no-op. On Termux a glibc build
 // gets its PT_INTERP rewritten in place to a short symlink wick keeps
 // pointing at glibc-runner's loader, which already searches
-// $PREFIX/glibc/lib, so the binary execs natively with no env and no
-// wrapper. When the symlink cannot be made, or does not fit, a launcher
-// script takes the binary's place instead. It runs before the sha256 is
+// $PREFIX/glibc/lib, so the binary execs natively. It then moves to
+// <bin>.real behind a launcher script that clears Termux's LD_PRELOAD
+// (loaderGuard). When the symlink cannot be made, or does not fit, the
+// launcher runs it through the loader explicitly instead. It runs before the sha256 is
 // recorded, so the prepared file is what Activate re-verifies later.
 func (hp hostPrep) prepareBinary(ctx context.Context, h Host, bin string) error {
 	if !h.Termux {
@@ -189,6 +205,10 @@ func (hp hostPrep) prepareBinary(ctx context.Context, h Host, bin string) error 
 	if linkErr == nil {
 		if got, err := elfInterp(bin); err != nil || got != link {
 			return fmt.Errorf("interpreter is %q after rewrite: %v", got, err)
+		}
+		// Natively runnable now, but still behind a launcher: see loaderGuard.
+		if shell := filepath.Join(prefix, "bin", "sh"); hp.exists(shell) {
+			return writeLauncher(bin, "", shell)
 		}
 		return nil
 	}

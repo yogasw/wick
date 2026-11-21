@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/accesstoken"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp/handlers"
@@ -156,13 +157,14 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 			} else {
 				ctx = login.WithUser(ctx, &scopedUser, tagIDs)
 			}
-			serveWithSession(next, w, r, ctx)
+			serveWithSession(next, w, r, ctx, false)
 			return
 		}
 
 		if m.internalToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.internalToken)) == 1 {
 			ctx := login.WithUser(r.Context(), internalSystemUser(), nil)
-			serveWithSession(next, w, r, ctx)
+			ctx = handlers.WithSessionTrustAll(ctx)
+			serveWithSession(next, w, r, ctx, true)
 			return
 		}
 
@@ -182,7 +184,7 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		}
 		tagIDs := m.users.GetUserFilterTagIDs(r.Context(), user.ID)
 		ctx := login.WithUser(r.Context(), user, tagIDs)
-		serveWithSession(next, w, r, ctx)
+		serveWithSession(next, w, r, ctx, false)
 	})
 }
 
@@ -190,15 +192,27 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 // A grant that named one has already put it there; otherwise the wire
 // header is used, which is how a provider that predates per-session
 // tokens (and the stdio transport) still resolves its session.
-func serveWithSession(next http.Handler, w http.ResponseWriter, r *http.Request, ctx context.Context) {
+// headerTrusted is true only for wick's own internal token; any other
+// credential's header is stamped as unverified (see SessionTrusted).
+func serveWithSession(next http.Handler, w http.ResponseWriter, r *http.Request, ctx context.Context, headerTrusted bool) {
 	if handlers.SessionIDFrom(ctx) == "" {
-		ctx = handlers.WithSessionID(ctx, r.Header.Get(handlers.SessionHeader))
+		if headerTrusted {
+			ctx = handlers.WithSessionID(ctx, r.Header.Get(handlers.SessionHeader))
+		} else {
+			ctx = handlers.WithUnverifiedSessionID(ctx, r.Header.Get(handlers.SessionHeader))
+		}
 	}
 	// A session that belongs to an Agents-app agent reaches only that
-	// agent's checklist. Trusting the header here is safe: a scope can only
-	// take away, so naming someone else's agent session narrows the caller
-	// and never widens it.
-	ctx = withAgentScope(ctx, handlers.SessionIDFrom(ctx))
+	// agent's checklist. Applying a header-named checklist is safe because
+	// a scope only takes away — but the LENDING half of it gives, so it is
+	// kept only when the caller may use that session (named by their own
+	// credential, or theirs). Anyone else gets the checklist without the
+	// lend: naming someone else's session narrows, never widens.
+	sid := handlers.SessionIDFrom(ctx)
+	ctx = withAgentScope(ctx, sid)
+	if sid != "" && !handlers.SessionTrusted(ctx, sid) {
+		ctx = connectors.WithAgentScope(connectors.WithoutAgentScope(ctx), connectors.WithoutLending(connectors.AgentScopeFrom(ctx)))
+	}
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 

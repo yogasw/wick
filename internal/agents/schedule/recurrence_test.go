@@ -73,10 +73,10 @@ func TestParseWhen_Cron(t *testing.T) {
 func TestParseWhen_Rejects(t *testing.T) {
 	now := time.Now()
 	bad := [][3]string{
-		{"", "", ""},                 // nothing
-		{"", "5m", "0 9 * * *"},      // both interval and cron
-		{"", "notaduration", ""},     // bad interval
-		{"", "", "0 9 * *"},          // 4-field cron
+		{"", "", ""},                     // nothing
+		{"", "5m", "0 9 * * *"},          // both interval and cron
+		{"", "notaduration", ""},         // bad interval
+		{"", "", "0 9 * *"},              // 4-field cron
 		{"2020-01-01T00:00:00Z", "", ""}, // past
 	}
 	for _, c := range bad {

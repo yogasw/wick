@@ -182,6 +182,10 @@ func flattenLevel(ctx context.Context, s ModelSets, ins Instance, path []string,
 	}
 	var out []ModelChoice
 	for _, r := range rows {
+		if !r.Live && r.ID == AutoModel {
+			// A model level's "Auto" row is a pick, not a model.
+			continue
+		}
 		if !r.Live {
 			out = append(out, r)
 			continue

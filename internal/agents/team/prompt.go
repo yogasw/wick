@@ -68,7 +68,7 @@ func (s *Service) SpawnPromptFor(ctx context.Context, sessionID string) (SpawnPr
 	f := EffectiveFeatures(*p, reach)
 	return SpawnPrompt{
 		Prompt:    s.teamPrompt(ctx, *p),
-		Access:    YourAccess(scope, reach),
+		Access:    withFrequent(YourAccess(scope, reach), s.frequentBlock(ctx, p.ID, scope, reach)),
 		Subagents: f.Subagents && scope.AllowKey("sub-agents") && scope.AllowTool("wick_agent_delegate"),
 		Schedule:  f.Schedule && scope.AllowTool("wick_schedule_message"),
 		Files:     f.Files,
@@ -251,3 +251,11 @@ func YourAccess(sc *Scope, reach Reach) string {
 // MemberOf is memberOf for callers outside the package (the A2A registry
 // builds its cards from the same name and description).
 func (s *Service) MemberOf(p entity.AgentPersona) Member { return s.memberOf(p) }
+
+// withFrequent appends the frequent-ops block to "Your access".
+func withFrequent(access, frequent string) string {
+	if frequent == "" {
+		return access
+	}
+	return access + "\n\n" + frequent
+}

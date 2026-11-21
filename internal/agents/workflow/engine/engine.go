@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
+	"github.com/yogasw/wick/internal/pkg/strutil"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -386,10 +387,10 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	// pattern never misses the run that triggered it. Index failure is
 	// still soft — log + continue; the run itself already finished.
 	if ierr := e.StateStore.IndexAppend(w.ID, state.IndexEntry{
-		ID:         runID,
-		Status:     st.Status,
-		StartedAt:  st.StartedAt,
-		EndedAt:    st.EndedAt,
+		ID:          runID,
+		Status:      st.Status,
+		StartedAt:   st.StartedAt,
+		EndedAt:     st.EndedAt,
 		DurationMs:  end.Sub(st.StartedAt).Milliseconds(),
 		Source:      indexEntrySource(st),
 		TriggerID:   indexEntryTrigger(st),
@@ -1078,7 +1079,7 @@ func truncateForEvent(v any) any {
 	if len(b) <= maxEventPayload {
 		return v
 	}
-	preview := string(b[:maxEventPayload])
+	preview := strutil.CutBytes(string(b), maxEventPayload)
 	return map[string]any{
 		"_truncated": true,
 		"_size":      len(b),

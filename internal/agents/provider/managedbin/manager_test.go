@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeSource is a managed type whose "binary" is a shell script. The
@@ -328,5 +329,21 @@ func TestHostAndVersionHelpers(t *testing.T) {
 	}
 	if !MatchesTag("v18.4.3", "18.4.3") || MatchesTag("v18.4.3", "18.4.2") {
 		t.Fatal("MatchesTag")
+	}
+}
+
+// The status poll must not wait for a running download: PruneIfIdle returns
+// at once while the type's lock is held.
+func TestPruneIfIdleDoesNotWaitForBusyType(t *testing.T) {
+	m := New()
+	l := m.typeLock("fakecli")
+	l.Lock()
+	defer l.Unlock()
+	done := make(chan struct{})
+	go func() { m.PruneIfIdle("fakecli"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PruneIfIdle blocked on a busy type")
 	}
 }

@@ -130,10 +130,30 @@ func TestFileOldWick(t *testing.T) {
 	}
 }
 
-func TestDoneAnnouncesFileFeature(t *testing.T) {
+func TestDoneAnnouncesFeatures(t *testing.T) {
 	f := newFake(t, 0)
 	ev, _ := f.run("js", `return 1;`, nil, 5*time.Second)
-	if len(ev.Features) != 1 || ev.Features[0] != featureFile {
+	if len(ev.Features) != 2 || ev.Features[0] != featureFile || ev.Features[1] != featureCache {
 		t.Fatalf("features = %v", ev.Features)
+	}
+}
+
+func TestCallForwardsCacheOption(t *testing.T) {
+	f := newFake(t, 0)
+	ev, _ := f.run("js", `
+wick.call("conn:a/one", {}, { cache: 300 });
+wick.tool("conn:a/two")({}, { cache: { ok: 60, error: 10 } });
+wick.callMany([{ toolId: "conn:a/three", params: {}, cache: true }, { toolId: "conn:a/four", params: {} }]);
+wick.call("conn:a/five", {});
+return 1;`, nil, 5*time.Second)
+	if !ev.OK {
+		t.Fatalf("run failed: %s", ev.Error)
+	}
+	want := map[string]string{"conn:a/one": "300", "conn:a/two": `{"error":10,"ok":60}`, "conn:a/three": "true", "conn:a/four": "", "conn:a/five": ""}
+	for id, w := range want {
+		got, _ := f.caches.Load(id)
+		if got != w {
+			t.Errorf("%s cache = %q, want %q", id, got, w)
+		}
 	}
 }

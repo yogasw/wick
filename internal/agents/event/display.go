@@ -175,13 +175,18 @@ var (
 func RegisterDetector(kind string, priority int, fn Detector) {
 	detectorsMu.Lock()
 	defer detectorsMu.Unlock()
-	detectors = append(detectors, detectorEntry{kind: kind, priority: priority, seq: len(detectors), fn: fn})
-	sort.SliceStable(detectors, func(i, j int) bool {
-		if detectors[i].priority != detectors[j].priority {
-			return detectors[i].priority > detectors[j].priority
+	// Build a new slice: readers hold the old one without the lock, so it
+	// must never be sorted in place.
+	next := make([]detectorEntry, len(detectors), len(detectors)+1)
+	copy(next, detectors)
+	next = append(next, detectorEntry{kind: kind, priority: priority, seq: len(detectors), fn: fn})
+	sort.SliceStable(next, func(i, j int) bool {
+		if next[i].priority != next[j].priority {
+			return next[i].priority > next[j].priority
 		}
-		return detectors[i].seq < detectors[j].seq
+		return next[i].seq < next[j].seq
 	})
+	detectors = next
 }
 
 func runDetectors(in DetectInput) Display {
