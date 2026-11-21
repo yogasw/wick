@@ -1727,6 +1727,16 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		OnFailover:      failoverHook(sess.Meta, p.decideFailover),
 		FailoverMsgKey:  resend.msgKey,
 		OnTurnOK: func(sentAt time.Time) {
+			// Runs on its own goroutine and writes agents.json: join p.wg
+			// (under the lock Stop sets p.closed under) so Stop waits for it.
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				return
+			}
+			p.wg.Add(1)
+			p.mu.Unlock()
+			defer p.wg.Done()
 			p.turnOK(sessionID, agentName, pType+"/"+pName, sentAt)
 		},
 	})
