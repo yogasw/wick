@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -19,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 const (
@@ -69,8 +70,8 @@ func TestRepeatedTableflipHandover(t *testing.T) {
 		}
 	}()
 
-	cmd := exec.Command(exe, "-test.run=^TestRepeatedTableflipHandover$")
-	cmd.Env = append(os.Environ(),
+	cmd := safeexec.Command(exe, "-test.run=^TestRepeatedTableflipHandover$")
+	cmd.Env = append(fixtureBaseEnv(),
 		reloadFixtureEnv+"=1",
 		reloadDirEnv+"="+stateDir,
 		reloadAddrEnv+"="+addr,
@@ -311,4 +312,19 @@ func processExited(pid int) bool {
 	}
 	fields := strings.Fields(raw[closeParen+1:])
 	return len(fields) > 0 && fields[0] == "Z"
+}
+
+// fixtureBaseEnv is the test's environment without tableflip's parent
+// sentinel. A test run started from a process that was itself handed over
+// (an agent shell under the live daemon) inherits the sentinel, and the
+// fixture would then wait for a parent that never existed.
+func fixtureBaseEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "TABLEFLIP_HAS_PARENT_7DIU3=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
 }
