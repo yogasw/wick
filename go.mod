@@ -107,3 +107,5 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace github.com/cloudflare/tableflip => github.com/yogasw/tableflip v0.0.0-20261121023209-5d2b4d66db86
