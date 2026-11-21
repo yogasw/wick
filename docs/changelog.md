@@ -10,6 +10,172 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.19.0](https://github.com/yogasw/wick/compare/v1.18.1...v1.19.0) — Access Control
+
+_Released on 2026-11-21_
+
+### Added
+
+*   **Access Requests**
+    *   Introduced per-action access requests with rules and facts.
+    *   Added support for rule scripts via code mode and approver rules.
+    *   Implemented 8h/24h timed approvals, timed approvals for overrides, and approver labels.
+    *   Added per-session connector access in the Workspace panel.
+    *   Introduced per-project settings card and history in session files for access requests.
+    *   Enabled agents to propose project rules, saved upon approval.
+    *   Made access requests opt-in per project, defaulting to off.
+*   **Agents & Roles**
+    *   Added native tools per role ("By role") for agents.
+    *   Enabled editing roles manually in Settings and added tag rules.
+    *   Introduced `wick_roles` built-in tools and a preview showing the effective role.
+    *   Implemented guest lends, co-owners, and roles changeable from within the agent.
+    *   Added "By role" in Settings > Access, with a read-only Roles view.
+    *   Allowed reading and changing an agent's roles through chat.
+    *   Implemented "By role" access for Team agents.
+    *   Added an "Akses & peran" (Access & Roles) tab for Team agent access.
+    *   Enabled pinning a session to a provider + model (`wick_session_model`).
+*   **Connectors**
+    *   Implemented per-call configuration overrides.
+    *   Added grouping for operations, frequent operations, and schema-on-error handling.
+    *   Record who asked for a run that was initiated via a lend.
+    *   A lend that names a specific account will now run as that account.
+*   **Deployment & Source Builds**
+    *   Introduced the `source_deploy` connector to update Wick from source without a release.
+    *   Added the ability to pull a checkout without an upstream; `--src` on a branch builds it.
+    *   Implemented numbered source builds (1, 2, 3) instead of date stamps.
+    *   Added functionality to pull the local checkout when safe, otherwise build it as is.
+    *   Enabled building the local checkout when run from inside it.
+    *   Published completion callbacks for source deployment.
+    *   Added `--no-pull` option for `deploy-from-source` to build `--src` as is.
+*   **Browser Automation (Playwright Browser)**
+    *   Added `launch_args` for live sessions and a code-mode skill for missing operations.
+    *   Included `cdp save_dir` for base64 results.
+    *   Implemented `cdp action` and `get_markdown` `extra_args` pass-throughs.
+    *   Enhanced `frame_click` with menu and `expect_url` options, showing where a live run stopped.
+    *   Revamped the live browser panel.
+*   **Code Mode**: Improved calls list folding for models and added guidance for many items.
+*   **Providers**: Added a spinner and elapsed time display while accounts are being read.
+*   **Slack**: Showed reply images as image blocks.
+
+### Fixed
+
+*   **Access Requests**
+    *   Refused operations when the connector's configuration switches them off.
+    *   Modal repeats the card's sender at the top.
+    *   Card shows running at once and posts as the thread's agent.
+    *   An approvers-only rule without a label now names no one.
+    *   An ended request's card names nobody.
+    *   Approver names are kept out of agent-facing results.
+    *   Multi-action requests run in list order, stopping after a failure.
+    *   A rule proposal now requires an existing project.
+    *   No rule script cache; now shows failed checks; includes admin fallback.
+*   **Agents**
+    *   "By role" access stays inside the agent's picked connectors.
+    *   Roles preview now loads once per pick instead of looping.
+    *   A sender-less turn auto-approves only from the owner's web chat.
+    *   Captain auto-approve applies only to the owner's own request.
+    *   "Turn off Instant" is now findable from both Slack modes.
+    *   Dropped reply text when a blocking Stop hook refused it.
+    *   Carried a session pin to the agent name the channel spawns.
+*   **Browser Automation (Playwright Browser)**
+    *   Kept one CDP session per page for CDP steps.
+    *   `get_markdown` reads JS-rendered pages and caps parallel moli fetches.
+    *   Listed moli tabs over HTTP; agent-callable `browser_update`.
+    *   Moli clicks with the real mouse where possible; clarified when to use moli.
+    *   Bound page calls a click step makes; one evaluate for menu matches.
+    *   Moli navigation waits without load events.
+    *   Mouse paths keep their planned duration.
+    *   Per-instance session list; finished missed clicks on moli.
+    *   Locked live session window size.
+*   **Channels**: Kept compaction boundaries out of Slack and Telegram.
+*   **Code Mode**: Handed host values to scripts as native JS arrays.
+*   **Connectors**
+    *   An agent's config override always waits for approval.
+    *   Config-off note names everyone who may change it (clarified wording).
+    *   A turn running as the lender keeps the lender as caller.
+    *   A lend covers a caller with no per-user account.
+    *   A lent connector keeps the lender as caller.
+    *   A refused per-user call specifies who it ran as and why.
+*   **Conversation**
+    *   Browser panel close actions answer at once.
+    *   Pop out and fullscreen undone by the second browser panel.
+*   **Custom Connectors**: A concurrent refresh can no longer hand out the old token.
+*   **Daemon**
+    *   Recognized a running daemon after its binary is replaced.
+    *   Preserved graceful upgrade environment on detached start.
+    *   Termux boot script keeps the daemon alive and writes crash reports.
+*   **Deployment**
+    *   Restarted with the new script when the pull replaced it.
+    *   Pulled the same-named branch from origin, not `@{u}`.
+    *   Switched from date-stamped to numbered builds with a restart.
+    *   Untracked files no longer skip the checkout's pull.
+    *   Restored committed FE build outputs before pulling a checkout.
+    *   A waiting build can be applied when handover is off.
+    *   Graceful handover is treated as on by default.
+    *   Floored build version at installed daemon.
+    *   Kept successful install from failing on version probe.
+    *   Enabled graceful handover by default.
+    *   Read daemon swap version before build.
+    *   Prevented version downgrade during reload.
+*   **Event**: Registered display detectors copy-on-write.
+*   **Frontend (FE)**: Provider picker loads live models everywhere with the same look as the chat.
+*   **Login TTY**: Dropped the OMP account listing when the binary changes.
+*   **Managed Binary**:
+    *   Kept the download progress live while a download runs.
+    *   Fell back to the API asset URL when a release download 5xxs.
+    *   Run Termux glibc binaries behind an `LD_PRELOAD` guard.
+*   **MCP**: A session named by header or argument lends nothing.
+    *   Group summaries now drop words shared by every operation.
+    *   Suggested grouping tolerates wrapped descriptions.
+    *   Honored per-account tag shares on per-user accounts.
+    *   Followed MCP `tools/list nextCursor`.
+*   **OMP**: An account picked without a model now runs that provider's default.
+    *   Fixed error spawning on Android Termux.
+*   **Providers**: Live model lists now correctly reflect account changes on next open.
+*   **Slack**
+    *   A person's turn closing on `[silent]` is asked once to answer.
+    *   Native Stop button now stops the running turn.
+    *   A DM thread reply opens with the thread it answers.
+    *   An empty reply posts nothing; the hourglass stays while it waits.
+    *   Corrected empty-reply line to English.
+    *   Kept the thread working while an empty reply waits.
+    *   Waited before posting the empty-reply line.
+    *   A failed profile lookup no longer runs as the channel owner.
+    *   A network stall no longer leaves the socket offline.
+    *   The empty-reply line now only appears for a person still unanswered.
+    *   A thread opener's unmentioned reply is now meant for the agent.
+    *   An auto-reply thread's turn is now treated as a person's turn.
+    *   An empty Slack turn says so; failover keeps track of who asked.
+    *   Who started a turn decides `[silent]`, not where it sits.
+    *   New thread sessions are given the thread they wake in.
+    *   Bot notifications are prevented from waking a listening thread.
+    *   A turn nobody typed posts only its closing text.
+    *   No narration fallback after the turn posted into its thread.
+*   **Source Deploy**: Retried completion callback after handover.
+    *   Delivered the completion event after a handover.
+    *   Documented direct completion callback.
+*   **Stream**: Live trace no longer repeats when returning from background.
+*   **System**: A waiting build can be applied when graceful handover is off.
+*   **Team**: A `new_chat` chat no longer copies the main chat's title.
+    *   A messaged teammate can no longer read its asker's session.
+*   **Termux**: Fixed Vite builds on Termux without `/usr/bin/env`.
+    *   Dropped glibc loader env at the source; prevented deploy from exiting with code 64.
+
+### Performance
+
+*   **Source Deploy**: Rebuilt only the FE workspaces that changed.
+
+### Changed
+
+*   **Agents**: Folded access & roles into the Access tab, in English.
+
+### Docs
+
+*   **Playwright Browser**: Added documentation for choosing an engine, driving a site, and moli behavior.
+
+---
+
+
 ## [v1.18.1](https://github.com/yogasw/wick/compare/v1.18.0...v1.18.1) — Platform Enhancements
 
 _Released on 2026-11-05_
