@@ -192,11 +192,11 @@ func (p *OMPParser) parse(line string) (AgentEvent, error) {
 		return AgentEvent{Raw: trimmed, ContextUsed: level}, nil
 
 	case "tool_execution_start":
-		in := string(raw.Args)
+		name, in := ompDeviceCall(raw.ToolName, raw.Args)
 		if in == "null" || in == "{}" {
 			in = ""
 		}
-		return AgentEvent{Type: ToolUse, ToolName: raw.ToolName, ToolUseID: raw.ToolCallID, ToolInput: in, Raw: trimmed}, nil
+		return AgentEvent{Type: ToolUse, ToolName: name, ToolUseID: raw.ToolCallID, ToolInput: in, Raw: trimmed}, nil
 
 	case "tool_execution_end":
 		return AgentEvent{Type: ToolResult, Text: raw.Result.text(), ToolUseID: raw.ToolCallID, IsError: raw.IsError, Raw: trimmed}, nil
@@ -279,3 +279,47 @@ var ompControlFrames = map[string]bool{
 	"advisor_cost_changed": true, "goal_updated": true, "todo_reminder": true,
 	"todo_auto_clear": true, "manual_compaction_start": true, "retry_fallback_succeeded": true,
 }
+
+// ompDeviceCall unwraps an omp `xd://` device call. omp unmounts MCP and
+// other discoverable tools from the request and lets the model run them
+// through its write tool: `write {path:"xd://<tool>", content:"<json args>"}`
+// (packages/coding-agent/src/tools/xdev.ts). Shown as is, every MCP call
+// reads as a file write to "xd://mcp__wick_execute"; unwrapped it is the
+// <tool> call with its own args, which is what omp's own renderer shows.
+// Anything else (a real file write, `read xd://` docs, bad JSON) passes
+// through unchanged.
+func ompDeviceCall(toolName string, args json.RawMessage) (string, string) {
+	in := string(args)
+	if toolName != "write" || len(args) == 0 || args[0] != '{' {
+		return toolName, in
+	}
+	var a struct {
+		Path    string          `json:"path"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return toolName, in
+	}
+	p := strings.TrimSpace(a.Path)
+	if len(p) <= len(ompDevicePrefix) || !strings.EqualFold(p[:len(ompDevicePrefix)], ompDevicePrefix) {
+		return toolName, in
+	}
+	device := p[len(ompDevicePrefix):]
+	if strings.ContainsAny(device, "/?#") {
+		return toolName, in
+	}
+	// content is a JSON string holding the args object; tolerate a model
+	// that sent the object itself.
+	body := a.Content
+	var str string
+	if json.Unmarshal(a.Content, &str) == nil {
+		body = json.RawMessage(strings.TrimSpace(str))
+	}
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return toolName, in
+	}
+	return device, string(body)
+}
+
+const ompDevicePrefix = "xd://"

@@ -136,3 +136,41 @@ func TestParseLinePlainParser(t *testing.T) {
 		t.Fatalf("got %v %v", evs, err)
 	}
 }
+
+// omp runs mounted tools as `write xd://<tool>` with the JSON args as
+// content; the event must carry the inner tool and args, not a file write.
+func TestOMPParserUnwrapsDeviceWrite(t *testing.T) {
+	p := NewOMPParser("acct")
+	line := `{"type":"tool_execution_start","toolCallId":"d1","toolName":"write","args":{"path":"xd://mcp__wick_execute","content":"{\"tool_id\":\"conn:abc/deploy\",\"params\":{\"profile\":\"p1\"}}"},"intent":"deploy"}`
+	ev, err := p.Parse(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Type != ToolUse || ev.ToolName != "mcp__wick_execute" {
+		t.Fatalf("got %v %q, want ToolUse mcp__wick_execute", ev.Type, ev.ToolName)
+	}
+	if !strings.Contains(ev.ToolInput, `"tool_id":"conn:abc/deploy"`) {
+		t.Fatalf("input not unwrapped: %s", ev.ToolInput)
+	}
+	if ev.Display == nil || ev.Display.Kind != KindMCP || ev.Display.Connector != "abc" || ev.Display.Op != "deploy" {
+		t.Fatalf("display = %+v, want mcp card abc · deploy", ev.Display)
+	}
+
+	// Object content, as a model may send it, unwraps too.
+	ev, _ = p.Parse(`{"type":"tool_execution_start","toolCallId":"d2","toolName":"write","args":{"path":"xd://recall","content":{"query":"x"}}}`)
+	if ev.ToolName != "recall" || ev.ToolInput != `{"query":"x"}` {
+		t.Fatalf("object content: %q %s", ev.ToolName, ev.ToolInput)
+	}
+
+	// Real files, device docs and non-JSON content stay a write.
+	for _, l := range []string{
+		`{"type":"tool_execution_start","toolCallId":"f1","toolName":"write","args":{"path":"src/a.go","content":"package a"}}`,
+		`{"type":"tool_execution_start","toolCallId":"f2","toolName":"write","args":{"path":"xd://recall/docs","content":"{}"}}`,
+		`{"type":"tool_execution_start","toolCallId":"f3","toolName":"write","args":{"path":"xd://recall","content":"?"}}`,
+	} {
+		ev, _ := p.Parse(l)
+		if ev.ToolName != "write" {
+			t.Errorf("%s: tool = %q, want write", l, ev.ToolName)
+		}
+	}
+}
