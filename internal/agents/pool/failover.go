@@ -316,7 +316,21 @@ func (p *Pool) decideFailover(req provider.FailoverRequest) provider.FailoverVer
 		job.pending = job.agent.TakePending()
 	}
 	l.Info().Str("from", failedKey).Str("to", t.Instance).Str("reason", reason).Msg("pool.failover: moving the turn")
-	go p.runFailover(job)
+	// Join p.wg under the lock Stop() sets p.closed under, so Stop waits
+	// for the switch's session writes instead of returning mid-switch. A
+	// pool already closed stays out: its Send/spawn refuse anyway.
+	p.mu.Lock()
+	tracked := !p.closed
+	if tracked {
+		p.wg.Add(1)
+	}
+	p.mu.Unlock()
+	go func() {
+		if tracked {
+			defer p.wg.Done()
+		}
+		p.runFailover(job)
+	}()
 	return provider.FailoverVerdict{
 		Rerun:   true,
 		Target:  t.Instance,
