@@ -3078,13 +3078,15 @@ func killCause(op, by, note string) string {
 	return c
 }
 
-// ReconcileDead scans active entries and Stops any whose subprocess is
-// no longer alive at the OS level — a crash or external kill that the
-// reader loop never saw as stdout EOF (common on Windows, where killing
-// a process does not reliably close its pipe). Stop() fires the exit
-// hook, releasing the slot and draining the queue, so a zombie entry
-// can't wedge the pool. Cheap signal-0 probe per entry; safe to call
-// from request handlers (panel open) and a periodic ticker.
+// ReconcileDead scans active entries and Stops idle entries whose subprocess
+// is no longer alive at the OS level — a crash or external kill that the
+// reader loop never saw as stdout EOF (common on Windows, where killing a
+// process does not reliably close its pipe). A process attached without an OS
+// PID is not dead: omp RPC, opencode, and the in-process provider deliberately
+// expose their turns that way. Stop() fires the exit hook, releasing the slot
+// and draining the queue, so a zombie entry can't wedge the pool. Cheap
+// signal-0 probe per PID; safe to call from request handlers (panel open) and
+// a periodic ticker.
 func (p *Pool) ReconcileDead() {
 	p.mu.Lock()
 	var dead []*runEntry
@@ -3096,9 +3098,9 @@ func (p *Pool) ReconcileDead() {
 		if e.state != nil {
 			lc = e.state.Lifecycle()
 		}
-		pid := e.agent.PID()
+		pid, attached := e.agent.ProcessState()
 		alive := pid != 0 && processctl.ProcessAlive(pid)
-		reap, next := reapDecision(lc, pid, alive, e.deadProbes)
+		reap, next := reapDecision(lc, pid, attached, alive, e.deadProbes)
 		e.deadProbes = next
 		if reap {
 			dead = append(dead, e)
@@ -3113,26 +3115,24 @@ func (p *Pool) ReconcileDead() {
 	}
 }
 
-// reapDecision is the pure core of ReconcileDead: given an entry's
-// lifecycle, its PID, whether that PID is alive, and how many consecutive
-// prior ticks it looked dead, it returns whether to reap now and the
-// updated dead-probe counter. Kept pure (no pool state) so the safety
-// rules can be unit-tested without spawning real processes.
+// reapDecision is the pure core of ReconcileDead: given an entry's lifecycle,
+// its process state, whether its PID is alive, and how many consecutive prior
+// ticks it looked dead, it returns whether to reap now and the updated
+// dead-probe counter. Kept pure (no pool state) so the safety rules can be
+// unit-tested without spawning real processes.
 //
 // Rules, in order:
 //   - working/spawning → NEVER reap (a long turn must not be pulled out
-//     from under a running process); counter resets. This is the sole
-//     protection long-running work needs.
+//     from under a running process); counter resets.
+//   - pid-less attached transport → NEVER reap. Its provider owns a shared or
+//     in-process server, so ProcessAlive has no meaningful target.
 //   - alive → healthy (resident codex or any live idle process); reset.
-//   - idle + (no live process: pid 0 OR dead pid) → a slot held with
-//     nothing running behind it (the "dead"/"idle · kill in Ns" card that
-//     never clears). Increment; reap only after it stays that way for
-//     reconcileDeadThreshold consecutive ticks, so a single transient probe
-//     miss can't reap a process that is actually alive. A codex that is
-//     merely idle-between-turns and gets reaped here is harmless: the next
-//     Send respawns it and resumes the same conversation.
-func reapDecision(lc state.Lifecycle, pid int, alive bool, deadProbes int) (reap bool, nextProbes int) {
-	if lc == state.LifecycleWorking || lc == state.LifecycleSpawning {
+//   - idle + no attachment + (no live process: pid 0 OR dead pid) → a slot
+//     held with nothing running behind it. Increment; reap only after it
+//     stays that way for reconcileDeadThreshold consecutive ticks, so a
+//     single transient probe miss can't reap a process that is actually alive.
+func reapDecision(lc state.Lifecycle, pid int, attached, alive bool, deadProbes int) (reap bool, nextProbes int) {
+	if lc == state.LifecycleWorking || lc == state.LifecycleSpawning || (attached && pid == 0) {
 		return false, 0
 	}
 	if alive {
