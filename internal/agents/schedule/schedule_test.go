@@ -627,6 +627,9 @@ func TestRunner_ProjectScopedNewIsFreshEachFire(t *testing.T) {
 	})
 	// Two ticks, two fires (the 1ms interval is due again immediately).
 	r.tick(ctx, zerologLogger{})
+	// The next fire is 1ms after the first; wait it out so a fast runner
+	// doesn't tick again before it is due.
+	time.Sleep(5 * time.Millisecond)
 	r.tick(ctx, zerologLogger{})
 
 	if len(sender.calls) != 2 {
@@ -662,6 +665,9 @@ func TestRunner_ProjectScopedTemplateReusesSession(t *testing.T) {
 		RunAt:           time.Now().Add(-time.Second),
 	})
 	r.tick(ctx, zerologLogger{})
+	// The next fire is 1ms after the first; wait it out so a fast runner
+	// doesn't tick again before it is due.
+	time.Sleep(5 * time.Millisecond)
 	r.tick(ctx, zerologLogger{})
 
 	if len(sender.calls) != 2 {
