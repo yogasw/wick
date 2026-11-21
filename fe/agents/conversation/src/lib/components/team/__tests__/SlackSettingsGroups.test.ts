@@ -12,6 +12,7 @@ const REST: SlackSettingField[] = [
   { key: "reaction_trigger_enabled", value: "false", type: "bool", group: "Reaction Auto-Reply" },
   { key: "reaction_channels_mode", value: "whitelist", type: "dropdown", options: "all|whitelist", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
   { key: "reaction_channels", value: "", type: "picker", options: "slack.channels", visible_when: "reaction_channels_mode:whitelist", group: "Reaction Auto-Reply" },
+  { key: "listen_request_whitelist_only", value: "false", type: "bool", group: "Reaction Auto-Reply" },
   { key: "reply_mode", value: "listen", type: "dropdown", options: "listen|auto_reply", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
   { key: "listen_delay_sec", value: "", type: "text", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
   { key: "auto_reply_delay_sec", value: "3", type: "text", visible_when: "reaction_trigger_enabled:true", group: "Reaction Auto-Reply" },
@@ -31,7 +32,7 @@ const SCHEMA_KEYS = [
   "mode", "bot_token", "app_token", "signing_secret",
   "users_mode", "allowed_users", "groups_mode", "allowed_groups", "bots_mode", "allowed_bots", "channels_mode", "allowed_channels",
   "ask_user_enabled", "hide_subagent_status",
-  "reaction_trigger_enabled", "reaction_channels_mode", "reaction_channels",
+  "reaction_trigger_enabled", "reaction_channels_mode", "reaction_channels", "listen_request_whitelist_only",
   "reply_mode", "listen_delay_sec", "auto_reply_delay_sec", "channel_reply_rules",
   "gate_approvers", "gate_approver_users", "gate_approver_groups",
   "project_id", "public_url",
@@ -247,6 +248,23 @@ describe("accessSummary", () => {
     expect(screen.getByTestId("listen-effective").textContent).toContain("Delay 2m · scope thread · when someone else answers: review");
     expect(info.textContent).toContain("/p/franky/LISTEN.md");
     expect(info.textContent).toContain("built-in");
+  });
+
+  test("the listen request toggle lives inside the listen mode in effect", async () => {
+    patch.mockClear();
+    current = {
+      fields: fields(), owner_slack_id: "UOWNER", owner_slack_name: "Yoga",
+      listen: { wick_path: "/a/LISTEN.md", wick_exists: false, agent_path: "", agent_exists: false, delay_sec: 15, scope: "thread", on_team_reply: "review", instructions: "" },
+    };
+    const { container } = render(SlackSettingsGroups, { props: { base: "/b", agent } });
+    const info = await screen.findByTestId("listen-info");
+    expect(screen.getByTestId("listen-request-effective").textContent).toContain("any channel the bot is in");
+    const box = info.querySelector<HTMLInputElement>('input[id$="listen_request_whitelist_only"]');
+    expect(box).not.toBeNull();
+    expect(container.querySelectorAll('input[id$="listen_request_whitelist_only"]').length).toBe(1);
+    await fireEvent.click(box!);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("listen_request_whitelist_only", "true"));
+    await waitFor(() => expect(screen.getByTestId("listen-request-effective").textContent).toContain("whitelisted channels only"));
   });
 });
 

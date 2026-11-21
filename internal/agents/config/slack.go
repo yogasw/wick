@@ -54,6 +54,9 @@ type SlackChannelConfig struct {
 	// ListenManualChannels: client-facing channels where listening is only
 	// ever switched on by a person, thread by thread.
 	ListenManualChannels string `wick:"picker=slack.channels;hidden;key=listen_manual_channels;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Channels where a new thread does NOT start listening on its own and an agent's channel/all listen scope never applies: someone has to put 🤖 on the thread or ask the agent to listen. Use it for client-facing channels. A channel rule with mode manual does the same."`
+	// ListenRequestWhitelistOnly is an opt-out so the zero value keeps an
+	// agent's listen request (wick_slack_listen) working in any channel.
+	ListenRequestWhitelistOnly bool `wick:"bool;hidden;key=listen_request_whitelist_only;group=Reaction Auto-Reply;desc=Limit an agent's listen request to the whitelist above. Off (default): an agent that is asked to listen can switch its thread on in any channel the bot is in, even outside the whitelist and while the 🤖 switch is off. On: the request is refused outside the whitelist, like the 🤖."`
 	// ListenIgnoredBots: bots whose replies in a listening thread never wake
 	// the agent (ticket/status notifiers that only echo what happened).
 	ListenIgnoredBots string `wick:"picker=slack.bots;hidden;key=listen_ignored_bots;visible_when=reaction_trigger_enabled:true;group=Reaction Auto-Reply;desc=Bots a listening thread never hears: their replies start no turn at all. Matched against the bot user ID or bot ID. A bot reply with no text and no files (an attachment-only notification) is skipped without being listed here."`

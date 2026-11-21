@@ -104,6 +104,10 @@
 
   const shown = (f: SlackSettingField) =>
     isVisible(f, values) && !(f.group === "Access Control" && PEOPLE_KEYS.has(f.key) && choice !== "custom");
+  /* Whether wick_slack_listen is limited to the whitelist: shown inside
+     "Listen mode in effect" rather than in the field list. */
+  const LISTEN_REQUEST_KEY = "listen_request_whitelist_only";
+  const listenRequestField = $derived(fields.find((f) => f.key === LISTEN_REQUEST_KEY));
   const label = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
   /* Reply-mode block: see REPLY_MODE_KEYS. */
@@ -184,6 +188,8 @@
               {#if shown(f)}{@render replyModes()}{/if}
             {:else if REPLY_MODE_KEYS.has(f.key)}
               <!-- drawn by replyModes -->
+            {:else if f.key === LISTEN_REQUEST_KEY && listen}
+              <!-- drawn inside "Listen mode in effect" -->
             {:else if f.key === "listen_manual_channels" && !pickerItems(values[f.key]).length}
               <!-- replaced by the manual mode of a channel rule; shown only while it still lists channels -->
             {:else if shown(f)}{@render field(f)}{/if}
@@ -198,6 +204,8 @@
   <section class="space-y-1 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="listen-info">
     <p class={legend}>Listen mode in effect</p>
     <p class="text-xs text-black-900 dark:text-white-100" data-testid="listen-effective">Delay {delayText(l.delay_sec)} · scope {l.scope} · when someone else answers: {l.on_team_reply}</p>
+    <p class="text-xs text-black-900 dark:text-white-100" data-testid="listen-request-effective">Listen request from the agent: {values[LISTEN_REQUEST_KEY] === "true" ? "whitelisted channels only" : "any channel the bot is in"}</p>
+    {#if listenRequestField}{@render field(listenRequestField)}{/if}
     <p class={muted}>
       @{agent.handle}'s LISTEN.md:
       {#if l.agent_path}<code class="break-all">{l.agent_path}</code>{l.agent_exists ? "" : " (not created yet: the wick default applies alone)"}{:else}no project folder{/if}

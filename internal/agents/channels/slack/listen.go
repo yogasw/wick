@@ -395,6 +395,13 @@ func (s *Channel) threadBinding(sessionID string) (agentchannels.ThreadBinding, 
 	return b, nil
 }
 
+// listenRequestAllowed reports whether a listen request (wick_slack_listen)
+// may switch a thread in channelID on: the channel is in the listen
+// whitelist, or the setting does not limit requests to it.
+func listenRequestAllowed(cfg agentconfig.SlackChannelConfig, channelID string) bool {
+	return !cfg.ListenRequestWhitelistOnly || reactionChannelAllowed(cfg, channelID)
+}
+
 // ThreadListen serves wick_slack_listen for a session this instance owns:
 // on, off or status of the thread the session is bound to.
 func (s *Channel) ThreadListen(sessionID string, req ListenRequest) (ListenResult, error) {
@@ -404,6 +411,9 @@ func (s *Channel) ThreadListen(sessionID string, req ListenRequest) (ListenResul
 	}
 	switch strings.ToLower(req.Action) {
 	case "on":
+		if !listenRequestAllowed(s.snapshot(), b.ChatID) {
+			return ListenResult{}, fmt.Errorf("listen is not allowed in this channel: it is not in the listen whitelist. An admin can add it there, or turn off \"limit listen request to the whitelist\" in the Slack settings")
+		}
 		s.ListenOn(sessionID, b.ChatID, b.ThreadID, req.Instructions, req.DelaySec)
 	case "off":
 		s.ListenOff(sessionID, b.ChatID, b.ThreadID, "tool", req.WholeChannel)

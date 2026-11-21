@@ -99,3 +99,30 @@ func TestReplyModeRefusesDM(t *testing.T) {
 		t.Fatal("a DM got a reply mode")
 	}
 }
+
+func TestThreadListenRequestFollowsWhitelist(t *testing.T) {
+	cfg := agentconfig.SlackChannelConfig{ReactionChannelsMode: "whitelist", ReactionChannels: "C02OTHER", ListenRequestWhitelistOnly: true}
+	ch, fake := replyModeChannel(t, cfg)
+	if _, err := ch.ThreadListen("S", ListenRequest{Action: "on"}); err == nil {
+		t.Fatal("listen request outside the whitelist accepted")
+	}
+	if fake.AutoReplyOn("S") {
+		t.Fatal("refused request still switched the thread on")
+	}
+	if _, err := ch.ThreadListen("S", ListenRequest{Action: "status"}); err != nil {
+		t.Fatalf("status refused: %v", err)
+	}
+
+	cfg.ListenRequestWhitelistOnly = false
+	ch, fake = replyModeChannel(t, cfg)
+	st, err := ch.ThreadListen("S", ListenRequest{Action: "on"})
+	if err != nil || !st.Listening || !fake.AutoReplyOn("S") {
+		t.Fatalf("default request outside the whitelist: %+v err=%v", st, err)
+	}
+
+	cfg = agentconfig.SlackChannelConfig{ReactionChannelsMode: "whitelist", ReactionChannels: "C01TESTCHAN", ListenRequestWhitelistOnly: true}
+	ch, _ = replyModeChannel(t, cfg)
+	if _, err := ch.ThreadListen("S", ListenRequest{Action: "on"}); err != nil {
+		t.Fatalf("whitelisted channel refused: %v", err)
+	}
+}
