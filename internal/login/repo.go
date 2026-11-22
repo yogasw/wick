@@ -57,6 +57,37 @@ func (r *repo) UpsertUser(ctx context.Context, email, name, avatar string, admin
 	return &u, nil
 }
 
+// ErrRegistrationClosed is returned by UpsertSSOUser when the email has no
+// account and the provider does not create new ones.
+var ErrRegistrationClosed = errors.New("registration is closed")
+
+// UpsertSSOUser is UpsertUser for a provider sign-in that carries a signup
+// policy. allowCreate=false refuses an email with no account. autoApprove
+// approves a new account at once, and approves an existing pending one on
+// its next sign-in. The role still comes only from adminEmails: an
+// auto-approved account is a plain user.
+func (r *repo) UpsertSSOUser(ctx context.Context, email, name, avatar string, adminEmails map[string]bool, allowCreate, autoApprove bool) (*entity.User, error) {
+	var u entity.User
+	err := r.db.WithContext(ctx).Where("email = ?", email).First(&u).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) && !allowCreate && !adminEmails[email] {
+		return nil, ErrRegistrationClosed
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	out, err := r.UpsertUser(ctx, email, name, avatar, adminEmails)
+	if err != nil {
+		return nil, err
+	}
+	if autoApprove && !out.Approved {
+		if err := r.db.WithContext(ctx).Model(out).Update("approved", true).Error; err != nil {
+			return nil, err
+		}
+		out.Approved = true
+	}
+	return out, nil
+}
+
 // ErrEmailExists is returned by CreateUserWithPassword when a user with
 // the requested email already exists. Admin-initiated creation must fail
 // loudly on a duplicate rather than silently overwrite the existing row

@@ -190,6 +190,7 @@ func Operations(deps Deps) []connector.Category {
 			}),
 	),
 		connector.Cat("Usage", "Who uses wick and what it costs: the People & usage page as data.", usageOps(h)...),
+		connector.Cat("Users & access", "Approve users, set roles and tags, manage tags, Google sign-up auto-register / auto-approve domains, and where account alerts go.", peopleOps(h)...),
 	}
 }
 

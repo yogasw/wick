@@ -107,11 +107,24 @@ func (s *Service) AnyEnabled() bool {
 	return false
 }
 
-// Update writes new credentials for a provider and refreshes the cache.
-// allowedDomains is a comma-separated list of email domains; empty
-// string disables the restriction.
-func (s *Service) Update(ctx context.Context, provider, clientID, clientSecret string, enabled bool, allowedDomains string) error {
-	if err := s.repo.Update(ctx, provider, clientID, clientSecret, enabled, normalizeDomains(allowedDomains)); err != nil {
+// UpdateInput is the editable part of a provider row.
+type UpdateInput struct {
+	ClientID     string
+	ClientSecret string
+	Enabled      bool
+	// AllowedDomains: comma-separated; empty = any domain may sign in.
+	AllowedDomains string
+	// AutoApproveDomains: comma-separated; empty = nobody is auto-approved.
+	AutoApproveDomains string
+	// DisableAutoRegister refuses sign-in for emails with no account yet.
+	DisableAutoRegister bool
+}
+
+// Update writes new settings for a provider and refreshes the cache.
+func (s *Service) Update(ctx context.Context, provider string, in UpdateInput) error {
+	in.AllowedDomains = normalizeDomains(in.AllowedDomains)
+	in.AutoApproveDomains = normalizeDomains(in.AutoApproveDomains)
+	if err := s.repo.Update(ctx, provider, in); err != nil {
 		return err
 	}
 	return s.reloadCache(ctx)
@@ -128,12 +141,48 @@ func (s *Service) IsEmailAllowed(provider, email string) bool {
 	if p.AllowedDomains == "" {
 		return true
 	}
+	return domainListed(p.AllowedDomains, email)
+}
+
+// SignupPolicy is what a provider decides about an account at sign-in.
+type SignupPolicy struct {
+	// AllowCreate: an email with no account may get one (pending or not).
+	AllowCreate bool
+	// AutoApprove: the account is approved without an admin.
+	AutoApprove bool
+}
+
+// SignupPolicy reports how a sign-in through provider treats email. An
+// unknown provider allows nothing.
+func (s *Service) SignupPolicy(provider, email string) SignupPolicy {
+	p, ok := s.Get(provider)
+	if !ok {
+		return SignupPolicy{}
+	}
+	return SignupPolicy{
+		AllowCreate: !p.DisableAutoRegister,
+		AutoApprove: p.AutoApproveDomains != "" && domainListed(p.AutoApproveDomains, email),
+	}
+}
+
+// emailDomain returns the lowercased domain of email, or "" when malformed.
+func emailDomain(email string) string {
 	at := strings.LastIndex(email, "@")
-	if at < 0 || at == len(email)-1 {
+	if at <= 0 || at == len(email)-1 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(email[at+1:]))
+}
+
+// domainListed reports whether email's domain is an entry of the
+// comma-separated list. Matching is exact (no subdomains) and
+// case-insensitive.
+func domainListed(list, email string) bool {
+	domain := emailDomain(email)
+	if domain == "" {
 		return false
 	}
-	domain := strings.ToLower(email[at+1:])
-	for _, d := range strings.Split(p.AllowedDomains, ",") {
+	for _, d := range strings.Split(list, ",") {
 		if strings.ToLower(strings.TrimSpace(d)) == domain {
 			return true
 		}

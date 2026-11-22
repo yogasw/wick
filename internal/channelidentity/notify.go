@@ -46,6 +46,11 @@ type Notifier struct {
 	// AppURL is the base URL used to deep-link a notification at the page where
 	// the reader can act. Empty = no link.
 	AppURL func() string
+	// AlertTargets returns the admin-notice target setting (see alerts.go).
+	// nil or "" = every admin on every door, the original behaviour.
+	AlertTargets func() string
+	// Rooms posts admin notices into a room target. Optional.
+	Rooms ChannelPoster
 }
 
 // NotifyAdminsNewUser tells approved admins that someone registered through a
@@ -55,33 +60,14 @@ type Notifier struct {
 // so sending it to an unapproved account would leak that to someone who has
 // not themselves been vetted.
 func (n *Notifier) NotifyAdminsNewUser(ctx context.Context, newUser *entity.User, source string) {
-	if n == nil || n.Admins == nil || newUser == nil {
+	if n == nil || newUser == nil {
 		return
 	}
-	admins, err := n.Admins.ListApprovedAdmins(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("channel identity: cannot list admins to notify")
-		return
-	}
-	if len(admins) == 0 {
-		// Worth a log line: nobody will ever see the request otherwise, and
-		// silence here looks identical to "notification delivered".
-		log.Warn().Str("email", newUser.Email).
-			Msg("channel identity: new user registered but no approved admin to notify")
-		return
-	}
-
 	title := "New user awaiting approval"
 	body := fmt.Sprintf("%s (%s) registered via %s and needs approval.",
 		displayName(newUser), newUser.Email, source)
-	url := n.link("/admin/users")
-
-	for _, a := range admins {
-		if a == nil || a.ID == newUser.ID {
-			continue // don't ask someone to approve themselves
-		}
-		n.deliver(ctx, a.ID, title, body, url)
-	}
+	// Skip the new user: don't ask someone to approve themselves.
+	n.notifyAdmins(ctx, newUser.ID, title, body, n.link("/admin/users"), "new user "+newUser.Email)
 }
 
 // NotifyUserApproved tells a user their account was approved, on every door
@@ -100,24 +86,11 @@ func (n *Notifier) NotifyUserApproved(ctx context.Context, user *entity.User) {
 		"Your wick account has been approved. You can start a session now.",
 		n.link("/"))
 
-	if n.Admins == nil {
-		return
-	}
-	admins, err := n.Admins.ListApprovedAdmins(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("channel identity: cannot list admins for approval notice")
-		return
-	}
 	title := "User approved"
 	body := fmt.Sprintf("%s (%s) is now approved and can use wick.",
 		displayName(user), user.Email)
-	url := n.link("/admin/users")
-	for _, a := range admins {
-		if a == nil || a.ID == user.ID {
-			continue // they already got the user-facing notice above
-		}
-		n.deliver(ctx, a.ID, title, body, url)
-	}
+	// Skip the user: they already got the user-facing notice above.
+	n.notifyAdmins(ctx, user.ID, title, body, n.link("/admin/users"), "approval notice")
 }
 
 // NotifyAdminsMergeNeeded tells admins a channel account exists that cannot be
@@ -127,37 +100,31 @@ func (n *Notifier) NotifyUserApproved(ctx context.Context, user *entity.User) {
 // for an approval, this one asks "who is this?". Approving it as its own
 // account is almost never right — it would leave the person with two.
 func (n *Notifier) NotifyAdminsMergeNeeded(ctx context.Context, userID, displayName, source string) {
-	if n == nil || n.Admins == nil {
-		return
-	}
-	admins, err := n.Admins.ListApprovedAdmins(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("channel identity: cannot list admins for merge notice")
+	if n == nil {
 		return
 	}
 	title := "Channel account needs linking"
 	body := fmt.Sprintf("%q messaged wick via %s. %s reports no email, so wick cannot tell "+
 		"which account this is — link it to the right user under Admin → Users.",
 		displayName, source, source)
-	url := n.link("/admin/users")
-	for _, a := range admins {
-		if a == nil || a.ID == userID {
-			continue
-		}
-		n.deliver(ctx, a.ID, title, body, url)
-	}
+	n.notifyAdmins(ctx, userID, title, body, n.link("/admin/users"), "merge notice")
 }
 
 // deliver pushes to the user's browsers and DMs every un-paused connection.
 // Each destination is independent: one failing must not stop the others.
 func (n *Notifier) deliver(ctx context.Context, userID, title, body, url string) {
-	if n.Push != nil {
+	n.deliverTo(ctx, userID, title, body, url, AlertTargets{All: true})
+}
+
+// deliverTo is deliver limited to the doors t allows.
+func (n *Notifier) deliverTo(ctx context.Context, userID, title, body, url string, t AlertTargets) {
+	if n.Push != nil && (t.All || t.Push) {
 		if _, err := n.Push.SendToUser(ctx, userID, title, body, url); err != nil {
 			log.Debug().Err(err).Str("user_id", userID).
 				Msg("channel identity: push delivery failed")
 		}
 	}
-	if n.Channels == nil || n.Store == nil {
+	if n.Channels == nil || n.Store == nil || (!t.All && len(t.Doors) == 0) {
 		return
 	}
 	// ActiveForUser excludes paused rows, so a pause is enforced HERE rather
@@ -168,11 +135,11 @@ func (n *Notifier) deliver(ctx context.Context, userID, title, body, url string)
 			Msg("channel identity: cannot list connections for delivery")
 		return
 	}
-	text := title + "\n" + body
-	if url != "" {
-		text += "\n" + url
-	}
+	text := joinNotice(title, body, url)
 	for _, c := range conns {
+		if !t.allowsDoor(c.ChannelType, c.InstanceKey) {
+			continue
+		}
 		if err := n.Channels.SendDirect(ctx, c.ChannelType, c.InstanceKey, c.ExternalUserID, text); err != nil {
 			log.Debug().Err(err).
 				Str("user_id", userID).

@@ -487,11 +487,17 @@ func NewServer() *Server {
 	// notifier fans out over browser push AND every un-paused chat connection;
 	// Channels is attached below, once the registry exists.
 	channelIdentities := channelidentity.NewStore(db)
+	if err := configsSvc.EnsureOwned(context.Background(), channelidentity.AlertConfigOwner, channelidentity.AlertConfigRows()...); err != nil {
+		log.Warn().Err(err).Msg("user alert config bootstrap failed")
+	}
 	channelNotifier := &channelidentity.Notifier{
 		Store:  channelIdentities,
 		Push:   pushSvc,
 		Admins: authSvc,
 		AppURL: configsSvc.AppURL,
+		AlertTargets: func() string {
+			return configsSvc.GetOwned(channelidentity.AlertConfigOwner, channelidentity.AlertConfigTargets)
+		},
 	}
 	// The encfields tool resolves its cipher through a package
 	// singleton — built-in tools register from cmd/lab before the DB
@@ -2102,8 +2108,21 @@ func NewServer() *Server {
 	// The admin handler that serves People & usage is built further down;
 	// the usage_* ops read it through this variable once it exists.
 	var adminUsage wickmanager.UsageSource
+	var adminPeople wickmanager.PeopleSource
 	connectors.Register(wickmanager.Module(wickmanager.Deps{
-		Usage:      func() wickmanager.UsageSource { return adminUsage },
+		Usage:  func() wickmanager.UsageSource { return adminUsage },
+		People: func() wickmanager.PeopleSource { return adminPeople },
+		AlertDoors: func(ctx context.Context, userID string) []string {
+			rows, err := channelIdentities.ActiveForUser(ctx, userID)
+			if err != nil {
+				return nil
+			}
+			out := make([]string, 0, len(rows))
+			for _, r := range rows {
+				out = append(out, r.InstanceKey)
+			}
+			return out
+		},
 		Configs:    configsSvc,
 		Connectors: connectorsSvc,
 		Jobs:       jobsSvc,
@@ -2279,6 +2298,7 @@ func NewServer() *Server {
 	// construction because the registry does not exist yet when the notifier is
 	// built, and the notifier needs the registry to pick the right instance.
 	channelNotifier.Channels = channelSenderFunc(channelReg.SendDirect)
+	channelNotifier.Rooms = roomPosterFunc(channelReg.PostToRoom)
 
 	// Wire Slack user-token lookup via the connectors service.
 	// SetTokenRefreshFn + RefreshTokenMap seeds the initial userID→token cache
@@ -3247,6 +3267,7 @@ func NewServer() *Server {
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
 	adminHandler.SetToolsSource(liveItems)
 	adminUsage = adminHandler
+	adminPeople = adminHandler
 	// The People & usage page reads the session store. Handed the SAME
 	// resolved layout the agents tool uses — resolving that path twice is how
 	// two parts of one binary end up reading two different directories.

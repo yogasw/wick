@@ -16,8 +16,18 @@ type SSOProvider struct {
 	// Empty string means no restriction — any email from the provider is
 	// accepted. Matching is case-insensitive.
 	AllowedDomains string `gorm:"type:text"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// AutoApproveDomains is a comma-separated list of email domains whose
+	// accounts are approved on sign-in, without an admin. Empty = every new
+	// account waits for an admin, as before. Auto-approval never grants the
+	// admin role.
+	AutoApproveDomains string `gorm:"type:text"`
+	// DisableAutoRegister stops this provider from creating accounts: an
+	// email with no wick account yet is refused at sign-in instead of being
+	// recorded as a pending user. False (the zero value) keeps the old
+	// behaviour, so existing rows need no backfill.
+	DisableAutoRegister bool `gorm:"default:false"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func (SSOProvider) TableName() string { return "sso_providers" }

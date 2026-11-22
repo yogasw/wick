@@ -378,28 +378,7 @@ type DirectSender interface {
 // Returns an error when no such instance exists or it cannot send directly, so
 // the caller can log a real cause instead of assuming delivery.
 func (r *Registry) SendDirect(ctx context.Context, channelType, instanceKey, externalUserID, text string) error {
-	r.mu.Lock()
-	var target Channel
-	for _, c := range r.channels {
-		if c.Name() != channelType {
-			continue
-		}
-		// An unkeyed channel is registered under its plain name, so accept
-		// either form — callers store whichever key was in effect at link time.
-		if key, ok := r.instanceKeys[c]; ok {
-			if key == instanceKey {
-				target = c
-				break
-			}
-			continue
-		}
-		if instanceKey == "" || instanceKey == channelType || instanceKey == "default" {
-			target = c
-			break
-		}
-	}
-	r.mu.Unlock()
-
+	target := r.instance(channelType, instanceKey)
 	if target == nil {
 		return fmt.Errorf("no %s channel instance %q", channelType, instanceKey)
 	}
@@ -408,6 +387,49 @@ func (r *Registry) SendDirect(ctx context.Context, channelType, instanceKey, ext
 		return fmt.Errorf("%s channel cannot send direct messages", channelType)
 	}
 	return sender.SendDirect(ctx, externalUserID, text)
+}
+
+// RoomPoster is a channel that can post a system notice into a room (a Slack
+// channel) by id.
+type RoomPoster interface {
+	PostToRoom(ctx context.Context, roomID, text string) error
+}
+
+// PostToRoom posts into one room through ONE specific channel instance, with
+// the same instance rules as SendDirect.
+func (r *Registry) PostToRoom(ctx context.Context, channelType, instanceKey, roomID, text string) error {
+	target := r.instance(channelType, instanceKey)
+	if target == nil {
+		return fmt.Errorf("no %s channel instance %q", channelType, instanceKey)
+	}
+	poster, ok := target.(RoomPoster)
+	if !ok {
+		return fmt.Errorf("%s channel cannot post to a room", channelType)
+	}
+	return poster.PostToRoom(ctx, roomID, text)
+}
+
+// instance finds the channel registered for channelType + instanceKey.
+func (r *Registry) instance(channelType, instanceKey string) Channel {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.channels {
+		if c.Name() != channelType {
+			continue
+		}
+		// An unkeyed channel is registered under its plain name, so accept
+		// either form — callers store whichever key was in effect at link time.
+		if key, ok := r.instanceKeys[c]; ok {
+			if key == instanceKey {
+				return c
+			}
+			continue
+		}
+		if instanceKey == "" || instanceKey == channelType || instanceKey == "default" {
+			return c
+		}
+	}
+	return nil
 }
 
 // RemoveKeyed stops and removes the channel registered under instanceKey.

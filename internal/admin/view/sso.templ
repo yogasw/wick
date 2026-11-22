@@ -186,7 +186,18 @@ templ ssoCard(row entity.SSOProvider, callbackURL string) {
 				<p class="text-xs text-black-700 dark:text-black-600">Leave blank to keep the current secret.</p>
 			</div>
 		</div>
-		@domainChipsField(row.AllowedDomains)
+		@domainChipsField("allowed_domains", "Allowed email domains", "Type then press space, comma, or Enter. Backspace removes the last chip. Leave empty to allow all domains.", row.AllowedDomains)
+		<div class="mt-6 border-t border-white-300 dark:border-navy-600 pt-5">
+			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">New users</h3>
+			<label class="mt-3 flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
+				<input type="checkbox" name="auto_register" value="true" checked?={ !row.DisableAutoRegister } class="mt-0.5 h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"/>
+				<span>
+					Auto-register new users
+					<span class="block text-xs text-black-700 dark:text-black-600">On: a first sign-in creates the account (pending unless its domain is auto-approved). Off: only existing accounts and admin emails can sign in.</span>
+				</span>
+			</label>
+			@domainChipsField("auto_approve_domains", "Auto-approve email domains", "Accounts from these domains are approved at sign-in, without an admin, as a regular user (never admin). Leave empty to approve every account by hand.", row.AutoApproveDomains)
+		</div>
 		<div class="mt-5 flex flex-col gap-1.5">
 			<label class="text-sm font-medium text-black-900 dark:text-white-100">Authorized redirect URI</label>
 			<div class="flex items-center gap-2">
@@ -209,15 +220,15 @@ templ ssoCard(row entity.SSOProvider, callbackURL string) {
 	</form>
 }
 
-// domainChipsField renders the allowed-domains editor as removable
-// chips + an add-row. The hidden input `allowed_domains` holds the
+// domainChipsField renders a domain-list editor as removable
+// chips + an add-row. The hidden input `name` holds the
 // current comma-joined value that gets submitted with the form; the
 // chip DOM is the source of truth and the hidden value is rebuilt on
 // every add/remove by the inline script below.
-templ domainChipsField(raw string) {
+templ domainChipsField(name, label, help, raw string) {
 	<div class="mt-5 flex flex-col gap-1.5" data-domain-field>
-		<label class="text-sm font-medium text-black-900 dark:text-white-100">Allowed email domains</label>
-		<input type="hidden" name="allowed_domains" value={ raw } data-domain-value/>
+		<label class="text-sm font-medium text-black-900 dark:text-white-100">{ label }</label>
+		<input type="hidden" name={ name } value={ raw } data-domain-value/>
 		// One combined container styled like a text input: existing
 		// chips flow inline with a flex-grow text input at the end.
 		// Clicking anywhere focuses the input — feels like a single
@@ -236,7 +247,7 @@ templ domainChipsField(raw string) {
 				class="flex-1 min-w-[8rem] bg-transparent px-1 py-0.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
 			/>
 		</div>
-		<p class="text-xs text-black-700 dark:text-black-600">Type then press space, comma, or Enter. Backspace removes the last chip. Leave empty to allow all domains.</p>
+		<p class="text-xs text-black-700 dark:text-black-600">{ help }</p>
 	</div>
 }
 

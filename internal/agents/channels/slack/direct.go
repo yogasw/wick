@@ -64,6 +64,29 @@ func (s *Channel) SendDirect(ctx context.Context, externalUserID, text string) e
 	return err
 }
 
+// PostToRoom posts text into a channel the bot is a member of (a C…/G… id),
+// with the bot token, as a system notice. The bot must be in the channel;
+// Slack's not_in_channel comes back as the error.
+func (s *Channel) PostToRoom(ctx context.Context, roomID, text string) error {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+
+	if api == nil {
+		return ErrNotConfigured
+	}
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" || strings.TrimSpace(text) == "" {
+		return errors.New("slack: missing target channel or text")
+	}
+	text = agentchannels.RewriteSourceTagsWith(agentchannels.RewriteOptionsLine(text), nil, escapeMrkdwn)
+	_, _, err := api.PostMessageContext(ctx, roomID,
+		slackgo.MsgOptionText(text, false),
+		slackgo.MsgOptionDisableLinkUnfurl(),
+	)
+	return err
+}
+
 // annotateDMError adds the actionable part to Slack's terse codes, so a log
 // line says what to fix rather than just that something failed.
 func annotateDMError(err error) error {

@@ -47,7 +47,15 @@ func (h *Handler) updateSSO(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.sso.Update(r.Context(), provider, clientID, clientSecret, enabled, allowedDomains); err != nil {
+	in := sso.UpdateInput{
+		ClientID:            clientID,
+		ClientSecret:        clientSecret,
+		Enabled:             enabled,
+		AllowedDomains:      allowedDomains,
+		AutoApproveDomains:  r.FormValue("auto_approve_domains"),
+		DisableAutoRegister: r.FormValue("auto_register") != "true",
+	}
+	if err := h.sso.Update(r.Context(), provider, in); err != nil {
 		log.Ctx(r.Context()).Error().Msgf("update sso %s: %s", provider, err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

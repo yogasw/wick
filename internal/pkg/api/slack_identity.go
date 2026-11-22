@@ -142,6 +142,13 @@ func (f channelSenderFunc) SendDirect(ctx context.Context, channelType, instance
 	return f(ctx, channelType, instanceKey, externalUserID, text)
 }
 
+// roomPosterFunc adapts Registry.PostToRoom to channelidentity.ChannelPoster.
+type roomPosterFunc func(ctx context.Context, channelType, instanceKey, roomID, text string) error
+
+func (f roomPosterFunc) PostToRoom(ctx context.Context, channelType, instanceKey, roomID, text string) error {
+	return f(ctx, channelType, instanceKey, roomID, text)
+}
+
 // channelAccountCreator lets an email-less channel (Telegram) record a sender as
 // its own unapproved account, to be merged into the real one by an admin.
 type channelAccountCreator struct {

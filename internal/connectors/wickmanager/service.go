@@ -47,6 +47,12 @@ type Deps struct {
 	// func because the admin handler is built after this connector is
 	// registered; nil, or a nil result, answers unavailable.
 	Usage func() UsageSource
+	// People returns the Users / Tags / sign-up manage API behind the
+	// user_*, tag_* and signup_* ops. A func for the same reason as Usage.
+	People func() PeopleSource
+	// AlertDoors lists the chat doors (instance keys) a user is linked on,
+	// shown by user_alerts_get. Optional.
+	AlertDoors func(ctx context.Context, userID string) []string
 }
 
 type handlers struct {

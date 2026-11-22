@@ -218,7 +218,12 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.svc.UpsertUser(r.Context(), info.Email, info.Name, info.Picture)
+	policy := h.sso.SignupPolicy(entity.SSOProviderGoogle, info.Email)
+	user, err := h.svc.UpsertSSOUser(r.Context(), info.Email, info.Name, info.Picture, policy.AllowCreate, policy.AutoApprove)
+	if errors.Is(err, ErrRegistrationClosed) {
+		http.Redirect(w, r, "/auth/login?error=No+account+for+this+email.+Ask+an+admin+to+add+you.", http.StatusFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to save user: "+err.Error(), http.StatusInternalServerError)
 		return
