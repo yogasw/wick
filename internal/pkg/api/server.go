@@ -2500,7 +2500,7 @@ func NewServer() *Server {
 	// Shared between the delegation service (which computes the narrowing)
 	// and the MCP minter above (which must apply it).
 	delegationChildGrants := delegation.NewChildGrants()
-	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, string, bool) {
+	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (func() (string, error), string) {
 		// A running SUB-AGENT has an identity chosen for it: its triggering
 		// human, with tags already intersected against the role's allowed
 		// list. Honour that first — the delegation computing the narrowing
@@ -2510,17 +2510,17 @@ func NewServer() *Server {
 			// stripAdmin=true: the narrowing is the whole point, so a child
 			// must be tag-filtered even when the human who triggered it is
 			// an administrator.
-			tok, err := mcpScopedTokens.IssueForSession(g.UserID, sessionID, g.TagIDs, true)
-			if err != nil {
-				log.Warn().Err(err).Str("session", sessionID).
-					Msg("mcp: sub-agent token mint failed; falling back to internal token")
-				return "", "", false
-			}
-			return tok, g.UserID, true
+			return func() (string, error) {
+				current, ok := delegationChildGrants.Get(sessionID)
+				if !ok || current.UserID != g.UserID || !slices.Equal(current.TagIDs, g.TagIDs) {
+					return "", fmt.Errorf("delegation MCP grant changed")
+				}
+				return mcpScopedTokens.IssueForSession(g.UserID, sessionID, g.TagIDs, true)
+			}, g.UserID
 		}
 		sess, found := agentsMgr.Registry().Session(sessionID)
 		if !found {
-			return "", "", false
+			return nil, ""
 		}
 		// WHOSE access this spawn gets. The caller wins when a human
 		// triggered it: a turn must run with the reach of the person who
@@ -2545,25 +2545,17 @@ func NewServer() *Server {
 		// request, and a deleted agent resolves to deny-all.
 		identity := team.SpawnIdentity(sess.Meta, teamSvc.AgentFor(context.Background(), sessionID), callerUserID)
 		if identity == "" {
-			return "", "", false
+			return nil, ""
 		}
 		// The session rides in the token as well as in the per-spawn
 		// header. claude sends the header; codex cannot send any header at
 		// all, so without this its calls have no session to resolve and
 		// every session-scoped tool falls back to whatever id the model
 		// remembered to type.
-		tok, err := mcpScopedTokens.IssueForSession(
-			identity,
-			sessionID,
-			authSvc.GetUserFilterTagIDs(context.Background(), identity),
-			false,
-		)
-		if err != nil {
-			log.Warn().Err(err).Str("session", sessionID).Str("identity", identity).
-				Msg("mcp: per-user token mint failed; falling back to internal token")
-			return "", "", false
-		}
-		return tok, identity, true
+		return func() (string, error) {
+			return mcpScopedTokens.IssueForSession(identity, sessionID,
+				authSvc.GetUserFilterTagIDs(context.Background(), identity), false)
+		}, identity
 	}
 	delegationSvc = &delegation.Service{
 		Repo:     delegation.NewRepo(db),

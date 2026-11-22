@@ -22,16 +22,28 @@ import (
 type Spawner struct {
 	Binary    string // empty → "omp"
 	ExtraArgs []string
-	// MCPToken is the per-session credential for wick's MCP server. Empty =
-	// no wick tools (the mcp.json entry is left alone).
+	// MCPToken is the non-revocable fallback for an ownerless session.
 	MCPToken string
-	// RevocableToken: MCPToken is a per-session credential omp revokes
-	// when the process using it is gone (SetMCPTokenRevoker). False for
-	// the shared per-boot token, which must never be revoked.
-	RevocableToken bool
+	// MintMCPToken issues a scoped credential only when starting a process.
+	// A warm RPC turn keeps using the credential of its existing server.
+	MintMCPToken func() (string, error)
 	// MCPOwner is who MCPToken speaks for (the caller). Part of the RPC
 	// process key: another caller gets its own process and identity.
 	MCPOwner string
+}
+
+func (s Spawner) processToken() (string, error) {
+	if s.MintMCPToken == nil {
+		return s.MCPToken, nil
+	}
+	token, err := s.MintMCPToken()
+	if err != nil {
+		return "", fmt.Errorf("issue OMP MCP credential: %w", err)
+	}
+	if token == "" {
+		return "", fmt.Errorf("OMP MCP issuer returned no credential")
+	}
+	return token, nil
 }
 
 // homeDir is swapped in tests so mcp.json lands in a temp dir.
@@ -206,9 +218,8 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if err != nil {
 		return nil, fmt.Errorf("omp instance %s: %w", ins.Name, err)
 	}
-	var mcpVars []string
 	endpoint := mcpEndpointFromEnv()
-	withWick := endpoint != "" && s.MCPToken != ""
+	withWick := endpoint != "" && (s.MintMCPToken != nil || s.MCPToken != "")
 	home, _ := homeDir()
 	cfgDir := envValue(opt.ExtraEnv, "PI_CONFIG_DIR")
 	if cfgDir == "" {
@@ -217,9 +228,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if home != "" {
 		if err := ensureMCPConfig(profileAgentDir(home, cfgDir, profile), withWick, extras); err != nil {
 			log.Warn().Err(err).Str("profile", profile).Msg("agents.spawn: omp mcp.json not updated — wick tools unavailable")
-		} else if withWick {
-			mcpVars = mcpEnv(endpoint, s.MCPToken)
+			withWick = false
 		}
+	}
+	if home == "" || !withWick {
+		endpoint = ""
 	}
 
 	// A sharer (AuthFrom) reads its owner's login through omp's auth
@@ -256,12 +269,27 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	soul, overlay := writeSoul(opt), writeOverlay(opt)
 	if useServer(ins, s.ExtraArgs, opt.ExtraArgs) {
-		return s.spawnRPC(ctx, opt, ins, bin, resume, soul, overlay, mcpVars, brokerVars, releaseBroker)
+		return s.spawnRPC(ctx, opt, ins, bin, resume, soul, overlay, endpoint, brokerVars, releaseBroker)
 	}
 	// Server mode off: a plain -p run, and an RPC process the instance no
 	// longer uses stops once it has no turn.
 	rpcServers.Retire(ins.Name)
 	args := buildArgs(ins, withResume(opt, resume), soul, overlay, s.ExtraArgs)
+	var token string
+	if endpoint != "" {
+		token, err = s.processToken()
+		if err != nil {
+			releaseBroker()
+			return nil, err
+		}
+	}
+	mcpVars := mcpEnv(endpoint, token)
+	release := func() {
+		releaseBroker()
+		if s.MintMCPToken != nil {
+			revokeLater(token)
+		}
+	}
 
 	execBin, execArgs, scopeUnit := opt.MemGuard.Wrap(bin, args, "omp", opt.SpawnSeq)
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
@@ -285,13 +313,13 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		releaseBroker()
+		release()
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
-		releaseBroker()
+		release()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = os.Stderr
@@ -300,7 +328,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		Str("resume", opt.ResumeID).Str("profile", profile).Msg("agents.spawn: starting (omp)")
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
-		releaseBroker()
+		release()
 		return nil, fmt.Errorf("start omp: %w", err)
 	}
 	opt.MemGuard.BiasChild(cmd.Process.Pid)
@@ -311,13 +339,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// No RPC to ask get_state: the window comes from models.db (window.go).
 	stdoutR := withContextLine(stdout, spawnWindow(ctx, ins, args))
 	proc := &process{cmd: cmd, stdout: stdoutR, env: addedEnv, scopeUnit: scopeUnit, realBin: bin, realArgv: args}
-	revoke := s.RevocableToken
-	proc.onExit = func() {
-		releaseBroker()
-		if revoke {
-			revokeLater(s.MCPToken)
-		}
-	}
+	proc.onExit = release
 	return proc, nil
 }
 

@@ -92,7 +92,7 @@ func TestRPCSpawnGetsBrokerEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := Spawner{}.spawnRPC(context.Background(), opt, sharer, "/bin/omp", "", "", "", nil, env, release)
+	p, err := Spawner{}.spawnRPC(context.Background(), opt, sharer, "/bin/omp", "", "", "", "", env, release)
 	if err != nil {
 		t.Fatal(err)
 	}

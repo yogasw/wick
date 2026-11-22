@@ -121,7 +121,7 @@ func TestMCPCredentialForReportsMintedIdentity(t *testing.T) {
 	if tok, id := f.mcpCredentialFor("sess-1", ""); tok != "token-for-owner-of-sess-1" || id != "owner-of-sess-1" {
 		t.Fatalf("got (%q, %q), want the owner's token and identity", tok, id)
 	}
-	f.SessionMCPToken = func(string, string) (string, string, bool) { return "", "", false }
+	f.SessionMCPToken = func(string, string) (func() (string, error), string) { return nil, "" }
 	if tok, id := f.mcpCredentialFor("sess-1", ""); tok != "internal-token" || id != "" {
 		t.Fatalf("got (%q, %q), want internal token with no identity", tok, id)
 	}

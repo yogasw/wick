@@ -199,22 +199,11 @@ type ClaudeFactory struct {
 	// (a session with no owner — legacy rows, cron, system jobs).
 	MCPToken string
 
-	// SessionMCPToken mints a per-SESSION MCP credential that authenticates
-	// as the human who owns the session, instead of the shared admin
-	// principal MCPToken grants. Without it, every user's spawn reaches the
-	// MCP server as the same synthetic admin, so connector access control
-	// and tag filtering never apply to a web chat.
-	//
-	// Returning ok=false means "no real owner" and the caller falls back to
-	// MCPToken — an ownerless session must keep working rather than lose
-	// MCP entirely. nil = per-user identity disabled (fallback for all).
-	//
-	// identity is the wick user the token was minted for. The pool only
-	// knows the caller of the message that woke the spawn, which is empty
-	// whenever no human did (a delegation result, a schedule fire) even
-	// though the minter then picked the owner — so the minter, the one place
-	// that decides, reports it back.
-	SessionMCPToken func(sessionID, callerUserID string) (token, identity string, ok bool)
+	// SessionMCPToken resolves the session's principal and an issuer bound to
+	// that principal. A nil issuer means the session uses the per-boot token.
+	// OMP keeps the issuer, not a bearer: one agent can outlive several RPC
+	// processes, each of which revokes its own credential when it exits.
+	SessionMCPToken func(sessionID, callerUserID string) (mint func() (string, error), identity string)
 
 	// InstanceOverride pins a specific Instance for every Build call,
 	// bypassing the provider.Find registry lookup. Tests use this to
@@ -371,23 +360,21 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			spawner = codexpkg.Spawner{Binary: bin, MCPToken: tok}
 		case provider.TypeGemini:
 			spawner = geminipkg.Spawner{Binary: bin, YoloMode: bypassPerms}
-		case provider.TypeOMP, provider.TypeOpencode:
-			// Same per-session MCP credential codex gets. Both run with
-			// approvals off unconditionally: there is no gate hook for
-			// them, and a headless run cannot answer a prompt.
+		case provider.TypeOMP:
+			mint, identity := f.mcpIssuerFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
+			s := omppkg.Spawner{Binary: bin, MintMCPToken: mint, MCPOwner: opt.CallerUserID + "\x00" + identity}
+			if mint == nil {
+				s.MCPToken = f.MCPToken
+			}
+			spawner = s
+		case provider.TypeOpencode:
 			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
 			runAsUserID = identity
-			if pType == provider.TypeOMP {
-				// omp revokes its own per-session token: in server mode it
-				// lives as long as the session's RPC process, not one turn
-				// (omp.SetMCPTokenRevoker), so it is not reported here.
-				spawner = omppkg.Spawner{Binary: bin, MCPToken: tok, RevocableToken: tok != f.MCPToken, MCPOwner: opt.CallerUserID}
-			} else {
-				if tok != f.MCPToken {
-					claudeMCPToken = tok
-				}
-				spawner = opencodepkg.Spawner{Binary: bin, MCPToken: tok}
+			if tok != f.MCPToken {
+				claudeMCPToken = tok
 			}
+			spawner = opencodepkg.Spawner{Binary: bin, MCPToken: tok}
 		case provider.TypeWick:
 			// In-process runtime — no binary. Must NOT fall through to
 			// the claude default: that would spawn a real claude CLI
@@ -792,12 +779,19 @@ func (f *ClaudeFactory) mcpTokenFor(sessionID, callerUserID string) string {
 // for. identity is "" on the shared-token fallback: that token belongs to
 // no human, and naming one would be a guess.
 func (f *ClaudeFactory) mcpCredentialFor(sessionID, callerUserID string) (token, identity string) {
-	if f.SessionMCPToken != nil && sessionID != "" {
-		if tok, id, ok := f.SessionMCPToken(sessionID, callerUserID); ok && tok != "" {
+	if mint, id := f.mcpIssuerFor(sessionID, callerUserID); mint != nil {
+		if tok, err := mint(); err == nil && tok != "" {
 			return tok, id
 		}
 	}
 	return f.MCPToken, ""
+}
+
+func (f *ClaudeFactory) mcpIssuerFor(sessionID, callerUserID string) (func() (string, error), string) {
+	if sessionID == "" || f.SessionMCPToken == nil {
+		return nil, ""
+	}
+	return f.SessionMCPToken(sessionID, callerUserID)
 }
 
 func sendModeFor(pType provider.Type, override string) provider.SendMode {

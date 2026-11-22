@@ -84,6 +84,10 @@ Everything lives under `/tools/agents`:
 | **Channels** | Slack + Telegram config. |
 | **Scheduled** | Monitor scheduled messages. |
 
+## OMP after an idle timeout
+
+`agents.omp: idle server killed` refers to the session's idle RPC process, not the Wick daemon. A warm process keeps its MCP credential across turns; a replacement gets a fresh credential for the session. If tools disappear, check the next `POST /mcp` initialization and try `wick_list` from the new turn. A `401` there is not a Git or deploy connector error.
+
 ## Storage
 
 All agent state is on disk under `~/.<app>/agents/` — sessions, projects, presets, workflows. There is no DB migration to worry about: backup is `tar`, and a restart re-scans the tree.

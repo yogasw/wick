@@ -106,10 +106,12 @@ var startRPCFn startFn = startRPC
 // resume is the --resume value (the id, or the transcript's path when
 // another profile holds it); opt.ResumeID stays the id the live process
 // is compared against.
-func (s Spawner) spawnRPC(ctx context.Context, opt provider.SpawnOptions, ins provider.Instance, bin, resume, soul, overlay string, mcpVars, brokerVars []string, releaseBroker func()) (provider.Process, error) {
+func (s Spawner) spawnRPC(ctx context.Context, opt provider.SpawnOptions, ins provider.Instance, bin, resume, soul, overlay, endpoint string, brokerVars []string, releaseBroker func()) (provider.Process, error) {
 	args := buildRPCArgs(ins, withResume(opt, resume), soul, overlay, s.ExtraArgs)
 	env := append(baseEnv(), opt.ExtraEnv...)
-	env = append(env, mcpVars...)
+	if endpoint != "" {
+		env = append(env, mcpURLEnvVar+"="+endpoint)
+	}
 	// Same as -p: no ~/.claude MCP/config source, no config overlays from
 	// wick's own environment.
 	env = append(env, "CLAUDE_CONFIG_DIR=", "PI_CONFIG_FILES=")
@@ -137,17 +139,29 @@ func (s Spawner) spawnRPC(ctx context.Context, opt provider.SpawnOptions, ins pr
 			fresh = true
 		}
 	}
-	token := ""
-	if s.RevocableToken {
-		token = s.MCPToken
-	}
-	spec := rpcSpec{bin: bin, args: args, env: env, dir: opt.Workspace, token: token,
+	spec := rpcSpec{bin: bin, args: args, env: env, dir: opt.Workspace,
 		wrap: func(b string, a []string) (string, []string, string) {
 			return opt.MemGuard.Wrap(b, a, "omp-rpc", opt.SpawnSeq)
 		}}
 	l, err := rpcServers.Acquire(ctx, cliserver.Spec{Instance: ins.Name, Group: ins.Name + "/" + opt.SessionID, Key: key, Idle: serverIdle(ins, opt), Turns: 1, MaxAge: rpcMaxAge},
-		func(ctx context.Context) (*rpcConn, error) { return startRPCFn(ctx, spec) })
-	addedEnv := provider.MaskSpawnEnv(append(append([]string{}, opt.ExtraEnv...), mcpVars...))
+		func(ctx context.Context) (*rpcConn, error) {
+			if endpoint != "" {
+				token, err := s.processToken()
+				if err != nil {
+					return nil, err
+				}
+				spec.env = append(spec.env, mcpTokenEnvVar+"="+token)
+				if s.MintMCPToken != nil {
+					spec.token = token
+				}
+			}
+			c, err := startRPCFn(ctx, spec)
+			if err != nil {
+				revokeLater(spec.token)
+			}
+			return c, err
+		})
+	addedEnv := provider.MaskSpawnEnv(opt.ExtraEnv)
 	if err != nil {
 		if errors.Is(err, cliserver.ErrShuttingDown) || ctx.Err() != nil {
 			releaseBroker()
@@ -157,16 +171,10 @@ func (s Spawner) spawnRPC(ctx context.Context, opt provider.SpawnOptions, ins pr
 		// config) fails the TURN with omp's own words, like a -p run that
 		// exits on the same error — not the spawn, which the pool would
 		// read as a crash and retry.
-		revokeLater(token)
 		releaseBroker()
 		p := newRPCProcess(addedEnv, bin, args)
 		go func() { p.emit(headerLine("", opt.Workspace)); p.emit(errorLines(err.Error())); p.finish(nil) }()
 		return p, nil
-	}
-	if !l.Fresh && token != "" && token != l.H.token {
-		// The process speaks with the token it was started with; this
-		// turn's own is never used.
-		revokeLater(token)
 	}
 	if l.Fresh {
 		fresh = false

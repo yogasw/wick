@@ -196,6 +196,57 @@ func readAll(t *testing.T, p *rpcProcess) string {
 	return string(b)
 }
 
+func TestRPCReplacementGetsIndependentMCPCredential(t *testing.T) {
+	manager, starter := rpcServers, startRPCFn
+	rpcServers = newRPCManager()
+	t.Cleanup(func() {
+		rpcServers.Shutdown()
+		rpcServers, startRPCFn = manager, starter
+	})
+	issued := []string{"first", "replacement"}
+	s := Spawner{MintMCPToken: func() (string, error) {
+		if len(issued) == 0 {
+			t.Fatal("warm turn unexpectedly minted another credential")
+		}
+		token := issued[0]
+		issued = issued[1:]
+		return token, nil
+	}}
+	var started []string
+	startRPCFn = func(_ context.Context, spec rpcSpec) (*rpcConn, error) {
+		if !slices.Contains(spec.env, mcpTokenEnvVar+"="+spec.token) {
+			t.Fatal("RPC process did not receive its own revocable credential")
+		}
+		started = append(started, spec.token)
+		c := fakeConn(&fakeOMP{})
+		c.token = spec.token
+		return c, nil
+	}
+	ins := provider.Instance{Type: provider.TypeOMP, Name: "test"}
+	opt := provider.SpawnOptions{SessionID: "s1", ResumeID: "omp-s1", InitialMessage: "hello"}
+	turn := func() {
+		t.Helper()
+		p, err := s.spawnRPC(context.Background(), opt, ins, "omp", opt.ResumeID, "", "", "http://localhost/mcp", nil, func() {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := io.ReadAll(p.Stdout())
+		if err != nil || !strings.Contains(string(out), `"delta":"echo:hello"`) {
+			t.Fatalf("turn did not respond: %v", err)
+		}
+		if err := p.Wait(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turn()
+	turn()
+	rpcServers.Retire(ins.Name)
+	turn()
+	if !slices.Equal(started, []string{"first", "replacement"}) {
+		t.Fatal("replacement reused the retired server's credential")
+	}
+}
+
 func TestRPCTurnStreamsPrintModeLines(t *testing.T) {
 	f := &fakeOMP{}
 	p, m := runFakeTurn(t, f, "hello")
