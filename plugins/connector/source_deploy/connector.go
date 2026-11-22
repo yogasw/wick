@@ -81,11 +81,11 @@ func Operations(svc *Service) []connector.Category {
 				nameInput{}, h.deleteProfile, wickdocs.Docs{}),
 		),
 		connector.Cat("Runs", "Start a deploy and follow it.",
-			connector.Op("deploy", "Deploy",
+			withTrack(connector.Op("deploy", "Deploy",
 				"Build and install from source using a profile. Returns at once with {run_id, state:running}: "+
 					"the build runs in the background, outside wick, and survives the reload it ends with. "+
 					"One run at a time. Follow it with status.",
-				deployInput{}, h.deploy, wickdocs.Docs{}),
+				deployInput{}, h.deploy, wickdocs.Docs{}), deployTrack),
 			connector.Op("status", "Run Status",
 				"State of a run (running/succeeded/failed/canceled), its exit code, the current stage "+
 					"(the script's last \"== …\" line) and the tail of its log.",
@@ -98,6 +98,28 @@ func Operations(svc *Service) []connector.Category {
 				cancelInput{}, h.cancel, wickdocs.Docs{}),
 		),
 	}
+}
+
+// deployTrack lets wick follow a deploy started from an agent session: a
+// checklist item that moves with the run's stage, and one wake-up message
+// when the run ends. The poll goes through status, which reads the run from
+// disk, so it keeps working across the reload the deploy performs.
+var deployTrack = connector.Track{
+	StatusOp:   "status",
+	Params:     map[string]string{"run_id": "out.run_id"},
+	StatePath:  "state",
+	Done:       []string{StateSucceeded},
+	Failed:     []string{StateFailed, StateCanceled},
+	DetailPath: "stage",
+	Every:      "20s",
+	Timeout:    "1h",
+	Label:      "Deploy {out.profile} ({out.run_id})",
+}
+
+// withTrack returns op marked as starting work wick should follow.
+func withTrack(op connector.Operation, t connector.Track) connector.Operation {
+	op.Track = &t
+	return op
 }
 
 type handlers struct {
