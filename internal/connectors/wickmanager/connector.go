@@ -163,6 +163,9 @@ func Operations(deps Deps) []connector.Category {
 			"Propose restoring an earlier version of an operator prompt (see prompt_history). Like prompt_set it only posts an approval card; an admin must accept it in the browser. Returns {status: pending_approval, approval_id, changes}. Access: ADMIN ONLY, and only from an agent session.",
 			promptRollbackInput{}, h.promptRollback, wickdocs.Docs{}),
 
+		connector.Op("build_status", "Build / Deploy Status",
+			"What wick version is serving, the next version a deploy will ship (patch + 1), and the deploy in flight if a deploy script is reporting one (from, to, next, phase, running, updated_ago). Read-only: it reads the state file the deploy script writes ($WICK_DEPLOY_STATE_FILE, default <cache dir>/wick-deploy/state.json) and never runs anything. deploy is null when no script has reported. Access: any signed-in user.",
+			emptyInput{}, h.buildStatus, wickdocs.Docs{}),
 		connector.Op("system_status", "System Status",
 			"Get HTTP server + background worker process status. Only available when wick is launched via the system tray. Returns {server_running, server_port, worker_running, run_mode}. Access: ADMIN + tray-only.",
 			emptyInput{}, h.systemStatus, wickdocs.Docs{}),
