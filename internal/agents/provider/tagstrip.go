@@ -52,6 +52,10 @@ const maxHeldTag = 64 << 10
 type tagStripper struct {
 	tags    []string
 	pending string
+	// skipWS drops the whitespace right after a removed block: the harness
+	// pads its tags with blank lines, which would otherwise stay behind as
+	// a run of empty lines in the reply.
+	skipWS bool
 }
 
 func newTagStripper(tags []string) *tagStripper {
@@ -66,6 +70,13 @@ func (t *tagStripper) feed(s string) string {
 	t.pending += s
 	var out strings.Builder
 	for t.pending != "" {
+		if t.skipWS {
+			t.pending = strings.TrimLeft(t.pending, " \t\r\n")
+			if t.pending == "" {
+				break
+			}
+			t.skipWS = false
+		}
 		i := strings.IndexByte(t.pending, '<')
 		if i < 0 {
 			out.WriteString(t.pending)
@@ -89,6 +100,7 @@ func (t *tagStripper) feed(s string) string {
 				return out.String()
 			}
 			t.pending = rest[j+len(closeTag):]
+			t.skipWS = true
 		case partial:
 			t.pending = rest
 			return out.String()
@@ -103,7 +115,7 @@ func (t *tagStripper) feed(s string) string {
 // flush returns whatever is still held, as is.
 func (t *tagStripper) flush() string {
 	s := t.pending
-	t.pending = ""
+	t.pending, t.skipWS = "", false
 	return s
 }
 

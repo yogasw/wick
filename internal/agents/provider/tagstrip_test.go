@@ -20,7 +20,7 @@ func feedAll(t *testing.T, pieces []string) string {
 
 func TestTagStripperSplitAcrossDeltas(t *testing.T) {
 	in := "Checking now:\n\n<system-reminder>\nToday: 2026-01-02\n</system-reminder>\n\nDone <b>ok</b> a<b"
-	want := "Checking now:\n\n\n\nDone <b>ok</b> a<b"
+	want := "Checking now:\n\nDone <b>ok</b> a<b"
 	// every split size, down to one byte per delta
 	for size := 1; size <= len(in); size++ {
 		var pieces []string
@@ -78,5 +78,19 @@ func TestTagStripperConfiguredTag(t *testing.T) {
 	out := ts.feed("a<ctx-") + ts.feed("note>hidden</ctx-no") + ts.feed("te>b<system-reminder>x</system-reminder>c") + ts.flush()
 	if out != "abc" {
 		t.Fatalf("got %q", out)
+	}
+}
+
+func TestTagStripperDropsPaddingAfterTag(t *testing.T) {
+	in := "Checking:\n\n<system-reminder>\nToday: 2026-01-02\n</system-reminder>\n\n\n\n\n\nNext step"
+	for size := 1; size <= len(in); size++ {
+		var pieces []string
+		for i := 0; i < len(in); i += size {
+			j := min(i+size, len(in))
+			pieces = append(pieces, in[i:j])
+		}
+		if got := feedAll(t, pieces); got != "Checking:\n\nNext step" {
+			t.Fatalf("size %d: got %q", size, got)
+		}
 	}
 }
