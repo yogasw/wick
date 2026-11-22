@@ -374,3 +374,20 @@ func TestAgentUnparsableLineIsWarningNotError(t *testing.T) {
 		}
 	}
 }
+func TestStripSystemReminder(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{`plain text`, `plain text`},
+		{`<system-reminder>Today: 2026-11-22</system-reminder>hi`, `hi`},
+		{`hi <system-reminder>Today: 2026-11-22</system-reminder> there`, `hi  there`},
+		{`<system-reminder>Today: 2026-11-22</system-reminder>`, ``},
+		{`a<system-reminder>x</system-reminder>b<system-reminder>y</system-reminder>c`, `abc`},
+		{`no tag here`, `no tag here`},
+	}
+	for _, tc := range cases {
+		if got := stripSystemReminder(tc.in); got != tc.want {
+			t.Fatalf("stripSystemReminder(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

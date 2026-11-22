@@ -17,7 +17,15 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
+// systemReminderRE matches harness-injected context tags that must never
+// reach a channel or be persisted as assistant output.
+var systemReminderRE = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
 
+// stripSystemReminder removes harness-injected <system-reminder> tags so they
+// are not stored as assistant text or forwarded to any channel.
+func stripSystemReminder(s string) string {
+	return systemReminderRE.ReplaceAllString(s, "")
+}
 // Agent owns one running subprocess. Lifecycle:
 //
 //	NewAgent(...)        — constructed, not yet started
@@ -1603,7 +1611,7 @@ func (a *Agent) run(ctx context.Context) {
 				produced = true
 			}
 			if ev.Type == event.TextDelta && !ev.Synthetic {
-				turnText.WriteString(ev.Text)
+				turnText.WriteString(stripSystemReminder(ev.Text))
 			}
 
 			switch ev.Type {
