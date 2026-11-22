@@ -114,8 +114,7 @@
       return bSel - aSel;
     });
     return filtered;
-  });
-  // Re-place once the popup exists (real height), and again whenever the level
+});
   // changes — drilling in or out changes the height, and a stale position
   // would leave the menu hanging off the trigger it belongs to.
   $effect(() => {
