@@ -33,6 +33,11 @@ type textJoiner struct {
 	sawText   bool // some assistant text has been emitted this turn
 	breakNext bool // a tool ran since; the next text is a NEW message
 	tailNL    int  // trailing newlines of the last emitted text
+	// heldNL is the run of newlines the last text ended on, not emitted
+	// yet (join). It is let out only when more text follows in the same
+	// message; across a tool boundary it is replaced by one blank line, and
+	// at the turn end it is dropped.
+	heldNL string
 }
 
 // toolRan records a tool boundary. Only a boundary that FOLLOWS text starts a
@@ -83,4 +88,42 @@ func trailingNewlines(s string) int {
 		n++
 	}
 	return n
+}
+
+// join returns next as it should be emitted: within a message it is passed
+// through (with any newlines held from the previous piece in front); after a
+// tool boundary the newlines on both sides of the boundary are replaced by
+// exactly one blank line, so a model (or a stripped context tag) that pads
+// the gap with a run of empty lines does not leave a hole in the reply. The
+// newlines a piece ends on are held back until more text follows. Returns ""
+// when nothing is to be emitted yet.
+func (j *textJoiner) join(next string) string {
+	if next == "" {
+		return ""
+	}
+	var out string
+	if j.breakNext {
+		rest := strings.TrimLeft(next, "\r\n")
+		if rest == "" {
+			return ""
+		}
+		out = "\n\n" + rest
+		j.breakNext = false
+	} else {
+		out = j.heldNL + next
+	}
+	j.heldNL = ""
+	if !j.sawText {
+		// The first text of a turn has no message before it to separate from.
+		out = strings.TrimLeft(out, "\r\n")
+		if out == "" {
+			return ""
+		}
+	}
+	trimmed := strings.TrimRight(out, "\r\n")
+	j.heldNL = out[len(trimmed):]
+	if trimmed != "" {
+		j.sawText = true
+	}
+	return trimmed
 }

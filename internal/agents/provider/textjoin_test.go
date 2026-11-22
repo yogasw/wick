@@ -1,6 +1,9 @@
 package provider
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The bug this exists for, taken from a real session: the model wrote a
 // sentence, ran a tool, then wrote the next sentence. Both pieces were
@@ -102,5 +105,41 @@ func TestTextJoinerIgnoresEmptyText(t *testing.T) {
 	// The pending break must survive an empty delta, not be eaten by it.
 	if sep := j.breakBefore("teks berikutnya"); sep != "\n\n" {
 		t.Errorf("pending break lost to an empty delta: %q", sep)
+	}
+}
+
+// runJoin feeds pieces through a joiner; "|" marks a tool boundary.
+func runJoin(pieces ...string) string {
+	var j textJoiner
+	var b strings.Builder
+	for _, p := range pieces {
+		if p == "|" {
+			j.toolRan()
+			continue
+		}
+		b.WriteString(j.join(p))
+	}
+	j.turnEnded()
+	return b.String()
+}
+
+func TestJoinCollapsesNewlinesAcrossToolBoundary(t *testing.T) {
+	cases := []struct {
+		name   string
+		pieces []string
+		want   string
+	}{
+		{"padding after boundary", []string{"Checking now:", "|", "\n\n\n\n\n\n\nDone."}, "Checking now:\n\nDone."},
+		{"padding before boundary", []string{"Waiting:\n\n\n\n\n", "|", "Still running."}, "Waiting:\n\nStill running."},
+		{"newline-only deltas", []string{"A:", "\n", "\n", "|", "\n", "\n\n", "B"}, "A:\n\nB"},
+		{"glued messages get a break", []string{"one.", "|", "two."}, "one.\n\ntwo."},
+		{"inside a message untouched", []string{"line1\n", "\n", "\nline2"}, "line1\n\n\nline2"},
+		{"trailing newlines dropped", []string{"end\n\n\n"}, "end"},
+		{"leading newlines of the turn dropped", []string{"\n\n", "hi"}, "hi"},
+	}
+	for _, tc := range cases {
+		if got := runJoin(tc.pieces...); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

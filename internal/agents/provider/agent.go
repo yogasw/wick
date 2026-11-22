@@ -1600,7 +1600,11 @@ func (a *Agent) run(ctx context.Context) {
 				joiner.turnEnded()
 			}
 			if ev.Type == event.TextDelta {
-				ev.Text = joiner.breakBefore(ev.Text) + ev.Text
+				ev.Text = joiner.join(ev.Text)
+				if ev.Text == "" {
+					// Only newlines so far: held until text follows them.
+					continue
+				}
 			}
 			if countsAsProduced(ev) {
 				produced = true
