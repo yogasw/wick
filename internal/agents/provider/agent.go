@@ -17,14 +17,26 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
-// systemReminderRE matches harness-injected context tags that must never
-// reach a channel or be persisted as assistant output.
-var systemReminderRE = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+// defaultStripPatterns are the harness-injected context tag patterns that
+// must never reach a channel or be persisted as assistant output. The first
+// entry is the default applied when Options.StripPatterns is empty. Additional
+// patterns can be injected via config without touching code.
+var defaultStripPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`),
+}
 
-// stripSystemReminder removes harness-injected <system-reminder> tags so they
-// are not stored as assistant text or forwarded to any channel.
-func stripSystemReminder(s string) string {
-	return systemReminderRE.ReplaceAllString(s, "")
+// stripSystemReminder removes harness-injected context tags matching every
+// pattern in pats, so they are not stored as assistant text or forwarded to
+// any channel. When pats is empty the default list is used.
+func stripSystemReminder(s string, pats ...*regexp.Regexp) string {
+	patterns := pats
+	if len(patterns) == 0 {
+		patterns = defaultStripPatterns
+	}
+	for _, re := range patterns {
+		s = re.ReplaceAllString(s, "")
+	}
+	return s
 }
 // Agent owns one running subprocess. Lifecycle:
 //
@@ -38,10 +50,9 @@ func stripSystemReminder(s string) string {
 // can spawn a fresh process on the next message (with --resume if a
 // CLI session ID was captured).
 //
-// Callers (the pool) treat Agent as one-shot per spawn — kill returns
-// the agent to "ready to spawn again" rather than reusing the process.
 type Agent struct {
 	cfg     Options
+	stripPatterns []*regexp.Regexp
 	parser  event.Parser
 	state   *state.Machine
 	store   *store.Store
@@ -361,10 +372,29 @@ type Options struct {
 	// no error since the message that started it, sentAt being when that
 	// message went out. The pool clears the account's failure with it.
 	OnTurnOK func(sentAt time.Time)
-	// FailoverMsgKey marks a spawn made to carry a failover run on: the
-	// first turn's failure reports it (FailoverRequest.MsgKey), so the
-	// pool keeps counting that run's tried targets and hops.
 	FailoverMsgKey string
+	// StripPatterns are harness-injected context tag regex patterns stripped
+	// from assistant output before store/apply/channel. Empty = default list.
+	StripPatterns []string
+}
+
+// compileStripPatterns converts StripPatterns into compiled regexps, falling
+// back to defaultStripPatterns when empty. Invalid patterns are skipped.
+func (opt Options) compileStripPatterns() []*regexp.Regexp {
+	raw := opt.StripPatterns
+	if len(raw) == 0 {
+		return append([]*regexp.Regexp{}, defaultStripPatterns...)
+	}
+	out := make([]*regexp.Regexp, 0, len(raw))
+	for _, p := range raw {
+		if re, err := regexp.Compile(p); err == nil {
+			out = append(out, re)
+		}
+	}
+	if len(out) == 0 {
+		return append([]*regexp.Regexp{}, defaultStripPatterns...)
+	}
+	return out
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -453,6 +483,7 @@ func New(opt Options) *Agent {
 		resumeID:     opt.ResumeID,
 		done:         make(chan struct{}),
 		activityCh:   make(chan struct{}, 1),
+		stripPatterns: opt.compileStripPatterns(),
 	}
 }
 
@@ -1611,7 +1642,7 @@ func (a *Agent) run(ctx context.Context) {
 				produced = true
 			}
 			if ev.Type == event.TextDelta && !ev.Synthetic {
-				turnText.WriteString(stripSystemReminder(ev.Text))
+				turnText.WriteString(stripSystemReminder(ev.Text, a.stripPatterns...))
 			}
 
 			switch ev.Type {
