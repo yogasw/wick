@@ -112,6 +112,7 @@
       const aSel = (value === aPinned || (value === d.value && a.default)) ? 1 : 0;
       const bSel = (value === bPinned || (value === d.value && b.default)) ? 1 : 0;
       return bSel - aSel;
+    });
     return filtered;
   });
   // Re-place once the popup exists (real height), and again whenever the level
