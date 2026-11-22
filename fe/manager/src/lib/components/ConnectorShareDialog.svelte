@@ -108,12 +108,15 @@
           </p>
         </div>
         {#if data.is_admin}
-          <Toggle
-            checked={!restricted}
-            disabled={busy}
-            label="Visible to everyone"
-            onChange={(v) => run({ action: v ? "everyone" : "restrict" })}
-          />
+          <span class="flex flex-shrink-0 items-center gap-2 text-xs text-black-800 dark:text-black-600">
+            Everyone
+            <Toggle
+              checked={!restricted}
+              disabled={busy}
+              label="Visible to everyone"
+              onChange={(v) => run({ action: v ? "everyone" : "restrict" })}
+            />
+          </span>
         {:else if !restricted}
           <Button size="sm" variant="secondary" disabled={busy} onclick={() => run({ action: "restrict" })}>Hide</Button>
         {/if}

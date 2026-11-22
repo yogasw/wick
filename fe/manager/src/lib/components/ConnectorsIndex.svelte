@@ -425,7 +425,7 @@
                 <span class="flex-shrink-0 rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">Disabled</span>
               {/if}
               {#if !card.available && card.visibility === "restricted" && !card.system}
-                <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600" title="Hidden: only the people and tags it is shared with, its owner and admins see it">🔒 Hidden</span>
+                <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600" title="Hidden: only the people and tags it is shared with, its owner and admins see it" aria-label="Hidden">🔒</span>
               {/if}
               {#if installedPlugins[card.key]?.update_available}
                 <span class="flex-shrink-0 rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400" title={`Update available · v${installedPlugins[card.key].latest_version}`}>⬆ Update</span>

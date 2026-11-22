@@ -795,7 +795,9 @@
                         Private
                       </span>
                     {:else}
-                      <span class="rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600">Everyone</span>
+                      <!-- On a hidden connector "Everyone" would overstate it: only
+                           people who can see the connector reach its rows. -->
+                      <span class="rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600" title={data.visibility === "restricted" ? "Anyone the connector is shared with" : undefined}>{data.visibility === "restricted" ? "Shared users" : "Everyone"}</span>
                     {/if}
                   {:else}
                     {#each row.tags ?? [] as tag (tag)}
