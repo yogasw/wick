@@ -104,15 +104,15 @@
     const q = modelSearch.trim();
     let filtered = q ? all.filter((m) => modelMatches(m, q)) : all;
     const { key, modelID } = splitPin(value);
+    const packed = (m: { id: string }) =>
+      drillStack.length ? `${d.value}::${encodePin(drillPath, m.id)}` : m.id;
     filtered.sort((a, b) => {
-      const aPinned = drillStack.length ? encodePin(drillPath, a.id) : a.id;
-      const bPinned = drillStack.length ? encodePin(drillPath, b.id) : b.id;
+      const aPinned = packed(a);
+      const bPinned = packed(b);
       const aSel = (value === aPinned || (value === d.value && a.default)) ? 1 : 0;
       const bSel = (value === bPinned || (value === d.value && b.default)) ? 1 : 0;
       return bSel - aSel;
     });
-    return filtered;
-  });
 
   // Re-place once the popup exists (real height), and again whenever the level
   // changes — drilling in or out changes the height, and a stale position

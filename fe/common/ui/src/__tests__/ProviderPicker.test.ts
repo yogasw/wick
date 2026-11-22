@@ -217,4 +217,15 @@ describe("ProviderPicker inside a transformed container", () => {
     const rows = await screen.findAllByText(/Model [AB]/);
     expect(rows.map((r) => r.textContent)).toEqual(["Model B", "Model A"]);
   });
-});
+  test("pinned model sorts to the top with full type/name::id pin", async () => {
+    const loadModels = vi.fn().mockResolvedValue([
+      { id: "m2", label: "Model B" },
+      { id: "m1", label: "Model A", default: true },
+    ] satisfies ComposerModelOption[]);
+    render(ProviderPicker, { options: [WICK], value: "wick/x::m2", onChange: vi.fn(), loadModels });
+
+    await fireEvent.click(screen.getByRole("button", { name: /select provider|wick/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /wick\/x/i }));
+    const rows = await screen.findAllByText(/Model [AB]/);
+    expect(rows.map((r) => r.textContent)).toEqual(["Model B", "Model A"]);
+  });
