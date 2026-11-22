@@ -664,6 +664,9 @@ type batchCall struct {
 	ToolID    string         `json:"tool_id"`
 	Params    map[string]any `json:"params"`
 	SessionID string         `json:"session_id"`
+	// idx is the call's position, so per-call side results (auto-track
+	// notes) land on the right entry.
+	idx int
 }
 
 // batchResult is one entry in the per-call result array. Result and Error
@@ -679,6 +682,9 @@ type batchResult struct {
 	// ResultOmitted is set when Result was dropped so the whole batch fits
 	// in one message; OK still says how the call itself went.
 	ResultOmitted string `json:"result_omitted,omitempty"`
+	// Tracked is the auto-track note when the op started a job wick now
+	// follows by itself (see autoTrack).
+	Tracked string `json:"tracked,omitempty"`
 }
 
 func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
@@ -696,12 +702,36 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		return
 	}
 	rawParams, _ := args["params"].(map[string]any)
-	resJSON, execErr := executeOne(r, svc, layout, toolID, rawParams, callSessionID(args), user, tagIDs)
+	resJSON, note, execErr := executeTracked(r.Context(), r, svc, layout, toolID, rawParams, callSessionID(args), user, tagIDs)
 	if execErr != nil {
 		rsp.ToolError(w, req.ID, execErr.Error(), toolID)
 		return
 	}
+	if note != "" {
+		resJSON += "\n\n[wick] " + note
+	}
 	writeExecuteResult(w, req.ID, rsp, resJSON, toolID)
+}
+
+// executeTracked runs one agent call and, when the op starts a job that
+// carries a Track spec, has wick follow it (checklist item + one message
+// when it ends). The no_track param opts a single call out. The note is ""
+// for an untracked op.
+func executeTracked(ctx context.Context, r *http.Request, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string) (string, string, error) {
+	params, skip := popNoTrack(rawParams)
+	res, err := executeOneCtx(ctx, r, svc, layout, toolID, params, sessionID, user, tagIDs)
+	if err != nil || skip {
+		return res, "", err
+	}
+	sid := ResolveCallSession(SessionOf(r), sessionID)
+	if !SessionTrusted(ctx, sid) {
+		sid = ""
+	}
+	// Detached from the request: the call already succeeded, and a client
+	// that hangs up now must not leave the job half-followed.
+	tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	return res, autoTrack(tctx, svc, layout, toolID, params, res, sid, user), nil
 }
 
 // writeExecuteResult sends a wick_execute result, or a tool error when it
@@ -949,7 +979,7 @@ func wickExecuteBatch(w http.ResponseWriter, r *http.Request, req RPCRequest, rs
 		}
 		params, _ := m["params"].(map[string]any)
 		sid, _ := m["session_id"].(string)
-		calls = append(calls, batchCall{ToolID: tid, Params: params, SessionID: strings.TrimSpace(sid)})
+		calls = append(calls, batchCall{ToolID: tid, Params: params, SessionID: strings.TrimSpace(sid), idx: i})
 	}
 
 	// Per-call timeout: caller's value, defaulted and clamped server-side.
@@ -961,10 +991,18 @@ func wickExecuteBatch(w http.ResponseWriter, r *http.Request, req RPCRequest, rs
 		}
 	}
 
+	notes := make([]string, len(calls))
 	results := runBatch(r.Context(), calls, perCallTimeout,
 		func(ctx context.Context, c batchCall) (string, error) {
-			return executeOneCtx(ctx, r, svc, layout, c.ToolID, c.Params, c.SessionID, user, tagIDs)
+			res, note, err := executeTracked(ctx, r, svc, layout, c.ToolID, c.Params, c.SessionID, user, tagIDs)
+			notes[c.idx] = note
+			return res, err
 		})
+	for i := range results {
+		if i < len(notes) {
+			results[i].Tracked = notes[i]
+		}
+	}
 
 	var okCount, errCount, timeoutCount int
 	for _, br := range results {

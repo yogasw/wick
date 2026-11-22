@@ -136,6 +136,10 @@ func validateRule(r *Rule, at string) error {
 
 // lookupPath walks a dot path through decoded JSON. Numeric segments index
 // arrays.
+// LookupPath reads a dotted path (a number segment indexes an array) out of
+// decoded JSON — the same path grammar check rules use.
+func LookupPath(v any, path string) (any, bool) { return lookupPath(v, path) }
+
 func lookupPath(v any, path string) (any, bool) {
 	cur := v
 	for _, seg := range strings.Split(path, ".") {

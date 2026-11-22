@@ -78,6 +78,10 @@ type Runner struct {
 	connExec ConnectorExecutor
 	// codeExec runs a watch's code steps; nil fails them.
 	codeExec CodeExecutor
+	// todoNotify tells open panels a session's checklist changed (watches
+	// with a WatchTodo); nil = the file is still written, panels catch up
+	// on their next read.
+	todoNotify func(sessionID string)
 	// watchSem bounds how many watch runs execute at once. A watch run can
 	// take up to a couple of minutes (a slow script), so they run off the
 	// tick loop — this keeps a burst of them from piling onto the host.

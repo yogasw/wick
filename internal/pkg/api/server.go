@@ -2797,6 +2797,11 @@ func NewServer() *Server {
 			return nil
 		})
 
+	// Ops that start a long-running job (connector Track) are followed by a
+	// watch in this store, mirrored into the caller's checklist.
+	mcphandlers.SetAutoTrackStore(scheduleStore)
+	mcphandlers.AutoTrackTodoNotify = agentstool.PublishTodoChanged
+
 	// Expose the full MCP tool surface (ask_user, wick_set_title,
 	// wick_session_info, connectors, providers, skills, wickmanager, …) to
 	// the built-in in-process wick provider agent. It reuses the same MCP
@@ -4415,6 +4420,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 				WithRunAsCheck(s.runAsUsable).
 				WithConnectorExecutor(s.scheduleConnExec).
 				WithCodeExecutor(s.scheduleCodeExec).
+				WithTodoNotify(agentstool.PublishTodoChanged).
 				Run(ctx)
 		}
 		close(s.intakeReady)

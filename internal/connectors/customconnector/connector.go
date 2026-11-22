@@ -121,6 +121,7 @@ type opPrefSetInput struct {
 	Muted       string `wick:"desc=true keeps the op out of Frequent however often it is used. Empty = unchanged."`
 	Note        string `wick:"desc=One-line pitfall or usage note shown next to the op (Frequent, wick_get). '-' clears it. Empty = unchanged."`
 	Keywords    string `wick:"desc=Comma-separated extra words wick_search should match the op on (e.g. revert, undo deploy). '-' clears. Empty = unchanged."`
+	Track       string `wick:"desc=JSON: this op STARTS a long-running job (build/pipeline/deploy) and wick should follow it automatically after every successful agent call — a checklist item in the calling session updated on each poll and one message into that session when it ends. Shape: {\"status_op\":\"get_pipeline\",\"params\":{\"uuid\":\"out.uuid\",\"repo\":\"in.repo\"},\"state_path\":\"state.result.name\",\"done\":[\"SUCCESSFUL\"],\"failed\":[\"FAILED\",\"ERROR\"],\"detail_path\":\"\",\"every\":\"20s\",\"timeout\":\"2h\",\"label\":\"pipeline {in.repo}\"}. params sources: out.<path> (start result), in.<name> (start param), else literal. '-' clears. Empty = unchanged."`
 }
 
 type instanceCreateInput struct {
@@ -201,7 +202,7 @@ func Operations(deps Deps) []connector.Operation {
 			"For one connector instance: every op's curated prefs (pinned, muted, note, keywords), its 30-day agent usage, the ops currently picked as Frequent, and prefs whose op no longer exists (orphaned). Access: any caller who can see the connector.",
 			opPrefsListInput{}, h.opPrefsList, wickdocs.Docs{}),
 		connector.Op("op_pref_set", "Set Op Pref",
-			"Pin/unpin, mute/unmute an op for the Frequent list (shown in wick_get and in Team agents' prompts with a call signature), or set its one-line note / search keywords. Only the fields you pass change. Use a note for pitfalls an agent should know before calling (e.g. 'repeat with cursor until has_more=false'). Access: admins, or the creator of a custom connector for its own instances.",
+			"Pin/unpin, mute/unmute an op for the Frequent list (shown in wick_get and in Team agents' prompts with a call signature), or set its one-line note / search keywords, or mark it as starting a long-running job to follow automatically (track). Only the fields you pass change. Use a note for pitfalls an agent should know before calling (e.g. 'repeat with cursor until has_more=false'). Access: admins, or the creator of a custom connector for its own instances.",
 			opPrefSetInput{}, h.opPrefSet, wickdocs.Docs{}),
 
 		// ── instances ────────────────────────────────────────────

@@ -216,6 +216,21 @@ func (h handlers) opPrefSet(c *connector.Ctx) (any, error) {
 	}
 	patch.Note = strOf(c.Input("note"))
 	patch.Keywords = strOf(c.Input("keywords"))
+	if tr := strOf(c.Input("track")); tr != nil {
+		if *tr != "" {
+			spec, err := connector.ParseTrack(*tr)
+			if err != nil {
+				return nil, err
+			}
+			if !moduleHasOp(mod, spec.StatusOp) {
+				return nil, fmt.Errorf("track.status_op: %q is not an operation of %s", spec.StatusOp, row.Key)
+			}
+			b, _ := json.Marshal(spec)
+			norm := string(b)
+			tr = &norm
+		}
+		patch.Track = tr
+	}
 	p, err := h.deps.Connectors.SetOpPref(c.Context(), row.ID, opKey, user.ID, patch)
 	if err != nil {
 		return nil, err
@@ -225,4 +240,14 @@ func (h handlers) opPrefSet(c *connector.Ctx) (any, error) {
 	_ = json.Unmarshal(b, &out)
 	delete(out, "UpdatedBy")
 	return out, nil
+}
+
+// moduleHasOp reports whether key is one of mod's operations.
+func moduleHasOp(mod connector.Module, key string) bool {
+	for _, op := range mod.AllOps() {
+		if op.Key == key {
+			return true
+		}
+	}
+	return false
 }

@@ -258,6 +258,8 @@ type OpPrefPatch struct {
 	Muted    *bool
 	Note     *string
 	Keywords *string
+	// Track is a JSON connector.Track; "" clears it.
+	Track *string
 }
 
 // SetOpPref applies a patch to one op's pref and drops cached rankings.
@@ -281,6 +283,9 @@ func (s *Service) SetOpPref(ctx context.Context, connectorID, opKey, by string, 
 	}
 	if patch.Keywords != nil {
 		cur.Keywords = strings.TrimSpace(*patch.Keywords)
+	}
+	if patch.Track != nil {
+		cur.Track = strings.TrimSpace(*patch.Track)
 	}
 	cur.UpdatedBy = by
 	cur.UpdatedAt = time.Now()

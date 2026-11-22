@@ -422,14 +422,14 @@ func Operations() []connector.Category {
 		connector.Cat(
 			"Pipelines",
 			"Trigger and inspect Bitbucket Pipelines builds.",
-			connector.OpDestructive(
+			trackRunPipeline(connector.OpDestructive(
 				"run_pipeline",
 				"Run Pipeline",
-				"Trigger a Bitbucket Pipelines build on a branch, optionally a custom pipeline by name and with variables. Returns the pipeline (uuid, build_number, state). Starts a real build.",
+				"Trigger a Bitbucket Pipelines build on a branch, optionally a custom pipeline by name and with variables. Returns the pipeline (uuid, build_number, state). Starts a real build; wick follows it to the end by itself (checklist item + one message when it finishes), so do not poll get_pipeline.",
 				RunPipelineInput{},
 				runPipeline,
 				wickdocs.Docs{},
-			),
+			)),
 			connector.Op(
 				"get_pipeline",
 				"Get Pipeline",
@@ -630,4 +630,24 @@ func listPipelines(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return fetchJSON(c, p)
+}
+
+// trackRunPipeline has wick follow a started pipeline until it completes:
+// get_pipeline is polled with the new pipeline's uuid; state.result.name
+// only exists once the pipeline is COMPLETED.
+func trackRunPipeline(op connector.Operation) connector.Operation {
+	op.Track = &connector.Track{
+		StatusOp: "get_pipeline",
+		Params: map[string]string{
+			"workspace":     "in.workspace?",
+			"repo_slug":     "in.repo_slug",
+			"pipeline_uuid": "out.uuid",
+		},
+		StatePath:  "state.result.name",
+		Done:       []string{"SUCCESSFUL"},
+		Failed:     []string{"FAILED", "ERROR", "STOPPED", "EXPIRED"},
+		DetailPath: "state.name",
+		Label:      "pipeline {in.repo_slug} #{out.build_number}",
+	}
+	return op
 }

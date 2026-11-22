@@ -254,6 +254,10 @@ func apiCLITodo(c *tool.Ctx) {
 // only way a checklist ever moved before. A script does not call tools, so
 // without an event of its own a CLI update would sit in the file until
 // something else happened to trigger a fetch.
+// PublishTodoChanged tells a session's open panels its checklist changed —
+// for writers outside this package (a watch following a job).
+func PublishTodoChanged(sessionID string) { publishTodoChanged(sessionID) }
+
 func publishTodoChanged(sessionID string) {
 	if globalBcast == nil || sessionID == "" {
 		return

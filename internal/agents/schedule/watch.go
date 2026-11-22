@@ -144,8 +144,50 @@ const (
 // array, so the setting needs no column of its own. A bare array still reads
 // as on_match stop.
 type watchEnvelope struct {
-	OnMatch string `json:"on_match,omitempty"`
-	Steps   []Step `json:"steps"`
+	OnMatch string     `json:"on_match,omitempty"`
+	Steps   []Step     `json:"steps"`
+	Todo    *WatchTodo `json:"todo,omitempty"`
+}
+
+// WatchTodo makes a watch mirror itself into one checklist item of its
+// target session: in progress on every poll (with what the check step
+// extracted), completed or failed when the watch ends. Set by wick when it
+// follows a job an agent started (connector Track), so the progress is
+// visible even when the agent never looks.
+type WatchTodo struct {
+	Item  string `json:"item"`
+	Title string `json:"title,omitempty"`
+}
+
+// AttachWatchTodo rewrites an encoded steps column so the watch carries a
+// checklist item. Steps and on_match are kept as they were.
+func AttachWatchTodo(enc string, t WatchTodo) (string, error) {
+	steps, onMatch, err := ParseWatch(enc)
+	if err != nil {
+		return "", err
+	}
+	env := watchEnvelope{Steps: steps, Todo: &t}
+	if onMatch == OnMatchContinue {
+		env.OnMatch = OnMatchContinue
+	}
+	b, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// WatchTodoOf is the checklist item a stored watch mirrors into, if any.
+func WatchTodoOf(raw string) *WatchTodo {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "{") {
+		return nil
+	}
+	var env watchEnvelope
+	if json.Unmarshal([]byte(raw), &env) != nil || env.Todo == nil || strings.TrimSpace(env.Todo.Item) == "" {
+		return nil
+	}
+	return env.Todo
 }
 
 // ParseSteps decodes a row's Steps column (either stored form).

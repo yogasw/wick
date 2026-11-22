@@ -88,6 +88,13 @@ func (r *Runner) WithConnectorExecutor(exec ConnectorExecutor) *Runner {
 
 // WithCodeExecutor installs the executor watch code steps run through (Code
 // Mode, as the run-as identity); without it code steps fail.
+// WithTodoNotify wires what tells a session's open panels that its
+// checklist changed (a watch with a WatchTodo writes it on every poll).
+func (r *Runner) WithTodoNotify(fn func(sessionID string)) *Runner {
+	r.todoNotify = fn
+	return r
+}
+
 func (r *Runner) WithCodeExecutor(exec CodeExecutor) *Runner {
 	r.codeExec = exec
 	return r
@@ -559,6 +566,7 @@ func (r *Runner) runWatch(ctx context.Context, l zerologLogger, e *watchEntry) {
 		// Cancelled or deleted while it ran: say nothing, write nothing.
 		return
 	}
+	r.syncWatchTodo(l, m, rec, terminal)
 
 	if terminal != "" {
 		target, serr := r.sendToTarget(ctx, l, m, text)

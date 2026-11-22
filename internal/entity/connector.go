@@ -369,7 +369,12 @@ type ConnectorOpPref struct {
 	Note         string `gorm:"type:text"`
 	// Keywords is a comma-separated list of extra words wick_search should
 	// match this op on ("revert, undo deploy").
-	Keywords  string `gorm:"type:text"`
+	Keywords string `gorm:"type:text"`
+	// Track is a JSON connector.Track: the op starts long-running work and
+	// wick follows it after a successful agent call (checklist item + one
+	// message when it ends). Overrides the op's code default. "" = use the
+	// code default (if any).
+	Track     string `gorm:"type:text"`
 	UpdatedBy string `gorm:"type:text"`
 	UpdatedAt time.Time
 }

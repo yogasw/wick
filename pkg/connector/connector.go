@@ -156,6 +156,10 @@ type Operation struct {
 	//
 	//	op.VisibleWhen = "browser:chromium|moli"
 	VisibleWhen string
+	// Track marks an op that starts long-running work and how to follow it
+	// (see Track). nil = nothing to follow. An instance's op pref can set or
+	// override it.
+	Track *Track `json:",omitempty"`
 	// Docs carries the opt-in self-documentation fields the workflow
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
 	// quirks, templateable fields, pair-with, common pitfalls).
