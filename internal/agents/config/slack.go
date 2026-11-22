@@ -74,6 +74,11 @@ type SlackChannelConfig struct {
 	GateApproverUsers  string `wick:"picker=slack.users;hidden;key=gate_approver_users;visible_when=gate_approvers:custom;group=Approval Gates;desc=Custom approver users."`
 	GateApproverGroups string `wick:"picker=slack.usergroups;hidden;key=gate_approver_groups;visible_when=gate_approvers:custom;group=Approval Gates;desc=Custom approver user groups."`
 
+	// Shortcuts maps a Slack message-shortcut callback_id or slash command
+	// to a built-in action. JSON list of {key, action}; empty = the default
+	// session_secret → session_secret.
+	Shortcuts string `wick:"kvlist=key|action;hidden;key=shortcuts;group=Shortcuts|Built-in actions behind your Slack app's shortcuts. Create the shortcut in the Slack app (Interactivity → Shortcuts → On messages, or Slash Commands) with the same key as its Callback ID / command name, then map it here. Action session_secret opens a form that hands values (a login, an API key) to the thread's agent session encrypted, never through the chat. A message shortcut knows its thread; a slash command asks for the thread link. Empty = key session_secret mapped to session_secret.;desc=Shortcut key (callback ID or slash command, without /) → action. Actions: session_secret."`
+
 	ProjectID string `wick:"dropdown;hidden;key=project_id;group=Routing;desc=Project to use for sessions from this Slack channel. Leave empty to use the global default."`
 }
 

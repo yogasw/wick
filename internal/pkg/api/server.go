@@ -96,6 +96,7 @@ import (
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
+	"github.com/yogasw/wick/internal/credreq"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/health"
@@ -2198,6 +2199,58 @@ func NewServer() *Server {
 				return d.DeliverToSession(ctx, sessionID, "", text)
 			},
 			configsSvc.AppURL, agentsLayout)
+	}
+	// Session secrets: values a person hands a session through the Slack
+	// form, encrypted; the agent gets tokens, a script resolves them.
+	{
+		d := poolDeliverer{pool: agentsPool, channels: channelReg}
+		cr := credreq.New(db, encSvc)
+		cr.SetWaker(func(ctx context.Context, sessionID, text string) error {
+			return d.DeliverToSession(ctx, sessionID, "", text)
+		})
+		slackch.SessionSecrets = cr
+		agentstool.SetSessionSecrets(cr)
+		// Session connector setup from Slack: a Fill in card instead of the
+		// web-only modal when the session lives in a Slack thread.
+		slackch.WakeSession = func(ctx context.Context, sessionID, text string) error {
+			return d.DeliverToSession(ctx, sessionID, "", text)
+		}
+		slackch.SessionConfigForm = func(sessionID, instID string, keys []string) (string, []slackch.ConfigField, error) {
+			label, fs, err := mcphandlers.SessionConfigForm(connectorsSvc, agentsLayout, sessionID, instID, keys)
+			out := make([]slackch.ConfigField, 0, len(fs))
+			for _, f := range fs {
+				cf := slackch.ConfigField{Key: f.Key, Help: f.Help, Type: f.Type, Value: f.Value, Placeholder: f.Placeholder}
+				for _, o := range f.Options {
+					cf.Options = append(cf.Options, o.Value)
+				}
+				out = append(out, cf)
+			}
+			return label, out, err
+		}
+		slackch.SessionConfigSave = func(sessionID, instID string, values map[string]string) ([]string, error) {
+			return mcphandlers.StoreSessionConfigFromUser(connectorsSvc, agentsLayout, sessionID, instID, values)
+		}
+		mcphandlers.SlackConfigCard = func(ctx context.Context, sessionID, instID, label, reason string, keys []string) (bool, error) {
+			for _, c := range channelReg.Channels() {
+				if sc, ok := c.(interface {
+					OwnsSession(string) bool
+					PostSessionConfigCard(context.Context, string, string, string, string, []string) (bool, error)
+				}); ok && sc.OwnsSession(sessionID) {
+					return sc.PostSessionConfigCard(ctx, sessionID, instID, label, reason, keys)
+				}
+			}
+			return false, nil
+		}
+		go func() {
+			for {
+				if n, err := cr.Sweep(context.Background()); err != nil {
+					log.Warn().Err(err).Msg("credreq: sweep failed")
+				} else if n > 0 {
+					log.Info().Int("requests", n).Msg("credreq: wiped idle session secrets")
+				}
+				time.Sleep(10 * time.Minute)
+			}
+		}()
 	}
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)

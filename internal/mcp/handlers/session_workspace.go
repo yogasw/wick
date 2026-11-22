@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -260,6 +261,21 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 	// every add that was followed by set_config, and put a form in front
 	// of whoever opened the session meanwhile.
 	prompt, _ := args["prompt"].(bool)
+	if prompt && len(applied) == 0 {
+		if handled, err := slackConfigCard(r, sessionID, inst, args); handled {
+			if err != nil {
+				rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+				return
+			}
+			writeWorkspaceResult(w, req, rsp, map[string]any{
+				"session_id": sessionID,
+				"instance":   sessionWorkspaceVM(svc, inst),
+				"status":     "card_posted",
+				"note":       "Session instance created and a Fill in card is in the chat thread. Say in one line that it waits for the values and END YOUR TURN: you are woken when someone fills it.",
+			})
+			return
+		}
+	}
 	if prompt && len(applied) == 0 && asks != nil {
 		if ok, _ := askAllowedOK(askAllowed, sessionID); ok {
 			applied, _ = openConfigModal(r, svc, layout, asks, sessionID, inst, args)
@@ -329,6 +345,19 @@ func sessionWorkspaceConfigure(w http.ResponseWriter, r *http.Request, req RPCRe
 	}
 	if !ok {
 		rsp.ToolError(w, req.ID, fmt.Sprintf("session instance %q not found", cid), sessionWorkspaceToolName)
+		return
+	}
+	if handled, err := slackConfigCard(r, sessionID, inst, args); handled {
+		if err != nil {
+			rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+			return
+		}
+		writeWorkspaceResult(w, req, rsp, map[string]any{
+			"session_id": sessionID,
+			"instance":   sessionWorkspaceVM(svc, inst),
+			"status":     "card_posted",
+			"note":       "A Fill in card is in the chat thread. Say in one line that it is waiting for the values and END YOUR TURN: you are woken when someone fills it.",
+		})
 		return
 	}
 	if asks == nil {
@@ -535,19 +564,18 @@ func sessionWorkspaceRemove(w http.ResponseWriter, req RPCRequest, rsp Responder
 // master-encrypts any secret the user typed and stores it on the
 // instance. Returns the keys actually applied. The agent never sees the
 // values — only the key names flow back.
-func openConfigModal(r *http.Request, svc *connectors.Service, layout agentconfig.Layout, asks askuser.Asker, sessionID string, inst sessionworkspace.Instance, args map[string]any) ([]string, error) {
+// configFieldsFor is the fill form of a session instance: one field per
+// config key the user may edit (keys narrows it, empty = all), plus the
+// specs the answers are validated against.
+func configFieldsFor(svc *connectors.Service, inst sessionworkspace.Instance, keys []string) ([]askuser.Field, map[string]entity.Config, error) {
 	mod, ok := svc.Module(inst.BaseKey)
 	if !ok {
-		return nil, fmt.Errorf("base module %q not registered", inst.BaseKey)
+		return nil, nil, fmt.Errorf("base module %q not registered", inst.BaseKey)
 	}
-
-	// Optional subset of keys to ask for; default = every config field.
 	wanted := map[string]bool{}
-	if rawKeys, ok := args["keys"].([]any); ok {
-		for _, k := range rawKeys {
-			if s, ok := k.(string); ok && strings.TrimSpace(s) != "" {
-				wanted[strings.TrimSpace(s)] = true
-			}
+	for _, k := range keys {
+		if strings.TrimSpace(k) != "" {
+			wanted[strings.TrimSpace(k)] = true
 		}
 	}
 
@@ -584,7 +612,64 @@ func openConfigModal(r *http.Request, svc *connectors.Service, layout agentconfi
 		fields = append(fields, f)
 	}
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("no config fields to fill for this connector")
+		return nil, nil, fmt.Errorf("no config fields to fill for this connector")
+	}
+	return fields, specByKey, nil
+}
+
+// keysArg reads the optional `keys` list of a configure call.
+func keysArg(args map[string]any) []string {
+	var out []string
+	if rawKeys, ok := args["keys"].([]any); ok {
+		for _, k := range rawKeys {
+			if s, ok := k.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// SessionConfigForm is configFieldsFor for other surfaces (the Slack fill
+// modal): the instance label and its fields.
+func SessionConfigForm(svc *connectors.Service, layout agentconfig.Layout, sessionID, instID string, keys []string) (string, []askuser.Field, error) {
+	inst, ok, err := sessionworkspace.Get(layout, sessionID, instID)
+	if err != nil {
+		return "", nil, err
+	}
+	if !ok {
+		return "", nil, fmt.Errorf("session connector %q is gone from the session", instID)
+	}
+	fields, _, err := configFieldsFor(svc, inst, keys)
+	return inst.Label, fields, err
+}
+
+// StoreSessionConfigFromUser saves values a person typed into a fill form
+// on another surface (Slack). Same validation and encryption as the modal.
+func StoreSessionConfigFromUser(svc *connectors.Service, layout agentconfig.Layout, sessionID, instID string, values map[string]string) ([]string, error) {
+	inst, ok, err := sessionworkspace.Get(layout, sessionID, instID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("session connector %q is gone from the session", instID)
+	}
+	_, specByKey, err := configFieldsFor(svc, inst, nil)
+	if err != nil {
+		return nil, err
+	}
+	return storeSessionConfig(svc, layout, sessionID, instID, specByKey, values)
+}
+
+// SlackConfigCard posts a "Fill in" card in the session's chat thread when
+// the session lives in one (wired at boot). handled=false = not a chat
+// session, the web modal applies.
+var SlackConfigCard func(ctx context.Context, sessionID, instID, label, reason string, keys []string) (handled bool, err error)
+
+func openConfigModal(r *http.Request, svc *connectors.Service, layout agentconfig.Layout, asks askuser.Asker, sessionID string, inst sessionworkspace.Instance, args map[string]any) ([]string, error) {
+	fields, specByKey, err := configFieldsFor(svc, inst, keysArg(args))
+	if err != nil {
+		return nil, err
 	}
 
 	question := strings.TrimSpace(argString(args, "reason"))
@@ -716,4 +801,17 @@ func maskedExecError(res *connectors.ExecuteResult, execErr error) string {
 		return res.ErrorMessage
 	}
 	return execErr.Error()
+}
+
+// slackConfigCard hands a fill request to the chat thread when the session
+// lives in one.
+func slackConfigCard(r *http.Request, sessionID string, inst sessionworkspace.Instance, args map[string]any) (bool, error) {
+	if SlackConfigCard == nil {
+		return false, nil
+	}
+	ctx := context.Background()
+	if r != nil {
+		ctx = r.Context()
+	}
+	return SlackConfigCard(ctx, sessionID, inst.ID, inst.Label, strings.TrimSpace(argString(args, "reason")), keysArg(args))
 }

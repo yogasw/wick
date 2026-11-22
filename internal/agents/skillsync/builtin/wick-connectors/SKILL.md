@@ -84,6 +84,18 @@ Do not try to work around this by guessing credentials or calling the op anyway.
 
 `wick_session_workspace` creates throwaway connector instances scoped to one session — useful to point at staging, or to use a different key without touching the shared instance.
 
+In a Slack thread, asking the person to fill a session instance (`prompt:true` on add, or `action=configure`) posts a **Fill in** card in the thread; the call returns `status: card_posted` at once. End the turn — the session is woken when someone saves the form.
+
+### Session secrets
+
+A person can hand a session values (a staging login, an API key) without typing them in chat: the Slack **Session secret** form (message shortcut ⋯ on a thread reply, or the slash command; the key is set per bot in its Slack settings, Shortcuts). The session receives a `[credentials]` message: each secret value as a `wick_cred_<id>.<key>` token, values the person marked not secret as they are. A token resolves only inside a script running for that session, on this machine:
+
+```bash
+PASS=$(support-tools agent secret "$TOKEN")   # needs WICK_CLI_TOKEN (wick_cli_token)
+```
+
+The person picks how long they live: once (each token resolves one time), or until unused for 1 hour / 1 day / 3 days / 7 days — every read resets the clock. Never echo or log a resolved value, and never ask for it in chat. There is no MCP tool to request secrets: if you need one, say which key you need and let the person use the form.
+
 The division of labour matters: **you create the blank instance, the user fills in the config through a UI form.** You never see the values. The instance shows up in `wick_list` for that session only and dies with the session.
 
 Some config fields are locked for you: they come back in the instance's `locked_keys` and `set_config` / `add values` refuse them. Only a human can change them, in the **Session Workspace tab** of this session; until then they run with the default. So when the work needs one changed (e.g. `mode` → `write` to unlock write ops): create the session instance, fill everything else yourself, then ask the user to switch that field in the Session Workspace tab and tell you when done. Do not reach for a saved instance or an admin unlock for this, and do not try another route around the lock.

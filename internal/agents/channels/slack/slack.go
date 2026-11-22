@@ -1798,11 +1798,15 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 	}
 }
 
-// handleSlashCommand fires the workflow trigger for a slash command.
-// The Slack channel itself has no agent-session role for slash
-// commands — they exist purely to be workflow-driven.
+// handleSlashCommand fires the workflow trigger for a slash command,
+// unless the bot's Shortcuts setting maps it to a built-in action.
 func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashCommand) {
 	defer agentchannels.RecoverPanic("slack", "slash command")
+	// A command mapped in the bot's Shortcuts setting is handled here
+	// (session_secret.go) instead of firing a workflow.
+	if s.handleSecretShortcut(ctx, cmd.Command, cmd.TriggerID, cmd.UserID, cmd.ChannelID, "") {
+		return
+	}
 	s.emitWorkflow(ctx, "command", map[string]any{
 		"user":         cmd.UserID,
 		"command":      cmd.Command,
@@ -4889,12 +4893,30 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 		s.handleAccessSubmit(ctx, cb)
 		return
 	}
+	// Session secrets (session_secret.go): the modal's save, and a message
+	// shortcut mapped to it in the bot's Shortcuts setting.
+	if cb.Type == slackgo.InteractionTypeViewSubmission && cb.View.CallbackID == secretCallback {
+		s.handleSecretSubmit(ctx, cb)
+		return
+	}
+	if cb.Type == slackgo.InteractionTypeViewSubmission && cb.View.CallbackID == cfgSaveCallback {
+		s.handleConfigSubmit(ctx, cb)
+		return
+	}
+	if cb.Type == slackgo.InteractionTypeMessageAction &&
+		s.handleSecretShortcut(ctx, cb.CallbackID, cb.TriggerID, cb.User.ID, cb.Channel.ID, threadOf(cb)) {
+		return
+	}
 	if len(cb.ActionCallback.BlockActions) == 0 {
 		return
 	}
 	action := cb.ActionCallback.BlockActions[0]
 	if action.BlockID == accessBlockID {
 		s.handleAccessClick(ctx, cb, action)
+		return
+	}
+	if action.BlockID == cfgCardBlockID && action.ActionID == cfgFillAction {
+		s.handleConfigFill(ctx, cb, action)
 		return
 	}
 	if action.BlockID == cardBlockID {

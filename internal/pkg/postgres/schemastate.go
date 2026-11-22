@@ -65,6 +65,9 @@ var migratedModels = []any{
 	&entity.AccessGrant{},
 	&entity.AccessRule{},
 	&entity.AccessRuleRevision{},
+	// Credential requests: values a person typed into a card for one
+	// session, encrypted, with a retention they picked.
+	&entity.CredentialRequest{},
 	&entity.CodeModeRun{},
 	&entity.ConnectorAccount{},
 	&entity.ConnectorCredentialPolicy{},

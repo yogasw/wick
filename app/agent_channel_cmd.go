@@ -53,7 +53,7 @@ func agentChannelCmd() *cobra.Command {
 			"  support-tools agent send --text \"0.1.255 built ok\"\n" +
 			"  support-tools agent send --text \"build FAILED at step 3\" || true\n",
 	}
-	cmd.AddCommand(agentSendCmd(), agentTodoCmd(), agentWhoamiCmd())
+	cmd.AddCommand(agentSendCmd(), agentTodoCmd(), agentWhoamiCmd(), agentSecretCmd())
 	return cmd
 }
 
@@ -259,6 +259,38 @@ func agentWhoamiCmd() *cobra.Command {
 			if missing, _ := resp["session_missing"].(bool); missing {
 				return exitErr(exitAuth, fmt.Errorf("the session this token belongs to no longer exists"))
 			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&token, "token", "", "CLI token (default: $"+envToken+")")
+	c.Flags().StringVar(&base, "base-url", "", "wick base URL (default: $"+envBase+")")
+	return c
+}
+
+// agentSecretCmd prints one session secret (a wick_cred_ token a person
+// saved for the session) to stdout, for a script that needs it right now:
+//
+//	PASS=$(support-tools agent secret "$TOKEN")
+//
+// Only the token's own session can read its secrets, from this machine.
+// The value is printed without a trailing newline so it can be piped as is.
+func agentSecretCmd() *cobra.Command {
+	var token, base string
+	c := &cobra.Command{
+		Use:   "secret <wick_cred_token>",
+		Short: "Print a session secret's value for use inside a script",
+		Long: "Resolve a wick_cred_ token (a value someone saved for this session through the\n" +
+			"Slack session-secret form) into its value on stdout. Use it inline, never echo or\n" +
+			"log the result. Exit 3 = not a secret of this session (or token expired), 5 = expired or used up.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			resp, err := callCLIAPI(http.MethodPost, base, token, "/api/cli/secret", map[string]string{"token": args[0]})
+			if err != nil {
+				return err
+			}
+			v, _ := resp["value"].(string)
+			fmt.Fprint(cmd.OutOrStdout(), v)
 			return nil
 		},
 	}

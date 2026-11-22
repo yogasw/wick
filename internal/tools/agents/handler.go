@@ -542,6 +542,7 @@ func Register(r tool.Router) {
 	r.POST("/api/cli/send", apiCLISend)
 	r.POST("/api/cli/todo", apiCLITodo)
 	r.GET("/api/cli/whoami", apiCLIWhoami)
+	r.POST("/api/cli/secret", apiCLISecret)
 	// A Code Mode script run as the token's session (api_cli_codemode.go).
 	r.POST("/api/cli/codemode/run", apiCLICodemodeRun)
 

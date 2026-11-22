@@ -45,7 +45,7 @@ func isCLIAPIPath(p string) bool {
 		return false
 	}
 	switch rest {
-	case "/send", "/whoami", "/todo", "/codemode/run":
+	case "/send", "/whoami", "/todo", "/codemode/run", "/secret":
 		return true
 	}
 	return false

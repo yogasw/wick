@@ -564,8 +564,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"'list' shows this session's instances (id, status, missing keys) and available_bases (connectors you may add). " +
 				"'add' creates an instance from a base_key. Pass values to fill it in the same call when you already hold them; pass prompt:true to have the user fill it in a modal instead. It opens no modal otherwise. " +
 				"'duplicate' copies an existing session instance (config and all) into a new one. " +
-				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
-				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
+				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. In a Slack thread (and for add with prompt:true) it posts a Fill in card instead and returns status card_posted at once: end your turn, you are woken when it is filled. " +
+				"'set_config' writes config values directly WITHOUT a modal, for automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
 				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
 				"'set_expiry' sets an instance's lifetime — expires_in (e.g. 4h) or idle_after (e.g. 1d), or neither to go back to the default idle window — use it when the user wants a connector kept longer. " +
 				"'remove' deletes a session instance (use it to clean up an instance you no longer need). " +

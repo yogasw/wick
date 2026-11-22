@@ -8,7 +8,23 @@
     "bot_user": {
       "display_name": "Wick Personal Agent",
       "always_online": true
-    }
+    },
+    "shortcuts": [
+      {
+        "name": "Session secret",
+        "type": "message",
+        "callback_id": "session_secret",
+        "description": "Hand a login or key to this thread's agent, encrypted"
+      }
+    ],
+    "slash_commands": [
+      {
+        "command": "/session_secret",
+        "description": "Hand a login or key to an agent session, encrypted",
+        "usage_hint": "(opens a form)",
+        "should_escape": false
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -34,7 +50,8 @@
         "lists:write",
         "mpim:read",
         "users:read",
-        "users:read.email"
+        "users:read.email",
+        "commands"
       ]
     },
     "pkce_enabled": false

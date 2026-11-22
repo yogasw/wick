@@ -89,11 +89,20 @@ rather than saying it does not exist.
 - Values the user owns: pass `prompt:true` (or `action=configure`) and they
   fill a modal; you never see them. Values you already hold: pass `values`
   on the add, no modal.
-- Channels without a UI (Slack and other automations) have no modal: write
-  the values with `action=set_config connector_id=<sw_id> values={…}`,
-  secrets as `wick_cenc_` / `wick_enc_` tokens so plaintext never passes
-  through you. Never invent a credential; if you lack it and there is no
-  modal, say what is missing.
+- In a Slack thread, `prompt:true` / `action=configure` posts a **Fill in**
+  card instead of the web modal (answer `status: card_posted`): say in one
+  line that it waits for the values and end your turn; you are woken when
+  someone fills it. Other automations have no modal: write the values with
+  `action=set_config connector_id=<sw_id> values={…}`, secrets as
+  `wick_cenc_` / `wick_enc_` tokens so plaintext never passes through you.
+  Never invent a credential; if you lack it and there is no form, say what is
+  missing.
+- A person can also hand you values through the Slack **Session secret**
+  form. You receive `[credentials]` with a `wick_cred_…` token per secret
+  value (non-secret values as is). Resolve a token only inside a script, at
+  the moment it is needed: `support-tools agent secret <token>` (needs
+  `WICK_CLI_TOKEN`). Never echo or log the result, and never ask for the
+  value in chat.
 - `action=test` confirms setup; `action=remove` cleans up.
 - Status in `wick_list` (`kind: "session"`): `ready` → execute like any
   connector; `needs_setup_workspace` → added but not filled in. That is not
