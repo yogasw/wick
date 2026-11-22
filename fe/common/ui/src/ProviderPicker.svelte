@@ -102,7 +102,16 @@
       ? (modelCache[cacheKey(d.value, encodePath(drillPath))] ?? [])
       : (modelCache[cacheKey(d.value)] ?? d.models ?? []);
     const q = modelSearch.trim();
-    return q ? all.filter((m) => modelMatches(m, q)) : all;
+    let filtered = q ? all.filter((m) => modelMatches(m, q)) : all;
+    const { key, modelID } = splitPin(value);
+    filtered.sort((a, b) => {
+      const aPinned = drillStack.length ? encodePin(drillPath, a.id) : a.id;
+      const bPinned = drillStack.length ? encodePin(drillPath, b.id) : b.id;
+      const aSel = (value === aPinned || (value === d.value && a.default)) ? 1 : 0;
+      const bSel = (value === bPinned || (value === d.value && b.default)) ? 1 : 0;
+      return bSel - aSel;
+    });
+    return filtered;
   });
 
   // Re-place once the popup exists (real height), and again whenever the level
@@ -196,6 +205,7 @@
     return !!o.models && o.models.length > 1;
   }
 
+  const selKey = $derived(splitPin(value).key);
   const groups = $derived.by(() => {
     const gs: { type: string; opts: ComposerSelectOption[] }[] = [];
     const idx = new Map<string, number>();
@@ -205,8 +215,9 @@
       if (i === undefined) { i = gs.length; idx.set(t, i); gs.push({ type: t, opts: [] }); }
       gs[i].opts.push(o);
     }
-    return gs;
+    return gs.map(g => ({ ...g, opts: [...g.opts].sort((a, b) => (b.value === selKey ? 1 : 0) - (a.value === selKey ? 1 : 0)) }));
   });
+  const sortedGroups = $derived.by(() => groups.slice().sort((ga, gb) => (gb.opts.some(o => o.value === selKey) ? 1 : 0) - (ga.opts.some(o => o.value === selKey) ? 1 : 0)));
 
   // Label of the current value: "claude · opus" when a model is pinned.
   //
@@ -474,7 +485,7 @@
           </div>
         {/if}
       {:else if typeDrill}
-        {@const group = groups.find((g) => g.type === typeDrill)}
+        {@const group = sortedGroups.find((g) => g.type === typeDrill)}
         <button type="button" onclick={() => (typeDrill = "")} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           {typeDrill}
@@ -494,7 +505,7 @@
       {:else}
         {@const selKey = splitPin(value).key}
         <div class="min-h-0 flex-1 overflow-y-auto py-1">
-          {#each groups as g (g.type)}
+          {#each sortedGroups as g (g.type)}
             {@const single = g.opts.length === 1 ? g.opts[0] : null}
             {@const nested = g.opts.length > 1 || (single ? hasModels(single) : false)}
             <button type="button" onclick={() => pickType(g)} class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm {(single && single.value === selKey) ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} text-black-900 dark:text-white-100">
