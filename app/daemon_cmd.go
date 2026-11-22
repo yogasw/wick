@@ -334,9 +334,30 @@ func reloadWithBinary(p daemon.Paths, o reloadOpts) error {
 		fmt.Printf("note: cannot read build info of the running binary (%v) — identity checks are limited\n", runErr)
 	}
 
-	if daemon.SameBuild(candidate, running) && !o.force {
+	switch sameBuildAction(daemon.SameBuild(candidate, running), daemon.ProcessImageIs(oldPID, target), o.force) {
+	case reloadNothing:
 		fmt.Printf("%s is already running this exact build (%s, built %s) — nothing to do\n",
 			BuildAppName, candidate.AppVersion, candidate.BuildTime)
+		return nil
+	case reloadHandOverOnly:
+		// The build is already installed at the exec path (a deploy script
+		// swapped it in) but the process still runs the previous image:
+		// comparing files said "same", the process says otherwise. Hand
+		// over without installing anything.
+		fmt.Printf("%s %s is installed at %s, but pid %d still runs the previous image — handing over\n",
+			BuildAppName, candidate.AppVersion, target, oldPID)
+		if err := signalReload(p); err != nil {
+			return err
+		}
+		if !o.wait {
+			fmt.Println("not waiting for it; the old process keeps serving until the new one is ready")
+			return nil
+		}
+		newPID, err := daemon.WaitSuccessor(p, BuildAppName, oldPID, o.timeout)
+		if err != nil {
+			return fmt.Errorf("%w — the previous process is still serving", err)
+		}
+		fmt.Printf("handover done: pid %d -> %d, now on %s\n", oldPID, newPID, candidate.AppVersion)
 		return nil
 	}
 
@@ -738,4 +759,27 @@ func httpStatus(appName string) string {
 		return fmt.Sprintf("ok (%s)", url)
 	}
 	return fmt.Sprintf("status %d (%s)", resp.StatusCode, url)
+}
+
+// reloadAction is what reload --binary does with a candidate.
+type reloadAction int
+
+const (
+	reloadInstall      reloadAction = iota // check, install, hand over
+	reloadNothing                          // the process already runs this build
+	reloadHandOverOnly                     // installed on disk, not yet running
+)
+
+// sameBuildAction decides the candidate's fate. "Running" build info is read
+// from the file at the exec path, which a deploy may already have replaced
+// while the process still runs the old image — so a same-build match only
+// means "nothing to do" when the process image is that file too.
+func sameBuildAction(sameBuild, imageIsTarget, force bool) reloadAction {
+	if !sameBuild || force {
+		return reloadInstall
+	}
+	if imageIsTarget {
+		return reloadNothing
+	}
+	return reloadHandOverOnly
 }

@@ -57,3 +57,22 @@ func TestIsTerminalRejectsFileAndNil(t *testing.T) {
 		t.Error("nil must not be reported as a terminal")
 	}
 }
+
+// A deploy that swapped the file but never handed over left the daemon on the
+// old image while reload --binary, comparing files, answered "nothing to do".
+func TestSameBuildAction(t *testing.T) {
+	cases := []struct {
+		same, image, force bool
+		want               reloadAction
+	}{
+		{false, true, false, reloadInstall},
+		{true, true, true, reloadInstall},
+		{true, true, false, reloadNothing},
+		{true, false, false, reloadHandOverOnly},
+	}
+	for _, tc := range cases {
+		if got := sameBuildAction(tc.same, tc.image, tc.force); got != tc.want {
+			t.Errorf("same=%v image=%v force=%v: got %v, want %v", tc.same, tc.image, tc.force, got, tc.want)
+		}
+	}
+}
