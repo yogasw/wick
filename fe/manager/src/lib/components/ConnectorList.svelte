@@ -23,6 +23,7 @@
   } from "$lib/api.js";
   import type { PluginProgress } from "$lib/api.js";
   import PluginUpdateProgress from "$lib/components/plugins/PluginUpdateProgress.svelte";
+  import ConnectorShareDialog from "$lib/components/ConnectorShareDialog.svelte";
   import { pluginPhaseLabel } from "$lib/components/plugins/updateProgress.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
   import { startInstanceOAuth } from "./custom/mcpInstanceOAuth.js";
@@ -51,6 +52,8 @@
      action items on this flag instead. */
   let isAdmin = $state(false);
   let typeBusy = $state(false);
+  /* Share dialog (connector-TYPE visibility): owner or admin only. */
+  let shareOpen = $state(false);
   let pluginBusy = $state(false);
   let confirmUninstall = $state(false);
   /* Custom-connector definition actions (header kebab). Deleting drops the
@@ -687,6 +690,9 @@
             {#if data.disabled_type}
               <span class="flex-shrink-0 rounded-full bg-neg-100 px-2 py-0.5 text-[11px] font-medium text-neg-400">Disabled</span>
             {/if}
+            {#if data.visibility === "restricted"}
+              <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600" title="Only the people and tags it is shared with, its owner and admins can see this connector" data-visibility-chip>🔒 Hidden</span>
+            {/if}
             {#if plugin?.update_available}
               <span class="flex-shrink-0 rounded-full bg-prog-100 px-2 py-0.5 text-[11px] font-medium text-prog-400">Update available · v{plugin.latest_version}</span>
             {/if}
@@ -719,6 +725,14 @@
             onclick={() => push(`/custom/${encodeURIComponent(data!.def_id!)}/edit`)}
             class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
           >Edit definition</button>
+        {/if}
+        {#if data.can_share}
+          <button
+            type="button"
+            onclick={() => (shareOpen = true)}
+            class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+            data-share-button
+          >Share</button>
         {/if}
         {#if !data.fixed}
           <button
@@ -969,6 +983,18 @@
 
   <!-- Rename: display name only. The key stays fixed server-side, so
        instances, access tags, and MCP tool ids are untouched. -->
+  {#if data}
+    <ConnectorShareDialog
+      open={shareOpen}
+      connectorKey={connectorKey}
+      connectorName={data.name}
+      onClose={() => (shareOpen = false)}
+      onChange={(v) => {
+        if (data) data = { ...data, visibility: v };
+      }}
+    />
+  {/if}
+
   <Modal open={renameOpen} title="Rename connector" size="sm" onClose={() => (renameOpen = false)}>
     <div class="space-y-2">
       <label for="rename-connector" class="block text-sm font-medium text-black-900 dark:text-white-100">Display name</label>

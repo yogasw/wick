@@ -77,11 +77,22 @@ connectors needs that access granted first (`/admin/tags`). If they cannot see
 the connector in `wick_list`, that is why; say so rather than assuming they lack
 permission in principle.
 
-Note what `def_create` does to visibility: it creates an access tag
-`custom:<key>` that is **admin-only until granted**. The person who just built
-the connector may not see it in `wick_list` afterwards, and that is the tag, not
-a failure. Point them at `/admin/tags` → `custom:<key>`, or tell them to remove
-the tag from the instance to open it to every approved user.
+Note what `def_create` does to visibility. Two layers apply:
+
+- **The connector itself starts Hidden.** A new custom connector is visible
+  only to its creator and admins — nobody else sees it in the Connectors page,
+  `wick_list` or `wick_search`, or knows it exists. The creator opens the
+  connector page and clicks **Share** to add people by email; an admin can also
+  share it with a tag (a team) or switch it to *Visible to everyone*. People it
+  is shared with create their own instance with their own credentials; they
+  cannot edit the definition.
+- **Instances carry the access tag `custom:<key>`**, admin-only until granted
+  (`/admin/tags`). Removing it from an instance opens that instance to everyone
+  who can see the connector.
+
+So "I built it and my teammate can't find it" means it was not shared yet:
+point the creator at **Share** on the connector page. Installed plugins and
+built-ins start *Visible to everyone*; an admin can hide them the same way.
 
 ## Is a custom connector even the right answer
 

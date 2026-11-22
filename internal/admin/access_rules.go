@@ -81,6 +81,11 @@ var accessRules = map[string]accessRule{
 	// Connector TYPE tags are categories (is_filter=false) for grouping on
 	// the connectors index — isConnectorVisibleTo never reads tags at all.
 	"manager": {UntaggedIsPublic: true, Reader: "manager.isConnectorVisibleTo"},
+
+	// Connector TYPE sharing (Share dialog): an untagged type is visible to
+	// everyone; a filter tag hides it from all but its holders. The custom
+	// connector's creator keeps it, and admins always see it.
+	"connector-types": {UntaggedIsPublic: true, OwnerScoped: true, FilterTagsGrant: true, Reader: "connectors.Service.TypeVisibleTo"},
 }
 
 // ruleFor returns the rule for a tool_path. An unknown namespace gets the

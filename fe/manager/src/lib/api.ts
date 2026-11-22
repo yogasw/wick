@@ -29,6 +29,8 @@ import type {
   AuditRunDetail,
   CodeRunResult,
   CodeRunFilter,
+  ConnectorSharing,
+  ShareAction,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager/api surface
@@ -52,6 +54,8 @@ export async function listConnectors(): Promise<ConnectorDef[]> {
     needs_reload: c.needs_reload ?? false,
     disabled: c.disabled ?? false,
     disabled_type: c.disabled_type ?? false,
+    visibility: c.visibility ?? "everyone",
+    can_share: c.can_share ?? false,
   }));
 }
 
@@ -80,6 +84,16 @@ export async function setConnectorTypeDisabled(
 ): Promise<{ disabled_type: boolean }> {
   const verb = disabled ? "type-disable" : "type-enable";
   return apiPost<{ disabled_type: boolean }>(`${connBase(key)}/${verb}`);
+}
+
+/* Connector-TYPE sharing (Share dialog). Owner shares by email; admins also
+   link tags and open the connector to everyone. */
+export async function getConnectorSharing(key: string): Promise<ConnectorSharing> {
+  return apiGet<ConnectorSharing>(`${connBase(key)}/sharing`);
+}
+
+export async function setConnectorSharing(key: string, req: ShareAction): Promise<ConnectorSharing> {
+  return apiPost<ConnectorSharing>(`${connBase(key)}/sharing`, req);
 }
 
 export async function getConnectorRow(key: string, id: string): Promise<ConnectorDetail> {

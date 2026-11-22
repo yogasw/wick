@@ -36,6 +36,13 @@ type connectorDef struct {
 	// distinct from Disabled (which is "every instance row is off"). A
 	// disabled type is hidden from the LLM but still listed here with a badge.
 	DisabledType bool `json:"disabled_type"`
+	// Visibility is the connector TYPE's sharing state: "everyone" (no
+	// restriction) or "restricted" (hidden from all but the people/tags it is
+	// shared with, its owner and admins). See connectors/type_share.go.
+	Visibility string `json:"visibility"`
+	// CanShare is true when the caller may open the Share dialog: admins, and
+	// the creator of a custom connector.
+	CanShare bool `json:"can_share"`
 }
 
 // apiConnectors serves the connector-definition catalog as JSON for the
@@ -97,6 +104,8 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	disabledTypes := h.connectors.DisabledTypeKeys()
+	typeVisible := h.connectors.TypeVisibility(ctx, userID(user), isAdmin)
+	restricted := h.connectors.TypeVisibility(ctx, "", false)
 
 	type defWithSort struct {
 		def     connectorDef
@@ -105,7 +114,7 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 	out := make([]defWithSort, 0, len(rows))
 	for _, m := range h.connectors.Modules() {
 		system := hasDefaultTag(m.Meta.DefaultTags, tags.System.Name)
-		if !isConnectorVisibleTo(m, user, disabledTypes) {
+		if !isConnectorVisibleTo(m, user, disabledTypes) || !typeVisible(m.Meta.Key) {
 			continue
 		}
 		cnt := countByKey[m.Meta.Key]
@@ -139,6 +148,8 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 			System:          system,
 			Disabled:        cnt.disabled > 0 && cnt.active == 0 && cnt.needsSetup == 0,
 			DisabledType:    disabledTypes[m.Meta.Key],
+			Visibility:      visibilityLabel(restricted(m.Meta.Key)),
+			CanShare:        h.canShareType(ctx, m, user),
 		}
 		if info := h.customDefInfo(ctx, m.Meta.Key, user); info != nil {
 			def.Custom = true
@@ -163,4 +174,13 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 		defs = append(defs, d.def)
 	}
 	writeJSON(w, http.StatusOK, defs)
+}
+
+// visibilityLabel maps an anonymous-caller gate answer onto the JSON label:
+// a type an anonymous caller cannot see is restricted.
+func visibilityLabel(openToAnyone bool) string {
+	if openToAnyone {
+		return "everyone"
+	}
+	return "restricted"
 }

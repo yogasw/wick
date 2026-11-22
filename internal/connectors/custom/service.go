@@ -415,7 +415,30 @@ func (s *Service) SaveNew(ctx context.Context, d *Draft, createdBy string) (*ent
 	if err != nil {
 		return nil, "", err
 	}
+	s.hideNewType(ctx, def)
 	return def, instanceID, nil
+}
+
+// hideNewType makes a freshly created definition visible only to its
+// creator (and admins) until they share it — nobody else needs to know it
+// exists. Failure is logged, not fatal: the instance tags still apply.
+func (s *Service) hideNewType(ctx context.Context, def *entity.CustomConnector) {
+	if err := s.conns.RestrictType(ctx, def.Key, def.CreatedBy); err != nil {
+		log.Warn().Err(err).Str("key", def.Key).Msg("hide new custom connector type")
+	}
+}
+
+// OwnerOfKey returns the creator of the custom connector with this key, ""
+// for built-ins, plugins and unknown keys. Feeds the type-sharing gate.
+func (s *Service) OwnerOfKey(ctx context.Context, key string) string {
+	if _, ok := s.DefIDForKey(key); !ok {
+		return ""
+	}
+	def, err := s.store.GetDefByKey(ctx, key)
+	if err != nil || def == nil {
+		return ""
+	}
+	return def.CreatedBy
 }
 
 // Rename changes only a definition's display name. It exists alongside
@@ -1271,6 +1294,7 @@ func (s *Service) ensureDefForServer(ctx context.Context, row *entity.CustomConn
 		_ = s.store.DeleteDef(ctx, def.ID)
 		return nil, "", err
 	}
+	s.hideNewType(ctx, def)
 	return def, instanceID, nil
 }
 

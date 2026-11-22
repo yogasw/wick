@@ -18,6 +18,11 @@ export interface ConnectorDef {
      listed here with a Disabled badge. Distinct from `disabled` (every
      instance row is off). */
   disabled_type?: boolean;
+  /* Connector-TYPE sharing: "everyone" or "restricted" (hidden from all but
+     the people/tags it is shared with, its owner and admins). */
+  visibility?: "everyone" | "restricted";
+  /* True when the viewer may open the Share dialog (admin or owner). */
+  can_share?: boolean;
 }
 
 export interface ConnectorRow {
@@ -98,8 +103,39 @@ export interface ConnectorList {
   needs_reload?: boolean;
   /* Connector-TYPE off-switch (header kebab). True = hidden from the LLM. */
   disabled_type?: boolean;
+  visibility?: "everyone" | "restricted";
+  can_share?: boolean;
   rows: ConnectorRow[] | null;
 }
+
+/* Connector-TYPE sharing state (Share dialog). */
+export interface SharePerson {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface ShareTag {
+  id: string;
+  name: string;
+}
+
+export interface ConnectorSharing {
+  visibility: "everyone" | "restricted";
+  owner?: SharePerson;
+  people: SharePerson[];
+  tags: ShareTag[];
+  available_tags: ShareTag[];
+  is_admin: boolean;
+}
+
+export type ShareAction =
+  | { action: "share_email"; email: string }
+  | { action: "unshare_user"; user_id: string }
+  | { action: "restrict" }
+  | { action: "everyone" }
+  | { action: "link_tag"; tag_id: string }
+  | { action: "unlink_tag"; tag_id: string };
 
 export interface ConfigField {
   key: string;

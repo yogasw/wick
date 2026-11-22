@@ -202,6 +202,9 @@ type Service struct {
 	// via SetUserFilterTagResolver; nil means no per-account tag share can be
 	// proven for a caller known only by id (see AccountUsableBy).
 	userTags func(ctx context.Context, userID string) []string
+	// typeOwner resolves a connector key to its creator (custom connectors),
+	// used by the type-level sharing gate (type_share.go). nil = no owners.
+	typeOwner func(ctx context.Context, key string) string
 
 	// runObserver, when set, is notified as a run enters "running" and again when
 	// it reaches a terminal status, so the agent conversation UI can surface a
@@ -979,6 +982,14 @@ func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs [
 }
 
 func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	rows, err := s.listVisibleByTags(ctx, userID, userTagIDs, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	return s.filterRowsByType(ctx, rows, userID, isAdmin), nil
+}
+
+func (s *Service) listVisibleByTags(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
 	if s.adminBypass(isAdmin) {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
@@ -1143,7 +1154,17 @@ func (s *Service) isVisibleDirect(ctx context.Context, connectorID, userID strin
 			return true, nil
 		}
 	}
-	return s.repo.IsAccessibleTo(ctx, connectorID, userTagIDs)
+	ok, err := s.repo.IsAccessibleTo(ctx, connectorID, userTagIDs)
+	if err != nil || !ok {
+		return ok, err
+	}
+	// Type-level sharing (type_share.go): a hidden connector type is not
+	// dispatchable by someone it was not shared with.
+	row, err := s.repo.Get(ctx, connectorID)
+	if err != nil {
+		return false, err
+	}
+	return s.TypeVisibleTo(ctx, row.Key, userID, isAdmin), nil
 }
 
 // ListForManager returns rows the caller can see in the admin manager.
@@ -1178,7 +1199,7 @@ func (s *Service) ListForManager(ctx context.Context, userID string, userTagIDs 
 			rows = append(rows, r)
 		}
 	}
-	return rows, nil
+	return s.filterRowsByType(ctx, rows, userID, isAdmin), nil
 }
 
 // IsManageableBy reports whether the caller may operate on a row from
@@ -1197,7 +1218,11 @@ func (s *Service) IsManageableBy(ctx context.Context, connectorID, userID string
 	if s.adminBypass(isAdmin) || OwnsConnector(*row, userID) {
 		return true, nil
 	}
-	return s.repo.IsAccessibleForManager(ctx, connectorID, userTagIDs)
+	ok, err := s.repo.IsAccessibleForManager(ctx, connectorID, userTagIDs)
+	if err != nil || !ok {
+		return ok, err
+	}
+	return s.TypeVisibleTo(ctx, row.Key, userID, isAdmin), nil
 }
 
 // Update writes label / configs / disabled changes. Identity fields

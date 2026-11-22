@@ -2226,6 +2226,8 @@ func NewServer() *Server {
 		Keys:       configsSvc,
 		BaseURL:    configsSvc.AppURL,
 	})
+	// Type-level sharing: a custom connector's creator always sees its type.
+	connectorsSvc.SetTypeOwnerResolver(customConnSvc.OwnerOfKey)
 	// Paste-page AI tab: the provider list resolves live per render /
 	// per parse, so adding or disabling a provider instance shows up
 	// without a restart. Only structured-output-capable providers

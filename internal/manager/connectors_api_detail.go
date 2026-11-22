@@ -117,8 +117,12 @@ type connectorListJSON struct {
 	NeedsReload bool   `json:"needs_reload"`
 	// DisabledType is the connector-TYPE off-switch (header kebab). When true
 	// the connector is hidden from the LLM but still manageable here.
-	DisabledType bool               `json:"disabled_type"`
-	Rows         []connectorRowJSON `json:"rows"`
+	DisabledType bool `json:"disabled_type"`
+	// Visibility / CanShare: connector-TYPE sharing (Share button). See
+	// connectors_share_api.go.
+	Visibility string             `json:"visibility"`
+	CanShare   bool               `json:"can_share"`
+	Rows       []connectorRowJSON `json:"rows"`
 }
 
 // configFieldJSON is the per-field config schema + value the SPA configs
@@ -278,6 +282,10 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown connector"})
 		return
 	}
+	if !h.typeVisibleTo(r, user, key) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown connector"})
+		return
+	}
 
 	rows, err := h.visibleRowsForKey(r, user, key)
 	if err != nil {
@@ -312,6 +320,8 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		MCPStatus:    mcpStatus,
 		NeedsReload:  h.connectorNeedsReload(ctx, key),
 		DisabledType: !h.connectors.TypeEnabled(key),
+		Visibility:   visibilityLabel(h.connectors.TypeVisibleTo(ctx, key, "", false)),
+		CanShare:     h.canShareType(ctx, mod, user),
 		Rows:         make([]connectorRowJSON, 0, len(rows)),
 	}
 	for _, row := range rows {
@@ -724,7 +734,7 @@ func (h *Handler) apiCreateConnectorRow(w http.ResponseWriter, r *http.Request) 
 	key := r.PathValue("key")
 
 	mod, ok := h.connectors.Module(key)
-	if !ok {
+	if !ok || !h.typeVisibleTo(r, user, key) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown connector"})
 		return
 	}

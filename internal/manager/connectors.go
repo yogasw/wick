@@ -50,6 +50,10 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	// type from the LLM. Distinct from the per-row {id}/disable below.
 	mux.Handle("POST /manager/api/connectors/{key}/type-disable", admin(h.apiSetConnectorTypeDisabled(true)))
 	mux.Handle("POST /manager/api/connectors/{key}/type-enable", admin(h.apiSetConnectorTypeDisabled(false)))
+	// Connector-TYPE sharing (Share dialog): owner shares by email, admins
+	// link tags or open to everyone. Gated inside (owner or admin).
+	mux.Handle("GET /manager/api/connectors/{key}/sharing", auth(h.apiConnectorSharing))
+	mux.Handle("POST /manager/api/connectors/{key}/sharing", auth(h.apiSetConnectorSharing))
 	mux.Handle("POST /manager/api/connectors/{key}/resync-tools", auth(h.apiResyncMCPTools))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
 	mux.Handle("DELETE /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiClearConnectorConfig))

@@ -30,6 +30,8 @@ Four tools, used in order:
 
 `wick_list` / `wick_search` skip instances the user chose to **hide for themselves**. When some are hidden the reply carries `hidden_count` and `hidden_note`; call again with `include_hidden: true` before telling the user a connector does not exist. A hidden instance still works by id (`wick_get` / `wick_execute`).
 
+A connector can also be **Hidden at the connector level** (Share dialog on its page): then it is left out of `wick_list` / `wick_search` entirely, `include_hidden` does not bring it back, and calls are refused — for everyone it was not shared with. Its owner, the people and tags it is shared with, and admins still see it. If a connector someone expects is missing, ask its owner or an admin to share it; do not look for another route.
+
 `wick_list` deliberately does **not** return per-operation input schemas — you only pay that token cost when you commit to a specific operation via `wick_get`.
 
 ```
