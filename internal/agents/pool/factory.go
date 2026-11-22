@@ -363,7 +363,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		case provider.TypeOMP:
 			mint, identity := f.mcpIssuerFor(opt.SessionID, opt.CallerUserID)
 			runAsUserID = identity
-			s := omppkg.Spawner{Binary: bin, MintMCPToken: mint, MCPOwner: opt.CallerUserID + "\x00" + identity}
+			s := omppkg.Spawner{Binary: bin, BinaryFn: managedBinaryFn(src, opt.ProviderType, opt.ProviderName), MintMCPToken: mint, MCPOwner: opt.CallerUserID + "\x00" + identity}
 			if mint == nil {
 				s.MCPToken = f.MCPToken
 			}
@@ -374,7 +374,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			if tok != f.MCPToken {
 				claudeMCPToken = tok
 			}
-			spawner = opencodepkg.Spawner{Binary: bin, MCPToken: tok}
+			spawner = opencodepkg.Spawner{Binary: bin, BinaryFn: managedBinaryFn(src, opt.ProviderType, opt.ProviderName), MCPToken: tok}
 		case provider.TypeWick:
 			// In-process runtime — no binary. Must NOT fall through to
 			// the claude default: that would spawn a real claude CLI
@@ -862,6 +862,24 @@ func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawn
 // Returned source is one of: registry, path, unconfigured — surfaced
 // in the spawn log so a "claude not found" failure tells the operator
 // whether the registry path was wrong vs whether they never set one.
+// managedBinaryFn re-resolves a wick-managed binary at each spawn. The
+// spawner outlives the turn that built it (it lives with the session's
+// agent), so the path fixed at build goes stale on a version switch, and
+// once retention prunes that version every later turn fails with
+// "fork/exec …/versions/<old>/<bin>: no such file or directory". nil for
+// any other source: a manual path or PATH lookup does not move.
+func managedBinaryFn(source, providerType, providerName string) func() string {
+	if source != provider.BinSourceManaged {
+		return nil
+	}
+	return func() string {
+		if p, src := resolveProviderBinary(providerType, providerName); src == provider.BinSourceManaged {
+			return p
+		}
+		return ""
+	}
+}
+
 func resolveProviderBinary(providerType, providerName string) (bin, source string) {
 	t := provider.Type(providerType)
 	if t == "" {

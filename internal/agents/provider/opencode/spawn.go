@@ -20,7 +20,9 @@ import (
 
 // Spawner spawns `opencode run --format json`, one process per turn.
 type Spawner struct {
-	Binary    string // empty → "opencode"
+	Binary string // empty → "opencode"
+	// BinaryFn re-resolves the binary at every Spawn (see omp.Spawner).
+	BinaryFn  func() string
 	ExtraArgs []string
 	// MCPToken is the per-session credential for wick's MCP server.
 	MCPToken string
@@ -95,7 +97,7 @@ func spawnEnv(ins provider.Instance, soulPath, endpoint, token string, disable [
 
 // Spawn starts one opencode run with opt.InitialMessage as the prompt.
 func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
-	bin := s.Binary
+	bin := provider.SpawnBinary(s.Binary, s.BinaryFn)
 	if bin == "" {
 		bin = "opencode"
 	}

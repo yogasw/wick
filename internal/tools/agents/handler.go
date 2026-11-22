@@ -3529,7 +3529,15 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 	if out == nil {
 		out = []modelDTO{}
 	}
-	c.JSON(http.StatusOK, map[string]any{"models": out})
+	// Stamped like the grouped levels: an EMPTY live list lands here, and
+	// without can_refresh the picker hides Refresh and its reload only
+	// re-reads the cache, so the list could never be filled from it.
+	if provider.LiveModelsEnabled(ins) {
+		if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+			stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+		}
+	}
+	c.JSON(http.StatusOK, withStamp(map[string]any{"models": out}))
 }
 
 // presetOptionsJSON returns [{name}] for every configured preset —

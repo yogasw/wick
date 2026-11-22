@@ -196,6 +196,19 @@ func backgroundRescan(t Type, name string) {
 	_ = RescanOne(ctx, t, name)
 }
 
+// refreshCLIModelsAfterBinaryChange runs the CLI's model list once, in the
+// background, for a binary that just changed and probed fine. Swapped in
+// tests.
+var refreshCLIModelsAfterBinaryChange = func(ins Instance) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		if _, _, err := CachedCLIModels(ctx, ins, true); err != nil {
+			log.Warn().Err(err).Str("type", string(ins.Type)).Str("name", ins.Name).Msg("agents.models: refresh after binary change failed")
+		}
+	}()
+}
+
 func persistFromStatus(t Type, name string, st Status) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	fp := ""
@@ -203,9 +216,14 @@ func persistFromStatus(t Type, name string, st Status) {
 		fp = BinaryFingerprint(st.Path)
 	}
 	// A different binary may list different models: drop the cached list
-	// (the next read harvests again; nothing is spawned for it).
+	// and read it again from the new binary, once per binary change. Reads
+	// only harvest the CLI's files, and where they say nothing (env-key
+	// accounts, some hosts) the list stayed empty until a manual Refresh.
 	if prev, ok := loadAll()[cacheKey(t, name)]; ok && prev.Fingerprint != "" && prev.Fingerprint != fp {
 		InvalidateCLIModels(st.Instance)
+		if st.PathFound && st.Version != "" && st.VersionErr == "" && LiveModelsEnabled(st.Instance) {
+			refreshCLIModelsAfterBinaryChange(st.Instance)
+		}
 	}
 	saveOne(t, name, userconfig.ProviderStatus{
 		Path:        st.Path,

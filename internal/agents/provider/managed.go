@@ -95,3 +95,14 @@ const (
 	BinSourceScan     = "scan"
 	BinSourceMiss     = "miss"
 )
+
+// SpawnBinary is the binary a spawner runs now: fn's answer when it has
+// one (the current wick-managed version), else the path fixed at build.
+func SpawnBinary(fixed string, fn func() string) string {
+	if fn != nil {
+		if p := fn(); p != "" {
+			return p
+		}
+	}
+	return fixed
+}

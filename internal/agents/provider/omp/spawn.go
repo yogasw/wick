@@ -20,7 +20,12 @@ import (
 
 // Spawner spawns `omp` in print/json mode, one process per turn.
 type Spawner struct {
-	Binary    string // empty → "omp"
+	Binary string // empty → "omp"
+	// BinaryFn re-resolves the binary at every Spawn when set (a wick-managed
+	// version): the Spawner lives as long as the session's agent, and a
+	// version switch + prune would otherwise leave it on a deleted file.
+	// "" falls back to Binary.
+	BinaryFn  func() string
 	ExtraArgs []string
 	// MCPToken is the non-revocable fallback for an ownerless session.
 	MCPToken string
@@ -192,7 +197,7 @@ func baseEnv() []string {
 
 // Spawn starts one omp run with opt.InitialMessage as the prompt.
 func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
-	bin := s.Binary
+	bin := provider.SpawnBinary(s.Binary, s.BinaryFn)
 	if bin == "" {
 		bin = "omp"
 	}
