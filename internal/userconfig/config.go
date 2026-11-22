@@ -285,6 +285,10 @@ type ProviderInstance struct {
 	IdleCompactScope string `json:"idle_compact_scope,omitempty"`
 	IdleCompactMatch string `json:"idle_compact_match,omitempty"`
 
+	// StripTags lists extra harness context tags, one per line, removed
+	// from assistant output (provider.StripTagList).
+	StripTags string `json:"strip_tags,omitempty"`
+
 	// AuthFrom (omp/opencode) names another instance of the same type whose
 	// login this one uses; empty = its own login. See provider/authshare.go.
 	AuthFrom string `json:"auth_from,omitempty"`

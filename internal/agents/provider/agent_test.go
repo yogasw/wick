@@ -386,8 +386,9 @@ func TestStripSystemReminder(t *testing.T) {
 		{`no tag here`, `no tag here`},
 	}
 	for _, tc := range cases {
-		if got := stripSystemReminder(tc.in); got != tc.want {
-			t.Fatalf("stripSystemReminder(%q) = %q, want %q", tc.in, got, tc.want)
+		ts := newTagStripper(nil)
+		if got := ts.feed(tc.in) + ts.flush(); got != tc.want {
+			t.Fatalf("strip(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

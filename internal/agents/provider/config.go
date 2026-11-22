@@ -51,7 +51,7 @@ type LiveCLIModelConfig struct {
 // OpencodeModelConfig is the opencode-only model/hosting section.
 type OpencodeModelConfig struct {
 	Model       string `wick:"key=opencode_model;desc=provider/model this instance runs (sent as --model), e.g. openai/gpt-5.5. Required: without it opencode silently uses its hosted default model."`
-	AllowHosted bool `wick:"bool;key=opencode_allow_hosted;desc=Allow opencode/… hosted models (opencode Zen). On by default so every model the CLI lists is offered, they send the whole conversation to opencode's servers — turn off to keep to your own providers."`
+	AllowHosted bool   `wick:"bool;key=opencode_allow_hosted;desc=Allow opencode/… hosted models (opencode Zen). On by default so every model the CLI lists is offered, they send the whole conversation to opencode's servers — turn off to keep to your own providers."`
 }
 
 // ServerModeConfig is the shared-CLI-server section (opencode today, omp
@@ -164,6 +164,7 @@ func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 			IdleCompactMatch:     ins.IdleCompactMatch,
 		})...)
 	}
+	rows = append(rows, pkgentity.StructToConfigs(StripTagsConfig{StripTags: ins.StripTags})...)
 	// CLI model picker — claude/codex/gemini only (wick uses WickModels).
 	if ins.Type != TypeWick {
 		rows = append(rows, pkgentity.StructToConfigs(CLIModelConfig{
@@ -246,6 +247,8 @@ func ApplyInstanceConfigKey(ins *Instance, key, value string) {
 		ins.IdleCompactScope = value
 	case "idle_compact_match":
 		ins.IdleCompactMatch = value
+	case "strip_tags":
+		ins.StripTags = strings.TrimSpace(value)
 	}
 }
 

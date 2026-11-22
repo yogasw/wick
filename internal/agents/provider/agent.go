@@ -17,27 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
-// defaultStripPatterns are the harness-injected context tag patterns that
-// must never reach a channel or be persisted as assistant output. The first
-// entry is the default applied when Options.StripPatterns is empty. Additional
-// patterns can be injected via config without touching code.
-var defaultStripPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`),
-}
 
-// stripSystemReminder removes harness-injected context tags matching every
-// pattern in pats, so they are not stored as assistant text or forwarded to
-// any channel. When pats is empty the default list is used.
-func stripSystemReminder(s string, pats ...*regexp.Regexp) string {
-	patterns := pats
-	if len(patterns) == 0 {
-		patterns = defaultStripPatterns
-	}
-	for _, re := range patterns {
-		s = re.ReplaceAllString(s, "")
-	}
-	return s
-}
 // Agent owns one running subprocess. Lifecycle:
 //
 //	NewAgent(...)        — constructed, not yet started
@@ -49,14 +29,13 @@ func stripSystemReminder(s string, pats ...*regexp.Regexp) string {
 // kills its own subprocess. State machine is reset to Idle so callers
 // can spawn a fresh process on the next message (with --resume if a
 // CLI session ID was captured).
-//
 type Agent struct {
-	cfg     Options
-	stripPatterns []*regexp.Regexp
-	parser  event.Parser
-	state   *state.Machine
-	store   *store.Store
-	spawner Spawner
+	cfg       Options
+	stripTags []string
+	parser    event.Parser
+	state     *state.Machine
+	store     *store.Store
+	spawner   Spawner
 
 	mu      sync.Mutex
 	proc    Process
@@ -371,30 +350,11 @@ type Options struct {
 	// OnTurnOK fires (in its own goroutine) after a turn ends in Done with
 	// no error since the message that started it, sentAt being when that
 	// message went out. The pool clears the account's failure with it.
-	OnTurnOK func(sentAt time.Time)
+	OnTurnOK       func(sentAt time.Time)
 	FailoverMsgKey string
-	// StripPatterns are harness-injected context tag regex patterns stripped
-	// from assistant output before store/apply/channel. Empty = default list.
-	StripPatterns []string
-}
-
-// compileStripPatterns converts StripPatterns into compiled regexps, falling
-// back to defaultStripPatterns when empty. Invalid patterns are skipped.
-func (opt Options) compileStripPatterns() []*regexp.Regexp {
-	raw := opt.StripPatterns
-	if len(raw) == 0 {
-		return append([]*regexp.Regexp{}, defaultStripPatterns...)
-	}
-	out := make([]*regexp.Regexp, 0, len(raw))
-	for _, p := range raw {
-		if re, err := regexp.Compile(p); err == nil {
-			out = append(out, re)
-		}
-	}
-	if len(out) == 0 {
-		return append([]*regexp.Regexp{}, defaultStripPatterns...)
-	}
-	return out
+	// StripTags are the harness context tags (<name>…</name>) removed from
+	// streamed assistant text before store/apply/channel. Nil = default.
+	StripTags []string
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -483,7 +443,7 @@ func New(opt Options) *Agent {
 		resumeID:     opt.ResumeID,
 		done:         make(chan struct{}),
 		activityCh:   make(chan struct{}, 1),
-		stripPatterns: opt.compileStripPatterns(),
+		stripTags:    opt.StripTags,
 	}
 }
 
@@ -1538,6 +1498,7 @@ func (a *Agent) run(ctx context.Context) {
 	// they do not arrive glued together. Per-run state; the loop below is
 	// the only writer.
 	var joiner textJoiner
+	tags := newTagStripper(a.stripTags)
 	// bgThisTurn: the running turn launched a background task (bgPending).
 	bgThisTurn := false
 
@@ -1610,6 +1571,9 @@ func (a *Agent) run(ctx context.Context) {
 			log.Warn().Err(err).Int("line_bytes", len(line)).Msg("agent.reader: unparsable stdout line, continuing")
 			evs = []event.AgentEvent{{Type: event.Warning, ErrorMsg: err.Error(), Raw: line}}
 		}
+		// Harness context tags arrive split over token deltas: strip them
+		// across events, before the joiner or anything else reads the text.
+		evs = tags.stripStream(evs)
 		for _, ev := range evs {
 			// A live rate-limit report keeps the usage card current without
 			// probing the usage endpoint. Read before any turn handling: it
@@ -1637,9 +1601,6 @@ func (a *Agent) run(ctx context.Context) {
 			}
 			if ev.Type == event.TextDelta {
 				ev.Text = joiner.breakBefore(ev.Text) + ev.Text
-				if !ev.Synthetic {
-					ev.Text = stripSystemReminder(ev.Text, a.stripPatterns...)
-				}
 			}
 			if countsAsProduced(ev) {
 				produced = true

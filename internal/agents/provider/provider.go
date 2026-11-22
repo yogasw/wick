@@ -118,10 +118,10 @@ type Instance struct {
 	IdleCompactThreshold int
 	IdleCompactScope     string
 	IdleCompactMatch     string
-	// StripPatterns are harness-injected context tag regex patterns stripped
-	// from assistant output before store/apply/channel. Empty = default list
-	// (<system-reminder>). Configured per agent instance in Settings → Agents.
-	StripPatterns []string
+	// StripTags is the strip_tags setting as typed: extra harness context
+	// tags, one per line, removed from assistant output on top of the
+	// built-in ones. See StripTagList.
+	StripTags string
 	// AuthFrom (omp/opencode only) is the name of another instance of the
 	// same type that owns the login this one uses; empty = its own login.
 	// Profile, config, soul and sessions stay this instance's own. See
@@ -1113,6 +1113,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			ins.IdleCompactTrigger, ins.IdleCompactThreshold = raw.IdleCompactTrigger, raw.IdleCompactThreshold
 			ins.IdleCompactScope = raw.IdleCompactScope
 			ins.IdleCompactMatch = raw.IdleCompactMatch
+			ins.StripTags = raw.StripTags
 			ins.AuthFrom = raw.AuthFrom
 			ins.OwnerPerms = raw.OwnerPerms
 			ins.Failover = failoverFromUser(raw.Failover)
@@ -1205,6 +1206,7 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw.IdleCompactTrigger, raw.IdleCompactThreshold = ins.IdleCompactTrigger, ins.IdleCompactThreshold
 	raw.IdleCompactScope = ins.IdleCompactScope
 	raw.IdleCompactMatch = ins.IdleCompactMatch
+	raw.StripTags = ins.StripTags
 	raw.AuthFrom = ins.AuthFrom
 	raw.OwnerPerms = ins.OwnerPerms
 	raw.Failover = failoverToUser(ins.Failover)
