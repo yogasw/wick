@@ -118,7 +118,10 @@ type Instance struct {
 	IdleCompactThreshold int
 	IdleCompactScope     string
 	IdleCompactMatch     string
-
+	// StripPatterns are harness-injected context tag regex patterns stripped
+	// from assistant output before store/apply/channel. Empty = default list
+	// (<system-reminder>). Configured per agent instance in Settings → Agents.
+	StripPatterns []string
 	// AuthFrom (omp/opencode only) is the name of another instance of the
 	// same type that owns the login this one uses; empty = its own login.
 	// Profile, config, soul and sessions stay this instance's own. See

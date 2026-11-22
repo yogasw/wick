@@ -616,6 +616,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		MaxTurns:       opt.MaxTurns,
 		ThinkingTokens: opt.ThinkingTokens,
 		ModelID:        opt.ModelID,
+		StripPatterns:  resolvedIns.StripPatterns,
 		MemGuard:       memGuard,
 		// Only applied when the guard is on: a tool ceiling without a mode
 		// would limit commands the operator never asked to limit.
