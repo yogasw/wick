@@ -205,6 +205,9 @@ type Service struct {
 	// typeOwner resolves a connector key to its creator (custom connectors),
 	// used by the type-level sharing gate (type_share.go). nil = no owners.
 	typeOwner func(ctx context.Context, key string) string
+	// typeCache memoises restrictedTypes (type_share.go) so the sharing gate
+	// adds no query to hot listings; writes through Service invalidate it.
+	typeCache typeShareCache
 
 	// runObserver, when set, is notified as a run enters "running" and again when
 	// it reaches a terminal status, so the agent conversation UI can surface a
@@ -680,6 +683,8 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 	} else if n > 0 {
 		log.Ctx(ctx).Info().Int64("count", n).Msg("connectors bootstrap: reclaimed stale running runs")
 	}
+	// Warm the connector-type sharing cache so the first listing pays nothing.
+	_, _ = s.restrictedTypes(ctx)
 	return nil
 }
 

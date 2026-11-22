@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -83,9 +85,53 @@ func (s *Service) typeDB(ctx context.Context) *gorm.DB {
 	return s.repo.db.WithContext(ctx)
 }
 
+// typeShareTTL bounds how stale the cache may get when a type tag is edited
+// outside this service (e.g. directly from the admin tags page).
+const typeShareTTL = 30 * time.Second
+
+// typeShareCache holds the last restrictedTypes answer. Callers treat the
+// map as read-only.
+type typeShareCache struct {
+	mu   sync.Mutex
+	data map[string][]string
+	at   time.Time
+}
+
+func (c *typeShareCache) get() (map[string][]string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.data == nil || time.Since(c.at) > typeShareTTL {
+		return nil, false
+	}
+	return c.data, true
+}
+
+func (c *typeShareCache) put(m map[string][]string) {
+	c.mu.Lock()
+	c.data, c.at = m, time.Now()
+	c.mu.Unlock()
+}
+
+func (c *typeShareCache) invalidate() {
+	c.mu.Lock()
+	c.data = nil
+	c.mu.Unlock()
+}
+
 // restrictedTypes maps every restricted connector key to the filter tag ids
-// linked to its type path. One query; keys absent from the map are open.
+// linked to its type path. Cached (typeShareTTL); keys absent are open.
 func (s *Service) restrictedTypes(ctx context.Context) (map[string][]string, error) {
+	if m, ok := s.typeCache.get(); ok {
+		return m, nil
+	}
+	m, err := s.loadRestrictedTypes(ctx)
+	if err == nil {
+		s.typeCache.put(m)
+	}
+	return m, err
+}
+
+func (s *Service) loadRestrictedTypes(ctx context.Context) (map[string][]string, error) {
 	out := map[string][]string{}
 	db := s.typeDB(ctx)
 	if db == nil {
@@ -282,6 +328,7 @@ func (s *Service) shareTag(ctx context.Context, key string, create bool) (*entit
 }
 
 func (s *Service) linkTypeTag(ctx context.Context, key, tagID string) error {
+	defer s.typeCache.invalidate()
 	return s.typeDB(ctx).Clauses(clause.OnConflict{DoNothing: true}).
 		Create(&entity.ToolTag{ToolPath: TypeSharePath(key), TagID: tagID}).Error
 }
@@ -313,6 +360,7 @@ func (s *Service) OpenType(ctx context.Context, key string) error {
 	if db == nil {
 		return nil
 	}
+	defer s.typeCache.invalidate()
 	return db.Where("tool_path = ?", TypeSharePath(key)).Delete(&entity.ToolTag{}).Error
 }
 
@@ -382,6 +430,7 @@ func (s *Service) UnlinkTypeTag(ctx context.Context, key, tagID string) error {
 	if db == nil {
 		return nil
 	}
+	defer s.typeCache.invalidate()
 	return db.Where("tool_path = ? AND tag_id = ?", TypeSharePath(key), tagID).Delete(&entity.ToolTag{}).Error
 }
 
