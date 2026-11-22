@@ -492,9 +492,11 @@
         () => runApi(openAgentChat(base, a.id, true)),
         (id, m) => runApi(sendMessage(base, id, m)),
         isPluginRemote(a) ? (id) => runApi(putSessionOptions(base, a.id, id, options)) : undefined,
+        (id) => {
+          draftFor = null;
+          go({ session: id, panel: null });
+        },
       );
-      draftFor = null;
-      go({ session: r.sessionId, panel: null });
       if (r.error) toastError(`Send: ${r.error}`);
     } catch (e) {
       toastError(`New chat: ${e instanceof Error ? e.message : String(e)}`);

@@ -2385,6 +2385,9 @@
         // still open here (the usual done-then-idle order leaves none).
         if (ev.lifecycle === "killed" || (ev.lifecycle === "idle" && (live !== null || typing.active))) scheduleSettleReload();
         else if (ev.lifecycle === "spawning" || ev.lifecycle === "working") cancelSettleReload();
+        // A chat opened from a draft shows before its first message is
+        // saved: once the turn is queued or spawning, that message exists.
+        if ((ev.lifecycle === "spawning" || ev.lifecycle === "queued") && turns.length === 0) void loadConversation();
         scheduleProcessReload();
         scheduleSubAgentReload();
         scheduleFileReload();

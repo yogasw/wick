@@ -82,8 +82,13 @@ export async function startDraftChat(
   open: () => Promise<{ session_id: string }>,
   send: (sessionId: string, msg: DraftMessage) => Promise<unknown>,
   prepare?: (sessionId: string) => Promise<unknown>,
+  opened?: (sessionId: string) => void,
 ): Promise<{ sessionId: string; error?: string }> {
   const { session_id } = await open();
+  // The chat exists now: let the caller show it while the first message
+  // goes out. Sending can take as long as the agent's spawn, and the
+  // chat page is where its queued/spawning state shows.
+  opened?.(session_id);
   try {
     // e.g. the session fields a plugin remote agent's first turn uses: a
     // failure keeps the message unsent so it never runs with other values.

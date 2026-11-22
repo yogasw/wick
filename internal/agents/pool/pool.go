@@ -1275,6 +1275,10 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	if p.slotFreeLocked(pType, pName) {
 		p.spawningKeys[key] = struct{}{}
 		p.mu.Unlock()
+		// Tell viewers at once: the spawn below (credentials, idle-server
+		// yield, the process start) can take a while, and until its own
+		// "spawning" lands the chat would show nothing at all.
+		p.announceLifecycle(ctx, sessionID, agentName, "spawning", pType, pName)
 		// Admitted: idle warm omp/opencode servers that will not serve
 		// this spawn give their memory back first (before the free-RAM
 		// check, which they would otherwise fail). Only here — a send that
@@ -1300,10 +1304,30 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	if !already {
 		p.waitChanged()
 	}
+	p.announceLifecycle(ctx, sessionID, agentName, "queued", pType, pName)
 	if p.cfg.PreemptIdle {
 		p.preemptIdleSlot()
 	}
 	return p.markStatus(sessionID, session.StatusQueued)
+}
+
+// announceLifecycle publishes a lifecycle edge that has no process behind
+// it yet (queued, about to spawn), so an open chat shows the state the
+// moment the message is accepted instead of after the process is up.
+// Never call it with p.mu held: the listener may read the pool.
+func (p *Pool) announceLifecycle(ctx context.Context, sessionID, agentName, lifecycle, pType, pName string) {
+	if p.cfg.OnLifecycle == nil {
+		return
+	}
+	p.cfg.OnLifecycle(LifecycleEvent{
+		SessionID:    sessionID,
+		AgentName:    agentName,
+		Lifecycle:    lifecycle,
+		Ctx:          ctx,
+		At:           time.Now().UTC(),
+		ProviderType: pType,
+		ProviderName: pName,
+	})
 }
 
 // predecessorPoll is how often a held session checks whether the draining

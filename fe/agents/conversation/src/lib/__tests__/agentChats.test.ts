@@ -32,6 +32,20 @@ describe("pinChatVia", () => {
 });
 
 describe("startDraftChat", () => {
+  it("hands the chat over before the first message is sent", async () => {
+    const order: string[] = [];
+    await startDraftChat(
+      { text: "hi", files: [] },
+      async () => ({ session_id: "s9" }),
+      async () => {
+        order.push("send");
+      },
+      undefined,
+      (id) => order.push(`opened:${id}`),
+    );
+    expect(order).toEqual(["opened:s9", "send"]);
+  });
+
   it("creates the chat only on Send, then sends into it", async () => {
     const calls: string[] = [];
     const open = vi.fn(async () => (calls.push("open"), { session_id: "s1" }));
