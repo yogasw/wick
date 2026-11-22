@@ -1637,12 +1637,15 @@ func (a *Agent) run(ctx context.Context) {
 			}
 			if ev.Type == event.TextDelta {
 				ev.Text = joiner.breakBefore(ev.Text) + ev.Text
+				if !ev.Synthetic {
+					ev.Text = stripSystemReminder(ev.Text, a.stripPatterns...)
+				}
 			}
 			if countsAsProduced(ev) {
 				produced = true
 			}
 			if ev.Type == event.TextDelta && !ev.Synthetic {
-				turnText.WriteString(stripSystemReminder(ev.Text, a.stripPatterns...))
+				turnText.WriteString(ev.Text)
 			}
 
 			switch ev.Type {
