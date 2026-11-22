@@ -26,6 +26,9 @@ var agentSlackSettingGroups = map[string]bool{
 	"Agent Behaviour":     true,
 	"Reaction Auto-Reply": true,
 	"Approval Gates":      true,
+	// Shortcuts: which Slack shortcut / slash command opens a built-in
+	// action (the session-secret form) for this agent's bot.
+	"Shortcuts": true,
 }
 
 // agentSlackReadOnlyNotes covers the rest of the Channels page schema

@@ -161,7 +161,7 @@ func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 			t.Errorf("%s = %q, want only \"set\"", f.Key, f.Value)
 		}
 	}
-	want := []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates", "Connection", "Token Rotation", "Routing"}
+	want := []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates", "Shortcuts", "Connection", "Token Rotation", "Routing"}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Errorf("groups = %v, want %v", order, want)
 	}
