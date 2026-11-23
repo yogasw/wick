@@ -221,11 +221,19 @@ func modelRows(ins provider.Instance, models []provider.LiveModel, prov, account
 				Default: m.Default || (m.ID == ins.LiveModelDefault && ins.LiveModelDefault != "")})
 			continue
 		}
+		// A refusal is shown next to the model's own description, not
+		// instead of it being one: a row like "Auto Free" used to read as a
+		// healthy model while every pin of it was being dropped.
 		desc := m.Desc
-		if m.Unavailable && desc == "" {
-			desc = provider.NotAvailableDesc
+		if m.Unavailable {
+			note := provider.NotAvailableDesc
 			if m.Reason != "" {
-				desc += " — " + m.Reason
+				note += " — " + m.Reason
+			}
+			if desc == "" {
+				desc = note
+			} else {
+				desc += " · " + note
 			}
 		}
 		rows = append(rows, provider.ModelChoice{ID: m.ID, Label: label, Desc: desc, Default: m.Default, Unavailable: m.Unavailable})

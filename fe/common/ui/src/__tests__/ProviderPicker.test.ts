@@ -199,10 +199,13 @@ describe("ProviderPicker inside a transformed container", () => {
     const onChange = vi.fn();
     render(ProviderPicker, { options: [W2, W3], value: "wick/b", onChange });
 
-    await fireEvent.click(screen.getByRole("button", { name: /select provider/i }));
-    const rows = await screen.findAllByRole("button", { name: /wick\/(a|b)/i });
-    expect(rows[0].textContent).toBe("wick/b");
-    expect(rows[1].textContent).toBe("wick/a");
+    // The trigger names the selection, so it is the first button; two
+    // instances of one type sit under the type's row.
+    await fireEvent.click(screen.getAllByRole("button")[0]);
+    await fireEvent.click(await screen.findByRole("button", { name: /^wick$/i }));
+    const rows = (await screen.findAllByRole("button", { name: /wick\/(a|b)/i })).slice(1);
+    expect(rows[0].textContent).toContain("wick/b");
+    expect(rows[1].textContent).toContain("wick/a");
   });
 
   test("pinned model sorts to the top of its instance list", async () => {
@@ -212,9 +215,10 @@ describe("ProviderPicker inside a transformed container", () => {
     ] satisfies ComposerModelOption[]);
     render(ProviderPicker, { options: [WICK], value: "wick/x::m2", onChange: vi.fn(), loadModels });
 
-    await fireEvent.click(screen.getByRole("button", { name: /select provider|wick/i }));
-    await fireEvent.click(screen.getByRole("button", { name: /wick\/x/i }));
-    const rows = await screen.findAllByText(/Model [AB]/);
+    await fireEvent.click(screen.getAllByRole("button")[0]);
+    const inst = await screen.findAllByRole("button", { name: /wick\/x/i });
+    await fireEvent.click(inst[inst.length - 1]);
+    const rows = (await screen.findAllByText(/^Model [AB]$/));
     expect(rows.map((r) => r.textContent)).toEqual(["Model B", "Model A"]);
   });
   test("pinned model sorts to the top with full type/name::id pin", async () => {
@@ -224,8 +228,10 @@ describe("ProviderPicker inside a transformed container", () => {
     ] satisfies ComposerModelOption[]);
     render(ProviderPicker, { options: [WICK], value: "wick/x::m2", onChange: vi.fn(), loadModels });
 
-    await fireEvent.click(screen.getByRole("button", { name: /select provider|wick/i }));
-    await fireEvent.click(screen.getByRole("button", { name: /wick\/x/i }));
-    const rows = await screen.findAllByText(/Model [AB]/);
+    await fireEvent.click(screen.getAllByRole("button")[0]);
+    const inst = await screen.findAllByRole("button", { name: /wick\/x/i });
+    await fireEvent.click(inst[inst.length - 1]);
+    const rows = (await screen.findAllByText(/^Model [AB]$/));
     expect(rows.map((r) => r.textContent)).toEqual(["Model B", "Model A"]);
   });
+});

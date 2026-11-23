@@ -105,10 +105,15 @@ func TestStalePin(t *testing.T) {
 			t.Errorf("%s: stale=%v, want %v", c.name, got, c.stale)
 		}
 	}
-	// Refused here since: stale even with a cold list.
+	// Refused here before: still not stale — the person's pick runs and the
+	// turn reports a real refusal itself.
 	MarkModelUnavailable(cold, "openai-codex", "openai-codex/gpt-5.5", "model_not_found")
-	if m, got := StalePin(&cold, "openai-codex/gpt-5.5"); !got || m != "openai-codex/gpt-5.5" {
-		t.Fatalf("refused pin: %q %v", m, got)
+	MarkModelUnavailable(b, "openai-codex", "openai-codex/gpt-5.6-luna", "")
+	if _, got := StalePin(&cold, "openai-codex/gpt-5.5"); got {
+		t.Fatal("a refusal alone must not drop a pin")
+	}
+	if _, got := StalePin(&b, "openai-codex/gpt-5.6-luna"); got {
+		t.Fatal("a refused model still on the list must not be dropped")
 	}
 }
 
@@ -148,12 +153,11 @@ func TestForgetPickedRefusalLetsAPickRunAgain(t *testing.T) {
 	MarkModelUnavailable(ins, "acme", "acme/auto-free", "")
 	MarkModelUnavailable(ins, "", "acme/auto-free", "")
 	MarkModelUnavailable(ins, "acme", "acme/big", "")
-	if _, stale := StalePin(&ins, "acme/auto-free"); !stale {
-		t.Fatal("setup: refused pin must be stale")
-	}
 	ForgetPickedRefusal(ins, "acme/auto-free")
-	if _, stale := StalePin(&ins, "acme/auto-free"); stale {
-		t.Fatal("a picked model must run again after its refusal is forgotten")
+	for _, acct := range []string{"acme", ""} {
+		if _, bad := ModelUnavailable(ins, acct, "acme/auto-free"); bad {
+			t.Fatalf("refusal under %q kept after the pick", acct)
+		}
 	}
 	if _, bad := ModelUnavailable(ins, "acme", "acme/big"); !bad {
 		t.Fatal("other refusals must stay")

@@ -102,18 +102,17 @@
       ? (modelCache[cacheKey(d.value, encodePath(drillPath))] ?? [])
       : (modelCache[cacheKey(d.value)] ?? d.models ?? []);
     const q = modelSearch.trim();
-    let filtered = q ? all.filter((m) => modelMatches(m, q)) : all;
-    const { key, modelID } = splitPin(value);
+    // A copy: sorting the cached list in place mutated state inside a
+    // derived, so the selected model never actually moved.
+    const filtered = q ? all.filter((m) => modelMatches(m, q)) : [...all];
+    // The same key the row's checkmark uses, so "selected" means one thing.
     const packed = (m: { id: string }) =>
-      drillStack.length ? `${d.value}::${encodePin(drillPath, m.id)}` : m.id;
-    filtered.sort((a, b) => {
-      const aPinned = packed(a);
-      const bPinned = packed(b);
-      const aSel = (value === aPinned || (value === d.value && a.default)) ? 1 : 0;
-      const bSel = (value === bPinned || (value === d.value && b.default)) ? 1 : 0;
-      return bSel - aSel;
-    });
-    return filtered;
+      `${d.value}::${drillStack.length ? encodePin(drillPath, m.id) : m.id}`;
+    const selected = (m: ComposerModelOption) =>
+      !isLiveSet(m) && (value === packed(m) || (value === d.value && !!m.default));
+    // The model in use goes first, so a long list never hides it.
+    const sel = filtered.filter(selected);
+    return sel.length ? [...sel, ...filtered.filter((m) => !selected(m))] : filtered;
 });
   // changes — drilling in or out changes the height, and a stale position
   // would leave the menu hanging off the trigger it belongs to.
@@ -446,17 +445,20 @@
             {@const opensSet = live}
             {@const pinned = `${d.value}::${drillStack.length ? encodePin(drillPath, m.id) : m.id}`}
             {@const isSel = !opensSet && (value === pinned || (value === d.value && m.default))}
-            <div class="flex w-full items-stretch {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} {m.unavailable && !live ? 'opacity-50' : ''}">
+            <!-- A model refused before stays pickable: the refusal may be
+                 stale (a one-off error, a plan since changed). Picking it
+                 tries again; a real refusal is reported on that turn. -->
+            <div class="flex w-full items-stretch {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'}">
               <button
                 type="button"
-                disabled={!live && !!m.unavailable}
-                onclick={() => { if (opensSet) pushDrill(m); else if (!m.unavailable) pickModel(d, m.id); }}
-                class="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-1.5 text-left {m.unavailable && !live ? 'cursor-not-allowed' : ''} text-black-900 dark:text-white-100"
+                onclick={() => { if (opensSet) pushDrill(m); else pickModel(d, m.id); }}
+                title={m.unavailable && !live ? "Refused on this account before — picking it tries again" : undefined}
+                class="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-1.5 text-left text-black-900 dark:text-white-100"
               >
                 <span class="flex flex-col min-w-0">
                   <span class="flex items-center gap-2 text-sm">
                     <span class="truncate">{m.label}</span>
-                    {#if m.unavailable && !live}<span class="shrink-0 rounded-full bg-black-500/10 px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">unavailable</span>
+                    {#if m.unavailable && !live}<span data-testid="model-refused-badge" class="shrink-0 rounded-full bg-cau-400/20 px-1.5 py-0.5 text-[10px] font-medium text-black-900 dark:text-white-100">unavailable · retry</span>
                     {:else if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
                     {#if opensSet && drillStack.length === 0}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
                   </span>

@@ -44,11 +44,15 @@ func InstanceOwnModel(ctx context.Context, ins Instance) string {
 	return ""
 }
 
-// StalePin reports whether a session's model pin cannot run on ins — the
-// account was refused that model, or ins's live list (cached, never
-// fetched here) does not offer it — with the CLI model it names. Only
+// StalePin reports whether a session's model pin cannot run on ins — ins's
+// live list (cached, never fetched here) does not offer it, as when it was
+// chosen on another account — with the CLI model it names. Only
 // omp/opencode; a pin ModelArgs already drops (wick-shaped, AI router)
 // is not stale, it is ignored.
+//
+// A refusal recorded earlier does not make a pin stale: the person chose
+// that model, and the record may be old or wrong. The turn runs on it and,
+// if it is still refused, says so (or auto-retry moves on).
 func StalePin(ins *Instance, pin string) (string, bool) {
 	if ins == nil || pin == "" || ins.UseAIRouter || !SupportsAutoRetryModel(ins.Type) {
 		return "", false
@@ -58,11 +62,6 @@ func StalePin(ins *Instance, pin string) (string, bool) {
 		m = p.Model
 	} else if isForeignModelPin(pin) {
 		return "", false
-	}
-	for _, acct := range []string{modelPrefix(m), ""} {
-		if _, bad := ModelUnavailable(*ins, acct, m); bad {
-			return m, true
-		}
 	}
 	if LiveModelsEnabled(*ins) {
 		if list := cachedCLIModelsOnly(*ins); len(list) > 0 {

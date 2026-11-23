@@ -59,17 +59,43 @@ describe("ProviderPicker drill stack", () => {
     expect(onChange).toHaveBeenCalledWith("omp/acme::openai-codex/2@openai-codex/gpt-5.4");
   });
 
-  test("an unavailable model is greyed out and cannot be picked", async () => {
+  test("the model in use is listed first", async () => {
+    render(ProviderPicker, {
+      options: [OMP],
+      value: "omp/acme::openai-codex/2@openai-codex/gpt-5.4",
+      onChange: vi.fn(),
+      loadModels: loadModels(),
+    });
+    // The trigger now names the pin too, so open it and the instance row
+    // explicitly; the picker may already reopen at the pinned level.
+    await fireEvent.click(screen.getAllByRole("button")[0]);
+    const rows = await screen.findAllByRole("button", { name: /omp\/acme/i });
+    await fireEvent.click(rows[rows.length - 1]);
+    if (!screen.queryByText("gpt-5.4")) {
+      await fireEvent.click(await screen.findByText("openai-codex"));
+      await fireEvent.click(await screen.findByText("akun B"));
+    }
+    await screen.findByText("gpt-5.4");
+    const labels = ["Auto", "gpt-5.5", "gpt-5.4"]
+      .map((t) => ({ t, y: screen.getByText(t).compareDocumentPosition(screen.getByText("gpt-5.4")) }));
+    // gpt-5.4 precedes every other row.
+    for (const { t, y } of labels) {
+      if (t === "gpt-5.4") continue;
+      expect(y & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    }
+  });
+
+  test("a model refused before is flagged but can still be picked", async () => {
     const onChange = vi.fn();
     render(ProviderPicker, { options: [OMP], value: "", onChange, loadModels: loadModels() });
     await openAndDrill();
     await fireEvent.click(await screen.findByText("openai-codex"));
     await fireEvent.click(await screen.findByText("akun B"));
     const row = (await screen.findByText("gpt-5.5")).closest("button")!;
-    expect(row.hasAttribute("disabled")).toBe(true);
+    expect(row.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByTestId("model-refused-badge").textContent).toBe("unavailable · retry");
     await fireEvent.click(row);
-    expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByText("unavailable")).toBeTruthy();
+    expect(onChange).toHaveBeenCalledWith("omp/acme::openai-codex/2@openai-codex/gpt-5.5");
   });
 
   // An account row opens its model level; its "Auto" row pins the account
