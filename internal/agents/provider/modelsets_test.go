@@ -151,10 +151,14 @@ func TestIsModelAccessErrorAndMessage(t *testing.T) {
 		`{"error":{"code":"model_not_found"}}`,
 		"You do not have access to the model gpt-5.5",
 		"The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.",
+		"404 The requested model 'acme/old-free' does not exist. Please use an exact model id as listed on /api/gateway/models.",
 	} {
 		if !IsModelAccessError(m) {
 			t.Fatalf("not detected: %q", m)
 		}
+	}
+	if IsModelAccessError("the file does not exist") {
+		t.Fatal("a missing file is not a model access error")
 	}
 	if IsModelAccessError("429 rate limited") {
 		t.Fatal("429 is not an access error")

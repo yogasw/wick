@@ -42,6 +42,46 @@ func TestModelTurnWatchMarksRefusedAndWorked(t *testing.T) {
 	}
 }
 
+func TestModelTurnWatchErrorTurnIsNotWorked(t *testing.T) {
+	withModelStateDir(t)
+	RegisterModelSets(TypeOMP, fakeSets{})
+	t.Cleanup(func() { RegisterModelSets(TypeOMP, nil) })
+	ins := &Instance{Type: TypeOMP, Name: "err-" + t.Name(), LiveModels: true, ModelSelect: true}
+
+	// A retired id: the gateway 404s it. Refused, never "last worked".
+	w := newModelTurnWatch(ins, "")
+	w.observe(`{"type":"message_start","message":{"provider":"acme","model":"acme/old-free"}}`)
+	w.observe(`{"type":"message_end","message":{"stopReason":"error","errorMessage":"404 The requested model 'acme/old-free' does not exist."}}`)
+	w.observe(`{"type":"agent_end"}`)
+	if _, bad := ModelUnavailable(*ins, "acme", "acme/old-free"); !bad {
+		t.Fatal("a 404 unknown model must be recorded as refused")
+	}
+	if got := LastWorkedModel(*ins, ""); got != "" {
+		t.Fatalf("a 404 turn counted as worked: %q", got)
+	}
+
+	// Any other request error (a quota hit) is not a refusal, but not a
+	// worked turn either.
+	w = newModelTurnWatch(ins, "")
+	w.observe(`{"type":"message_start","message":{"provider":"acme","model":"acme/big"}}`)
+	w.observe(`{"type":"message_end","message":{"stopReason":"error","errorMessage":"usage limit reached"}}`)
+	w.observe(`{"type":"agent_end"}`)
+	if _, bad := ModelUnavailable(*ins, "acme", "acme/big"); bad {
+		t.Fatal("a quota hit is not a refusal")
+	}
+	if got := LastWorkedModel(*ins, ""); got != "" {
+		t.Fatalf("an errored turn counted as worked: %q", got)
+	}
+
+	// The next clean turn still counts.
+	w = newModelTurnWatch(ins, "")
+	w.observe(`{"type":"message_start","message":{"provider":"acme","model":"acme/big"}}`)
+	w.observe(`{"type":"agent_end"}`)
+	if got := LastWorkedModel(*ins, ""); got != "acme/big" {
+		t.Fatalf("clean turn not recorded: %q", got)
+	}
+}
+
 func TestPickLiveDefaultWithoutEvidenceIsListOrder(t *testing.T) {
 	withModelStateDir(t)
 	ins := Instance{Type: TypeOpencode, Name: "x"}

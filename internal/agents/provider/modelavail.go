@@ -281,7 +281,11 @@ func IsModelAccessError(msg string) bool {
 			return true
 		}
 	}
-	return false
+	// A gateway that dropped the id altogether (an alias retired upstream):
+	// "404 The requested model 'x' does not exist. Please use an exact model
+	// id …". Without this the dead id kept counting as the model that last
+	// worked, and every fallback went straight back to it.
+	return strings.Contains(low, "requested model") && strings.Contains(low, "does not exist")
 }
 
 // ModelUnavailableMessage is the user-facing text for a refused model, with

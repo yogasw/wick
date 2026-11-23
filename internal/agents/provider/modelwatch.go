@@ -244,6 +244,12 @@ func (w *modelTurnWatch) observe(line string) {
 		w.say(w.rotationNotice())
 		return
 	}
+	// Any error that ends the request (a quota hit, an unknown model, an
+	// upstream outage) means the turn did not run on this model: it must not
+	// become the model that last worked, or the next fallback picks it again.
+	if isErrorLine(line) {
+		w.failed = true
+	}
 	if turnEnded(w.ins.Type, line) {
 		// A finished turn is when the CLI may have refreshed its own model
 		// cache: harvest it (files / running server, never a spawn).
