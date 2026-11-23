@@ -82,6 +82,27 @@ func TestModelTurnWatchErrorTurnIsNotWorked(t *testing.T) {
 	}
 }
 
+func TestModelTurnWatchIgnoresQuotedAccessErrors(t *testing.T) {
+	withModelStateDir(t)
+	RegisterModelSets(TypeOMP, fakeSets{})
+	t.Cleanup(func() { RegisterModelSets(TypeOMP, nil) })
+	ins := &Instance{Type: TypeOMP, Name: "quote-" + t.Name(), LiveModels: true, ModelSelect: true}
+
+	// A turn whose tool output and answer quote access errors, but which
+	// itself runs fine, must not refuse its model.
+	w := newModelTurnWatch(ins, "")
+	w.observe(`{"type":"message_start","message":{"provider":"acme","model":"acme/auto-free"}}`)
+	w.observe(`{"type":"tool_execution_end","result":{"content":[{"type":"text","text":"log: {\"error\":{\"code\":\"model_not_found\"}} you do not have access"}]}}`)
+	w.observe(`{"type":"message_end","message":{"stopReason":"stop","content":[{"type":"text","text":"The log says model_not_found."}]}}`)
+	w.observe(`{"type":"agent_end"}`)
+	if _, bad := ModelUnavailable(*ins, "acme", "acme/auto-free"); bad {
+		t.Fatal("a quoted access error refused a working model")
+	}
+	if got := LastWorkedModel(*ins, ""); got != "acme/auto-free" {
+		t.Fatalf("clean turn not recorded as worked: %q", got)
+	}
+}
+
 func TestPickLiveDefaultWithoutEvidenceIsListOrder(t *testing.T) {
 	withModelStateDir(t)
 	ins := Instance{Type: TypeOpencode, Name: "x"}

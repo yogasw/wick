@@ -210,7 +210,12 @@ func (w *modelTurnWatch) observe(line string) {
 		return
 	}
 	w.learnModel(line)
-	if IsModelAccessError(line) {
+	// Only a line that ends the request can refuse a model. Every stream
+	// line passes through here — tool output, a file the agent read, the
+	// answer itself — and any of them may quote "model_not_found" or "do not
+	// have access" while the turn runs fine; matching those marked a working
+	// model refused for good.
+	if isErrorLine(line) && IsModelAccessError(line) {
 		w.failed = true
 		if w.model != "" {
 			reason, plan := "", ""
