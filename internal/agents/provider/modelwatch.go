@@ -179,19 +179,19 @@ func (w *modelTurnWatch) say(msg string) {
 func (w *modelTurnWatch) rotationNotice() string {
 	from := w.quotaAcct
 	if w.pinned {
-		return fmt.Sprintf("Akun %s (%s) kena limit — akun ini dipilih manual, jadi tidak dipindah. Pilih akun lain atau Auto.", from, w.quotaProv)
+		return fmt.Sprintf("Account %s (%s) hit its limit — it was picked manually, so it is not switched. Pick another account or Auto.", from, w.quotaProv)
 	}
 	next := OpencodeAutoAccount(w.ins, w.quotaProv)
 	if next == "" {
 		next = OpencodeMainAccount
 	}
 	if next == from {
-		return fmt.Sprintf("Akun %s (%s) kena limit dan tidak ada akun lain yang tersedia untuk provider ini.", from, w.quotaProv)
+		return fmt.Sprintf("Account %s (%s) hit its limit and no other account is available for this provider.", from, w.quotaProv)
 	}
 	if w.rotate != nil && w.rotate() {
-		return fmt.Sprintf("Akun %s (%s) kena limit → pindah ke akun %s; pesan ini diulang sekali di sana.", from, w.quotaProv, next)
+		return fmt.Sprintf("Account %s (%s) hit its limit → switched to account %s; this message is retried there once.", from, w.quotaProv, next)
 	}
-	return fmt.Sprintf("Akun %s (%s) kena limit → turn berikutnya memakai akun %s.", from, w.quotaProv, next)
+	return fmt.Sprintf("Account %s (%s) hit its limit → the next turn uses account %s.", from, w.quotaProv, next)
 }
 
 // turnEnded reports a line that closes one turn of the CLI's JSON stream.

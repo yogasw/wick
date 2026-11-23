@@ -296,5 +296,5 @@ func accountErrorMsg(cli, instance, msg string) string {
 	if instance == "" {
 		instance = cli
 	}
-	return fmt.Sprintf("akun instance %s/%s kena limit/kuota: %s", cli, instance, msg)
+	return fmt.Sprintf("instance account %s/%s hit its limit/quota: %s", cli, instance, msg)
 }

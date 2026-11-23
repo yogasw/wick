@@ -103,7 +103,7 @@ func TestAutoRetryModelRerunsTurnOnNextModel(t *testing.T) {
 	if !strings.Contains(conv, "Model a is not available for this account — retried with b.") {
 		t.Fatalf("missing retry note in transcript: %s", conv)
 	}
-	if strings.Contains(conv, "pilih model lain") {
+	if strings.Contains(conv, "pick another model") {
 		t.Fatalf("a retried turn must not also say pick another model: %s", conv)
 	}
 	// The agent stays on the model that worked for the next turn.
@@ -121,7 +121,7 @@ func TestAutoRetryModelOffDoesNotRetry(t *testing.T) {
 	if got := r.settle(t, 1); len(got) != 1 {
 		t.Fatalf("off must not retry, got %d spawns", len(got))
 	}
-	waitFor(t, func() bool { return strings.Contains(r.conversation(), "pilih model lain") }, 2*time.Second)
+	waitFor(t, func() bool { return strings.Contains(r.conversation(), "pick another model") }, 2*time.Second)
 }
 
 func TestAutoRetryModelNotAfterOutput(t *testing.T) {
@@ -132,7 +132,7 @@ func TestAutoRetryModelNotAfterOutput(t *testing.T) {
 		t.Fatalf("a turn that produced output must not be retried, got %d spawns", len(got))
 	}
 	// Not retried → the usual "pick another model" line is still posted.
-	waitFor(t, func() bool { return strings.Contains(r.conversation(), "pilih model lain") }, 2*time.Second)
+	waitFor(t, func() bool { return strings.Contains(r.conversation(), "pick another model") }, 2*time.Second)
 }
 
 func TestAutoRetryModelStopsAfterTwoRetries(t *testing.T) {
@@ -145,7 +145,7 @@ func TestAutoRetryModelStopsAfterTwoRetries(t *testing.T) {
 	if got[1].ModelID != "openai/b" || got[2].ModelID != "openai/c" {
 		t.Fatalf("retries ran on %q, %q", got[1].ModelID, got[2].ModelID)
 	}
-	waitFor(t, func() bool { return strings.Contains(r.conversation(), "pilih model lain") }, 2*time.Second)
+	waitFor(t, func() bool { return strings.Contains(r.conversation(), "pick another model") }, 2*time.Second)
 }
 
 func TestNextRetryModelPrefersLastWorkedAndSkipsRefused(t *testing.T) {

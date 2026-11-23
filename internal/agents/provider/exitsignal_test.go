@@ -26,9 +26,9 @@ func TestExitSignalNote(t *testing.T) {
 	cases := []struct {
 		sig, cause, want string
 	}{
-		{"SIGTERM", "", "SIGTERM, dihentikan dari luar wick (bukan Stop/Kill wick): tidak ada Stop/Kill dari wick yang tercatat"},
-		{"SIGKILL", "idle timer", "SIGKILL, dihentikan oleh wick: idle timer"},
-		{"", "Stop()", "dihentikan oleh wick: Stop()"},
+		{"SIGTERM", "", "SIGTERM, stopped from outside wick (not a wick Stop/Kill): no Stop/Kill from wick was recorded"},
+		{"SIGKILL", "idle timer", "SIGKILL, stopped by wick: idle timer"},
+		{"", "Stop()", "stopped by wick: Stop()"},
 		{"", "", ""},
 	}
 	for _, c := range cases {

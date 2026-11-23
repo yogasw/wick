@@ -296,9 +296,9 @@ func ModelUnavailableMessage(model, plan string) string {
 		short = short[i+1:]
 	}
 	if plan = strings.TrimSpace(plan); plan != "" {
-		return fmt.Sprintf("%s tidak tersedia untuk akun %s ini — pilih model lain.", short, plan)
+		return fmt.Sprintf("%s is not available on this %s account — pick another model.", short, plan)
 	}
-	return fmt.Sprintf("%s tidak tersedia untuk akun ini — pilih model lain.", short)
+	return fmt.Sprintf("%s is not available on this account — pick another model.", short)
 }
 
 // SetModelStateDirForTest points the availability store at dir and empties

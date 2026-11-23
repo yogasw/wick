@@ -48,7 +48,7 @@ func TestModelUnavailableNoticeNamesModelAndPlan(t *testing.T) {
 	w.observe(`{"type":"message_start","message":{"provider":"openai-codex","model":"gpt-5.5"}}`)
 	w.observe(`{"type":"message_end","message":{"stopReason":"error","errorMessage":"{\"error\":{\"code\":\"model_not_found\"}}"}}`)
 	w.observe(`{"type":"message_end","message":{"stopReason":"error","errorMessage":"model_not_found again"}}`)
-	if got := nextNotice(t, ch); got != "gpt-5.5 tidak tersedia untuk akun ChatGPT free ini — pilih model lain." {
+	if got := nextNotice(t, ch); got != "gpt-5.5 is not available on this ChatGPT free account — pick another model." {
 		t.Fatalf("notice = %q", got)
 	}
 	select {
@@ -64,7 +64,7 @@ func TestModelUnavailableNoticeNamesModelAndPlan(t *testing.T) {
 	w = newModelTurnWatch(oc, EncodePin([]string{"openai"}, "openai/gpt-5.5"))
 	ch = collectNotices(w)
 	w.observe(`{"type":"error","error":{"data":{"message":"You do not have access to the model gpt-5.5"}}}`)
-	if got := nextNotice(t, ch); got != "gpt-5.5 tidak tersedia untuk akun ini — pilih model lain." {
+	if got := nextNotice(t, ch); got != "gpt-5.5 is not available on this account — pick another model." {
 		t.Fatalf("opencode notice = %q", got)
 	}
 }
@@ -106,7 +106,7 @@ func TestOpencodeQuotaRotatesAndRetriesOnce(t *testing.T) {
 	w.rotate = func() bool { retries++; return retries == 1 }
 	w.observe(quota)
 	w.observe(quota) // same turn: no second notice / retry
-	if got := nextNotice(t, ch); got != "Akun main (openai) kena limit → pindah ke akun a2; pesan ini diulang sekali di sana." {
+	if got := nextNotice(t, ch); got != "Account main (openai) hit its limit → switched to account a2; this message is retried there once." {
 		t.Fatalf("notice = %q", got)
 	}
 	if retries != 1 {
@@ -122,7 +122,7 @@ func TestOpencodeQuotaRotatesAndRetriesOnce(t *testing.T) {
 	ch = collectNotices(w)
 	w.rotate = func() bool { retries++; return retries == 1 }
 	w.observe(quota)
-	if got := nextNotice(t, ch); got != "Akun a2 (openai) kena limit → turn berikutnya memakai akun main." {
+	if got := nextNotice(t, ch); got != "Account a2 (openai) hit its limit → the next turn uses account main." {
 		t.Fatalf("second notice = %q", got)
 	}
 
@@ -132,7 +132,7 @@ func TestOpencodeQuotaRotatesAndRetriesOnce(t *testing.T) {
 	ch = collectNotices(w)
 	w.rotate = func() bool { t.Fatal("pinned account must not retry"); return false }
 	w.observe(quota)
-	if got := nextNotice(t, ch); got != "Akun a2 (openai) kena limit — akun ini dipilih manual, jadi tidak dipindah. Pilih akun lain atau Auto." {
+	if got := nextNotice(t, ch); got != "Account a2 (openai) hit its limit — it was picked manually, so it is not switched. Pick another account or Auto." {
 		t.Fatalf("pinned notice = %q", got)
 	}
 }

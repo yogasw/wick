@@ -1941,9 +1941,9 @@ func exitSignalNote(sig, wickCause string) string {
 	if sig == "" && wickCause == "" {
 		return ""
 	}
-	who := "dihentikan dari luar wick (bukan Stop/Kill wick): tidak ada Stop/Kill dari wick yang tercatat"
+	who := "stopped from outside wick (not a wick Stop/Kill): no Stop/Kill from wick was recorded"
 	if wickCause != "" {
-		who = "dihentikan oleh wick: " + wickCause
+		who = "stopped by wick: " + wickCause
 	}
 	if sig == "" {
 		return who

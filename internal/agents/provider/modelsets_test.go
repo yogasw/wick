@@ -163,7 +163,7 @@ func TestIsModelAccessErrorAndMessage(t *testing.T) {
 	if IsModelAccessError("429 rate limited") {
 		t.Fatal("429 is not an access error")
 	}
-	if got := ModelUnavailableMessage("openai-codex/gpt-5.5", "free"); got != "gpt-5.5 tidak tersedia untuk akun free ini — pilih model lain." {
+	if got := ModelUnavailableMessage("openai-codex/gpt-5.5", "free"); got != "gpt-5.5 is not available on this free account — pick another model." {
 		t.Fatalf("msg %q", got)
 	}
 }

@@ -27,7 +27,7 @@ func init() {
 }
 
 // accountPlanLabel names the plan of the account a refused turn ran on, for
-// "gpt-5.5 tidak tersedia untuk akun ChatGPT free ini". omp only: opencode's
+// "gpt-5.5 is not available on this ChatGPT free account". omp only: opencode's
 // auth.json carries no plan. account "" = the provider's single active
 // account (Auto with several is ambiguous → "").
 func accountPlanLabel(ins provider.Instance, prov, account string) string {
