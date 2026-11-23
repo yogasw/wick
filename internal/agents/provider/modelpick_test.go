@@ -140,3 +140,25 @@ func TestAgentDropsStalePin(t *testing.T) {
 		t.Fatalf("stale pin reached the spawn: %q", got)
 	}
 }
+
+func TestForgetPickedRefusalLetsAPickRunAgain(t *testing.T) {
+	t.Cleanup(SetModelStateDirForTest(t.TempDir()))
+	ins := pickIns("pk-forget", true, "")
+	primeModels(t, ins, "acme/auto-free", "acme/big")
+	MarkModelUnavailable(ins, "acme", "acme/auto-free", "")
+	MarkModelUnavailable(ins, "", "acme/auto-free", "")
+	MarkModelUnavailable(ins, "acme", "acme/big", "")
+	if _, stale := StalePin(&ins, "acme/auto-free"); !stale {
+		t.Fatal("setup: refused pin must be stale")
+	}
+	ForgetPickedRefusal(ins, "acme/auto-free")
+	if _, stale := StalePin(&ins, "acme/auto-free"); stale {
+		t.Fatal("a picked model must run again after its refusal is forgotten")
+	}
+	if _, bad := ModelUnavailable(ins, "acme", "acme/big"); !bad {
+		t.Fatal("other refusals must stay")
+	}
+	// Types that keep no refusals are left alone; empty pin is a no-op.
+	ForgetPickedRefusal(Instance{Type: TypeClaude, Name: "c"}, "opus")
+	ForgetPickedRefusal(ins, "")
+}

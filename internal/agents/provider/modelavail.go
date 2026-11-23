@@ -162,6 +162,42 @@ func MarkModelWorked(ins Instance, account, model string) {
 	saveModelState(st, path)
 }
 
+// ForgetPickedRefusal drops every refusal ins holds for the model a person
+// just picked (pin): the pick is newer evidence than a refusal recorded
+// turns or days ago, which may have been a one-off or a plan since changed.
+// Without this a refused model stayed dropped as "not available" on every
+// turn, however often it was picked, until someone refreshed the list. If
+// it is still refused, the next turn records it again. Only omp/opencode
+// keep refusals.
+func ForgetPickedRefusal(ins Instance, pin string) {
+	if pin == "" || !SupportsAutoRetryModel(ins.Type) {
+		return
+	}
+	m, keys := pin, []string{""}
+	if p, ok := ResolvePin(&ins, pin); ok {
+		m = p.Model
+		keys = append(keys, AvailabilityAccount(p.Provider, p.Account))
+	} else if isForeignModelPin(pin) {
+		return
+	}
+	keys = append(keys, modelPrefix(m))
+	modelStateMu.Lock()
+	defer modelStateMu.Unlock()
+	st, path := loadModelState(ins)
+	changed := false
+	for _, k := range keys {
+		if e := st.Accounts[k]; e != nil {
+			if _, ok := e.Unavailable[m]; ok {
+				delete(e.Unavailable, m)
+				changed = true
+			}
+		}
+	}
+	if changed {
+		saveModelState(st, path)
+	}
+}
+
 // ModelUnavailable reports whether account was refused model, with the reason.
 func ModelUnavailable(ins Instance, account, model string) (string, bool) {
 	modelStateMu.Lock()

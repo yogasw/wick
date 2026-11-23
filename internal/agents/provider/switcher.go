@@ -430,6 +430,9 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 		return res, nil
 	}
 
+	// A person's pick: an old refusal of that model must not drop it again.
+	ForgetPickedRefusal(toIns, opts.ModelID)
+
 	steps := []string{
 		"Saved provider to agents.json",
 		"Killing running agent process",
