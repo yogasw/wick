@@ -787,3 +787,33 @@ func TestStore_CancelTargeting(t *testing.T) {
 		t.Fatalf("empty target cancelled %d rows", n)
 	}
 }
+
+func TestStore_GetByShortID(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	m, err := s.Create(ctx, &entity.ScheduledMessage{
+		SessionID: "sess-1", OwnerUserID: "u1", Message: "x", RunAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	short := m.ID[:11] // "sm_" + first uuid group
+	got, err := s.Get(ctx, short)
+	if err != nil || got.ID != m.ID {
+		t.Fatalf("short id %q: %v %+v", short, err, got)
+	}
+	for _, bad := range []string{"sm_", "sm_abc", "sm_%", "sm________", "xx" + m.ID[2:11]} {
+		if _, err := s.Get(ctx, bad); err != ErrNotFound {
+			t.Fatalf("Get(%q) err = %v, want ErrNotFound", bad, err)
+		}
+	}
+
+	// Two rows sharing the prefix: ambiguous, so not found.
+	twin := entity.ScheduledMessage{ID: short + "-0000-0000-0000-000000000000", SessionID: "sess-1", OwnerUserID: "u1", Message: "y", RunAt: time.Now().Add(time.Hour)}
+	if _, err := s.Create(ctx, &twin); err != nil {
+		t.Fatalf("create twin: %v", err)
+	}
+	if _, err := s.Get(ctx, short); err != ErrNotFound {
+		t.Fatalf("ambiguous prefix err = %v, want ErrNotFound", err)
+	}
+}

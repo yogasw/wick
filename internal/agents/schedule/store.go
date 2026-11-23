@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"gorm.io/gorm"
@@ -60,17 +61,41 @@ func (s *Store) Create(ctx context.Context, m *entity.ScheduledMessage) (*entity
 	return m, nil
 }
 
-// Get loads one schedule by id.
+// Get loads one schedule by id. A short id (the "sm_" prefix plus the first
+// uuid group, the form people and agents quote) resolves when exactly one
+// schedule starts with it; an ambiguous prefix is not found.
 func (s *Store) Get(ctx context.Context, id string) (*entity.ScheduledMessage, error) {
 	var m entity.ScheduledMessage
 	err := s.db.WithContext(ctx).First(&m, "id = ?", id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrNotFound
+		return s.getByPrefix(ctx, id)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// shortIDRe accepts "sm_" plus at least the first 8 hex digits of the uuid.
+var shortIDRe = regexp.MustCompile(`^sm_[0-9a-f]{8}[0-9a-f-]*$`)
+
+func (s *Store) getByPrefix(ctx context.Context, id string) (*entity.ScheduledMessage, error) {
+	if !shortIDRe.MatchString(id) {
+		return nil, ErrNotFound
+	}
+	// The pattern only holds [0-9a-f-] after the prefix, so the one LIKE
+	// wildcard to escape is the underscore in "sm_".
+	var rows []entity.ScheduledMessage
+	err := s.db.WithContext(ctx).
+		Where(`id LIKE ? ESCAPE '\'`, `sm\_`+id[3:]+"%").
+		Limit(2).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		return nil, ErrNotFound
+	}
+	return &rows[0], nil
 }
 
 // ListForOwner returns schedules an owner may see, live-and-soonest first
