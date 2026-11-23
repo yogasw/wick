@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { get } from "svelte/store";
-import { createThreadStore, TURN_SETTLE_MS } from "../thread.js";
+import { createThreadStore, TURN_SETTLE_MS, LIVE_FLUSH_GRACE_MS } from "../thread.js";
 import { foldSystemEvents } from "../../systemEvents.js";
 import { teamSender } from "../../teamMention.js";
 import type { ConversationTurn, AgentEvent } from "../../types/agents.js";
@@ -159,6 +159,48 @@ describe("createThreadStore", () => {
     expect(twin.events.some((e) => e.text === "RESULT-BODY")).toBe(true);
     // No duplicate: the local twin was dropped, only the persisted one remains.
     expect(turns.filter((t) => t.role === "assistant" && t.text === "done")).toHaveLength(1);
+  });
+
+  test("setHistory drops a streamed reply whose text differs once the persisted reply landed", () => {
+    // Narration between tool calls streams as one glued string; the stored
+    // turn holds only the final answer, so the text keys never match.
+    store.handleEvent(ev("text_delta", { data: "Checking the page now:" }));
+    store.handleEvent(ev("text_delta", { data: "Done. Change is live." }));
+    store.handleEvent(ev("done"));
+
+    store.setHistory([
+      makeTurn({ turn_id: "u1", role: "user", text: "fix it" }),
+      makeTurn({ turn_id: "a1", role: "assistant", text: "Done. Change is live." }),
+    ]);
+
+    const turns = get(store.turns);
+    expect(turns.map((t) => t.turn_id)).toEqual(["u1", "a1"]);
+  });
+
+  test("setHistory keeps an unmatched streamed reply while the persisted reply is not in yet", () => {
+    store.handleEvent(ev("text_delta", { data: "answer" }));
+    store.handleEvent(ev("done"));
+
+    store.setHistory([makeTurn({ turn_id: "u1", role: "user", text: "question" })]);
+
+    const turns = get(store.turns);
+    expect(turns).toHaveLength(2);
+    expect(turns[1].text).toBe("answer");
+  });
+
+  test("setHistory drops an unmatched streamed reply after the flush grace", () => {
+    vi.useFakeTimers();
+    try {
+      store.handleEvent(ev("text_delta", { data: "answer" }));
+      store.handleEvent(ev("done"));
+      vi.advanceTimersByTime(LIVE_FLUSH_GRACE_MS + 1);
+
+      store.setHistory([makeTurn({ turn_id: "u1", role: "user", text: "question" })]);
+
+      expect(get(store.turns).map((t) => t.turn_id)).toEqual(["u1"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("setHistory keeps a persisted turn's own events when it already has a trace", () => {

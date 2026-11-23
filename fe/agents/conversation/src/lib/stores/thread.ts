@@ -34,6 +34,11 @@ const PROVIDER_TYPES = new Set(["claude", "codex", "gemini", "opencode", "omp", 
     ever clear "thinking…". Exported so the view can re-read history after. */
 export const TURN_SETTLE_MS = 4000;
 
+/** How long a finished streamed reply may wait for its persisted twin
+    before a history reload drops it. Covers the reload-vs-flush race
+    right after `done`; past it the persisted history wins. */
+export const LIVE_FLUSH_GRACE_MS = 60_000;
+
 /** Events that belong to a running turn and light the typing indicator.
     session_start is one: the CLI's own start-up frame, which a stopped
     process can still flush after its killed edge. */
@@ -774,7 +779,22 @@ export function createThreadStore(): ThreadStore {
         });
 
         const persistedKeys = new Set(newTurns.map(keyOf));
-        const pendingLocal = cur.filter((t) => isLocal(t) && !persistedKeys.has(keyOf(t)));
+        // A streamed reply (live-*) is matched by text, but the streamed text
+        // is not always the text that gets persisted: a provider that narrates
+        // between tool calls streams every narration line, glued together,
+        // while the stored turn holds only the final answer. The twin was
+        // never recognised and the streamed copy sat under the real reply
+        // until a page reload. Keep an unmatched streamed reply only while it
+        // can still be the flush race this guards against: the persisted
+        // window has no assistant reply after its last user message yet, and
+        // the turn ended moments ago.
+        let lastUser = -1;
+        newTurns.forEach((t, i) => { if (t.role === "user") lastUser = i; });
+        const replyLanded = newTurns.slice(lastUser + 1).some((t) => t.role === "assistant");
+        const now = Date.now();
+        const stillRacing = (t: ConversationTurn) =>
+          !t.turn_id.startsWith("live-") || (!replyLanded && now - t.timestamp < LIVE_FLUSH_GRACE_MS);
+        const pendingLocal = cur.filter((t) => isLocal(t) && !persistedKeys.has(keyOf(t)) && stillRacing(t));
         // Pagination: `newTurns` may be only the LATEST window (limit=N), while
         // `cur` still holds older pages scrolled in via prependHistory. Keep
         // everything in `cur` that precedes the window's first turn; a full
