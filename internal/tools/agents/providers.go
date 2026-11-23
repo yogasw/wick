@@ -302,7 +302,11 @@ func saveProviderDetail(c *tool.Ctx) {
 	if sent("env") && canProviderDo(c, t, name, ownerPermEnv) {
 		ins.Env = splitLines(c.Form("env"))
 	}
-	ins.Disabled = c.Form("disabled") == "on"
+	// Disabled has its own toggle (a per-key save); a form without it keeps
+	// the stored state instead of re-enabling the instance on every save.
+	if sent("disabled") {
+		ins.Disabled = c.Form("disabled") == "on"
+	}
 	if sent("max_concurrent") {
 		ins.MaxConcurrent = parseIntForm(c.Form("max_concurrent"))
 	}
@@ -349,6 +353,11 @@ func saveProviderDetail(c *tool.Ctx) {
 			ins.CodexConfig = &provider.CodexConfig{}
 		}
 		ins.CodexConfig.SandboxMode = provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode")))
+	}
+	// strip_tags is a plain textarea on every type: the page sends it with
+	// the other simple fields, so the detail save must read it too.
+	if sent("strip_tags") && canProviderDo(c, t, name, providerKeyPerm("strip_tags")) {
+		provider.ApplyInstanceConfigKey(&ins, "strip_tags", c.Form("strip_tags"))
 	}
 	// CLI model picker (claude/codex/gemini): toggle + curated model list.
 	// Empty models → the per-type seed defaults are offered. Not applicable

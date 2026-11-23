@@ -430,18 +430,43 @@
     return payload;
   }
 
+  /* Configuration saves itself: a pick or a toggle at once, typing after a
+     short pause or on blur. One save runs at a time; a change made while it
+     runs is saved right after. The page is reloaded only when nothing was
+     typed meanwhile, so a reload never overwrites what is being typed. */
+  const AUTOSAVE_TYPING_MS = 800;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveQueued = false;
+  let lastSaved = $state<number>(0);
+
+  function scheduleSave(delay = 0) {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saveTimer = null; void doSave(); }, delay);
+  }
+
   async function doSave() {
+    if (saving) { saveQueued = true; return; }
     saving = true;
+    let sentPayload = "";
     try {
       await settleSaves();
-      await apiSaveProviderDetail(base, type, name, buildSavePayload());
-      toastOk("Settings saved");
-      await load(true);
+      const payload = buildSavePayload();
+      sentPayload = JSON.stringify(payload);
+      await apiSaveProviderDetail(base, type, name, payload);
+      lastSaved = Date.now();
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Save failed");
+      sentPayload = "";
     } finally {
       saving = false;
     }
+    const changed = sentPayload !== "" && JSON.stringify(buildSavePayload()) !== sentPayload;
+    if (saveQueued || changed) {
+      saveQueued = false;
+      if (!saveTimer) void doSave();
+      return;
+    }
+    if (sentPayload !== "" && !saveTimer) await load(true);
   }
 
   async function saveAIRouter() {
@@ -1014,14 +1039,14 @@
                     ariaLabel={f.Key}
                     value={fieldValues[f.Key] ?? ""}
                     options={[{ label: "Its own login", value: "" }, ...(f.Options ?? "").split("|").map((o) => o.trim()).filter(Boolean).map((o) => ({ label: o, value: o }))]}
-                    onChange={(v) => { fieldValues[f.Key] = v; }}
+                    onChange={(v) => { fieldValues[f.Key] = v; scheduleSave(); }}
                   />
                 {:else if (f.Type === "dropdown" || f.Type === "select") && f.Options}
                   <Select
                     ariaLabel={f.Key}
                     value={fieldValues[f.Key] ?? ""}
                     options={f.Options.split(f.Type === "dropdown" ? "|" : ",").map((o) => o.trim()).filter(Boolean)}
-                    onChange={(v) => { fieldValues[f.Key] = v; }}
+                    onChange={(v) => { fieldValues[f.Key] = v; scheduleSave(); }}
                   />
                 {:else if f.IsSecret}
                   <input
@@ -1030,6 +1055,7 @@
                     autocomplete="new-password"
                     bind:value={fieldValues[f.Key]}
                     oninput={() => onSecretInput(f.Key)}
+                    onblur={() => { if (secretTouched[f.Key]) scheduleSave(); }}
                     class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
                 {:else if f.Type === "textarea"}
@@ -1038,12 +1064,16 @@
                     bind:value={fieldValues[f.Key]}
                     rows="6"
                     spellcheck="false"
+                    oninput={() => scheduleSave(AUTOSAVE_TYPING_MS)}
+                    onblur={() => scheduleSave()}
                     class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   ></textarea>
                 {:else if f.Type === "number"}
                   <input
                     type="number"
                     bind:value={fieldValues[f.Key]}
+                    oninput={() => scheduleSave(AUTOSAVE_TYPING_MS)}
+                    onblur={() => scheduleSave()}
                     class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
                 {:else if f.Type === "bool" || f.Type === "checkbox"}
@@ -1055,7 +1085,7 @@
                     aria-label={f.Key}
                     data-testid={SWITCH_TESTIDS[f.Key] ?? `config-switch-${f.Key}`}
                     aria-checked={fieldValues[f.Key] === "true"}
-                    onclick={() => (fieldValues[f.Key] = fieldValues[f.Key] === "true" ? "false" : "true")}
+                    onclick={() => { fieldValues[f.Key] = fieldValues[f.Key] === "true" ? "false" : "true"; scheduleSave(); }}
                     class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {fieldValues[f.Key] === 'true' ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
                   >
                     <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {fieldValues[f.Key] === 'true' ? 'translate-x-5' : 'translate-x-0.5'}"></span>
@@ -1064,6 +1094,8 @@
                   <input
                     type="text"
                     bind:value={fieldValues[f.Key]}
+                    oninput={() => scheduleSave(AUTOSAVE_TYPING_MS)}
+                    onblur={() => scheduleSave()}
                     class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
                 {/if}
@@ -1095,11 +1127,8 @@
           </div>
         </div>
         <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
-          <button
-            onclick={doSave}
-            disabled={saving}
-            class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
-          >{saving ? "Saving…" : "Save All"}</button>
+          <span data-testid="config-autosave-status" class="text-xs text-black-700 dark:text-black-600"
+          >{saving ? "Saving…" : lastSaved ? "All changes saved" : "Changes save automatically"}</span>
         </div>
       </CollapsibleSection>
     {/if}

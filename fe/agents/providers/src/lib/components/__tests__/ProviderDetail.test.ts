@@ -220,21 +220,29 @@ describe("ProviderDetail - enable/disable toggle", () => {
 });
 
 describe("ProviderDetail - simple field save", () => {
-  it("Save All sends simple fields only", async () => {
+  it("auto-saves simple fields only when a field is left", async () => {
+    vi.mocked(api.apiSaveProviderDetail).mockClear();
     render(ProviderDetail, { props: defaultProps });
     await fireEvent.click(await screen.findByText("Configuration"));
-    await screen.findByText("Save All");
-    fireEvent.click(screen.getByText("Save All"));
-    await vi.waitFor(() => expect(api.apiSaveProviderDetail).toHaveBeenCalled());
+    expect(screen.queryByText("Save All")).toBeNull();
+    await editBinary("claude-next");
+    await vi.waitFor(() => expect(api.apiSaveProviderDetail).toHaveBeenCalledTimes(1));
     const payload = vi.mocked(api.apiSaveProviderDetail).mock.calls[0][3] as Record<string, string>;
-    expect(payload["binary"]).toBe("claude");
+    expect(payload["binary"]).toBe("claude-next");
     expect(payload["max_concurrent"]).toBe("4");
     expect(payload["send_mode"]).toBe("default");
     /* kvlist fields are never in the simple payload */
     expect(Object.prototype.hasOwnProperty.call(payload, "extra_args")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(payload, "env")).toBe(false);
+    await vi.waitFor(() => expect(screen.getByTestId("config-autosave-status").textContent).toBe("All changes saved"));
   });
 });
+
+async function editBinary(value: string) {
+  const input = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).find((i) => i.value === "claude")!;
+  await fireEvent.input(input, { target: { value } });
+  await fireEvent.blur(input);
+}
 
 describe("ProviderDetail - value-list editor (extra_args)", () => {
   it("renders existing value rows", async () => {
@@ -297,7 +305,7 @@ describe("ProviderDetail - key-value editor (env)", () => {
     expect(parsed).toEqual([{ key: "FOO", value: "1" }]);
   });
 
-  // The rows "disappeared": a reload (here after Save All) re-seeded the
+  // The rows "disappeared": a reload (here after an auto-save) re-seeded the
   // editor from the server before the typed value had been saved.
   it("keeps a typed env value across a reload", async () => {
     vi.mocked(api.apiGetProviderDetail).mockClear();
@@ -306,13 +314,13 @@ describe("ProviderDetail - key-value editor (env)", () => {
     const value = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).find((i) => i.value === "1")!;
     await fireEvent.input(value, { target: { value: "2" } });
     await fireEvent.click(await screen.findByText("Configuration"));
-    await fireEvent.click(await screen.findByText("Save All"));
+    await editBinary("claude-next");
     await vi.waitFor(() => expect(api.apiGetProviderDetail).toHaveBeenCalledTimes(2));
     const vals = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).map((i) => i.value);
     expect(vals).toContain("2");
   });
 
-  it("Save All waits for an env save still in flight", async () => {
+  it("an auto-save waits for an env save still in flight", async () => {
     let finish!: () => void;
     vi.mocked(api.apiSaveProviderDetail).mockClear();
     vi.mocked(api.apiSaveConfigKey).mockImplementationOnce(() => new Promise<void>((r) => { finish = r; }));
@@ -322,7 +330,7 @@ describe("ProviderDetail - key-value editor (env)", () => {
     await fireEvent.input(value, { target: { value: "2" } });
     await fireEvent.blur(value);
     await fireEvent.click(await screen.findByText("Configuration"));
-    await fireEvent.click(await screen.findByText("Save All"));
+    await editBinary("claude-next");
     await new Promise((r) => setTimeout(r, 20));
     expect(api.apiSaveProviderDetail).not.toHaveBeenCalled();
     finish();

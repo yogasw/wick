@@ -64,11 +64,11 @@ func TestStripStreamFlushesBeforeToolUse(t *testing.T) {
 
 func TestStripTagList(t *testing.T) {
 	got := StripTagList("  <ctx-note>\n\nsystem-reminder\n</extra>\nbad tag\n<a>b</a>\n")
-	want := []string{"system-reminder", "ctx-note", "extra"}
+	want := []string{"system-reminder", "system-notice", "ctx-note", "extra"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v, want %v", got, want)
 	}
-	if got := StripTagList(""); len(got) != 1 || got[0] != "system-reminder" {
+	if got := StripTagList(""); len(got) != 2 || got[0] != "system-reminder" || got[1] != "system-notice" {
 		t.Fatalf("default: got %v", got)
 	}
 }
@@ -92,5 +92,13 @@ func TestTagStripperDropsPaddingAfterTag(t *testing.T) {
 		if got := feedAll(t, pieces); got != "Checking:\n\nNext step" {
 			t.Fatalf("size %d: got %q", size, got)
 		}
+	}
+}
+
+func TestStripsSystemNoticeByDefault(t *testing.T) {
+	ts := newTagStripper(StripTagList(""))
+	out := ts.feed("before <system-") + ts.feed("notice>harness note</system-notice>\n\nafter") + ts.flush()
+	if out != "before after" {
+		t.Fatalf("got %q", out)
 	}
 }

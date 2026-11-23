@@ -11,12 +11,12 @@ import (
 // assistant text. A provider that streams token deltas splits a tag over
 // many events, so the text is filtered as a stream (tagStripper), never one
 // delta at a time.
-var DefaultStripTags = []string{"system-reminder"}
+var DefaultStripTags = []string{"system-reminder", "system-notice"}
 
 // StripTagsConfig is the per-instance setting that adds tags to the list
 // without a rebuild.
 type StripTagsConfig struct {
-	StripTags string `wick:"key=strip_tags;textarea;desc=Extra context tags to hide from replies, one per line: a name like system-reminder or <system-reminder>. Everything from <name> to </name> is removed from the reply before it is saved or sent to any channel. system-reminder is always removed. Takes effect on the next session spawn."`
+	StripTags string `wick:"key=strip_tags;textarea;desc=Extra context tags to hide from replies, one per line: a name like system-reminder or <system-reminder>. Everything from <name> to </name> is removed from the reply before it is saved or sent to any channel. system-reminder and system-notice are always removed. Takes effect on the next session spawn."`
 }
 
 var stripTagName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:-]*$`)
