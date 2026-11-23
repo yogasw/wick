@@ -196,3 +196,26 @@ func TestRuntimeMemoryArgs(t *testing.T) {
 		t.Fatalf("no aggregate must lift the ceiling, got %v", got)
 	}
 }
+
+// The scope description must never be the command line: systemd logs it
+// to the journal, and the agent argv can carry a bearer token.
+func TestWrapArgv_DescriptionHidesCommandLine(t *testing.T) {
+	_, argv := WrapArgv("/usr/bin/claude", []string{"--mcp-config", `{"Authorization":"Bearer secret-123"}`}, Opts{
+		Unit: "claude-agent-7",
+	})
+	found := false
+	for _, a := range argv {
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "--description=") {
+			found = true
+			if strings.Contains(a, "secret-123") || a != "--description=wick agent claude-agent-7" {
+				t.Fatalf("description = %q", a)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("systemd-run argv has no --description before --")
+	}
+}

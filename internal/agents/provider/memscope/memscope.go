@@ -114,6 +114,11 @@ func WrapArgv(bin string, args []string, o Opts) (string, []string) {
 		"--user", "--scope", "--quiet", "--collect",
 		"--slice=" + slice,
 		"--unit=" + o.Unit,
+		// Without an explicit description systemd names the scope after
+		// the full command line, and logs it to the journal on start. The
+		// agent argv can hold a live credential (an inline MCP config with
+		// its Authorization header), so the journal gets a fixed label.
+		"--description=wick agent " + o.Unit,
 		"-p", "MemoryHigh=infinity",
 		"-p", "MemorySwapMax=0",
 	}

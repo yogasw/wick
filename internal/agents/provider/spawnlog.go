@@ -63,12 +63,12 @@ type SpawnEvent struct {
 	ProviderType string    `json:"provider_type,omitempty"`
 	ProviderName string    `json:"provider_name,omitempty"`
 	SessionID    string    `json:"session_id,omitempty"`
-	AgentName   string    `json:"agent_name,omitempty"`
-	Workspace   string    `json:"workspace,omitempty"`
-	ResumeID    string    `json:"resume_id,omitempty"`
-	Binary      string    `json:"binary,omitempty"`
-	Args        []string  `json:"args,omitempty"`
-	Env         []string  `json:"env,omitempty"`
+	AgentName    string    `json:"agent_name,omitempty"`
+	Workspace    string    `json:"workspace,omitempty"`
+	ResumeID     string    `json:"resume_id,omitempty"`
+	Binary       string    `json:"binary,omitempty"`
+	Args         []string  `json:"args,omitempty"`
+	Env          []string  `json:"env,omitempty"`
 	// PID is the OS pid of the started subprocess. Set on the `start`
 	// event after Spawner.Spawn returns; carried on `exit` so listings
 	// can verify the same pid was reaped. 0 = test fake or unknown.
@@ -81,11 +81,11 @@ type SpawnEvent struct {
 	// FirstUserMessage is a short prefix of the user input that
 	// triggered the spawn (truncated). Surfaces in the Backends UI
 	// "Recent Spawns" list so operators see what each spawn was for.
-	FirstUserMessage string    `json:"first_user_message,omitempty"`
-	ExitReason       string    `json:"exit_reason,omitempty"`
-	DurationMs       int64     `json:"duration_ms,omitempty"`
-	Error            string    `json:"error,omitempty"`
-	Message          string    `json:"message,omitempty"`
+	FirstUserMessage string `json:"first_user_message,omitempty"`
+	ExitReason       string `json:"exit_reason,omitempty"`
+	DurationMs       int64  `json:"duration_ms,omitempty"`
+	Error            string `json:"error,omitempty"`
+	Message          string `json:"message,omitempty"`
 	// ReasonDetail is a human sentence on the exit event explaining WHY
 	// the process ended — e.g. "idle TTL expired", "Stop() called
 	// (preempt or session change)", "subprocess crashed: <stderr line>".
@@ -111,6 +111,10 @@ func (s *SpawnLogger) Append(path string, ev SpawnEvent) error {
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
 	}
+	// Spawn logs are plain files any reader of the data dir can open; the
+	// argv/env they record must not carry a live token.
+	ev.Args = RedactArgv(ev.Args)
+	ev.Env = RedactArgv(ev.Env)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err

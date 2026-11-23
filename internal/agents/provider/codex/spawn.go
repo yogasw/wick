@@ -265,7 +265,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	log.Info().
 		Str("bin", bin).
-		Strs("argv", args).
+		Strs("argv", provider.RedactArgv(args)).
 		Str("cwd", opt.Workspace).
 		Str("resume", opt.ResumeID).
 		Msg("agents.spawn: starting (codex)")

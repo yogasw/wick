@@ -173,7 +173,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	cmd.Stderr = os.Stderr
 
-	log.Info().Str("bin", bin).Strs("argv", args).Str("cwd", opt.Workspace).
+	log.Info().Str("bin", bin).Strs("argv", provider.RedactArgv(args)).Str("cwd", opt.Workspace).
 		Str("resume", opt.ResumeID).Msg("agents.spawn: starting (opencode)")
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
