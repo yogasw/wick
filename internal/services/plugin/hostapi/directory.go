@@ -70,25 +70,33 @@ func (d *ManifestDirectory) Reload(ctx context.Context) {
 	d.mu.Unlock()
 }
 
-// Plugin resolves key; a miss rescans at most every rescanAfter.
-func (d *ManifestDirectory) Plugin(key string) (PluginInfo, bool) {
+// refreshIfStale re-reads installed manifests periodically, including for
+// keys already known. A CLI-installed plugin can replace its manifest while
+// Wick stays running; keeping the old HostScopes/HostResources indefinitely
+// would incorrectly deny newly declared operations until a server restart.
+func (d *ManifestDirectory) refreshIfStale() {
 	d.mu.Lock()
-	p, ok := d.plugins[key]
 	stale := time.Since(d.at) > rescanAfter
 	d.mu.Unlock()
-	if ok || !stale {
-		return p, ok
+	if stale {
+		d.Reload(context.Background())
 	}
-	d.Reload(context.Background())
+}
+
+// Plugin resolves key and checks for a changed manifest after rescanAfter.
+// A successful lookup must not bypass refresh: upgrades keep the same key.
+func (d *ManifestDirectory) Plugin(key string) (PluginInfo, bool) {
+	d.refreshIfStale()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	p, ok = d.plugins[key]
+	p, ok := d.plugins[key]
 	return p, ok
 }
 
 // All lists every installed plugin, sorted by key (the admin Host access
-// page).
+// page). Refresh here too so the admin can enable new scopes immediately.
 func (d *ManifestDirectory) All() []PluginInfo {
+	d.refreshIfStale()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make([]PluginInfo, 0, len(d.plugins))
@@ -102,6 +110,7 @@ func (d *ManifestDirectory) All() []PluginInfo {
 // UnknownScopes lists the host_scopes key declares that this wick does not
 // know (denied; shown to the admin).
 func (d *ManifestDirectory) UnknownScopes(key string) []string {
+	d.refreshIfStale()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return slices.Clone(d.unknown[key])
