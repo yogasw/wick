@@ -1164,7 +1164,18 @@ func TargetKey(params map[string]string) string {
 	return "params:" + hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-var targetKeys = []string{"title", "name", "page_id", "database_id", "channel", "channel_id", "repo", "repository", "branch", "app_code", "app_id", "room_id", "path", "url", "id", "email", "query"}
+// targetKeys are tried in this order: WHERE the action lands first (the
+// repository, branch, page, channel, app), then what it is called, so a
+// pull request reads "repo_slug=… · source_branch=…" before its title.
+var targetKeys = []string{
+	"workspace", "project_key", "repo", "repository", "repo_slug", "project", "project_id",
+	"branch", "branch_name", "source_branch", "destination_branch", "target_branch", "ref",
+	"page_id", "database_id", "channel", "channel_id", "app_code", "app_id", "room_id", "ticket_id",
+	"path", "url", "id", "email", "title", "name", "query",
+}
+
+// targetSummaryParts is how many target parameters the summary shows.
+const targetSummaryParts = 4
 
 // targetSummary is a short line saying what the action touches, built
 // from its real parameters (never from the agent's description).
@@ -1185,7 +1196,7 @@ func targetSummary(params map[string]any) string {
 			continue
 		}
 		parts = append(parts, k+"="+truncate(s, 60))
-		if len(parts) == 3 {
+		if len(parts) == targetSummaryParts {
 			break
 		}
 	}

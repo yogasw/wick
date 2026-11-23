@@ -704,3 +704,17 @@ func TestHoldsConnectorWhileWaiting(t *testing.T) {
 		t.Fatal("a decided action no longer holds its connector")
 	}
 }
+
+func TestTargetSummaryNamesRepositoryBeforeTitle(t *testing.T) {
+	got := targetSummary(map[string]any{
+		"workspace": "acme", "repo_slug": "widget-api", "source_branch": "fix/a",
+		"destination_branch": "main", "title": "fix: something", "description": "long text",
+	})
+	want := "workspace=acme · repo_slug=widget-api · source_branch=fix/a · destination_branch=main"
+	if got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+	if got := targetSummary(map[string]any{"title": "hello", "text": "x"}); got != "title=hello" {
+		t.Fatalf("title-only summary = %q", got)
+	}
+}

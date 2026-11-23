@@ -1734,14 +1734,17 @@ var socketAckTimeout = 2 * time.Second
 
 // ack answers a socket request on the client currently in use; serve swaps
 // the client when it reconnects, so it is read under cfgMu.
-func (s *Channel) ack(evt socketmode.Event) {
+func (s *Channel) ack(evt socketmode.Event) { s.ackWith(evt, nil) }
+
+// ackWith answers a socket request with a payload (nil = empty ack).
+func (s *Channel) ackWith(evt socketmode.Event, payload any) {
 	s.cfgMu.Lock()
 	socket := s.socket
 	s.cfgMu.Unlock()
 	if socket != nil && evt.Request != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), socketAckTimeout)
 		defer cancel()
-		if err := socket.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil {
+		if err := socket.AckCtx(ctx, evt.Request.EnvelopeID, payload); err != nil {
 			log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Msg("socket ack not queued")
 		}
 	}
@@ -1758,11 +1761,15 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 		}
 		s.handleEventsAPI(ctx, apiEvent)
 	case socketmode.EventTypeInteractive:
-		s.ack(evt)
 		cb, ok := evt.Data.(slackgo.InteractionCallback)
 		if !ok {
+			s.ack(evt)
 			return
 		}
+		// Most interactions ack empty; an access-request submit answers in
+		// the ack itself (a validation error, or "saving…" in place of the
+		// modal) so the approver is never left looking at nothing.
+		s.ackWith(evt, accessSubmitAck(cb))
 		go s.handleInteraction(ctx, cb)
 	case socketmode.EventTypeSlashCommand:
 		// Slash commands need an immediate ack so the user doesn't see

@@ -38,6 +38,7 @@ const (
 	accessOpenWebAction  = "access_open_web"
 	accessDecideCallback = "access_req_decide"
 	accessDenyCallback   = "access_req_deny"
+	accessSavingCallback = "access_req_saving"
 	accessNoteBlock      = "access_note"
 	accessItemBlockPfx   = "access_item:"
 	maxSectionText       = 2900
@@ -208,14 +209,18 @@ func clipText(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// accessStatusIcon is where an action ended up. It deliberately avoids
+// ✅/❌: those already mean a tool call passed or failed elsewhere in the
+// thread, and an approver read them as "approved"/"declined". The words
+// in itemStatusLine carry the decision; the icon carries the outcome.
 func accessStatusIcon(status string) string {
 	switch status {
 	case accessreq.ItemOK:
-		return "✅"
+		return "🟢"
 	case accessreq.ItemError:
-		return "❌"
+		return "🔴"
 	case accessreq.ItemDenied:
-		return "⛔"
+		return "🚫"
 	case accessreq.ItemRunning:
 		return "🔄"
 	}
@@ -257,19 +262,25 @@ func itemStatusLine(it accessreq.ItemView) string {
 		}
 		return line
 	case accessreq.ItemRunning:
-		return fmt.Sprintf("_Approved %s by %s · running…_", strings.ToLower(accessreq.ModeLabel(it.Mode)), escapeMrkdwn(it.DecidedBy))
+		return approvedBy(it) + " · Run: _running…_"
 	case accessreq.ItemOK:
-		return fmt.Sprintf("Approved %s by %s · *OK*", strings.ToLower(accessreq.ModeLabel(it.Mode)), escapeMrkdwn(it.DecidedBy))
+		return approvedBy(it) + " · Run: *succeeded*"
 	case accessreq.ItemError:
-		return fmt.Sprintf("Approved %s by %s · *error:* `%s`", strings.ToLower(accessreq.ModeLabel(it.Mode)), escapeMrkdwn(it.DecidedBy), escapeMrkdwn(clipText(it.Error, 300)))
+		return approvedBy(it) + " · Run: *failed* `" + escapeMrkdwn(clipText(it.Error, 300)) + "`"
 	case accessreq.ItemDenied:
-		line := "Denied by " + escapeMrkdwn(it.DecidedBy)
+		line := "Decision: *Denied* by " + escapeMrkdwn(it.DecidedBy) + " · not run"
 		if it.Note != "" {
 			line += ": _" + escapeMrkdwn(clipText(it.Note, 300)) + "_"
 		}
 		return line
 	}
 	return it.Status
+}
+
+// approvedBy is the decision half of a decided action's line, kept apart
+// from how the run went.
+func approvedBy(it accessreq.ItemView) string {
+	return fmt.Sprintf("Decision: *Approved* %s by %s", strings.ToLower(accessreq.ModeLabel(it.Mode)), escapeMrkdwn(it.DecidedBy))
 }
 
 func itemHeading(it accessreq.ItemView) string {
@@ -335,7 +346,13 @@ func accessCardBlocks(v accessreq.View) []map[string]any {
 		}
 		blocks = append(blocks, map[string]any{"type": "actions", "block_id": accessBlockID, "elements": elems})
 	}
-	blocks = append(blocks, contextBlock(fmt.Sprintf("Request `%s` · approved actions run with the approver's own access", shortID(v.ID))))
+	footer := fmt.Sprintf("Request `%s` · approved actions run with the approver's own access", shortID(v.ID))
+	if !waiting {
+		// Decided or ended: the "approved actions run…" hint read as if
+		// something was approved on a card that was denied.
+		footer = fmt.Sprintf("Request `%s` · closed", shortID(v.ID))
+	}
+	blocks = append(blocks, contextBlock(footer))
 	return blocks
 }
 
@@ -489,7 +506,7 @@ func reviewModal(v accessreq.View, meta string) map[string]any {
 			text += "\n*Target:* " + escapeMrkdwn(it.Target)
 		}
 		if it.CanDecide {
-			text += "\n*Runs as:* your own account ✅"
+			text += "\n*Runs as:* your own account"
 		}
 		blocks = append(blocks, section(text))
 		blocks = append(blocks, section("```"+escapeMrkdwn(payloadPreview(it, modalPayloadChars))+"```"))
@@ -758,8 +775,77 @@ func threadOf(cb slackgo.InteractionCallback) string {
 	return cb.Message.Timestamp
 }
 
-// handleAccessSubmit applies a submitted review or deny modal and tells
-// the clicker (only them) what did not go through.
+// accessPickMsg is the error shown on a review modal submitted without
+// any decision picked (a note alone decides nothing).
+const accessPickMsg = "Pick a decision for at least one action. A note is only sent together with a Deny."
+
+// accessSubmitAck is the socket ack for an interaction: nil (empty ack)
+// for everything but an access-request modal submit. A review submitted
+// with nothing picked keeps the modal open with an error under each
+// decision; otherwise the modal turns into a "saving" view at once and
+// handleAccessSubmit replaces it with the result.
+func accessSubmitAck(cb slackgo.InteractionCallback) any {
+	if cb.Type != slackgo.InteractionTypeViewSubmission ||
+		(cb.View.CallbackID != accessDecideCallback && cb.View.CallbackID != accessDenyCallback) {
+		return nil
+	}
+	if cb.View.CallbackID == accessDecideCallback {
+		values := viewStateValues(cb.View)
+		errs := map[string]string{}
+		for blockID := range values {
+			if !strings.HasPrefix(blockID, accessItemBlockPfx) {
+				continue
+			}
+			if stateSelected(values, blockID, "mode") != "" {
+				errs = nil
+				break
+			}
+			errs[blockID] = accessPickMsg
+		}
+		if len(errs) > 0 {
+			return map[string]any{"response_action": "errors", "errors": errs}
+		}
+	}
+	return map[string]any{"response_action": "update", "view": savingModal(cb.View.PrivateMetadata)}
+}
+
+func savingModal(meta string) map[string]any {
+	return modalBase("Access request", accessSavingCallback, meta, []map[string]any{
+		section("⏳ *Saving your decision…*"),
+		contextBlock("This view shows the result when it is done. You can close it: the card in the thread shows the same."),
+	}, "")
+}
+
+// resultModal is what replaces the saving view: every action with its
+// decision and how its run went, plus what did not go through.
+func resultModal(v accessreq.View, meta string, failed []string) map[string]any {
+	head := "✔️ *Decision saved.*"
+	if len(failed) > 0 {
+		head = "⚠️ *Some decisions were not applied.*"
+	}
+	blocks := []map[string]any{section(head)}
+	if len(failed) > 0 {
+		blocks = append(blocks, section("• "+escapeMrkdwn(strings.Join(failed, "\n• "))))
+	}
+	running := false
+	for _, it := range v.Items {
+		blocks = append(blocks, map[string]any{"type": "divider"})
+		text := accessStatusIcon(it.Status) + " " + itemHeading(it)
+		if it.Target != "" {
+			text += "\n" + escapeMrkdwn(it.Target)
+		}
+		text += "\n" + itemStatusLine(it)
+		blocks = append(blocks, section(text))
+		running = running || it.Status == accessreq.ItemRunning
+	}
+	if running {
+		blocks = append(blocks, contextBlock("Still running: the card in the thread shows the outcome when it finishes."))
+	}
+	return modalBase("Access request", accessSavingCallback, meta, capBlocks(blocks), "")
+}
+
+// handleAccessSubmit applies a submitted review or deny modal, then
+// replaces the modal (already showing "saving…") with the outcome.
 func (s *Channel) handleAccessSubmit(ctx context.Context, cb slackgo.InteractionCallback) {
 	if AccessRequests == nil {
 		return
@@ -771,7 +857,7 @@ func (s *Channel) handleAccessSubmit(ctx context.Context, cb slackgo.Interaction
 	reqID, chatID, threadTS := parts[0], parts[1], parts[2]
 	viewer := s.accessViewerID(ctx, cb.User.ID)
 	if viewer == "" {
-		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Your Slack account is not linked to an approved wick user, so nothing was decided.")
+		s.accessSubmitMessage(ctx, cb, chatID, threadTS, "⛔ Your Slack account is not linked to an approved wick user, so nothing was decided.")
 		return
 	}
 	values := viewStateValues(cb.View)
@@ -803,7 +889,7 @@ func (s *Channel) handleAccessSubmit(ctx context.Context, cb slackgo.Interaction
 		_, results, err = AccessRequests.Decide(ctx, reqID, viewer, ds)
 	}
 	if err != nil {
-		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Could not save your decisions: "+err.Error())
+		s.accessSubmitMessage(ctx, cb, chatID, threadTS, "⚠️ Could not save your decisions: "+err.Error())
 		return
 	}
 	var failed []string
@@ -812,9 +898,42 @@ func (s *Channel) handleAccessSubmit(ctx context.Context, cb slackgo.Interaction
 			failed = append(failed, r.Error)
 		}
 	}
+	if v, verr := AccessRequests.ViewFor(ctx, reqID, viewer); verr == nil && s.accessUpdateModal(ctx, cb, resultModal(v, cb.View.PrivateMetadata, failed)) {
+		return
+	}
 	if len(failed) > 0 {
 		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Some decisions were not applied:\n• "+strings.Join(failed, "\n• "))
 	}
+}
+
+// accessSubmitMessage puts a one-line outcome in the submitted modal, or,
+// when the modal is gone, in an ephemeral message to the clicker.
+func (s *Channel) accessSubmitMessage(ctx context.Context, cb slackgo.InteractionCallback, chatID, threadTS, text string) {
+	m := modalBase("Access request", accessSavingCallback, cb.View.PrivateMetadata, []map[string]any{section(escapeMrkdwn(text))}, "")
+	if !s.accessUpdateModal(ctx, cb, m) {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, text)
+	}
+}
+
+// accessUpdateModal replaces the submitted modal (by view id; the ack
+// already swapped it for the saving view). False when Slack refused,
+// e.g. the approver closed it.
+func (s *Channel) accessUpdateModal(ctx context.Context, cb slackgo.InteractionCallback, view map[string]any) bool {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil || cb.View.ID == "" {
+		return false
+	}
+	req, err := toModalRequest(view)
+	if err != nil {
+		return false
+	}
+	if _, err := api.UpdateViewContext(ctx, req, "", "", cb.View.ID); err != nil {
+		log.Debug().Str("channel", "slack").Err(err).Msg("access request: result modal update failed")
+		return false
+	}
+	return true
 }
 
 func (s *Channel) accessEphemeral(chatID, threadTS, userID, text string) {
