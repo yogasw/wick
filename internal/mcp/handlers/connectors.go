@@ -702,7 +702,7 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		return
 	}
 	rawParams, _ := args["params"].(map[string]any)
-	resJSON, note, execErr := executeTracked(r.Context(), r, svc, layout, toolID, rawParams, callSessionID(args), user, tagIDs)
+	resJSON, note, execErr := executeTracked(r.Context(), r, svc, layout, toolID, rawParams, CallSession(r, args), user, tagIDs)
 	if execErr != nil {
 		rsp.ToolError(w, req.ID, execErr.Error(), toolID)
 		return
