@@ -2,6 +2,37 @@
 
 Operational rules for coding agents (Claude Code, etc.) working in this repo. Human onboarding lives in [README.md](README.md).
 
+## Required workflow for every code change
+
+**Read this file before editing Wick, even when working through a GitHub API
+or an MCP connector rather than a local checkout.** Read the nearest scoped
+`AGENTS.md` files and the relevant development skills, then inspect an existing
+implementation in the target subsystem. Do not assume rules from an earlier
+conversation are still current. The user's requested behavior defines the
+scope; unrelated cleanup belongs in a separate change.
+
+1. Inspect the current branch, working tree and applicable conventions. Preserve
+   unrelated local edits and understand the existing design before replacing it.
+2. Plan a small, coherent change with its tests and documentation. Reuse existing
+   abstractions, shared UI components and helpers rather than creating parallel
+   implementations.
+3. Implement and review the complete change in a working tree or staged batch
+   of files, not as a sequence of remote one-file commits.
+4. Format, lint, compile and test the affected code. Review the full diff for
+   correctness, readability, security, regressions and accidental changes.
+5. Commit a logical, independently buildable change including its tests and
+   documentation. Open the PR against the intended branch (normally
+   `develop` for Wick development). Report the checks actually executed.
+6. Merge only after required checks pass and review blockers are resolved.
+   For runtime changes, verify the installed version/commit and affected
+   behavior after deployment. Documentation-only changes do not require a
+   binary rebuild.
+
+If the available tools cannot run a required check, say exactly what could not
+be verified. Do not treat an unavailable check as a pass. A draft PR or clearly
+identified unverified review branch is acceptable; a claimed verified merge
+is not. Never bypass failing checks merely to finish quickly.
+
 ## Running the app (agent flow)
 
 When an agent needs to start the server — e.g. to verify a UI change — use a **one-shot** flow, not watch mode:
@@ -44,11 +75,61 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 
 ## Before declaring a task done
 
-- `templ generate && go build ./...` passes.
+- For runtime code changes, the applicable compile, lint and test checks below pass; generate templ output when required. For docs-only changes, review the documentation diff.
 - Any process you started is stopped.
 - Changes on the tool grid / Ctrl+K palette look right in both light and dark mode (if UI changed).
 
 ## Code conventions
+
+### Readability, architecture and maintenance
+
+- Match the surrounding project conventions. Go uses `gofmt` indentation and
+  alignment; TypeScript/Svelte/CSS use the repository's existing formatter and
+  style. Do not compress control flow into semicolon-separated one-liners or
+  manually minify source. Generated files follow their generator's convention.
+- Give new packages, plugin entry points, exported types and functions useful
+  documentation. For internal helpers, explain purpose, inputs, outputs,
+  invariants, side effects or error semantics when they are not obvious.
+  Explain **why** a decision was made, especially security, compatibility,
+  concurrency, caching, fallback and lifecycle decisions. Keep comments accurate
+  when implementation changes; do not pad obvious getters with redundant prose.
+- Keep functions focused and name them by intent. Separate configuration,
+  operation declarations, business logic, policy, OS/network I/O, and UI
+  rendering where their complexity warrants it. Avoid deep nesting, duplicated
+  validation, magic constants and unrelated abstractions. Follow the existing
+  subsystem layout rather than inventing a new architecture for a small fix.
+- Keep error handling explicit. Propagate context cancellation and deadlines,
+  close resources, bound input/output and concurrency, and preserve meaningful
+  error context. Do not swallow failures or silently fall back to permissive
+  security defaults.
+- Use the existing structured logger for meaningful operation lifecycle and
+  error events, with appropriate levels and identifiers/durations where useful.
+  Do not log credentials, raw sensitive inputs, command arguments, environment
+  variables or file contents. Avoid duplicate or noisy logs.
+- For UI changes, reuse the design system and shared components, preserve theme,
+  responsive behavior and accessibility, and verify interaction in a browser
+  when available. Do not rely solely on screenshots of static markup.
+- For plugins, respect the plugin boundary, the existing SDK, access policy
+  and versioning. Use the public `pkg/safeexec` compatibility helpers for
+  subprocesses that may run on Termux; these helpers are not a security sandbox.
+
+### Verification before committing
+
+| Change | Minimum relevant checks |
+|---|---|
+| Go code | Format changed handwritten files with `gofmt`, run `go vet` and `go test` for affected packages; use existing lint configuration if present. |
+| Go templates / backend UI | Generate templ output as required, compile affected packages and test rendering/behavior. |
+| External connector plugins | Test within the plugins module/workspace; verify plugin build/manifest when changing its contract. For Host Access, run `bash scripts/check-connector-quality.sh host_access`. |
+| Frontend | Use the existing workspace checks/tests/build commands (for example `cd fe && npm run check` and the relevant unit tests). Verify changed interaction in the browser when available. |
+| Docs only | Review the diff, links, examples and consistency with current source; no application rebuild is required. |
+
+Add regression tests with bug fixes and unit tests for new behavior, covering
+normal cases, edge cases, errors and relevant security boundaries. Favor
+behavioral assertions over brittle source-text checks. Run broader checks when
+shared contracts, core code, or cross-package behavior changes. For concurrency
+changes, use race testing where supported. Report existing unrelated failures
+separately; do not hide them by weakening tests. Use the tools and commands
+actually available in the repository; do not invent a passing lint result.
 
 ### Connector code quality
 
@@ -69,7 +150,7 @@ Use `github.com/yogasw/wick/pkg/safeexec` for subprocess execution, including
 plugins that run on Termux. Resolve executable names before command creation.
 Safeexec is a compatibility layer, not a sandbox.
 
-### Never call `os/exec.LookPath` directly — use `internal/safeexec.LookPath`
+### Never call `os/exec.LookPath` directly in host runtime — use `pkg/safeexec.LookPath`
 
 Go's `os/exec.LookPath` uses the `faccessat2(2)` syscall to check executable permissions. Android's seccomp filter on devices that still ship a 4.x kernel (Android 13 userland on top of kernel 4.14 is a real, in-the-wild combination) rejects `faccessat2` with `SIGSYS` instead of the `ENOSYS` that Go's runtime expects, killing the process before its fallback to plain `faccessat` can fire.
 
@@ -78,7 +159,44 @@ Anything that runs inside `wick-agent` (everything under `internal/agents/`, `in
 - **Replace `exec.LookPath(name)`** with `safeexec.LookPath(name)`.
 - **Before `exec.Command(name, ...)` where `name` may be a bare binary name** (anything without `/`), call `safeexec.ResolveBin(name)` first and pass the resolved absolute path. `exec.Command` calls `LookPath` internally during `Cmd` construction whenever the argument has no slash, which trips the same `faccessat2` chain.
 
-CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) runs on the developer's build host — kernel ≥ 5.8 in practice — and stays on stdlib `exec.LookPath` since `wick build` / `wick init` / `wick doctor` never run inside `wick-agent`.
+CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) can also run on Termux. Prefer `pkg/safeexec` for new or changed subprocess call sites; do not assume the developer's kernel supports `faccessat2`. Preserve existing working compatibility helpers.
+
+## Git and pull request quality
+
+A commit represents a **logical change, not an individual file edit**.
+
+- Group related source, regression tests, comments, formatting, version changes
+  and documentation together. Finish and review a logical unit before committing.
+  Do not create a commit for each file, typo, indentation correction or routine
+  intermediate fix. Do not split a feature into artificially small commits;
+  conversely, do not combine unrelated fixes merely to reduce commit count.
+- Each commit should be independently buildable and testable in its context.
+  Prefer a single atomic commit for a small change, or a small series of coherent
+  commits for a larger feature. Keep separate issues in separate PRs when they
+  can be reviewed and deployed independently.
+- Use Conventional Commits: `type(scope): imperative summary` (scope optional).
+  For non-trivial changes, include a body explaining the motivation, design
+  trade-offs, compatibility and verification. Avoid vague messages such as
+  "update file", "fix again" or "WIP" in review-ready history.
+- Prefer local editing, staging, and a single commit for a related file set.
+  When using GitHub API tools, use the Git Tree/Commit API to create an atomic
+  multi-file change against the current parent, then update the feature branch
+  with an expected-head check and no force. Do not call the contents API once
+  per changed file when an atomic batch is available. If the tools cannot
+  provide an atomic commit, disclose that limitation and prefer a reviewable
+  draft over a long chain of unverified micro-commits.
+- Inspect `git status` and the staged diff (or the equivalent API diff) before
+  committing. Exclude generated noise, secrets, local configuration, unrelated
+  changes and build artifacts unless intentionally required. Review the full
+  PR diff against the target branch before requesting merge.
+- Do not rewrite published or merged history, force push, hard reset, or amend
+  someone else's commits without explicit authorization. Squash merge is an
+  option for keeping target-branch history clean when the repository policy
+  permits it; it is not permission to bypass checks or discard useful history.
+- PR descriptions should state the problem, solution, relevant security or
+  migration implications, and exact verification results (including skipped or
+  failing checks). Keep the PR focused and update its description if scope
+  changes. Required CI checks and branch protections must not be bypassed.
 
 ## Skills to use
 
