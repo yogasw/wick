@@ -135,6 +135,18 @@ when:
     const ops = ["U01TESTUSER"];   // chat user ids
     return !input.requester || !ops.includes(input.requester.id);
 
+# 4. A card for every post outside the agent's own channels, even though
+#    the agent may post on its own (always_ask: require/deny only)
+name: posts-outside-own-channels
+effect: require
+always_ask: true            # also holds calls the agent's own access allows
+when:
+  ops: [slack.*]
+  kind: [send]
+  script: |
+    const ch = String(input.action.params.channel_id || input.action.params.channel || "");
+    return !["C01TESTCHAN", "C02TESTCHAN"].includes(ch);
+
 # input = {action: {connector_id, connector_key, op, kind, params, config, agent, session_id},
 #          requester: {id, name, channel, wick_user_id} | null   (whose message the agent answered;
 #                     null for a schedule or another agent),

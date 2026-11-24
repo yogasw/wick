@@ -45,6 +45,11 @@ type RuleDoc struct {
 	Effect   string `json:"effect" yaml:"effect"`
 	Simulate bool   `json:"simulate,omitempty" yaml:"simulate,omitempty"`
 	Disabled bool   `json:"disabled,omitempty" yaml:"disabled,omitempty"`
+	// AlwaysAsk (require and deny only) also holds calls the agent's own
+	// access allows: without it a rule only decides calls the agent's
+	// access refused. A send the agent may make on its own (a post to
+	// another team's channel) then still waits for a person's card.
+	AlwaysAsk bool `json:"always_ask,omitempty" yaml:"always_ask,omitempty"`
 	// Approvers is the mode of an approvers rule: add (default) or only.
 	Approvers string `json:"approvers,omitempty" yaml:"approvers,omitempty"`
 	// ApproversLabel names, on the card, who an approvers rule lets in
@@ -119,6 +124,9 @@ func (d RuleDoc) Validate() error {
 		}
 	} else if d.Approvers != "" {
 		return fmt.Errorf("approvers is only for effect: approvers")
+	}
+	if d.AlwaysAsk && d.Effect != EffectRequire && d.Effect != EffectDeny {
+		return fmt.Errorf("always_ask is only for effect: require or deny")
 	}
 	if len(d.When.Ops) == 0 {
 		return fmt.Errorf("when.ops is required: name the operations, e.g. [notion.update_page] or [apps.*]")
@@ -386,6 +394,12 @@ func (s *Service) ruleApplies(_ context.Context, r entity.AccessRule, sessionID,
 // auto_approve. An auto_approve rule only acts when its owner can run
 // the action themselves; otherwise it is skipped (the card still shows).
 func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
+	return s.evaluate(ctx, a, false)
+}
+
+// evaluate is Evaluate; alwaysAskOnly keeps only the always_ask rules,
+// for a call the agent's own access already allows.
+func (s *Service) evaluate(ctx context.Context, a Action, alwaysAskOnly bool) Verdict {
 	var v Verdict
 	if s.store == nil {
 		return v
@@ -405,7 +419,7 @@ func (s *Service) Evaluate(ctx context.Context, a Action) Verdict {
 			continue
 		}
 		d, err := ParseRule(r.Doc)
-		if err != nil || !s.Matches(ctx, d, a) {
+		if err != nil || (alwaysAskOnly && !d.AlwaysAsk) || !s.Matches(ctx, d, a) {
 			continue
 		}
 		if strings.TrimSpace(d.When.Script) != "" {

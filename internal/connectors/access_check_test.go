@@ -106,3 +106,53 @@ func TestAccessCheckOverridesRefusal(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// fullScope lets the agent run every op of its connector on its own.
+type fullScope struct{ conn string }
+
+func (s fullScope) AllowConnector(id string) bool   { return id == s.conn }
+func (s fullScope) AllowAccount(id, _ string) bool  { return id == s.conn }
+func (fullScope) AllowOp(string, string, bool) bool { return true }
+func (fullScope) AgentID() string                   { return "agent-1" }
+
+// An op the agent may run on its own still waits when the rule gate holds
+// it, only for a project with access requests on.
+func TestRuleGateHoldsAllowedOp(t *testing.T) {
+	bg := context.Background()
+	svc, db := newSvcAccountVisDB(t)
+	row, err := svc.Create(bg, "acct-vis", "Gated Row", nil, "u-approver")
+	require.NoError(t, err)
+	tagRow(t, db, row.ID, "custom:gated_row")
+	ctx := WithAgentScope(bg, fullScope{conn: row.ID})
+	exec := func() error {
+		_, err := svc.Execute(ctx, ExecuteParams{
+			ConnectorID: row.ID, OperationKey: "whoami", Input: map[string]string{"channel": "C02TESTCHAN"},
+			Source: entity.ConnectorRunSourceMCP, UserID: "u-agent-user", SessionID: "sess-1",
+		})
+		return err
+	}
+	var seen AccessQuery
+	svc.SetRuleGate(func(_ context.Context, q AccessQuery) error {
+		seen = q
+		return errors.New("needs a person's approval (access rule \"outside\")")
+	})
+	defer svc.SetRuleGate(nil)
+
+	svc.SetAccessGate(func(string) bool { return false })
+	require.NoError(t, exec(), "gate asked while access requests are off")
+
+	svc.SetAccessGate(func(string) bool { return true })
+	err = exec()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside")
+	assert.Equal(t, "C02TESTCHAN", seen.Input["channel"])
+	assert.Equal(t, "agent-1", seen.AgentID)
+
+	svc.SetRuleGate(func(context.Context, AccessQuery) error { return nil })
+	require.NoError(t, exec())
+
+	// The approved run (no agent scope) never meets the gate.
+	svc.SetRuleGate(func(context.Context, AccessQuery) error { return errors.New("held") })
+	_, err = svc.Execute(bg, ExecuteParams{ConnectorID: row.ID, OperationKey: "whoami", Source: entity.ConnectorRunSourceMCP, UserID: "u-approver", SessionID: "sess-1"})
+	require.NoError(t, err)
+}

@@ -2,6 +2,7 @@ package accessreq
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -215,5 +216,75 @@ func TestAppFromConnectorConfig(t *testing.T) {
 	a.Config = map[string]string{"app_code": "acme-prod"}
 	if runAs, _, _ := e.svc.Check(ctx, a); runAs != "" {
 		t.Fatalf("param says staging, connector is prod: auto-approved as %q", runAs)
+	}
+}
+
+func TestAlwaysAskOnlyForRequireOrDeny(t *testing.T) {
+	raw := "name: a\neffect: auto_approve\nalways_ask: true\nwhen: {ops: [x.*], kind: [write]}"
+	if _, err := ParseRule(raw); err == nil {
+		t.Fatal("always_ask accepted on auto_approve")
+	}
+	if _, err := ParseRule("name: a\neffect: require\nalways_ask: true\nwhen: {ops: [x.*]}"); err != nil {
+		t.Fatalf("always_ask on require refused: %v", err)
+	}
+}
+
+func TestGateHoldsOnlyAlwaysAskRules(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	other := Action{SessionID: "sess-1", ConnectorID: "c-chat", ConnectorKey: "chat", OpKey: "post_message", Kind: KindSend,
+		Params: map[string]string{"channel": "C02OTHER", "text": "hi"}}
+	own := other
+	own.Params = map[string]string{"channel": "C01OWN", "text": "hi"}
+
+	// A plain require rule only decides refused calls: the gate lets the
+	// agent's own call through.
+	saveRule(t, e, "owner-a", "name: plain\neffect: require\nwhen:\n  ops: [chat.*]\n  all: [{fact: channel, equals: C02OTHER}]\n")
+	if err := e.svc.Gate(ctx, other); err != nil {
+		t.Fatalf("plain require gated an allowed call: %v", err)
+	}
+
+	saveRule(t, e, "owner-a", "name: outside-own\neffect: require\nalways_ask: true\nwhen:\n  ops: [chat.*]\n  kind: [send]\n  all: [{fact: channel, equals: C02OTHER}]\n")
+	err := e.svc.Gate(ctx, other)
+	if err == nil || !errors.Is(err, ErrNeedsApproval) || !strings.Contains(err.Error(), "wick_request_access") {
+		t.Fatalf("always_ask require did not hold the call: %v", err)
+	}
+	if err := e.svc.Gate(ctx, own); err != nil {
+		t.Fatalf("own channel held: %v", err)
+	}
+	// Another session's project is not covered.
+	far := other
+	far.SessionID = "sess-h"
+	if err := e.svc.Gate(ctx, far); err != nil {
+		t.Fatalf("rule leaked to another project: %v", err)
+	}
+}
+
+// An always_ask card offers the timed modes, and the grant it leaves
+// lets the same call on the same target through the gate.
+func TestAlwaysAskCardOffersTimedModesAndGrantPasses(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	saveRule(t, e, "owner-a", "name: notes-ask\neffect: require\nalways_ask: true\nwhen:\n  ops: [notes.update_page]\n")
+	a := Action{SessionID: "sess-1", AgentID: "agent-1", ConnectorID: "c-notes", ConnectorKey: "notes", OpKey: "update_page", Kind: KindWrite,
+		Params: map[string]string{"page_id": "p1", "status": "done"}}
+	if err := e.svc.Gate(ctx, a); !errors.Is(err, ErrNeedsApproval) {
+		t.Fatalf("gate before approval: %v", err)
+	}
+	v0 := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1", "status": "done"}))
+	v, _ := e.svc.ViewFor(ctx, v0.ID, "owner-a")
+	if len(v.Items[0].Modes) < 2 {
+		t.Fatalf("always_ask card offers %v, want the timed modes too", v.Items[0].Modes)
+	}
+	if _, res, err := e.svc.Decide(ctx, v.ID, "owner-a", []Decision{{ItemID: v.Items[0].ID, Mode: ModeHour}}); err != nil || len(res) != 1 || !res[0].OK {
+		t.Fatalf("decide: %v %+v", err, res)
+	}
+	if err := e.svc.Gate(ctx, a); err != nil {
+		t.Fatalf("gate after an hour grant: %v", err)
+	}
+	other := a
+	other.Params = map[string]string{"page_id": "p2"}
+	if err := e.svc.Gate(ctx, other); !errors.Is(err, ErrNeedsApproval) {
+		t.Fatalf("grant leaked to another target: %v", err)
 	}
 }

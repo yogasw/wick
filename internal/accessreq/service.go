@@ -175,8 +175,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 			ConnectorKey: meta.ConnectorKey, ConnectorLabel: meta.ConnectorLabel, OpKey: a.OpKey, OpName: meta.OpName,
 			AccountID: a.AccountID, Params: string(params), ParamsHash: hash, Kind: kind, Status: ItemPending,
 			// A "require" rule, or an action that names no clear target,
-			// is approved one call at a time, never for a while.
-			OnceOnly: v.Effect == EffectRequire || !HasTarget(act.Params),
+			// is approved one call at a time, never for a while. An
+			// always_ask rule only puts a card in front of calls the agent
+			// could make itself: its card offers the timed modes like any
+			// request.
+			OnceOnly: (v.Effect == EffectRequire && !ruleAlwaysAsks(v.Rule)) || !HasTarget(act.Params),
 		}
 		if len(v.Simulated) > 0 {
 			item.Note = "would auto-approve (simulate): " + strings.Join(v.Simulated, ", ")
@@ -922,6 +925,56 @@ func (s *Service) Check(ctx context.Context, a Action) (runAs, note string, err 
 		return v.Rule.OwnerID, "rule " + v.Rule.Name, nil
 	}
 	return "", "", nil
+}
+
+// ruleAlwaysAsks reports whether a stored rule carries always_ask.
+func ruleAlwaysAsks(r *entity.AccessRule) bool {
+	if r == nil {
+		return false
+	}
+	d, err := ParseRule(r.Doc)
+	return err == nil && d.AlwaysAsk
+}
+
+// ErrNeedsApproval marks a call an always_ask rule holds for a person.
+var ErrNeedsApproval = errors.New("needs a person's approval")
+
+// Gate is the connector-side hook for a call the agent's own access
+// allows. Only always_ask rules speak here: a deny one refuses, a
+// require one holds the call until a person approves that exact call on
+// a card (wick_request_access; the approved run never comes back here).
+// A grant left by an earlier card for the same operation on the same
+// target (an hour, this session…) lets it through until it lapses.
+func (s *Service) Gate(ctx context.Context, a Action) error {
+	ctx = WithSession(ctx, a.SessionID)
+	if !s.Enabled(a.SessionID) {
+		return nil
+	}
+	if a.AgentName == "" && a.AgentID != "" && s.dir != nil {
+		a.AgentName = s.dir.AgentName(ctx, a.AgentID)
+	}
+	if a.AskedBy == nil {
+		a.AskedBy = s.lastAsker(a.SessionID)
+	}
+	v := s.evaluate(ctx, a, true)
+	switch v.Effect {
+	case EffectDeny:
+		return fmt.Errorf("denied by access rule %q", v.Rule.Name)
+	case EffectRequire:
+		if s.store != nil && HasTarget(a.Params) {
+			scopes := map[string]string{ModeSession: a.SessionID, "agent": a.AgentID}
+			if grants, err := s.store.grants(ctx, a.ConnectorID, a.OpKey, scopes, s.now()); err == nil {
+				target := TargetKey(a.Params)
+				for _, g := range grants {
+					if g.Target == target {
+						return nil
+					}
+				}
+			}
+		}
+		return fmt.Errorf("%w (access rule %q): do not retry it; file this exact call with wick_request_access (same tool_id and params, plus a reason) and end your turn — a person approves or rejects it on a card, and a rejection comes back with their note", ErrNeedsApproval, v.Rule.Name)
+	}
+	return nil
 }
 
 // Grants lists standing grants (all when scopeType is "").

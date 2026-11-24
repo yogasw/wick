@@ -287,6 +287,12 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 			OpKey: q.OpKey, Kind: accessreq.ClassifyOp(q.OpKey, q.Destructive), Params: q.Input, Config: q.Config,
 		})
 	})
+	svc.SetRuleGate(func(ctx context.Context, q connectors.AccessQuery) error {
+		return ar.Gate(ctx, accessreq.Action{
+			SessionID: q.SessionID, AgentID: q.AgentID, ConnectorID: q.ConnectorID, ConnectorKey: q.ConnectorKey,
+			OpKey: q.OpKey, Kind: accessreq.ClassifyOp(q.OpKey, q.Destructive), Params: q.Input, Config: q.Config,
+		})
+	})
 	ar.SetScriptRunner(func(ctx context.Context, ownerID, code string, input map[string]any) (json.RawMessage, []string, error) {
 		u, err := users.GetUserByID(ctx, ownerID)
 		if err != nil || u == nil {

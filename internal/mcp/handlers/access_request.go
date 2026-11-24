@@ -36,7 +36,9 @@ func AccessRequestDescriptor() ToolDescriptor {
 	return ToolDescriptor{
 		Name: accessRequestTool,
 		Description: "Ask a person to approve connector actions YOUR access cannot run (wick_execute refused them: " +
-			"\"not allowed for this agent\", a read-only grant, a role that may only read). One request carries up to 10 " +
+			"\"not allowed for this agent\", a read-only grant, a role that may only read, or an access rule that holds the call " +
+			"for a person). Use it too for an action your access DOES allow when your instructions say that target needs a " +
+			"person's approval first (a post to another team's channel, say): file it here instead of running it. One request carries up to 10 " +
 			"exact actions ({tool_id, params}, the same shape as wick_execute). A card appears where this conversation lives " +
 			"(the Slack thread, the web); an approver opens it, sees every action with its real parameters, and decides each " +
 			"one: once, for 1 / 8 / 24 hours or for this session (same operation on the same target, and the same config_override, only), or deny (standing access is a rule, set in the project settings, Access requests). Approved actions run with the APPROVER's access — you do NOT run " +

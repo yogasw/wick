@@ -90,19 +90,19 @@ type runAsIdentity struct {
 	tags []string
 }
 
-// accessOverride asks the access check about an op the agent scope
-// refused, and resolves who it may run as. The person must still reach
-// the connector on their own: a grant never outlives its approver's
-// access.
-func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) (*runAsIdentity, error) {
-	// Off for this session's project: nothing is asked, the refusal stands
-	// exactly as before access requests existed.
-	if s.accessCheck == nil || s.identity == nil || noAccessCheck(ctx) || !s.accessOn(p.SessionID) {
-		return nil, nil
-	}
-	virtual := p.SessionInstance != nil
+// RuleGate answers an op the agent's own access allows: nil lets it run,
+// an error holds it (an always_ask rule wants a person to approve it, or
+// a deny rule refuses it).
+type RuleGate func(ctx context.Context, q AccessQuery) error
+
+// SetRuleGate wires the always_ask access rules. Set once at boot.
+func (s *Service) SetRuleGate(f RuleGate) { s.ruleGate = f }
+
+// accessQuery is the action an access check or gate is asked about: the
+// op's input plus a config override, and the instance's subject config.
+func (s *Service) accessQuery(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) AccessQuery {
 	var cfg map[string]string
-	if virtual {
+	if p.SessionInstance != nil {
 		cfg = subjectConfig(p.SessionInstance.Config)
 	} else {
 		cfg = subjectConfig(s.LoadConfigs(*c))
@@ -118,10 +118,39 @@ func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity
 		b, _ := json.Marshal(p.ConfigOverride)
 		input[ConfigOverrideParam] = string(b)
 	}
-	who, note, err := s.accessCheck(ctx, AccessQuery{
+	return AccessQuery{
 		SessionID: p.SessionID, AgentID: agentIDOf(ctx), ConnectorID: c.ID, ConnectorKey: c.Key,
 		OpKey: op.Key, Destructive: op.Destructive, Input: input, Config: cfg,
-	})
+	}
+}
+
+// checkRuleGate holds an op the agent may run on its own when an
+// always_ask rule of the session's project matches it (a send to a
+// channel outside the agent's own, say): the agent files it with
+// wick_request_access and a person approves the exact call. Off when the
+// project has access requests off.
+func (s *Service) checkRuleGate(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) error {
+	if s.ruleGate == nil || noAccessCheck(ctx) || !s.accessOn(p.SessionID) {
+		return nil
+	}
+	if err := s.ruleGate(ctx, s.accessQuery(ctx, p, c, op)); err != nil {
+		return fmt.Errorf("operation %q: %w", op.Key, err)
+	}
+	return nil
+}
+
+// accessOverride asks the access check about an op the agent scope
+// refused, and resolves who it may run as. The person must still reach
+// the connector on their own: a grant never outlives its approver's
+// access.
+func (s *Service) accessOverride(ctx context.Context, p ExecuteParams, c *entity.Connector, op *connector.Operation) (*runAsIdentity, error) {
+	// Off for this session's project: nothing is asked, the refusal stands
+	// exactly as before access requests existed.
+	if s.accessCheck == nil || s.identity == nil || noAccessCheck(ctx) || !s.accessOn(p.SessionID) {
+		return nil, nil
+	}
+	virtual := p.SessionInstance != nil
+	who, note, err := s.accessCheck(ctx, s.accessQuery(ctx, p, c, op))
 	if err != nil {
 		return nil, fmt.Errorf("operation %q: %w", op.Key, err)
 	}

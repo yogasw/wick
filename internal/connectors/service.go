@@ -128,6 +128,11 @@ type Service struct {
 	// see SetAccessCheck. nil changes nothing.
 	accessCheck AccessCheck
 
+	// ruleGate is asked when an agent's own access ALLOWS an op: an
+	// always_ask rule may still hold it for a person's approval — see
+	// SetRuleGate. nil changes nothing.
+	ruleGate RuleGate
+
 	// ownerCheck tells whether a user owns an instance (its owner tag),
 	// for who may approve a config override — see SetOwnerCheck.
 	ownerCheck OwnerCheck
@@ -2564,6 +2569,8 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				}
 				return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance%s", op.Key, c.Key, s.requestHint(p.SessionID))
 			}
+		} else if err := s.checkRuleGate(ctx, p, c, op); err != nil {
+			return nil, err
 		}
 	}
 	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
@@ -2618,6 +2625,8 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 					}
 				}
 			}
+		} else if err := s.checkRuleGate(ctx, p, c, op); err != nil {
+			return nil, err
 		}
 	}
 
