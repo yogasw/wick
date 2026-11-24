@@ -245,7 +245,11 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			     (admin-only) live in its menu, like the Team sidebar. -->
 			if user != nil {
 				<div class="border-t border-white-300 dark:border-navy-600 px-1.5 pb-2.5 pt-1.5" data-sidebar-account data-space-account>
-					@ui.SidebarAccountMenu(user, vm.Base+"/settings")
+					if vm.ShellAssetURL != "" {
+						@sharedAgentAccountMenu(user, vm.Base+"/settings")
+					} else {
+						@ui.SidebarAccountMenu(user, vm.Base+"/settings")
+					}
 				</div>
 			}
 			<!-- Constrain top-widget dropdowns to sidebar width so menus don't overflow -->
