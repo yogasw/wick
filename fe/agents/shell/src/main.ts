@@ -13,6 +13,9 @@
  * inline <script> in layout.templ and are NOT duplicated here.
  */
 
+import { mount } from "svelte";
+import AccountMenu from "../../../common/ui/src/AccountMenu.svelte";
+import { readAccountMenuData } from "../../../common/ui/src/account-menu.js";
 import { statusDotClass, effectiveStatus, applyEvent, type DotState } from "./statusDot.js";
 import { applyRowStatus, createResorter, refreshAges } from "./sidebarRows.js";
 
@@ -221,6 +224,11 @@ function wireAgeTicker(): void {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  const accountEl = document.querySelector<HTMLElement>("[data-shared-account-menu]");
+  if (accountEl) {
+    const props = readAccountMenuData(accountEl);
+    mount(AccountMenu, { target: accountEl, props: { ...props, settingsLabel: "Agent settings", settingsHref: props.isAdmin ? accountEl.dataset.settingsHref : "" } });
+  }
   wirePin();
   wireDragToMove();
   wireLiveStatus();
