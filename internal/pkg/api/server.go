@@ -136,6 +136,7 @@ import (
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	toolplugin "github.com/yogasw/wick/internal/tools/plugin"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/buildsource"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
@@ -3802,6 +3803,18 @@ func NewServer() *Server {
 
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
+	// The account-menu details compare the immutable running build with GitHub.
+	// The checker caches responses, so opening the normal menu never hits the network.
+	sourceChecker := buildsource.NewChecker(buildsource.Current(buildWickVersion, releaseAppVersion, releaseRepo), buildTime)
+	r.HandleFunc("GET /api/build-source", func(w http.ResponseWriter, r *http.Request) {
+		if login.GetUser(r.Context()) == nil {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "private, no-store")
+		_ = json.NewEncoder(w).Encode(sourceChecker.Snapshot(r.Context()))
+	})
 
 	// Prometheus-compatible metrics scrape endpoint. Admin-only — bearer
 	// token or session required so the endpoint is not public by default.
