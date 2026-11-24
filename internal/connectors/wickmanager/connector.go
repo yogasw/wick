@@ -203,8 +203,8 @@ func Operations(deps Deps) []connector.Category {
 type emptyInput struct{}
 
 type forceSwapInput struct {
-	ExpectedVersion string `wick:"required,desc=Exact pending installed version from build_status."`
-	Confirm bool `wick:"required,desc=True only after the administrator explicitly approves interrupting running work for this version."`
+	ExpectedVersion string `wick:"required;desc=Exact pending installed version from build_status."`
+	Confirm bool `wick:"required;desc=True only after the administrator explicitly approves interrupting running work for this version."`
 }
 
 type appGetInput struct {
