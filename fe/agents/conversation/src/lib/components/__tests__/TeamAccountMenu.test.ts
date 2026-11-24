@@ -133,7 +133,7 @@ describe("TeamAccountMenu", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     expect(screen.getByTestId("versions").textContent).toContain("1.2.3");
     expect(screen.getByTestId("versions").textContent).toContain("0.9.0");
-    expect(screen.getByText("1234567890ab").getAttribute("title")).toBe("1234567890abcdef1234567890abcdef12345678");
+    expect(screen.getByText("1234567").getAttribute("title")).toBe("1234567890abcdef1234567890abcdef12345678");
   });
 
   test("unknown commit is explicit", async () => {
