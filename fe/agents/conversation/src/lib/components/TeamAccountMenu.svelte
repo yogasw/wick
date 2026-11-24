@@ -53,7 +53,7 @@
   let details = $state<SourceDetails | null>(null);
   let loadingDetails = $state(false);
   let detailsError = $state("");
-  const shortCommit = $derived(/^[0-9a-f]{13,40}$/i.test(buildCommit) ? buildCommit.slice(0, 12) : buildCommit);
+  const shortCommit = $derived(/^[0-9a-f]{8,40}$/i.test(buildCommit) ? buildCommit.slice(0, 7) : buildCommit);
   function displayDate(value?: string) {
     if (!value) return "Unknown";
     const date = new Date(value);
@@ -218,7 +218,7 @@
                 {#if details.tag}<p class="break-all">Tag: {details.tag}</p>{/if}
                 {#if details.upstream}<p class="break-all">Upstream: {details.upstream}</p>{/if}
                 {#if details.revision}
-                  <p class="break-all">Revision: <span class="font-mono" title={details.revision}>{details.revision.slice(0, 12)}</span></p>
+                  <p class="break-all">Revision: <span class="font-mono" title={details.revision}>{details.revision.slice(0, 7)}</span></p>
                   {#if details.repository}<a class="underline" href={"https://github.com/" + details.repository + "/commit/" + details.revision} target="_blank" rel="noopener noreferrer">View commit on GitHub</a>{/if}
                 {/if}
                 {#if details.dirty}<p>Dirty build — revision is the base commit; local edits are not included in the comparison.</p>{/if}
