@@ -766,7 +766,13 @@ plugins() {
     ver="$(tr -d '[:space:]' <"plugins/$kind/$key/VERSION")"
     [ "$TEST" = 1 ] && heavy "plugin-test-$key" env GOFLAGS= go test "./plugins/$kind/$key/..."
     # GOWORK=off: a go.work would put plugins/ in workspace mode and break -mod=mod.
-    (cd plugins && heavy "plugin-build-$key" env GOWORK=off GOFLAGS= wick plugin build --kind "$kind" "$key" --target "$TARGET")
+    # Like the core cross-build, Termux must not use Android cgo headers for Linux.
+    # Shipped plugins are pure Go; keep an explicit override on other hosts.
+    local plugin_cgo="${CGO_ENABLED:-0}"
+    if [ "$(go env GOOS 2>/dev/null || true)" = android ] || [ -n "${TERMUX_VERSION:-}" ]; then
+      plugin_cgo=0
+    fi
+    (cd plugins && heavy "plugin-build-$key" env CGO_ENABLED="$plugin_cgo" GOWORK=off GOFLAGS= wick plugin build --kind "$kind" "$key" --target "$TARGET")
     zip="plugins/bin/$key-$ver-$OS-$ARCH.zip"
     [ "$DRY" = 1 ] || [ -f "$zip" ] || die "build produced no $zip"
     run "$APP" plugin install "$zip"
