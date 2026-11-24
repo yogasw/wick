@@ -115,6 +115,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.apiDisconnectAccount))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.apiSetAccountDisabledOps))
 	mux.Handle("GET /manager/api/connectors/{key}/{id}/accounts/{accountID}", auth(h.apiAccountDetail))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/health-check", auth(h.apiAccountHealthCheck))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/ops/{opKey}", auth(h.apiSetAccountOpOverride))
 
 	// Connector page routes → SPA shell. The SPA's client router resolves
