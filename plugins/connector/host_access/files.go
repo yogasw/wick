@@ -10,7 +10,9 @@ import (
  "github.com/yogasw/wick/pkg/connector"
 )
 
+// policyFor reads the saved configuration on each call so policy changes take effect without restarting the plugin.
 func policyFor(c *connector.Ctx)(Policy,error){return loadPolicy(c.Cfg("policy_json"))}
+// fileAction centralizes authorization and serialization for native file handlers. Never register a file operation that bypasses this wrapper.
 func fileAction(op string, fn func(Policy,string,*connector.Ctx)(any,error)) connector.ExecuteFunc {
  return func(c *connector.Ctx)(any,error){
   p,err:=policyFor(c);if err!=nil{return nil,err}
@@ -20,6 +22,7 @@ func fileAction(op string, fn func(Policy,string,*connector.Ctx)(any,error)) con
   return fn(p,name,c)
  }
 }
+// fileRead returns bounded UTF-8 text and the full-file digest needed for optimistic edits.
 func fileRead(_ Policy,name string,c *connector.Ctx)(any,error){
  b,err:=readFile(name);if err!=nil{return nil,err}
  if !utf8.Valid(b)||strings.ContainsRune(string(b),0){return nil,fmt.Errorf("not a UTF-8 text file")}
@@ -29,14 +32,17 @@ func fileRead(_ Policy,name string,c *connector.Ctx)(any,error){
  if end-start>=1000{end=start+999}
  return map[string]any{"path":name,"content":strings.Join(lines[start-1:end],"\n"),"start_line":start,"end_line":end,"total_lines":len(lines),"sha256":digest(b),"bytes":len(b)},nil
 }
+// fileWrite replaces an existing file only when the caller supplies the expected digest.
 func fileWrite(_ Policy,name string,c *connector.Ctx)(any,error){
  b:=[]byte(c.Input("content"));if err:=replaceFile(name,b,c.Input("expected_sha256"));err!=nil{return nil,err}
  return map[string]any{"path":name,"sha256":digest(b),"bytes":len(b)},nil
 }
+// fileCreate never overwrites a file that already exists.
 func fileCreate(_ Policy,name string,c *connector.Ctx)(any,error){
  b:=[]byte(c.Input("content"));if err:=writeNew(name,b);err!=nil{return nil,err}
  return map[string]any{"path":name,"sha256":digest(b),"bytes":len(b)},nil
 }
+// fileEdit requires a unique exact match, avoiding ambiguous replacements in source files.
 func fileEdit(p Policy,name string,c *connector.Ctx)(any,error){
  if _,err:=p.authorize("read",name);err!=nil{return nil,err}
  b,err:=readFile(name);if err!=nil{return nil,err}
@@ -47,6 +53,7 @@ func fileEdit(p Policy,name string,c *connector.Ctx)(any,error){
  if err:=replaceFile(name,updated,expected);err!=nil{return nil,err}
  return map[string]any{"path":name,"sha256":digest(updated),"bytes":len(updated)},nil
 }
+// fileAppend requires read and write permission because it preserves existing content.
 func fileAppend(p Policy,name string,c *connector.Ctx)(any,error){
  if _,err:=p.authorize("read",name);err!=nil{return nil,err}
  b,err:=readFile(name);if err!=nil{return nil,err}
@@ -54,6 +61,7 @@ func fileAppend(p Policy,name string,c *connector.Ctx)(any,error){
  if err:=replaceFile(name,b,c.Input("expected_sha256"));err!=nil{return nil,err}
  return map[string]any{"path":name,"sha256":digest(b),"bytes":len(b)},nil
 }
+// fileCopy checks both source and destination permissions before creating a new file.
 func fileCopy(p Policy,name string,c *connector.Ctx)(any,error){
  if _,err:=p.authorize("read",name);err!=nil{return nil,err}
  dest,err:=p.authorize("copy",c.Input("destination"));if err!=nil{return nil,err}
@@ -82,6 +90,7 @@ func fileMove(p Policy, name string, c *connector.Ctx) (any, error) {
 	return map[string]any{"path": name, "destination": dest, "moved": true}, nil
 }
 
+// fileList filters every child independently; a readable parent does not imply that all its children are visible.
 func fileList(p Policy,name string,c *connector.Ctx)(any,error){
  limit:=c.InputInt("limit");if limit<=0||limit>500{limit=500}
  names,more,err:=listDir(name,limit);if err!=nil{return nil,err}
@@ -96,6 +105,7 @@ func fileList(p Policy,name string,c *connector.Ctx)(any,error){
  }
  return map[string]any{"path":name,"entries":rows,"truncated":more},nil
 }
+// search walks permitted directories with bounded depth, entries, bytes and results. It does not follow links or invoke an external grep process.
 func search(p Policy,name string,c *connector.Ctx,content bool,tree bool)(any,error){
  limit:=c.InputInt("limit");if limit<=0||limit>200{limit=200}
  depth:=c.InputInt("max_depth");if depth<=0||depth>20{depth=8}
@@ -132,6 +142,7 @@ func search(p Policy,name string,c *connector.Ctx,content bool,tree bool)(any,er
  walk(name,0)
  return map[string]any{"matches":rows,"scanned":scanned,"truncated":truncated},nil
 }
+// systemInfo reports actual platform capability, not an assumed sandbox.
 func systemInfo(c *connector.Ctx)(any,error){
  p,err:=policyFor(c);if err!=nil{return nil,err}
  if !contains(p.System.Allow,"system_info"){return nil,fmt.Errorf("system_info denied")}
