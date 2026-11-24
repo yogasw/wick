@@ -53,6 +53,9 @@ type Deps struct {
 	// AlertDoors lists the chat doors (instance keys) a user is linked on,
 	// shown by user_alerts_get. Optional.
 	AlertDoors func(ctx context.Context, userID string) []string
+	// LiveHandover reuses the admin Software Update snapshot; nil in stdio mode.
+	LiveHandover func() map[string]any
+	ForceSwap func(expectedVersion string) (map[string]any, error)
 }
 
 type handlers struct {
