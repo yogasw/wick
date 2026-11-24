@@ -55,12 +55,11 @@ func assembleLDFlags(cfg Config) []string {
 		fmt.Sprintf("-X github.com/yogasw/wick/app.BuildTime=%s", time.Now().UTC().Format(time.RFC3339)),
 	}
 	// A source deploy builds a scaffold, not the source checkout itself.
-	// Stamp the actual source SHA, or mark uncommitted source as dirty.
+	// Stamp the actual base SHA. Dirty state stays separate in build metadata.
 	commit := os.Getenv("WICK_BUILD_COMMIT")
 	if meta, ok := sourceMetadata(); ok {
 		flags = append(flags, "-X github.com/yogasw/wick/internal/buildsource.Encoded="+buildsource.Encode(meta))
 		commit = meta.Revision
-		if meta.Dirty { commit = "dirty" }
 	}
 	if commit == "dirty" || regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(commit) {
 		flags = append(flags, "-X github.com/yogasw/wick/app.BuildCommit="+commit)
