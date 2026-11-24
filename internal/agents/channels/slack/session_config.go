@@ -77,10 +77,75 @@ func (s *Channel) PostSessionConfigCard(ctx context.Context, sessionID, instID, 
 		opts = append(opts, slackgo.MsgOptionTS(threadTS))
 	}
 	opts = append(opts, s.personaOpts(threadTS)...)
-	if _, _, err := api.PostMessageContext(ctx, chatID, opts...); err != nil {
+	_, ts, err := api.PostMessageContext(ctx, chatID, opts...)
+	if err != nil {
 		return true, fmt.Errorf("post fill card: %w", err)
 	}
+	s.cfgMu.Lock()
+	if s.cfgCards == nil {
+		s.cfgCards = map[string]cfgCardRef{}
+	}
+	s.cfgCards[sessionID+"|"+instID] = cfgCardRef{chatID: chatID, ts: ts, label: label}
+	s.cfgMu.Unlock()
 	return true, nil
+}
+
+// cfgCardRef locates a posted Fill in card so it can be closed once the
+// values are saved, whichever form saved them.
+type cfgCardRef struct {
+	chatID, ts, label string
+}
+
+// SessionConfigFilled closes the Fill in card this channel posted for the
+// instance and wakes the session. It is the web form's door: a person who
+// fills the values from the session's Config tab instead of the card must
+// not leave the card open and the agent asleep. Reports false when this
+// channel posted no card for it (a plain Config-tab edit wakes nobody).
+func (s *Channel) SessionConfigFilled(ctx context.Context, sessionID, instID, who string, keys []string) bool {
+	s.cfgMu.Lock()
+	ref, ok := s.cfgCards[sessionID+"|"+instID]
+	s.cfgMu.Unlock()
+	if !ok {
+		return false
+	}
+	s.finishConfigCard(ctx, sessionID, instID, ref.chatID, ref.ts, ref.label, who, keys)
+	return true
+}
+
+// finishConfigCard swaps the card's button for a done line, forgets the
+// card and wakes the session with what was filled.
+func (s *Channel) finishConfigCard(ctx context.Context, sessionID, instID, chatID, ts, label, who string, keys []string) {
+	s.cfgMu.Lock()
+	api := s.api
+	if ref, ok := s.cfgCards[sessionID+"|"+instID]; ok {
+		if label == "" {
+			label = ref.label
+		}
+		if ts == "" {
+			chatID, ts = ref.chatID, ref.ts
+		}
+		delete(s.cfgCards, sessionID+"|"+instID)
+	}
+	s.cfgMu.Unlock()
+	if label == "" {
+		label = instID
+	}
+	if api != nil && chatID != "" && ts != "" {
+		text := fmt.Sprintf("✅ *%s* filled by %s (%s). The agent continues.", label, who, strings.Join(keys, ", "))
+		if blocks, err := blocksFromJSON([]map[string]any{section(text)}); err == nil {
+			if _, _, _, err := api.UpdateMessageContext(ctx, chatID, ts, slackgo.MsgOptionText(text, false), slackgo.MsgOptionBlocks(blocks...)); err != nil {
+				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("session config: close fill card failed")
+			}
+		}
+	}
+	if WakeSession == nil {
+		log.Warn().Str("channel", "slack").Str("session", sessionID).Msg("session config: no waker wired, session not woken")
+		return
+	}
+	msg := fmt.Sprintf("[session connector] %s filled %s on %s. Secret values are stored encrypted in its config; run the connector (action=test first if unsure) instead of asking for them.", who, strings.Join(keys, ", "), instID)
+	if err := WakeSession(context.WithoutCancel(ctx), sessionID, msg); err != nil {
+		log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("session config: wake failed")
+	}
 }
 
 // handleConfigFill opens the fill modal for the card's button.
@@ -105,7 +170,11 @@ func (s *Channel) handleConfigFill(ctx context.Context, cb slackgo.InteractionCa
 		s.accessEphemeral(cb.Channel.ID, threadOf(cb), cb.User.ID, "Cannot open the form: "+err.Error())
 		return
 	}
-	meta := sessionID + "|" + instID + "|" + cb.Channel.ID + "|" + threadOf(cb)
+	cardTS := cb.Container.MessageTs
+	if cardTS == "" {
+		cardTS = cb.Message.Timestamp
+	}
+	meta := sessionID + "|" + instID + "|" + cb.Channel.ID + "|" + threadOf(cb) + "|" + cardTS
 	req, err := toModalRequest(configModal(label, meta, fields))
 	if err != nil {
 		return
@@ -156,11 +225,15 @@ func configModal(label, meta string, fields []ConfigField) map[string]any {
 
 // handleConfigSubmit saves the modal and wakes the session.
 func (s *Channel) handleConfigSubmit(ctx context.Context, cb slackgo.InteractionCallback) {
-	parts := strings.SplitN(cb.View.PrivateMetadata, "|", 4)
-	if len(parts) != 4 || SessionConfigSave == nil {
+	parts := strings.SplitN(cb.View.PrivateMetadata, "|", 5)
+	if len(parts) < 4 || SessionConfigSave == nil {
 		return
 	}
 	sessionID, instID, chatID, threadTS := parts[0], parts[1], parts[2], parts[3]
+	cardTS := ""
+	if len(parts) == 5 {
+		cardTS = parts[4]
+	}
 	if s.accessViewerID(ctx, cb.User.ID) == "" {
 		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Your Slack account is not linked to an approved wick user, so nothing was saved.")
 		return
@@ -195,11 +268,9 @@ func (s *Channel) handleConfigSubmit(ctx context.Context, cb slackgo.Interaction
 		return
 	}
 	s.accessEphemeral(chatID, threadTS, cb.User.ID, "🔧 Saved "+strings.Join(keys, ", ")+". Only you see this message.")
-	if WakeSession != nil {
-		name := cb.User.Name
-		if name == "" {
-			name = cb.User.ID
-		}
-		_ = WakeSession(ctx, sessionID, fmt.Sprintf("[session connector] %s filled %s on %s. Secret values are stored encrypted in its config; run the connector (action=test first if unsure) instead of asking for them.", name, strings.Join(keys, ", "), instID))
+	name := cb.User.Name
+	if name == "" {
+		name = "<@" + cb.User.ID + ">"
 	}
+	s.finishConfigCard(ctx, sessionID, instID, chatID, cardTS, "", name, keys)
 }

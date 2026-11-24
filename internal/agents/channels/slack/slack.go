@@ -377,6 +377,7 @@ type Channel struct {
 	bgTick      time.Duration
 
 	cfgMu     sync.Mutex
+	cfgCards  map[string]cfgCardRef // open Fill in cards by "session|instance"; guarded by cfgMu
 	cfg       agentconfig.SlackChannelConfig
 	pubURL    string
 	api       *slackgo.Client

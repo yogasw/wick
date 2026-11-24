@@ -3,6 +3,7 @@ package agents
 import (
 	"time"
 
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -391,7 +392,28 @@ func sessionWorkspaceSetUI(c *tool.Ctx) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	notifyConfigFilled(c, sid, inst.ID, keys)
 	c.JSON(http.StatusOK, map[string]any{"applied": keys})
+}
+
+// notifyConfigFilled tells the channel that posted a Fill in card for this
+// instance that the values arrived through the web form, so it closes the
+// card and wakes the agent waiting on it.
+func notifyConfigFilled(c *tool.Ctx, sid, instID string, keys []string) {
+	if globalChannels == nil {
+		return
+	}
+	who := "someone"
+	if u := login.GetUser(c.Context()); u != nil && u.Name != "" {
+		who = u.Name
+	}
+	for _, ch := range globalChannels.Channels() {
+		if f, ok := ch.(interface {
+			SessionConfigFilled(context.Context, string, string, string, []string) bool
+		}); ok && f.SessionConfigFilled(c.Context(), sid, instID, who, keys) {
+			return
+		}
+	}
 }
 
 // sessionWorkspaceDuplicateUI copies an instance (config and all).
