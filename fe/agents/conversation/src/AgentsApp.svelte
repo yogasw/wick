@@ -59,7 +59,8 @@
   import { liveRoster, boundedDebounce, singleFlight, ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS } from "./lib/rosterLive.js";
   import type { SessionActivity } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
-  import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
+  import AccountMenu from "../../../common/ui/src/AccountMenu.svelte";
+  import { readAccountMenuData } from "../../../common/ui/src/account-menu.js";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
   import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
@@ -72,20 +73,7 @@
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
   const viewerName = readViewerName();
-  const account = {
-    viewerEmail: appEl?.dataset.viewerEmail ?? "",
-    viewerAvatar: appEl?.dataset.viewerAvatar ?? "",
-    isAdmin: appEl?.dataset.viewerAdmin !== undefined,
-    viewingAs: appEl?.dataset.viewingAs ?? "",
-    appVersion: appEl?.dataset.appVersion ?? "",
-    wickVersion: appEl?.dataset.wickVersion ?? "",
-    buildCommit: appEl?.dataset.buildCommit ?? "",
-  };
-  const themeMode = appEl?.dataset.themeMode;
-  const theme =
-    themeMode === "light" || themeMode === "dark"
-      ? { mode: themeMode, light: appEl?.dataset.themeLight ?? "", dark: appEl?.dataset.themeDark ?? "" }
-      : null;
+  const account = readAccountMenuData(appEl);
 
   /* The "Agents" switch is a tab, not a back button: it opens the Agents
      home ("New session"), with the project of the page the user came from
@@ -1197,10 +1185,9 @@
         {#if ticketProjects?.length}<span class="shrink-0 text-[11px] font-normal text-black-700" data-testid="tickets-nav-count">{projectCount(ticketProjects.length)}</span>{/if}
       </button>
       {/if}
-      <TeamAccountMenu
-        {viewerName}
+      <AccountMenu
         {...account}
-        {theme}
+        {viewerName}
         onSettings={() => { rosterOpen = false; openPanel({ kind: "team-settings", tab: "general" }); }}
       />
     </div>
