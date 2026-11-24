@@ -309,6 +309,11 @@ func (h *Handler) systemServingStream(w http.ResponseWriter, r *http.Request) {
 // servingPayload is the one description of "which process is answering, what
 // is it doing, and what is waiting to replace it" — shared by the one-shot
 // GET and the stream so the two can never drift.
+// ServingPayload is the shared live snapshot for the admin page and Wick Manager.
+func (h *Handler) ServingPayload() map[string]any {
+	return h.servingPayload()
+}
+
 func (h *Handler) servingPayload() map[string]any {
 	version := h.sys.WickVersion
 	if h.sys.Coordinator != nil {
@@ -318,6 +323,10 @@ func (h *Handler) servingPayload() map[string]any {
 	}
 	body := map[string]any{
 		"pid":      os.Getpid(),
+		"commit": h.sys.Commit,
+		"build_time": h.sys.BuildTime,
+		"app_version": h.sys.AppVersion,
+		"handing_over": upgrade.HandingOver(),
 		"version":  version,
 		"graceful": upgrade.Armed(),
 		"forced":   upgrade.Forced(),
@@ -420,14 +429,38 @@ func (h *Handler) systemRestartNow(w http.ResponseWriter, r *http.Request) {
 const swapNowGrace = 2 * time.Second
 
 func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
+	status, payload := h.requestSwap(boolParam(r, "force"))
+	writeJSON(w, status, payload)
+}
+
+// ManagerForceSwap only operates on a validated installed candidate matching
+// the version the administrator explicitly approved. A downloaded but not yet
+// installed release must still go through the updater's apply path.
+func (h *Handler) ManagerForceSwap(expectedVersion string) (map[string]any, error) {
+	sw := detectPendingSwap(h.sys.AppVersion, h.sys.BuildTime)
+	if !sw.Pending || sw.To == "" || sw.To != expectedVersion {
+		return nil, fmt.Errorf("no installed candidate matching %q; read build_status again", expectedVersion)
+	}
+	if sw.Blocked != "" {
+		return nil, fmt.Errorf("candidate blocked: %s", sw.Blocked)
+	}
+	if _, ok := upgrade.ReadDrainState(h.sys.DataDir); ok {
+		return nil, fmt.Errorf("previous generation still draining; cannot start a third generation")
+	}
+	status, payload := h.requestSwap(true)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%v", payload["error"])
+	}
+	return payload, nil
+}
+
+func (h *Handler) requestSwap(forced bool) (int, map[string]any) {
 	if !upgrade.Armed() {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
+		return http.StatusBadRequest, map[string]any{
 			"ok":    false,
 			"error": "graceful handover is not available in this process — restart the service instead",
-		})
-		return
+		}
 	}
-	forced := boolParam(r, "force")
 	busy := upgrade.Busy()
 	if forced {
 		log.Warn().Strs("interrupting", busy).
@@ -450,7 +483,7 @@ func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Error().Err(err).Msg("swap now: successor not started — this process keeps serving")
 			upgrade.SetAutoSwap(upgrade.AutoSwap{})
-			if forced {
+			if forced && !strings.Contains(err.Error(), "upgrade in progress") {
 				// Same rule as a handover that never started at boot: a
 				// stale force must not ambush the next, unattended one.
 				upgrade.ClearForce()
@@ -474,13 +507,11 @@ func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
 			if forced {
 				note = "A handover is already underway; it will now hand over without waiting for the work above."
 			}
-			writeJSON(w, http.StatusOK, map[string]any{
+			return http.StatusOK, map[string]any{
 				"ok": true, "forced": forced, "already": true, "message": note,
-			})
-			return
+			}
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": msg})
-		return
+		return http.StatusInternalServerError, map[string]any{"ok": false, "error": msg}
 	}
 	// Same phase the watcher publishes, so the page shows "handing over — the
 	// new process is booting" for the ~90s that takes, whether the handover
@@ -490,7 +521,7 @@ func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
 		to = sw.To
 	}
 	upgrade.SetAutoSwap(upgrade.AutoSwap{State: "handing_over", To: to})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "forced": forced})
+	return http.StatusOK, map[string]any{"ok": true, "forced": forced}
 }
 
 // systemSetAutoUpdate persists the auto-update toggle into userconfig.
