@@ -1398,7 +1398,16 @@ func (s *Service) SaveAccountTokens(ctx context.Context, connectorID, wickUserID
 		ExpiresAt:      expiresAt,
 		UpdatedAt:      time.Now(),
 	}
-	return s.repo.UpsertAccount(ctx, acc, row.MultiAccount)
+	if err := s.repo.UpsertAccount(ctx, acc, row.MultiAccount); err != nil {
+		return err
+	}
+	// A failed permission probe must not turn a successful consent into a failed login.
+	if mod, ok := s.Module(row.Key); ok && mod.HealthCheck != nil {
+		if _, err := s.RunAccountHealthCheck(ctx, connectorID, acc.ID, wickUserID); err != nil {
+			log.Warn().Str("connector_id", connectorID).Str("account_id", acc.ID).Msg("account connected; permission check failed, retry from Manage Operations")
+		}
+	}
+	return nil
 }
 
 // UpdateAccountTokens persists a refreshed token set onto one account.
@@ -1526,7 +1535,7 @@ type AccountOpState struct {
 	// Inherited is what the instance says, shown as the value the account
 	// would fall back to when the override is cleared.
 	Inherited bool
-	// SystemDisabled is the health-check lock on the instance. It is a
+	// SystemDisabled is the health-check lock on this credential. It is a
 	// ceiling, not a default: an override cannot switch an operation back
 	// on when the credential genuinely lacks the upstream permission, so
 	// forcing it would only buy an error from the provider.
@@ -1537,16 +1546,16 @@ type AccountOpState struct {
 // ResolveAccountOps resolves every operation in opKeys for one account
 // against the instance's own operation state.
 //
-// Precedence, tightest first: SystemDisabled wins over everything, then the
-// account's own override, then the instance's Enabled flag.
+// Precedence: the account health lock, its manual override, then the instance Enabled flag.
+// The instance health report belongs to its shared credential, never to an account.
 func ResolveAccountOps(acc *entity.ConnectorAccount, instance map[string]OpState, opKeys []string) []AccountOpState {
 	overrides := AccountOpOverrides(acc)
 	out := make([]AccountOpState, 0, len(opKeys))
 	for _, key := range opKeys {
-		st := instance[key]
-		inherited := st.Enabled && !st.SystemDisabled
+		st := accountHealthState(acc, key, instance[key])
+		inherited := st.Enabled
 		forced, overridden := overrides[key]
-		enabled := inherited
+		enabled := inherited && !st.SystemDisabled
 		if overridden {
 			enabled = forced && !st.SystemDisabled
 		}
@@ -1565,6 +1574,7 @@ func ResolveAccountOps(acc *entity.ConnectorAccount, instance map[string]OpState
 // AccountOpEnabled answers the single question Execute needs: may this
 // account run this operation? Same precedence as ResolveAccountOps.
 func AccountOpEnabled(acc *entity.ConnectorAccount, opKey string, st OpState) bool {
+	st = accountHealthState(acc, opKey, st)
 	if st.SystemDisabled {
 		return false
 	}
@@ -1572,6 +1582,24 @@ func AccountOpEnabled(acc *entity.ConnectorAccount, opKey string, st OpState) bo
 		return forced
 	}
 	return st.Enabled
+}
+
+// accountHealthLocks is independent of the manual override map.
+func accountHealthLocks(acc *entity.ConnectorAccount) map[string]string {
+	locks := make(map[string]string)
+	if acc != nil && acc.HealthDisabledOps != "" {
+		if err := json.Unmarshal([]byte(acc.HealthDisabledOps), &locks); err != nil || locks == nil {
+			return make(map[string]string)
+		}
+	}
+	return locks
+}
+
+func accountHealthState(acc *entity.ConnectorAccount, key string, st OpState) OpState {
+	if acc != nil {
+		st.SystemDisabledReason, st.SystemDisabled = accountHealthLocks(acc)[key]
+	}
+	return st
 }
 
 // GetAccount returns one ConnectorAccount by ID.
