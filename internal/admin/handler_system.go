@@ -480,10 +480,10 @@ func (h *Handler) requestSwap(forced bool) (int, map[string]any) {
 	go func() {
 		err := upgrade.Trigger()
 		done <- err
-		if err != nil {
+		if err != nil && !strings.Contains(err.Error(), "upgrade in progress") {
 			log.Error().Err(err).Msg("swap now: successor not started — this process keeps serving")
 			upgrade.SetAutoSwap(upgrade.AutoSwap{})
-			if forced && !strings.Contains(err.Error(), "upgrade in progress") {
+			if forced {
 				// Same rule as a handover that never started at boot: a
 				// stale force must not ambush the next, unattended one.
 				upgrade.ClearForce()
