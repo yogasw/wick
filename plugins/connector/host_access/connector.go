@@ -11,62 +11,62 @@ import (
 // Policy is not session-overridable because it controls host permissions.
 type Config struct {
 	PolicyJSON string `wick:"key=policy_json;textarea;session_locked;desc=Versioned JSON policy. Empty denies all operations. Only trusted administrators may configure this instance."`
-	Overview string `wick:"html=policy_overview;desc=Read-only summary of the saved JSON policy."`
+	Overview   string `wick:"html=policy_overview;desc=Read-only summary of the saved JSON policy."`
 }
 
 type pathInput struct {
 	Path string `wick:"required;desc=Absolute path or ~/ path."`
 }
 type readInput struct {
-	Path string `wick:"required;desc=Absolute file path."`
-	StartLine int `wick:"desc=First line (1-based, default 1)."`
-	EndLine int `wick:"desc=Last inclusive line, max 1000 lines per read."`
+	Path      string `wick:"required;desc=Absolute file path."`
+	StartLine int    `wick:"desc=First line (1-based, default 1)."`
+	EndLine   int    `wick:"desc=Last inclusive line, max 1000 lines per read."`
 }
 type writeInput struct {
-	Path string `wick:"required;desc=Absolute file path."`
-	Content string `wick:"textarea;desc=New text content."`
+	Path           string `wick:"required;desc=Absolute file path."`
+	Content        string `wick:"textarea;desc=New text content."`
 	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=SHA256 returned by file_read."`
 }
 type createInput struct {
-	Path string `wick:"required;desc=New file path; existing files refused."`
+	Path    string `wick:"required;desc=New file path; existing files refused."`
 	Content string `wick:"textarea;desc=Text content."`
 }
 type editInput struct {
-	Path string `wick:"required;desc=Absolute file path."`
-	OldText string `wick:"required;textarea;desc=Exact unique text to replace."`
-	NewText string `wick:"textarea;desc=Replacement text."`
+	Path           string `wick:"required;desc=Absolute file path."`
+	OldText        string `wick:"required;textarea;desc=Exact unique text to replace."`
+	NewText        string `wick:"textarea;desc=Replacement text."`
 	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=SHA256 from file_read."`
 }
 type copyInput struct {
-	Path string `wick:"required;desc=Source file."`
+	Path        string `wick:"required;desc=Source file."`
 	Destination string `wick:"required;desc=New destination file; no overwrite."`
 }
 type moveInput struct {
-	Path string `wick:"required;desc=Source file."`
-	Destination string `wick:"required;desc=New destination file; no overwrite."`
+	Path           string `wick:"required;desc=Source file."`
+	Destination    string `wick:"required;desc=New destination file; no overwrite."`
 	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=Source SHA256."`
 }
 type listInput struct {
-	Path string `wick:"required;desc=Directory path."`
-	Limit int `wick:"desc=Maximum entries, up to 500."`
+	Path  string `wick:"required;desc=Directory path."`
+	Limit int    `wick:"desc=Maximum entries, up to 500."`
 }
 type searchInput struct {
-	Path string `wick:"required;desc=Directory to search."`
-	Pattern string `wick:"desc=Filename glob, default *."`
-	Query string `wick:"desc=Literal text for content search."`
-	MaxDepth int `wick:"desc=Maximum recursion depth, default 8, max 20."`
-	Limit int `wick:"desc=Maximum results, default 200."`
+	Path     string `wick:"required;desc=Directory to search."`
+	Pattern  string `wick:"desc=Filename glob, default *."`
+	Query    string `wick:"desc=Literal text for content search."`
+	MaxDepth int    `wick:"desc=Maximum recursion depth, default 8, max 20."`
+	Limit    int    `wick:"desc=Maximum results, default 200."`
 }
 type execInput struct {
-	Command string `wick:"required;desc=Executable name or absolute path."`
-	ArgsJSON string `wick:"key=args_json;textarea;desc=JSON array of literal argument strings; no shell expansion."`
-	Cwd string `wick:"required;desc=Absolute allowed working directory."`
-	TimeoutSeconds int `wick:"desc=Optional timeout, capped by policy."`
+	Command        string `wick:"required;desc=Executable name or absolute path."`
+	ArgsJSON       string `wick:"key=args_json;textarea;desc=JSON array of literal argument strings; no shell expansion."`
+	Cwd            string `wick:"required;desc=Absolute allowed working directory."`
+	TimeoutSeconds int    `wick:"desc=Optional timeout, capped by policy."`
 }
 type shellInput struct {
-	Script string `wick:"required;textarea;desc=Script to execute in trusted unrestricted shell mode."`
-	Cwd string `wick:"required;desc=Absolute allowed working directory."`
-	TimeoutSeconds int `wick:"desc=Optional timeout, capped by policy."`
+	Script         string `wick:"required;textarea;desc=Script to execute in trusted unrestricted shell mode."`
+	Cwd            string `wick:"required;desc=Absolute allowed working directory."`
+	TimeoutSeconds int    `wick:"desc=Optional timeout, capped by policy."`
 }
 type validateInput struct {
 	PolicyJSON string `wick:"key=policy_json;required;textarea;desc=Proposed policy JSON. Validation never changes settings."`
@@ -77,9 +77,9 @@ type overviewInput struct {
 
 type checkInput struct {
 	Operation string `wick:"required;desc=Filesystem operation or exec/exec_shell."`
-	Path string `wick:"desc=Path for filesystem checks."`
-	Command string `wick:"desc=Command for terminal checks."`
-	ArgsJSON string `wick:"key=args_json;textarea;desc=JSON array of arguments."`
+	Path      string `wick:"desc=Path for filesystem checks."`
+	Command   string `wick:"desc=Command for terminal checks."`
+	ArgsJSON  string `wick:"key=args_json;textarea;desc=JSON array of arguments."`
 }
 
 // Module is the complete plugin contract: a single instance, default-deny
@@ -89,11 +89,11 @@ func Module() connector.Module {
 	d := wickdocs.Docs{}
 	m := connector.Module{
 		Meta: connector.Meta{
-			Key:         "host_access",
-			Name:        "Host Access",
-			Icon:        "🖥️",
+			Key:  "host_access",
+			Name: "Host Access",
+			Icon: "🖥️",
 			// The host is a single resource, so do not allow duplicate instances.
-			Fixed: true,
+			Fixed:       true,
 			Description: "Optional host filesystem and terminal access. Default deny. Terminal is explicitly trusted host execution, not a sandbox.",
 			// System is the admin-only category; never use a public default tag.
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.System},
@@ -153,40 +153,47 @@ func Module() connector.Module {
 			connector.Cat("Directories & search", "List and search only visible paths, bounded by depth and result count.",
 				connector.Op("directory_list", "List directory",
 					"List permitted entries.",
-					listInput{}, fileAction("list",fileList), d),
+					listInput{}, fileAction("list", fileList), d),
 				connector.Op("directory_tree", "Directory tree",
 					"Bounded recursive directory tree.",
-					searchInput{}, fileAction("search",directoryTree),d),
-				connector.OpDestructive("directory_create","Create directory",
+					searchInput{}, fileAction("search", directoryTree), d),
+				connector.OpDestructive("directory_create", "Create directory",
 					"Create one directory; parent must exist.",
-					pathInput{},fileAction("mkdir",directoryCreate),d),
-				connector.OpDestructive("directory_delete","Delete empty directory",
+					pathInput{}, fileAction("mkdir", directoryCreate), d),
+				connector.OpDestructive("directory_delete", "Delete empty directory",
 					"Delete only an empty directory.",
-					pathInput{},fileAction("delete",directoryDelete),d),
-				connector.Op("search_files","Search files",
+					pathInput{}, fileAction("delete", directoryDelete), d),
+				connector.Op("search_files", "Search files",
 					"Find permitted filenames by glob.",
-					searchInput{},fileAction("search",searchFiles),d),
-				connector.Op("search_content","Search content",
+					searchInput{}, fileAction("search", searchFiles), d),
+				connector.Op("search_content", "Search content",
 					"Search permitted UTF-8 files for literal text.",
-					searchInput{},fileAction("search",searchContent),d),
+					searchInput{}, fileAction("search", searchContent), d),
 			),
 			connector.Cat("Terminal", "Trusted host execution only. Command filters are not a sandbox; child programs can bypass file policy.",
-				connector.OpDestructive("exec","Execute command",
+				connector.OpDestructive("exec", "Execute command",
 					"Run executable with literal arguments using safeexec. Trusted host mode required.",
-					execInput{},execCommand,d),
-				connector.OpDestructive("exec_shell","Execute shell",
+					execInput{}, execCommand, d),
+				connector.OpDestructive("exec_shell", "Execute shell",
 					"Run arbitrary script only with explicitly unrestricted shell policy.",
-					shellInput{},execShell,d),
+					shellInput{}, execShell, d),
 			),
 			connector.Cat("System", "Read host information with explicit system permission.",
-				connector.Op("system_info","System info",
+				connector.Op("system_info", "System info",
 					"Return OS, architecture and capability flags.",
-					struct{}{},systemInfo,d),
-				connector.Op("disk_usage","Disk usage",
+					struct{}{}, systemInfo, d),
+				connector.Op("disk_usage", "Disk usage",
 					"Filesystem capacity at permitted directory.",
-					pathInput{},fileAction("disk_usage",systemDiskUsage),d),
+					pathInput{}, fileAction("disk_usage", systemDiskUsage), d),
 			),
 		},
 	}
+	// Attach one audit wrapper per operation, including denied calls.
+	for i := range m.Operations {
+		for j := range m.Operations[i].Ops {
+			op := &m.Operations[i].Ops[j]
+			op.Execute = audited(op.Key, op.Execute)
+		}
+	}
+	return m
 }
-
