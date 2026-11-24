@@ -246,7 +246,7 @@
     healthBusy = true;
     healthBanner = null;
     try {
-      const res = await runHealthCheck(connectorKey, connectorId);
+      const res = await runHealthCheck(connectorKey, connectorId, accountId || undefined);
       if (!res.ok) {
         healthBanner = { ok: false, msg: res.error ?? "Permission check failed" };
       } else {
@@ -255,7 +255,7 @@
         const parts: string[] = [];
         if (locked.length) parts.push(`System-disabled: ${locked.join(", ")}.`);
         if (cleared.length) parts.push(`Cleared: ${cleared.join(", ")}.`);
-        if (!parts.length) parts.push("No changes — every operation has the permissions it needs.");
+        if (!parts.length) parts.push("Permission check completed — no changes.");
         healthBanner = { ok: true, msg: parts.join(" ") };
         await load(true);
       }
@@ -335,12 +335,19 @@
       {#if inAccountMode && account}
         <div class="flex flex-shrink-0 items-center gap-2">
           <Button variant="secondary" size="sm" onclick={() => push(`/connectors/${connectorKey}/${connectorId}/history?credential=${encodeURIComponent(accountId)}`)}>History</Button>
+          {#if account.can_manage && data.has_health_check}
+            <Button variant="secondary" size="sm" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
+          {/if}
           {#if account.can_manage}
             <KebabMenu ariaLabel={`Actions for @${account.display_name}`} items={accountMenuItems} />
           {/if}
         </div>
       {/if}
     </div>
+
+    {#if inAccountMode && healthBanner}
+      <div class="rounded-xl border px-4 py-3 text-sm {healthBanner.ok ? 'border-pos-300 bg-pos-100 text-pos-400' : 'border-neg-300 bg-neg-100 text-neg-400'}">{healthBanner.msg}</div>
+    {/if}
 
     {#if inAccountMode && account?.auth_error}
       <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">
@@ -458,7 +465,7 @@
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
           {#if data.has_health_check}
-            <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
+            <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : (data.accounts?.length ? "Check Shared Permissions" : "Check Permissions")}</Button>
           {/if}
         </div>
         <p class="mt-1 text-sm text-black-800 dark:text-black-600">Per-row values shared by every operation on this connector.</p>
