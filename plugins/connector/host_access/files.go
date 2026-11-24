@@ -54,21 +54,34 @@ func fileAppend(p Policy,name string,c *connector.Ctx)(any,error){
  if err:=replaceFile(name,b,c.Input("expected_sha256"));err!=nil{return nil,err}
  return map[string]any{"path":name,"sha256":digest(b),"bytes":len(b)},nil
 }
-func fileCopy(p Policy,name string,c *connector.Ctx,move bool)(any,error){
+func fileCopy(p Policy,name string,c *connector.Ctx)(any,error){
  if _,err:=p.authorize("read",name);err!=nil{return nil,err}
- op:="copy";if move{op="move";if _,err:=p.authorize("delete",name);err!=nil{return nil,err}}
- dest,err:=p.authorize(op,c.Input("destination"));if err!=nil{return nil,err}
+ dest,err:=p.authorize("copy",c.Input("destination"));if err!=nil{return nil,err}
  if _,err=p.authorize("create",dest);err!=nil{return nil,err}
  b,err:=readFile(name);if err!=nil{return nil,err}
- if move && (c.Input("expected_sha256")==""||digest(b)!=c.Input("expected_sha256")){return nil,fmt.Errorf("expected_sha256 mismatch")}
  if err=writeNew(dest,b);err!=nil{return nil,err}
- if move{
-  check,e:=readFile(name)
-  if e!=nil||digest(check)!=digest(b){return map[string]any{"copied":true,"moved":false,"destination":dest,"reason":"source changed; not deleted"},nil}
-  if err=removeFile(name,false);err!=nil{return map[string]any{"copied":true,"moved":false,"destination":dest,"reason":err.Error()},nil}
- }
- return map[string]any{"path":name,"destination":dest,"sha256":digest(b),"copied":true,"moved":move},nil
+ return map[string]any{"path":name,"destination":dest,"sha256":digest(b),"copied":true},nil
 }
+// Moving a file needs both source-delete and destination-create permissions.
+func fileMove(p Policy, name string, c *connector.Ctx) (any, error) {
+	for _, op := range []string{"read", "delete"} {
+		if _, err := p.authorize(op, name); err != nil {
+			return nil, err
+		}
+	}
+	dest, err := p.authorize("move", c.Input("destination"))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.authorize("create", dest); err != nil {
+		return nil, err
+	}
+	if err := moveFile(name, dest, c.Input("expected_sha256")); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": name, "destination": dest, "moved": true}, nil
+}
+
 func fileList(p Policy,name string,c *connector.Ctx)(any,error){
  limit:=c.InputInt("limit");if limit<=0||limit>500{limit=500}
  names,more,err:=listDir(name,limit);if err!=nil{return nil,err}
@@ -89,7 +102,7 @@ func search(p Policy,name string,c *connector.Ctx,content bool,tree bool)(any,er
  pattern:=c.Input("pattern");if pattern==""{pattern="*"}
  if _,err:=filepath.Match(pattern,"x");err!=nil{return nil,err}
  query:=c.Input("query");if content&&query==""{return nil,fmt.Errorf("query required")}
- rows:=[]map[string]any{};scanned:=0;truncated:=false
+ rows:=[]map[string]any{};scanned:=0;bytesRead:=0;truncated:=false
  var walk func(string,int)
  walk=func(dir string,d int){
   if d>depth||scanned>=5000||len(rows)>=limit||c.Context().Err()!=nil{truncated=true;return}
@@ -99,6 +112,7 @@ func search(p Policy,name string,c *connector.Ctx,content bool,tree bool)(any,er
    scanned++;if scanned>5000||len(rows)>=limit||c.Context().Err()!=nil{truncated=true;return}
    child:=filepath.Join(dir,n)
    if v,_:=p.fileVerdict("search",child);v!="allow"{continue}
+   if v,_:=p.fileVerdict("stat",child);v!="allow"{continue}
    st,e:=statFile(child);if e!=nil{continue}
    isDir:=st["type"]=="directory"
    matched,_:=filepath.Match(pattern,n)
@@ -106,7 +120,8 @@ func search(p Policy,name string,c *connector.Ctx,content bool,tree bool)(any,er
    if isDir{walk(child,d+1);continue}
    if content&&matched{
     if v,_:=p.fileVerdict("read",child);v!="allow"{continue}
-    b,e:=readFile(child);if e!=nil||!utf8.Valid(b)||strings.ContainsRune(string(b),0){continue}
+    if bytesRead>=16<<20{truncated=true;return}
+    b,e:=readFile(child);if e!=nil{continue};bytesRead+=len(b);if !utf8.Valid(b)||strings.ContainsRune(string(b),0){continue}
     for i,line:=range strings.Split(string(b),"\n"){
      if strings.Contains(line,query){if len(line)>1000{line=line[:1000]};rows=append(rows,map[string]any{"path":child,"line":i+1,"text":line});if len(rows)>=limit{truncated=true;break}}
     }
