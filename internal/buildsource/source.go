@@ -79,8 +79,14 @@ func Current(wickVersion, appVersion, releaseRepo string) Metadata {
 	}
 	// For packaged releases the embedded Wick module version identifies its
 	// tag even if the application was built in a git-less scaffold.
+	if strings.Contains(appVersion, "-source-build") {
+		// An old source binary without a stamp is not a packaged release.
+		return Metadata{Kind: "source"}
+	}
 	version := StableVersion(wickVersion)
-	if version == "" && releaseRepo == OfficialRepo { version = StableVersion(appVersion) }
+	if releaseRepo == OfficialRepo {
+		if official := StableVersion(appVersion); official != "" { version = official }
+	}
 	if version != "" {
 		return Metadata{Kind: "release", Repository: OfficialRepo, Tag: version, SourceVersion: version, CompareRef: "master", Upstream: "origin/master"}
 	}
