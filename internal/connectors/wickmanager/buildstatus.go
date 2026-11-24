@@ -2,6 +2,7 @@ package wickmanager
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -45,7 +46,15 @@ func deployStatePath() string {
 // nextPatch is v with its last numeric segment raised by one ("0.1.692" →
 // "0.1.693"); "" when v is not a dotted number (e.g. "dev").
 func nextPatch(v string) string {
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	v = strings.TrimSpace(v)
+	if strings.HasSuffix(v, "-source-build") {
+		base := strings.TrimSuffix(v, "-source-build")
+		next := nextPatch(base)
+		if next == "" { return "" }
+		if strings.HasPrefix(v, "v") { next = "v" + next }
+		return next + "-source-build"
+	}
+	v = strings.TrimPrefix(v, "v")
 	i := strings.LastIndex(v, ".")
 	if i < 0 {
 		return ""
@@ -117,5 +126,24 @@ func (h *handlers) buildStatus(c *connector.Ctx) (any, error) {
 			raw = b
 		}
 	}
-	return buildStatus(appname.BuildAppVersion, raw, time.Now()), nil
+	out := buildStatus(appname.BuildAppVersion, raw, time.Now())
+	// The same detailed snapshot exposed by the admin Software Update page.
+	// Busy entries and candidate paths are admin-only.
+	if user.IsAdmin() && h.deps.LiveHandover != nil {
+		out["handover"] = h.deps.LiveHandover()
+	}
+	return out, nil
+}
+
+func (h *handlers) forceSwap(c *connector.Ctx) (out any, err error) {
+	start := time.Now()
+	user, err := requireAdmin(c.Context())
+	target := strings.TrimSpace(c.Input("expected_version"))
+	defer func() { logOp(user, "force_swap", map[string]string{"expected_version": target}, err, time.Since(start)) }()
+	if err != nil { return nil, err }
+	if c.Input("confirm") != "true" || target == "" {
+		return nil, fmt.Errorf("explicit confirmation and exact expected_version are required")
+	}
+	if h.deps.ForceSwap == nil { return nil, fmt.Errorf("handover unavailable") }
+	return h.deps.ForceSwap(target)
 }
