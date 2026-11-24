@@ -4006,6 +4006,7 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 			snap := s.verCache.Snapshot()
 			ctx = ui.WithVersionInfo(ctx, ui.VersionInfo{
 				AppVersion:      snap.AppVersion,
+				BuildCommit:     buildCommit,
 				AppDev:          snap.AppDev,
 				AppLatest:       snap.AppLatest,
 				AppUpdate:       snap.AppUpdate,
