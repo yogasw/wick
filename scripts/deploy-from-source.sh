@@ -717,12 +717,15 @@ wick_self() {
   say "version $ver"; run sedi "s/^version:.*/version: $ver/" wick.yml
   run rm -f bin/"$APP"-linux-* bin/"$APP"-darwin-*
   say "build ($TARGET)"
+  # Stamp the Wick source revision, not the scaffold's (usually absent) VCS.
+  # A dirty checkout must not masquerade as an exact committed build.
+  local build_commit="${BUILT_SHA:-dirty}"
   if [ "$(go env GOOS 2>/dev/null || true)" = android ]; then
     # Termux's cgo headers are for Android and fail when Wick cross-builds a
     # linux/arm64 binary. Wick has a pure-Go path, so disable cgo for this build.
-    heavy "$APP-build" env CGO_ENABLED=0 GOFLAGS= wick build --target "$TARGET"
+    heavy "$APP-build" env WICK_BUILD_COMMIT="$build_commit" CGO_ENABLED=0 GOFLAGS= wick build --target "$TARGET"
   else
-    heavy "$APP-build" env GOFLAGS= wick build --target "$TARGET"
+    heavy "$APP-build" env WICK_BUILD_COMMIT="$build_commit" GOFLAGS= wick build --target "$TARGET"
   fi
   install_build "$installed"
   [ "$NOINSTALL" = 1 ] || done_note "${BUILT_SHA:0:12}"
