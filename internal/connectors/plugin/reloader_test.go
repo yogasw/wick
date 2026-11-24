@@ -141,3 +141,55 @@ func TestReloaderRemovesNowDisabled(t *testing.T) {
 		t.Fatal("disabled alpha binary should be dropped")
 	}
 }
+
+func TestReloaderModuleObserver(t *testing.T) {
+	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "0")
+	t.Setenv("WICK_PLUGIN_PUBKEY", "")
+	dir := t.TempDir()
+	writeDemoPlugin(t, dir, "alpha", "v1")
+	svc := &fakeUpserter{upserted: map[string]bool{}, removed: map[string]bool{}}
+	mgr := &Manager{entries: map[string]*entry{}, binaries: map[string]string{}, now: func() time.Time { return time.Unix(0, 0) }, stop: make(chan struct{})}
+	mgr.killFn = mgr.kill
+	store := &fakeStore{enabled: map[string]bool{}}
+	r := NewReloader(dir, svc, mgr, time.Second, store)
+	registered := map[string]int{}
+	removed := map[string]int{}
+	r.SetModuleObserver(func(m connector.Module) {
+		if !svc.upserted[m.Meta.Key] || !mgr.IsPlugin(m.Meta.Key) {
+			t.Fatal("observer called before module is available")
+		}
+		registered[m.Meta.Key]++
+	}, func(key string) {
+		if !svc.removed[key] || mgr.IsPlugin(key) {
+			t.Fatal("observer called before module removal")
+		}
+		removed[key]++
+	})
+	r.reconcile(context.Background())
+	r.reconcile(context.Background())
+	if registered["alpha"] != 1 {
+		t.Fatalf("unchanged plugin must register once, got %d", registered["alpha"])
+	}
+	writeDemoPlugin(t, dir, "alpha", "v2")
+	r.reconcile(context.Background())
+	if registered["alpha"] != 2 {
+		t.Fatal("updated plugin should refresh observer")
+	}
+	store.enabled["alpha"] = false
+	r.reconcile(context.Background())
+	if removed["alpha"] != 1 {
+		t.Fatal("disabled plugin must disappear from dependent registry")
+	}
+	store.enabled["alpha"] = true
+	r.reconcile(context.Background())
+	if registered["alpha"] != 3 {
+		t.Fatal("re-enabled plugin must reappear")
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "alpha")); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile(context.Background())
+	if removed["alpha"] != 2 {
+		t.Fatal("uninstalled plugin must disappear from dependent registry")
+	}
+}
