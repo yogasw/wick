@@ -116,6 +116,10 @@ templ AgentsApp(vm AgentsAppVM) {
 				data-app-version={ ui.VersionInfoFromContext(ctx).AppVersion }
 				data-wick-version={ ui.VersionInfoFromContext(ctx).WickVersion }
 				data-build-commit={ ui.VersionInfoFromContext(ctx).BuildCommit }
+				data-account-themes={ accountThemeCatalog() }
+				data-serving-pid={ accountServingPID() }
+				data-update-available?={ ui.VersionInfoFromContext(ctx).AnyUpdate() }
+				data-official-build?={ ui.VersionInfoFromContext(ctx).IsOfficial }
 				data-theme-mode={ vm.ThemeMode }
 				data-theme-light={ vm.ThemeLight }
 				data-theme-dark={ vm.ThemeDark }

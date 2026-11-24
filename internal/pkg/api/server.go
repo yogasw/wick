@@ -3816,6 +3816,31 @@ func NewServer() *Server {
 	// The account-menu details compare the immutable running build with GitHub.
 	// The checker caches responses, so opening the normal menu never hits the network.
 	sourceChecker := buildsource.NewChecker(buildsource.Current(buildWickVersion, releaseAppVersion, releaseRepo), buildTime)
+	r.HandleFunc("GET /api/account-menu-status", func(w http.ResponseWriter, r *http.Request) {
+		user := login.GetUser(r.Context())
+		if user == nil {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		snap := verCache.Snapshot()
+		out := map[string]any{
+			"pid": os.Getpid(), "app_version": snap.AppVersion, "wick_version": snap.WickVersion,
+			"commit": buildCommit, "official": snap.IsOfficial,
+			"update_available": (snap.AppUpdateKnown && snap.AppUpdate) || (snap.WickUpdateKnown && snap.WickUpdate),
+			"handing_over": upgrade.HandingOver(), "draining": upgrade.Draining(),
+		}
+		if user.IsAdmin() && adminSystem != nil {
+			state := adminSystem.ServingPayload()
+			for _, key := range []string{"swap", "auto_swap", "last_handover"} {
+				if value, ok := state[key]; ok { out[key] = value }
+			}
+			_, previousDraining := state["draining"]
+			out["previous_draining"] = previousDraining
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "private, no-store")
+		_ = json.NewEncoder(w).Encode(out)
+	})
 	r.HandleFunc("GET /api/build-source", func(w http.ResponseWriter, r *http.Request) {
 		if login.GetUser(r.Context()) == nil {
 			http.Error(w, "authentication required", http.StatusUnauthorized)

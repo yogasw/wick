@@ -50,7 +50,7 @@ func TestHTTPInflight(t *testing.T) {
 		// A status poll that counts itself would keep the process "busy" for
 		// as long as somebody watches the page.
 		h := newHTTPInflight()
-		for _, path := range []string{"/health", "/boot-status", "/admin/advanced/software-update/serving"} {
+		for _, path := range []string{"/health", "/boot-status", "/admin/advanced/software-update/serving", "/api/account-menu-status", "/api/build-source"} {
 			var during int
 			srv := h.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				during = h.Count()

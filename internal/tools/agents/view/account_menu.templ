@@ -1,0 +1,52 @@
+package view
+
+import (
+	"encoding/json"
+	"os"
+	"strconv"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// Keep the catalog in Go: adding a palette once updates both sidebars.
+func accountThemeCatalog() string {
+	b, _ := json.Marshal(ui.Themes)
+	return string(b)
+}
+
+func accountServingPID() string {
+	return strconv.Itoa(os.Getpid())
+}
+
+func accountThemeMode(user *entity.User) string {
+	if ui.ThemeByID(ui.EffectiveTheme(user.Metadata.Theme)).IsDark {
+		return "dark"
+	}
+	return "light"
+}
+
+templ sharedAgentAccountMenu(user *entity.User, settingsHref string) {
+	{{ v := ui.VersionInfoFromContext(ctx) }}
+	<div
+		data-shared-account-menu
+		data-viewer-name={ user.Name }
+		data-viewer-email={ viewerEmail(user) }
+		data-viewer-avatar={ viewerAvatar(user) }
+		data-viewer-admin?={ user.IsAdmin() }
+		data-viewing-as={ ui.ImpersonationFromContext(ctx).ActingAs }
+		data-app-version={ v.AppVersion }
+		data-wick-version={ v.WickVersion }
+		data-build-commit={ v.BuildCommit }
+		data-update-available?={ v.AnyUpdate() }
+		data-official-build?={ v.IsOfficial }
+		data-serving-pid={ accountServingPID() }
+		data-theme-mode={ accountThemeMode(user) }
+		data-theme-light={ ui.EffectiveLightTheme(user.Metadata.LightTheme) }
+		data-theme-dark={ ui.EffectiveDarkTheme(user.Metadata.DarkTheme) }
+		data-account-themes={ accountThemeCatalog() }
+		if user.IsAdmin() {
+			data-settings-href={ settingsHref }
+		}
+	></div>
+}

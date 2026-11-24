@@ -1,6 +1,8 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import TeamAccountMenu from "../TeamAccountMenu.svelte";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const theme = { mode: "light" as const, light: "github-light", dark: "github-dark" };
 
@@ -13,6 +15,32 @@ function mount(over: Record<string, unknown> = {}) {
 }
 
 describe("TeamAccountMenu", () => {
+  test("shared Agent settings retain the existing link and no duplicate Team settings", async () => {
+    const { button } = mount({ settingsLabel: "Agent settings", settingsHref: "/tools/agents/settings", isAdmin: true });
+    await fireEvent.click(button);
+    expect(screen.getByRole("menuitem", { name: "Agent settings" }).getAttribute("href")).toBe("/tools/agents/settings");
+    expect(screen.queryByRole("menuitem", { name: "Team settings" })).toBeNull();
+  });
+
+  test("theme dropdown keeps quick mode buttons and posts the chosen palette", async () => {
+    const { button } = mount({ themes: [{ ID: "github-light", Label: "GitHub Light", IsDark: false }, { ID: "dracula", Label: "Dracula", IsDark: true }] });
+    await fireEvent.click(button);
+    await fireEvent.click(screen.getByRole("button", { name: "Pick theme" }));
+    expect(screen.getByRole("menuitemradio", { name: "Light" })).toBeTruthy();
+    const form = screen.getByRole("button", { name: "Dracula" }).closest("form")!;
+    expect(form.getAttribute("action")).toBe("/theme");
+    expect((form.querySelector('input[name="theme"]') as HTMLInputElement).value).toBe("dracula");
+  });
+
+  test("live handover and new serving PID use one update indicator", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ pid: 2, app_version: "1.2.4", wick_version: "0.9.0", commit: "abcdef1234", update_available: false }) })));
+    const { button } = mount({ isAdmin: true, appVersion: "1.2.3", servingPID: "1", updateAvailable: true });
+    await fireEvent.click(button);
+    await vi.waitFor(() => expect(screen.getByText("New build is running")).toBeTruthy());
+    expect(screen.getByText("abcdef1")).toBeTruthy();
+    expect(screen.queryByTestId("update-status")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reload page" })).toBeTruthy();
+  });
   test("closed by default; the row shows initial and name and announces a menu", () => {
     const { button } = mount();
     expect(button.getAttribute("aria-haspopup")).toBe("menu");
@@ -133,7 +161,7 @@ describe("TeamAccountMenu", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     expect(screen.getByTestId("versions").textContent).toContain("1.2.3");
     expect(screen.getByTestId("versions").textContent).toContain("0.9.0");
-    expect(screen.getByText("1234567890ab").getAttribute("title")).toBe("1234567890abcdef1234567890abcdef12345678");
+    expect(screen.getByText("1234567").getAttribute("title")).toBe("1234567890abcdef1234567890abcdef12345678");
   });
 
   test("unknown commit is explicit", async () => {

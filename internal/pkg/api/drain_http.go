@@ -87,7 +87,7 @@ func (h *httpInflight) middleware(next http.Handler) http.Handler {
 // as long as somebody keeps the page open, and the wait would never settle.
 func skipDrainCount(path string) bool {
 	switch path {
-	case "/health", "/boot-status", "/admin/advanced/software-update/serving":
+	case "/health", "/boot-status", "/admin/advanced/software-update/serving", "/api/account-menu-status", "/api/build-source":
 		return true
 	}
 	// Static asset trees are served from embed.FS and depend on nothing a
