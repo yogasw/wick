@@ -16,7 +16,9 @@ import (
  "golang.org/x/sys/unix"
 )
 
+// maxFileBytes limits individual file reads and edits to keep MCP responses and memory bounded.
 const maxFileBytes = 1<<20
+// fileMu serializes this plugin process's native mutations; it cannot lock unrelated host processes.
 var fileMu sync.Mutex
 
 // Walk directory descriptors without following any symlink. Never use a
@@ -31,10 +33,12 @@ func openDir(name string)(int,error){
  }
  return fd,nil
 }
+// parentFD opens the containing directory securely and returns the final component separately for *at syscalls.
 func parentFD(name string)(int,string,error){
  if name=="/"{return -1,"",errors.New("root cannot be modified")}
  fd,err:=openDir(filepath.Dir(name));return fd,filepath.Base(name),err
 }
+// openRegular rejects symlinks, special files and multiple hard links before reading any content.
 func openRegular(name string)(*os.File,error){
  fd,base,err:=parentFD(name);if err!=nil{return nil,err};defer unix.Close(fd)
  f,err:=unix.Openat(fd,base,unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC,0)
@@ -45,13 +49,16 @@ func openRegular(name string)(*os.File,error){
  }
  return os.NewFile(uintptr(f),name),nil
 }
+// readFile bounds input size even if another process grows a file during the read.
 func readFile(name string)([]byte,error){
  f,err:=openRegular(name);if err!=nil{return nil,err};defer f.Close()
  b,err:=io.ReadAll(io.LimitReader(f,maxFileBytes+1));if err!=nil{return nil,err}
  if len(b)>maxFileBytes{return nil,errors.New("file exceeds 1 MiB limit")}
  return b,nil
 }
+// digest returns the stable SHA-256 revision used by optimistic edits.
 func digest(b []byte)string{h:=sha256.Sum256(b);return hex.EncodeToString(h[:])}
+// statFile reports metadata only for entries the secure backend can open.
 func statFile(name string)(map[string]any,error){
  fd,err:=openDir(name)
  if err==nil {defer unix.Close(fd);return map[string]any{"path":name,"type":"directory"},nil}
@@ -59,12 +66,14 @@ func statFile(name string)(map[string]any,error){
  s,err:=f.Stat();if err!=nil{return nil,err}
  return map[string]any{"path":name,"type":"file","size":s.Size(),"modified":s.ModTime(),"mode":s.Mode().Perm().String()},nil
 }
+// listDir returns at most limit names and a truncation flag without recursively reading child entries.
 func listDir(name string, limit int)([]string,bool,error){
  fd,err:=openDir(name);if err!=nil{return nil,false,err}
  f:=os.NewFile(uintptr(fd),name);defer f.Close()
  names,err:=f.Readdirnames(limit+1);if err!=nil&&err!=io.EOF{return nil,false,err}
  more:=len(names)>limit;if more{names=names[:limit]};return names,more,nil
 }
+// writeNew uses exclusive creation so an existing destination cannot be overwritten.
 func writeNew(name string,b []byte)error{
  if len(b)>maxFileBytes{return errors.New("content too large")}
  fd,base,err:=parentFD(name);if err!=nil{return err};defer unix.Close(fd)
@@ -95,9 +104,11 @@ func replaceFile(name string,b []byte,expected string)error{
  if before.Dev!=now.Dev||before.Ino!=now.Ino||before.Size!=now.Size||before.Mtim!=now.Mtim||before.Ctim!=now.Ctim||now.Nlink!=1{return errors.New("file changed during edit")}
  return unix.Renameat(fd,tmp,fd,base)
 }
+// mkdir creates exactly one directory relative to its securely opened parent.
 func mkdir(name string)error{
  fd,b,err:=parentFD(name);if err!=nil{return err};defer unix.Close(fd);return unix.Mkdirat(fd,b,0700)
 }
+// removeFile deletes one regular file or empty directory; recursive removal is intentionally unsupported.
 func removeFile(name string,directory bool)error{
  fd,b,err:=parentFD(name);if err!=nil{return err};defer unix.Close(fd)
  var st unix.Stat_t;if err=unix.Fstatat(fd,b,&st,unix.AT_SYMLINK_NOFOLLOW);err!=nil{return err}
@@ -105,6 +116,7 @@ func removeFile(name string,directory bool)error{
  if st.Mode&unix.S_IFMT!=unix.S_IFREG||st.Nlink!=1{return errors.New("not a regular single-link file")}
  return unix.Unlinkat(fd,b,0)
 }
+// diskUsage queries the filesystem of the already-open directory without invoking a shell.
 func diskUsage(name string)(map[string]any,error){
  fd,err:=openDir(name);if err!=nil{return nil,err};defer unix.Close(fd)
  var s unix.Statfs_t;if err=unix.Fstatfs(fd,&s);err!=nil{return nil,err}
