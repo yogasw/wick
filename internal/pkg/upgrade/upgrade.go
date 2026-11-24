@@ -211,6 +211,8 @@ type AutoSwap struct {
 	// applied — Note says why).
 	State string `json:"state"`
 	To    string `json:"to,omitempty"`
+	// Blocking is the exact safety-gate work list, including Termux active turns.
+	Blocking []string `json:"blocking,omitempty"`
 	// Note explains a state the operator would otherwise have to guess at.
 	// Carried for "blocked", where a silent refusal is indistinguishable from
 	// a watcher that simply stopped working.
