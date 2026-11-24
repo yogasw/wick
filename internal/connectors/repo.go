@@ -433,6 +433,17 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 	if !multiAccount {
 		// Single-account: replace whatever is there.
 		return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// Re-consenting as the same identity must preserve the manual choices.
+			var old entity.ConnectorAccount
+			if acc.ExternalUserID != "" {
+				err := tx.Where("connector_id = ? AND wick_user_id = ? AND external_user_id = ?", acc.ConnectorID, acc.WickUserID, acc.ExternalUserID).First(&old).Error
+				if err == nil {
+					acc.OpOverrides, acc.DisabledOps, acc.HealthDisabledOps = old.OpOverrides, old.DisabledOps, old.HealthDisabledOps
+					if acc.RefreshToken == "" { acc.RefreshToken = old.RefreshToken }
+				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+			}
 			if err := tx.Where("connector_id = ?", acc.ConnectorID).Delete(&entity.ConnectorAccount{}).Error; err != nil {
 				return err
 			}
@@ -472,6 +483,7 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 			}
 			// A fresh consent is the reconnect the auth error asked for.
 			updates["auth_error"], updates["auth_error_at"] = "", nil
+			acc.ID = existing.ID
 			return r.db.WithContext(ctx).Model(&existing).Updates(updates).Error
 		}
 	}
@@ -518,6 +530,17 @@ func (r *Repo) SetAccountOpOverrides(ctx context.Context, accountID, overridesJS
 	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
 		Where("id = ?", accountID).
 		Update("op_overrides", overridesJSON).Error
+}
+
+// SetAccountHealthDisabledOps stores a permission report only if the credential
+// checked is still current; an old check must not overwrite a reconnect.
+func (r *Repo) SetAccountHealthDisabledOps(ctx context.Context, accountID, accessToken, locksJSON string) error {
+	res := r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
+		Where("id = ? AND access_token = ?", accountID, accessToken).
+		UpdateColumn("health_disabled_ops", locksJSON)
+	if res.Error != nil { return res.Error }
+	if res.RowsAffected == 0 { return fmt.Errorf("account credential changed during health check; retry") }
+	return nil
 }
 
 // SetAccountDisabledOps persists the JSON-encoded disabled ops list for an account.
