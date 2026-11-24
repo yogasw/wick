@@ -4,34 +4,23 @@ Operational rules for coding agents (Claude Code, etc.) working in this repo. Hu
 
 ## Required workflow for every code change
 
-**Read this file before editing Wick, even when working through a GitHub API
-or an MCP connector rather than a local checkout.** Read the nearest scoped
-`AGENTS.md` files and the relevant development skills, then inspect an existing
-implementation in the target subsystem. Do not assume rules from an earlier
-conversation are still current. The user's requested behavior defines the
-scope; unrelated cleanup belongs in a separate change.
+Read this file first, even when editing through the GitHub API or an MCP
+connector instead of a local checkout. Then read the development skill for the
+subsystem (see "Skills to use") and one existing implementation next to the code
+you are about to change. Copy its shape; do not invent a parallel helper,
+component or architecture for a small fix.
 
-1. Inspect the current branch, working tree and applicable conventions. Preserve
-   unrelated local edits and understand the existing design before replacing it.
-2. Plan a small, coherent change with its tests and documentation. Reuse existing
-   abstractions, shared UI components and helpers rather than creating parallel
-   implementations.
-3. Implement and review the complete change in a working tree or staged batch
-   of files, not as a sequence of remote one-file commits.
-4. Format, lint, compile and test the affected code. Review the full diff for
-   correctness, readability, security, regressions and accidental changes.
-5. Commit a logical, independently buildable change including its tests and
-   documentation. Open the PR against the intended branch (normally
-   `develop` for Wick development). Report the checks actually executed.
-6. Merge only after required checks pass and review blockers are resolved.
-   For runtime changes, verify the installed version/commit and affected
-   behavior after deployment. Documentation-only changes do not require a
-   binary rebuild.
+1. **Scope.** Change only what the request needs. Unrelated cleanup goes in a
+   separate change. Never revert or overwrite local edits you did not make.
+2. **Implement** the whole change (code + tests + docs/skills) before committing.
+3. **Check** with the commands in "Before declaring a task done" and read your
+   own full diff once more for leftovers, debug output and accidental edits.
+4. **Commit and push** following "Git and pull request quality".
+5. **Report** the commands you actually ran and their result. A check you could
+   not run is reported as *not run*, never as passed.
 
-If the available tools cannot run a required check, say exactly what could not
-be verified. Do not treat an unavailable check as a pass. A draft PR or clearly
-identified unverified review branch is acceptable; a claimed verified merge
-is not. Never bypass failing checks merely to finish quickly.
+`develop` has no automatic CI. The checks above are the only gate, so run them
+locally before every push; do not wait for, or point to, a CI that will not run.
 
 ## Running the app (agent flow)
 
@@ -75,61 +64,56 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 
 ## Before declaring a task done
 
-- For runtime code changes, the applicable compile, lint and test checks below pass; generate templ output when required. For docs-only changes, review the documentation diff.
+Minimum for any Go change:
+
+```bash
+templ generate          # only when .templ files changed
+gofmt -l .              # must print nothing for files you touched
+go vet ./<changed packages>/...
+go test ./<changed packages>/...      # add -race for concurrency changes
+go build ./...
+```
+
+| Also changed | Additional check |
+|---|---|
+| `fe/` | `cd fe && npm run check`, plus the relevant unit tests; click through the changed UI in a browser |
+| Host Access connector | `bash scripts/check-connector-quality.sh host_access` |
+| External plugin | test inside the `plugins` module; rebuild the plugin when its manifest/contract changes |
+| UI (any) | tool grid / Ctrl+K palette look right in light and dark mode |
+| Docs only | re-read the rendered diff; check links and commands against current source |
+
+- Bug fix → add a regression test that fails without the fix. New behaviour →
+  unit tests for the normal case, edge cases and the error path. Assert
+  behaviour, not source text.
+- A pre-existing unrelated failure is reported separately; never weaken or
+  skip a test to make it pass.
 - Any process you started is stopped.
-- Changes on the tool grid / Ctrl+K palette look right in both light and dark mode (if UI changed).
 
 ## Code conventions
 
-### Readability, architecture and maintenance
+### Readable code (the rules most often broken)
 
-- Match the surrounding project conventions. Go uses `gofmt` indentation and
-  alignment; TypeScript/Svelte/CSS use the repository's existing formatter and
-  style. Do not compress control flow into semicolon-separated one-liners or
-  manually minify source. Generated files follow their generator's convention.
-- Give new packages, plugin entry points, exported types and functions useful
-  documentation. For internal helpers, explain purpose, inputs, outputs,
-  invariants, side effects or error semantics when they are not obvious.
-  Explain **why** a decision was made, especially security, compatibility,
-  concurrency, caching, fallback and lifecycle decisions. Keep comments accurate
-  when implementation changes; do not pad obvious getters with redundant prose.
-- Keep functions focused and name them by intent. Separate configuration,
-  operation declarations, business logic, policy, OS/network I/O, and UI
-  rendering where their complexity warrants it. Avoid deep nesting, duplicated
-  validation, magic constants and unrelated abstractions. Follow the existing
-  subsystem layout rather than inventing a new architecture for a small fix.
-- Keep error handling explicit. Propagate context cancellation and deadlines,
-  close resources, bound input/output and concurrency, and preserve meaningful
-  error context. Do not swallow failures or silently fall back to permissive
-  security defaults.
-- Use the existing structured logger for meaningful operation lifecycle and
-  error events, with appropriate levels and identifiers/durations where useful.
-  Do not log credentials, raw sensitive inputs, command arguments, environment
-  variables or file contents. Avoid duplicate or noisy logs.
-- For UI changes, reuse the design system and shared components, preserve theme,
-  responsive behavior and accessibility, and verify interaction in a browser
-  when available. Do not rely solely on screenshots of static markup.
-- For plugins, respect the plugin boundary, the existing SDK, access policy
-  and versioning. Use the public `pkg/safeexec` compatibility helpers for
-  subprocesses that may run on Termux; these helpers are not a security sandbox.
-
-### Verification before committing
-
-| Change | Minimum relevant checks |
-|---|---|
-| Go code | Format changed handwritten files with `gofmt`, run `go vet` and `go test` for affected packages; use existing lint configuration if present. |
-| Go templates / backend UI | Generate templ output as required, compile affected packages and test rendering/behavior. |
-| External connector plugins | Test within the plugins module/workspace; verify plugin build/manifest when changing its contract. For Host Access, run `bash scripts/check-connector-quality.sh host_access`. |
-| Frontend | Use the existing workspace checks/tests/build commands (for example `cd fe && npm run check` and the relevant unit tests). Verify changed interaction in the browser when available. |
-| Docs only | Review the diff, links, examples and consistency with current source; no application rebuild is required. |
-
-Add regression tests with bug fixes and unit tests for new behavior, covering
-normal cases, edge cases, errors and relevant security boundaries. Favor
-behavioral assertions over brittle source-text checks. Run broader checks when
-shared contracts, core code, or cross-package behavior changes. For concurrency
-changes, use race testing where supported. Report existing unrelated failures
-separately; do not hide them by weakening tests. Use the tools and commands
-actually available in the repository; do not invent a passing lint result.
+- **Formatting.** `gofmt` for Go, the repo's existing formatter for FE. No
+  semicolon-chained statements, no several statements on one line, no
+  hand-minified code, no 300-character lines.
+- **Small named functions.** A handler parses input, calls named helpers and
+  writes output. If a function needs a comment block to explain its sections,
+  split it into functions named after those sections. Keep nesting shallow with
+  early returns.
+- **Comments explain why.** Every new package and exported identifier gets a doc
+  comment. Inside functions, comment only non-obvious decisions: security,
+  compatibility, concurrency, fallbacks, magic values. Do not narrate the code
+  line by line, and update comments the code no longer matches.
+- **Reuse before writing.** Search for an existing helper, component or
+  pattern first (`grep` the symbol). Duplicated validation, a second HTTP
+  client wrapper or a copy-pasted Svelte component is a review blocker.
+- **Errors.** Wrap with context (`fmt.Errorf("load config: %w", err)`), pass
+  `ctx` through, close what you open. No ignored errors, no silent fallback to
+  a more permissive default.
+- **Logs.** Use the existing structured logger with identifiers and durations.
+  Never log credentials, tokens, env vars, command arguments or file contents.
+- **UI.** Use the design system and shared components; keep light/dark theme,
+  responsive layout and keyboard access working.
 
 ### Connector code quality
 
@@ -163,40 +147,29 @@ CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) can also run 
 
 ## Git and pull request quality
 
-A commit represents a **logical change, not an individual file edit**.
+A commit is **one logical change**, not one edited file.
 
-- Group related source, regression tests, comments, formatting, version changes
-  and documentation together. Finish and review a logical unit before committing.
-  Do not create a commit for each file, typo, indentation correction or routine
-  intermediate fix. Do not split a feature into artificially small commits;
-  conversely, do not combine unrelated fixes merely to reduce commit count.
-- Each commit should be independently buildable and testable in its context.
-  Prefer a single atomic commit for a small change, or a small series of coherent
-  commits for a larger feature. Keep separate issues in separate PRs when they
-  can be reviewed and deployed independently.
-- Use Conventional Commits: `type(scope): imperative summary` (scope optional).
-  For non-trivial changes, include a body explaining the motivation, design
-  trade-offs, compatibility and verification. Avoid vague messages such as
-  "update file", "fix again" or "WIP" in review-ready history.
-- Prefer local editing, staging, and a single commit for a related file set.
-  When using GitHub API tools, use the Git Tree/Commit API to create an atomic
-  multi-file change against the current parent, then update the feature branch
-  with an expected-head check and no force. Do not call the contents API once
-  per changed file when an atomic batch is available. If the tools cannot
-  provide an atomic commit, disclose that limitation and prefer a reviewable
-  draft over a long chain of unverified micro-commits.
-- Inspect `git status` and the staged diff (or the equivalent API diff) before
-  committing. Exclude generated noise, secrets, local configuration, unrelated
-  changes and build artifacts unless intentionally required. Review the full
-  PR diff against the target branch before requesting merge.
-- Do not rewrite published or merged history, force push, hard reset, or amend
-  someone else's commits without explicit authorization. Squash merge is an
-  option for keeping target-branch history clean when the repository policy
-  permits it; it is not permission to bypass checks or discard useful history.
-- PR descriptions should state the problem, solution, relevant security or
-  migration implications, and exact verification results (including skipped or
-  failing checks). Keep the PR focused and update its description if scope
-  changes. Required CI checks and branch protections must not be bypassed.
+- Code, its tests and its docs/skill update go in the **same commit**. Never a
+  commit per file, per typo or per formatting fix. Unrelated fixes go in
+  separate commits.
+- Each commit builds and passes its tests on its own.
+- Message: Conventional Commits, `type(scope): imperative summary`. Non-trivial
+  changes get a body: why, design trade-off, how it was verified. No "update
+  file", "fix again", "WIP".
+- **Editing through the GitHub API:** build one commit for all changed files with
+  the Git Tree/Commit API and move the branch ref with a fast-forward update.
+  Do not call the contents API once per file. If the available tool can only
+  commit one file at a time, say so and work on a feature branch/draft PR, not
+  on `develop`.
+- Before committing, read `git status` and the staged diff: no build artifacts,
+  generated noise, local config, secrets or unrelated files.
+- No force push, history rewrite, hard reset or amending someone else's commit
+  without explicit permission.
+- Branches: small verified fixes may be pushed straight to `develop`; larger
+  features, risky changes and anything you could not fully verify go through a
+  PR against `develop`. `master` and release branches are not pushed to directly.
+- A PR description states the problem, the solution, any migration/security
+  impact, and the exact checks run (including skipped or failing ones).
 
 ## Skills to use
 
