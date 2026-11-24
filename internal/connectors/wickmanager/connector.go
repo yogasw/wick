@@ -164,8 +164,11 @@ func Operations(deps Deps) []connector.Category {
 			promptRollbackInput{}, h.promptRollback, wickdocs.Docs{}),
 
 		connector.Op("build_status", "Build / Deploy Status",
-			"What wick version is serving, the next version a deploy will ship (patch + 1), and the deploy in flight if a deploy script is reporting one (from, to, next, phase, running, updated_ago). Read-only: it reads the state file the deploy script writes ($WICK_DEPLOY_STATE_FILE, default <cache dir>/wick-deploy/state.json) and never runs anything. deploy is null when no script has reported. Access: any signed-in user.",
+			"Running app version, next source build or patch version, deploy script progress (null if none reported), and for admins live handover state: pid, commit, pending candidate, blockers, auto_swap countdown, previous drain, last attempt and graceful/forced flags. Read-only. Use handover even when deploy is null.",
 			emptyInput{}, h.buildStatus, wickdocs.Docs{}),
+		connector.OpDestructive("force_swap", "Force Installed Build Swap",
+			"ADMIN ONLY. Start graceful handover to the already installed, validated candidate matching expected_version, without waiting for running work. May interrupt agent turns, workflows and requests. Read build_status first, show blockers to the human and obtain explicit confirmation for this target. Never call automatically. Returns acceptance, not proof of completion; verify the serving version and PID using build_status. Refuses missing/blocked candidates and previous generation still draining.",
+			forceSwapInput{}, h.forceSwap, wickdocs.Docs{}),
 		connector.Op("system_status", "System Status",
 			"Get HTTP server + background worker process status. Only available when wick is launched via the system tray. Returns {server_running, server_port, worker_running, run_mode}. Access: ADMIN + tray-only.",
 			emptyInput{}, h.systemStatus, wickdocs.Docs{}),
@@ -198,6 +201,11 @@ func Operations(deps Deps) []connector.Category {
 }
 
 type emptyInput struct{}
+
+type forceSwapInput struct {
+	ExpectedVersion string `wick:"required;desc=Exact pending installed version from build_status."`
+	Confirm bool `wick:"required;desc=True only after the administrator explicitly approves interrupting running work for this version."`
+}
 
 type appGetInput struct {
 	Key string `wick:"required;desc=Variable key (e.g. app_name, session_secret)."`

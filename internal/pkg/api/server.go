@@ -2112,9 +2112,18 @@ func NewServer() *Server {
 	// the usage_* ops read it through this variable once it exists.
 	var adminUsage wickmanager.UsageSource
 	var adminPeople wickmanager.PeopleSource
+	var adminSystem *admin.Handler
 	connectors.Register(wickmanager.Module(wickmanager.Deps{
 		Usage:  func() wickmanager.UsageSource { return adminUsage },
 		People: func() wickmanager.PeopleSource { return adminPeople },
+		LiveHandover: func() map[string]any {
+			if adminSystem == nil { return nil }
+			return adminSystem.ServingPayload()
+		},
+		ForceSwap: func(expectedVersion string) (map[string]any, error) {
+			if adminSystem == nil { return nil, fmt.Errorf("system handler unavailable") }
+			return adminSystem.ManagerForceSwap(expectedVersion)
+		},
 		AlertDoors: func(ctx context.Context, userID string) []string {
 			rows, err := channelIdentities.ActiveForUser(ctx, userID)
 			if err != nil {
@@ -3322,6 +3331,7 @@ func NewServer() *Server {
 	adminHandler.SetToolsSource(liveItems)
 	adminUsage = adminHandler
 	adminPeople = adminHandler
+	adminSystem = adminHandler
 	// The People & usage page reads the session store. Handed the SAME
 	// resolved layout the agents tool uses — resolving that path twice is how
 	// two parts of one binary end up reading two different directories.

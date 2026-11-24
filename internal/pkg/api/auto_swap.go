@@ -219,7 +219,7 @@ func (a *autoSwapper) status(p daemon.Pending, pending bool, busy []string, fire
 	case fire:
 		return upgrade.AutoSwap{State: "handing_over", To: p.Version}
 	case len(busy) > 0:
-		return upgrade.AutoSwap{State: "waiting", To: p.Version, NextCheckIn: int(autoSwapInterval / time.Second)}
+		return upgrade.AutoSwap{State: "waiting", To: p.Version, Blocking: append([]string(nil), busy...), NextCheckIn: int(autoSwapInterval / time.Second)}
 	default:
 		return upgrade.AutoSwap{State: "settling", To: p.Version, NextCheckIn: int(autoSwapInterval / time.Second)}
 	}
