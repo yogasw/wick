@@ -19,10 +19,15 @@ func accountServingPID() string {
 	return strconv.Itoa(os.Getpid())
 }
 
+func accountThemeMode(user *entity.User) string {
+	if ui.ThemeByID(ui.EffectiveTheme(user.Metadata.Theme)).IsDark {
+		return "dark"
+	}
+	return "light"
+}
+
 templ sharedAgentAccountMenu(user *entity.User, settingsHref string) {
 	{{ v := ui.VersionInfoFromContext(ctx) }}
-	{{ mode := "light" }}
-	{{ if ui.ThemeByID(ui.EffectiveTheme(user.Metadata.Theme)).IsDark { mode = "dark" } }}
 	<div
 		data-shared-account-menu
 		data-viewer-name={ user.Name }
@@ -36,7 +41,7 @@ templ sharedAgentAccountMenu(user *entity.User, settingsHref string) {
 		data-update-available?={ v.AnyUpdate() }
 		data-official-build?={ v.IsOfficial }
 		data-serving-pid={ accountServingPID() }
-		data-theme-mode={ mode }
+		data-theme-mode={ accountThemeMode(user) }
 		data-theme-light={ ui.EffectiveLightTheme(user.Metadata.LightTheme) }
 		data-theme-dark={ ui.EffectiveDarkTheme(user.Metadata.DarkTheme) }
 		data-account-themes={ accountThemeCatalog() }
