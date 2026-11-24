@@ -37,6 +37,9 @@ type Reloader struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	store    enabledChecker
+	// Observer mirrors runtime changes into dependent registries (e.g. workflow).
+	onRegister   func(connector.Module)
+	onUnregister func(string)
 }
 
 // NewReloader builds a Reloader. interval <= 0 defaults to 5s.
@@ -53,6 +56,14 @@ func NewReloader(dir string, svc moduleSink, mgr *Manager, interval time.Duratio
 		stop:     make(chan struct{}),
 		store:    store,
 	}
+}
+
+// SetModuleObserver wires a dependent registry to successful plugin changes.
+// Configure once before Start/Reload; the callbacks run synchronously and
+// must be safe for the reloader goroutine. Boot registration is handled by Load.
+func (r *Reloader) SetModuleObserver(register func(connector.Module), unregister func(string)) {
+	r.onRegister = register
+	r.onUnregister = unregister
 }
 
 // Start runs the poll loop until Stop is called or ctx is cancelled. Call once.
@@ -91,6 +102,9 @@ func (r *Reloader) reconcile(ctx context.Context) {
 			if _, ok := r.seen[f.Key]; ok {
 				r.svc.RemoveModule(f.Key)
 				r.mgr.RemoveBinary(f.Key)
+				if r.onUnregister != nil {
+					r.onUnregister(f.Key)
+				}
 				delete(r.seen, f.Key)
 				log.Info().Str("connector", f.Key).Msg("connector plugin reload: disabled, removed")
 			}
@@ -114,6 +128,9 @@ func (r *Reloader) reconcile(ctx context.Context) {
 			continue
 		}
 		r.mgr.SetBinary(f.Key, f.BinaryPath)
+		if r.onRegister != nil {
+			r.onRegister(mod)
+		}
 		r.seen[f.Key] = f.Manifest.SHA256
 		log.Info().Str("connector", f.Key).Str("version", f.Manifest.Version).Msg("connector plugin reload: registered")
 	}
@@ -121,6 +138,9 @@ func (r *Reloader) reconcile(ctx context.Context) {
 		if !present[key] {
 			r.svc.RemoveModule(key)
 			r.mgr.RemoveBinary(key)
+			if r.onUnregister != nil {
+				r.onUnregister(key)
+			}
 			delete(r.seen, key)
 			log.Info().Str("connector", key).Msg("connector plugin reload: removed")
 		}
