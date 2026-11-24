@@ -33,7 +33,6 @@ type Policy struct {
   Approval []string `json:"approval,omitempty"`
   TrustHost bool `json:"trust_host,omitempty"`
   AllowShell bool `json:"allow_shell,omitempty"`
-  AllowBackground bool `json:"allow_background,omitempty"`
   TimeoutSeconds int `json:"timeout_seconds,omitempty"`
  } `json:"terminal"`
  System struct { Allow []string `json:"allow"` } `json:"system"`
@@ -51,6 +50,7 @@ func validateOps(xs []string, allowed []string) error {
 
 func absolutePath(raw string) (string,error) {
  if raw=="" || strings.ContainsRune(raw,0) { return "",errors.New("absolute path required") }
+ for _, part := range strings.Split(filepath.ToSlash(raw), "/") { if part == ".." { return "", errors.New("parent traversal is not allowed") } }
  // Accept the OS home alias on Android, but never follow caller-selected symlinks.
  home, err := os.UserHomeDir()
  if err==nil && home!="" {
