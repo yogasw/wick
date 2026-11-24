@@ -22,10 +22,11 @@ const maxFileBytes = 1 << 20
 // fileMu serializes this plugin process's native mutations; it cannot lock unrelated host processes.
 var fileMu sync.Mutex
 
-// Walk directory descriptors without following any symlink. Never use a
-// checked path in a second path-based syscall. Android supports openat.
+// openDir walks directory descriptors without following any symlink.
+// O_PATH permits traversal through searchable but unreadable ancestors,
+// such as Android's /data. Only directory listings need a readable descriptor.
 func openDir(name string) (int, error) {
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, err
 	}
@@ -33,7 +34,7 @@ func openDir(name string) (int, error) {
 		if part == "" {
 			continue
 		}
-		next, e := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		next, e := unix.Openat(fd, part, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		unix.Close(fd)
 		if e != nil {
 			return -1, e
@@ -116,7 +117,13 @@ func listDir(name string, limit int) ([]string, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	f := os.NewFile(uintptr(fd), name)
+	defer unix.Close(fd)
+	// Open the already-resolved directory, not its original pathname.
+	readFD, err := unix.Openat(fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	f := os.NewFile(uintptr(readFD), name)
 	defer f.Close()
 	names, err := f.Readdirnames(limit + 1)
 	if err != nil && err != io.EOF {

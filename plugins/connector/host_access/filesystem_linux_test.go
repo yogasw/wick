@@ -4,8 +4,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,7 +44,7 @@ func TestFileCRUDAndExpectedHash(t *testing.T) {
 	}
 }
 
-func TestSymlinkAndHardlinkRefused(t *testing.T) {
+func TestSymlinkRefused(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret")
@@ -66,8 +68,24 @@ func TestSymlinkAndHardlinkRefused(t *testing.T) {
 	if err := replaceFile(link, []byte("changed"), digest([]byte("private"))); err == nil {
 		t.Fatal("symlink edit accepted")
 	}
+}
+
+func TestHardlinkRefused(t *testing.T) {
+	root := t.TempDir()
+	secret := filepath.Join(root, "secret")
+	if err := os.WriteFile(secret, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	hard := filepath.Join(root, "hard")
 	if err := os.Link(secret, hard); err != nil {
+		// Android may deny hardlink creation at the OS boundary. Verify
+		// the denied fixture was not created; keep the Linux regression.
+		if runtime.GOOS == "android" && errors.Is(err, os.ErrPermission) {
+			if _, statErr := os.Lstat(hard); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("unexpected hardlink state: %v", statErr)
+			}
+			t.Skipf("Android prohibits hardlink fixture creation: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := readFile(hard); err == nil {
@@ -108,5 +126,36 @@ func TestDeleteDirectoryIsNotRecursive(t *testing.T) {
 	}
 	if err := removeFile(root, true); err == nil {
 		t.Fatal("non-empty directory deleted")
+	}
+}
+
+func TestTraverseSearchableAncestor(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "ancestor")
+	child := filepath.Join(ancestor, "child")
+	if err := os.MkdirAll(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ancestor, 0100); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(ancestor, 0700); err != nil {
+			t.Error(err)
+		}
+	})
+
+	name := filepath.Join(child, "file")
+	if err := writeNew(name, []byte("content")); err != nil {
+		t.Fatalf("write through searchable ancestor: %v", err)
+	}
+	names, more, err := listDir(child, 10)
+	if err != nil || more || len(names) != 1 || names[0] != "file" {
+		t.Fatalf("list child: %v, %v, %v", names, more, err)
+	}
+	if os.Geteuid() != 0 {
+		if _, _, err := listDir(ancestor, 10); err == nil {
+			t.Fatal("listing unreadable ancestor unexpectedly allowed")
+		}
 	}
 }
