@@ -1,7 +1,6 @@
 package main
 
 import (
-
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/wickdocs"
@@ -88,15 +87,22 @@ type checkInput struct {
 // catalog stays easy to review and security checks stay centralized.
 func Module() connector.Module {
 	d := wickdocs.Docs{}
-	return connector.Module{
+	m := connector.Module{
 		Meta: connector.Meta{
-			Key: "host_access", Name: "Host Access", Icon: "🖥️", Fixed: true,
+			Key:         "host_access",
+			Name:        "Host Access",
+			Icon:        "🖥️",
+			// The host is a single resource, so do not allow duplicate instances.
+			Fixed: true,
 			Description: "Optional host filesystem and terminal access. Default deny. Terminal is explicitly trusted host execution, not a sandbox.",
+			// System is the admin-only category; never use a public default tag.
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.System},
 		},
 		Configs: entity.StructToConfigs(Config{}),
 		ValidateConfig: func(key, value string) error {
-			if key != "policy_json" { return nil }
+			if key != "policy_json" {
+				return nil
+			}
 			_, err := loadPolicy(value)
 			return err
 		},
