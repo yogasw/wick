@@ -2005,6 +2005,7 @@ func NewServer() *Server {
 	var pluginReloader *connplugin.Reloader
 	if pluginMgr != nil {
 		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0, pluginStore)
+		pluginReloader.SetModuleObserver(wfMgr.Connectors.Register, wfMgr.Connectors.Unregister)
 	}
 	// Wire the connectors service into the agents tool so the session
 	// Config tab can read connector field schemas + AllowSessionConfig.
