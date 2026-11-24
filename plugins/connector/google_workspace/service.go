@@ -287,8 +287,9 @@ var opScopes = map[string][][]string{
 		{"https://www.googleapis.com/auth/gmail.send"},
 		{"https://mail.google.com/"},
 	},
+	// Reply reads the original message before sending; both permissions are needed.
 	"gmail_reply": {
-		{"https://www.googleapis.com/auth/gmail.send"},
+		{"https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"},
 		{"https://mail.google.com/"},
 	},
 	"gmail_create_draft": {
@@ -390,15 +391,16 @@ func normalizeGranted(scopeStr string) map[string]bool {
 		m["https://www.googleapis.com/auth/gmail.compose"] = true
 		m["https://www.googleapis.com/auth/gmail.modify"] = true
 	}
-	// gmail.modify implies readonly + compose (can read, label, and create drafts)
+	// gmail.modify implies readonly + compose (can read, label, draft, and send)
 	if m["https://www.googleapis.com/auth/gmail.modify"] {
 		m["https://www.googleapis.com/auth/gmail.readonly"] = true
 		m["https://www.googleapis.com/auth/gmail.compose"] = true
 	}
-	// meetings.space.created (write) implies read access to space/conference data
-	if m["https://www.googleapis.com/auth/meetings.space.created"] {
-		m["https://www.googleapis.com/auth/meetings.space.readonly"] = true
+	// Both gmail.modify and gmail.compose authorize messages.send.
+	if m["https://www.googleapis.com/auth/gmail.compose"] {
+		m["https://www.googleapis.com/auth/gmail.send"] = true
 	}
+	// Meet created and readonly are independent: created only covers app-created spaces.
 	return m
 }
 
