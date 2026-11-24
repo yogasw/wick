@@ -13,7 +13,7 @@ import (
 )
 
 type Config struct {
-	PolicyJSON string `wick:"textarea;session_locked;desc=Versioned JSON policy. Empty denies all operations. Only trusted administrators may configure this instance."`
+	PolicyJSON string `wick:"key=policy_json;textarea;session_locked;desc=Versioned JSON policy. Empty denies all operations. Only trusted administrators may configure this instance."`
 	Overview string `wick:"html=policy_overview;desc=Read-only summary of the saved JSON policy."`
 }
 
@@ -28,7 +28,7 @@ type readInput struct {
 type writeInput struct {
 	Path string `wick:"required;desc=Absolute file path."`
 	Content string `wick:"textarea;desc=New text content."`
-	ExpectedSHA256 string `wick:"required;desc=SHA256 returned by file_read."`
+	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=SHA256 returned by file_read."`
 }
 type createInput struct {
 	Path string `wick:"required;desc=New file path; existing files refused."`
@@ -38,7 +38,7 @@ type editInput struct {
 	Path string `wick:"required;desc=Absolute file path."`
 	OldText string `wick:"required;textarea;desc=Exact unique text to replace."`
 	NewText string `wick:"textarea;desc=Replacement text."`
-	ExpectedSHA256 string `wick:"required;desc=SHA256 from file_read."`
+	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=SHA256 from file_read."`
 }
 type copyInput struct {
 	Path string `wick:"required;desc=Source file."`
@@ -47,7 +47,7 @@ type copyInput struct {
 type moveInput struct {
 	Path string `wick:"required;desc=Source file."`
 	Destination string `wick:"required;desc=New destination file; no overwrite."`
-	ExpectedSHA256 string `wick:"required;desc=Source SHA256."`
+	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=Source SHA256."`
 }
 type listInput struct {
 	Path string `wick:"required;desc=Directory path."`
@@ -62,7 +62,7 @@ type searchInput struct {
 }
 type execInput struct {
 	Command string `wick:"required;desc=Executable name or absolute path."`
-	ArgsJSON string `wick:"textarea;desc=JSON array of literal argument strings; no shell expansion."`
+	ArgsJSON string `wick:"key=args_json;textarea;desc=JSON array of literal argument strings; no shell expansion."`
 	Cwd string `wick:"required;desc=Absolute allowed working directory."`
 	TimeoutSeconds int `wick:"desc=Optional timeout, capped by policy."`
 }
@@ -72,13 +72,17 @@ type shellInput struct {
 	TimeoutSeconds int `wick:"desc=Optional timeout, capped by policy."`
 }
 type validateInput struct {
-	PolicyJSON string `wick:"required;textarea;desc=Proposed policy JSON. Validation never changes settings."`
+	PolicyJSON string `wick:"key=policy_json;required;textarea;desc=Proposed policy JSON. Validation never changes settings."`
 }
+type overviewInput struct {
+	Browser string `wick:"desc=Current widget value; ignored."`
+}
+
 type checkInput struct {
 	Operation string `wick:"required;desc=Filesystem operation or exec/exec_shell."`
 	Path string `wick:"desc=Path for filesystem checks."`
 	Command string `wick:"desc=Command for terminal checks."`
-	ArgsJSON string `wick:"textarea;desc=JSON array of arguments."`
+	ArgsJSON string `wick:"key=args_json;textarea;desc=JSON array of arguments."`
 }
 
 func Module() connector.Module {
@@ -100,7 +104,7 @@ func Module() connector.Module {
 				connector.Op("policy_get", "Get policy", "Return current JSON policy; does not change permissions.", struct{}{}, getPolicy, d),
 				connector.Op("policy_validate", "Validate policy", "Check proposed JSON without saving or granting access.", validateInput{}, validatePolicy, d),
 				connector.Op("policy_check", "Check policy", "Simulate one path or command rule; no operation executed. Does not guarantee runtime access.", checkInput{}, checkPolicy, d),
-				connector.OpConfigOnly("policy_overview", "Policy overview", "Render saved policy summary.", struct{}{}, overview, d),
+				connector.OpConfigOnly("policy_overview", "Policy overview", "Render saved policy summary.", overviewInput{}, overview, d),
 			),
 			connector.Cat("Files", "Bounded file operations with policy checks and no symlink following.",
 				connector.Op("file_read", "Read file", "Read UTF-8 text with line range and SHA256.", readInput{}, fileAction("read", fileRead), d),
@@ -109,8 +113,8 @@ func Module() connector.Module {
 				connector.OpDestructive("file_write", "Write file", "Replace existing file using expected SHA256.", writeInput{}, fileAction("write", fileWrite), d),
 				connector.OpDestructive("file_edit", "Edit file", "Replace one exact text match using expected SHA256.", editInput{}, fileAction("edit", fileEdit), d),
 				connector.OpDestructive("file_append", "Append file", "Append content using expected SHA256.", writeInput{}, fileAction("write", fileAppend), d),
-				connector.OpDestructive("file_copy", "Copy file", "Copy a bounded regular file to a new destination.", copyInput{}, fileAction("copy", func(p Policy,n string,c *connector.Ctx)(any,error){return fileCopy(p,n,c,false)}), d),
-				connector.OpDestructive("file_move", "Move file", "Copy then delete source if unchanged; may report partial success.", moveInput{}, fileAction("move", func(p Policy,n string,c *connector.Ctx)(any,error){return fileCopy(p,n,c,true)}), d),
+				connector.OpDestructive("file_copy", "Copy file", "Copy a bounded regular file to a new destination.", copyInput{}, fileAction("copy", func(p Policy,n string,c *connector.Ctx)(any,error){return fileCopy(p,n,c)}), d),
+				connector.OpDestructive("file_move", "Move file", "Move a regular file atomically without overwriting a destination; expected SHA256 required.", moveInput{}, fileAction("move", fileMove), d),
 				connector.OpDestructive("file_delete", "Delete file", "Delete one regular file. No recursive deletion.", pathInput{}, fileAction("delete", func(_ Policy,n string,_ *connector.Ctx)(any,error){return map[string]bool{"deleted":true},removeFile(n,false)}), d),
 			),
 			connector.Cat("Directories & search", "List and search only visible paths, bounded by depth and result count.",
