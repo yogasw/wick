@@ -3,7 +3,9 @@ package slack
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	slackgo "github.com/slack-go/slack"
@@ -37,9 +39,15 @@ var (
 const (
 	cfgCardBlockID  = "sw_cfg"
 	cfgFillAction   = "sw_fill"
+	cfgCancelAction = "sw_cancel"
 	cfgSaveCallback = "sw_config_save"
 	cfgFieldBlkPfx  = "sw_f:"
 )
+
+// CfgCardTTL is how long a Fill in card stays usable. Past it the card
+// closes itself, so a request nobody answered cannot be filled hours later
+// by whoever scrolls by. A var so tests can shorten it.
+var CfgCardTTL = 30 * time.Minute
 
 // PostSessionConfigCard posts the Fill in card in the session's thread.
 // handled=false when this channel does not own the session.
@@ -61,13 +69,15 @@ func (s *Channel) PostSessionConfigCard(ctx context.Context, sessionID, instID, 
 	if reason != "" {
 		text += "\n_Agent:_ " + reason
 	}
-	value := sessionID + "|" + instID + "|" + strings.Join(keys, ",")
+	expires := time.Now().Add(CfgCardTTL)
+	value := sessionID + "|" + instID + "|" + strings.Join(keys, ",") + "|" + strconv.FormatInt(expires.Unix(), 10)
 	blocks, err := blocksFromJSON([]map[string]any{
 		section(text),
 		{"type": "actions", "block_id": cfgCardBlockID, "elements": []any{
 			map[string]any{"type": "button", "action_id": cfgFillAction, "value": clipText(value, 2000), "style": "primary", "text": plain("Fill in")},
+			map[string]any{"type": "button", "action_id": cfgCancelAction, "value": clipText(value, 2000), "text": plain("Cancel")},
 		}},
-		contextBlock("Values go straight to the session, encrypted. Nothing is posted here."),
+		contextBlock(fmt.Sprintf("Values go straight to the session, encrypted. Nothing is posted here. This card closes in %d minutes if nobody fills it.", int(CfgCardTTL/time.Minute))),
 	})
 	if err != nil {
 		return true, err
@@ -87,7 +97,32 @@ func (s *Channel) PostSessionConfigCard(ctx context.Context, sessionID, instID, 
 	}
 	s.cfgCards[sessionID+"|"+instID] = cfgCardRef{chatID: chatID, ts: ts, label: label}
 	s.cfgMu.Unlock()
+	time.AfterFunc(CfgCardTTL, func() { s.expireConfigCard(sessionID, instID, ts) })
 	return true, nil
+}
+
+// expireConfigCard closes a card nobody filled in time. The ts check keeps
+// an old timer from closing a newer card posted for the same instance.
+func (s *Channel) expireConfigCard(sessionID, instID, ts string) {
+	s.cfgMu.Lock()
+	ref, ok := s.cfgCards[sessionID+"|"+instID]
+	s.cfgMu.Unlock()
+	if !ok || ref.ts != ts {
+		return
+	}
+	s.closeConfigCard(context.Background(), sessionID, instID, ref.chatID, ref.ts, ref.label,
+		"⌛ *%s* was not filled within "+strconv.Itoa(int(CfgCardTTL/time.Minute))+" minutes. The card is closed.",
+		fmt.Sprintf("[session connector] nobody filled %s within %d minutes and its Fill in card expired. Do not wait for it: ask again (action=configure) only if you still need it.", instID, int(CfgCardTTL/time.Minute)))
+}
+
+// cardExpired reads the expiry stamp a card carries in its button value
+// (4th field). Cards posted before the stamp existed never expire here.
+func cardExpired(parts []string) bool {
+	if len(parts) < 4 {
+		return false
+	}
+	exp, err := strconv.ParseInt(parts[3], 10, 64)
+	return err == nil && time.Now().Unix() > exp
 }
 
 // cfgCardRef locates a posted Fill in card so it can be closed once the
@@ -112,9 +147,17 @@ func (s *Channel) SessionConfigFilled(ctx context.Context, sessionID, instID, wh
 	return true
 }
 
-// finishConfigCard swaps the card's button for a done line, forgets the
-// card and wakes the session with what was filled.
+// finishConfigCard closes the card as filled and wakes the session with
+// what was filled.
 func (s *Channel) finishConfigCard(ctx context.Context, sessionID, instID, chatID, ts, label, who string, keys []string) {
+	s.closeConfigCard(ctx, sessionID, instID, chatID, ts, label,
+		"✅ *%s* filled by "+who+" ("+strings.Join(keys, ", ")+"). The agent continues.",
+		fmt.Sprintf("[session connector] %s filled %s on %s. Secret values are stored encrypted in its config; run the connector (action=test first if unsure) instead of asking for them.", who, strings.Join(keys, ", "), instID))
+}
+
+// closeConfigCard swaps the card's buttons for one line (doneFmt gets the
+// label), forgets the card and wakes the session with wakeText.
+func (s *Channel) closeConfigCard(ctx context.Context, sessionID, instID, chatID, ts, label, doneFmt, wakeText string) {
 	s.cfgMu.Lock()
 	api := s.api
 	if ref, ok := s.cfgCards[sessionID+"|"+instID]; ok {
@@ -126,12 +169,18 @@ func (s *Channel) finishConfigCard(ctx context.Context, sessionID, instID, chatI
 		}
 		delete(s.cfgCards, sessionID+"|"+instID)
 	}
+	if ts != "" {
+		if s.cfgClosed == nil {
+			s.cfgClosed = map[string]bool{}
+		}
+		s.cfgClosed[ts] = true
+	}
 	s.cfgMu.Unlock()
 	if label == "" {
 		label = instID
 	}
 	if api != nil && chatID != "" && ts != "" {
-		text := fmt.Sprintf("✅ *%s* filled by %s (%s). The agent continues.", label, who, strings.Join(keys, ", "))
+		text := fmt.Sprintf(doneFmt, label)
 		if blocks, err := blocksFromJSON([]map[string]any{section(text)}); err == nil {
 			if _, _, _, err := api.UpdateMessageContext(ctx, chatID, ts, slackgo.MsgOptionText(text, false), slackgo.MsgOptionBlocks(blocks...)); err != nil {
 				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("session config: close fill card failed")
@@ -142,10 +191,74 @@ func (s *Channel) finishConfigCard(ctx context.Context, sessionID, instID, chatI
 		log.Warn().Str("channel", "slack").Str("session", sessionID).Msg("session config: no waker wired, session not woken")
 		return
 	}
-	msg := fmt.Sprintf("[session connector] %s filled %s on %s. Secret values are stored encrypted in its config; run the connector (action=test first if unsure) instead of asking for them.", who, strings.Join(keys, ", "), instID)
-	if err := WakeSession(context.WithoutCancel(ctx), sessionID, msg); err != nil {
+	if err := WakeSession(context.WithoutCancel(ctx), sessionID, wakeText); err != nil {
 		log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("session config: wake failed")
 	}
+}
+
+// cardLabel recovers the connector label for a card this process no longer
+// remembers (posted before a restart): the first bold run of its text.
+func cardLabel(cb slackgo.InteractionCallback) string {
+	t := cb.Message.Text
+	if i := strings.Index(t, "🔧 "); i >= 0 {
+		t = strings.TrimSuffix(strings.TrimSpace(t[i+len("🔧 "):]), " needs values")
+		return t
+	}
+	return ""
+}
+
+// mayActOnCard runs the same who-may-answer checks as the modal save.
+func (s *Channel) mayActOnCard(ctx context.Context, cb slackgo.InteractionCallback, chatID, threadTS string) bool {
+	if s.accessViewerID(ctx, cb.User.ID) == "" {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Your Slack account is not linked to an approved wick user.")
+		return false
+	}
+	groups, _ := s.resolveUserGroups(cb.User.ID)
+	if ok, _ := s.allowedCfg(s.snapshot(), cb.User.ID, groups, chatID); !ok {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "You may not talk to this agent here.")
+		return false
+	}
+	return true
+}
+
+func cardTS(cb slackgo.InteractionCallback) string {
+	if cb.Container.MessageTs != "" {
+		return cb.Container.MessageTs
+	}
+	return cb.Message.Timestamp
+}
+
+func slackName(cb slackgo.InteractionCallback) string {
+	if cb.User.Name != "" {
+		return cb.User.Name
+	}
+	return "<@" + cb.User.ID + ">"
+}
+
+// expireClicked answers a click on a card past its expiry (its timer was
+// lost to a restart): close it as expired and tell the clicker.
+func (s *Channel) expireClicked(ctx context.Context, cb slackgo.InteractionCallback, sessionID, instID string) {
+	s.accessEphemeral(cb.Channel.ID, threadOf(cb), cb.User.ID, "This Fill in card expired. Ask the agent for a new one.")
+	s.closeConfigCard(ctx, sessionID, instID, cb.Channel.ID, cardTS(cb), cardLabel(cb),
+		"⌛ *%s* expired before anyone filled it. The card is closed.",
+		fmt.Sprintf("[session connector] the Fill in card for %s expired unfilled. Do not wait for it: ask again (action=configure) only if you still need it.", instID))
+}
+
+// handleConfigCancel closes the card without saving anything and tells the
+// agent to stop waiting.
+func (s *Channel) handleConfigCancel(ctx context.Context, cb slackgo.InteractionCallback, action *slackgo.BlockAction) {
+	parts := strings.Split(action.Value, "|")
+	if len(parts) < 2 {
+		return
+	}
+	sessionID, instID := parts[0], parts[1]
+	if !s.mayActOnCard(ctx, cb, cb.Channel.ID, threadOf(cb)) {
+		return
+	}
+	who := slackName(cb)
+	s.closeConfigCard(ctx, sessionID, instID, cb.Channel.ID, cardTS(cb), cardLabel(cb),
+		"✖️ *%s* cancelled by "+who+". Nothing was saved.",
+		fmt.Sprintf("[session connector] %s cancelled the Fill in card for %s; nothing was saved. Do not wait for it and do not post the card again unless they ask.", who, instID))
 }
 
 // handleConfigFill opens the fill modal for the card's button.
@@ -156,13 +269,24 @@ func (s *Channel) handleConfigFill(ctx context.Context, cb slackgo.InteractionCa
 	if api == nil || SessionConfigForm == nil {
 		return
 	}
-	parts := strings.SplitN(action.Value, "|", 3)
+	parts := strings.Split(action.Value, "|")
 	if len(parts) < 2 {
 		return
 	}
 	sessionID, instID := parts[0], parts[1]
+	if cardExpired(parts) {
+		s.expireClicked(ctx, cb, sessionID, instID)
+		return
+	}
+	s.cfgMu.Lock()
+	closed := s.cfgClosed[cardTS(cb)]
+	s.cfgMu.Unlock()
+	if closed {
+		s.accessEphemeral(cb.Channel.ID, threadOf(cb), cb.User.ID, "This Fill in card is already closed.")
+		return
+	}
 	var keys []string
-	if len(parts) == 3 && parts[2] != "" {
+	if len(parts) >= 3 && parts[2] != "" {
 		keys = strings.Split(parts[2], ",")
 	}
 	label, fields, err := SessionConfigForm(sessionID, instID, keys)
@@ -170,11 +294,11 @@ func (s *Channel) handleConfigFill(ctx context.Context, cb slackgo.InteractionCa
 		s.accessEphemeral(cb.Channel.ID, threadOf(cb), cb.User.ID, "Cannot open the form: "+err.Error())
 		return
 	}
-	cardTS := cb.Container.MessageTs
-	if cardTS == "" {
-		cardTS = cb.Message.Timestamp
+	exp := ""
+	if len(parts) >= 4 {
+		exp = parts[3]
 	}
-	meta := sessionID + "|" + instID + "|" + cb.Channel.ID + "|" + threadOf(cb) + "|" + cardTS
+	meta := sessionID + "|" + instID + "|" + cb.Channel.ID + "|" + threadOf(cb) + "|" + cardTS(cb) + "|" + exp
 	req, err := toModalRequest(configModal(label, meta, fields))
 	if err != nil {
 		return
@@ -225,22 +349,29 @@ func configModal(label, meta string, fields []ConfigField) map[string]any {
 
 // handleConfigSubmit saves the modal and wakes the session.
 func (s *Channel) handleConfigSubmit(ctx context.Context, cb slackgo.InteractionCallback) {
-	parts := strings.SplitN(cb.View.PrivateMetadata, "|", 5)
+	parts := strings.Split(cb.View.PrivateMetadata, "|")
 	if len(parts) < 4 || SessionConfigSave == nil {
 		return
 	}
 	sessionID, instID, chatID, threadTS := parts[0], parts[1], parts[2], parts[3]
-	cardTS := ""
-	if len(parts) == 5 {
-		cardTS = parts[4]
+	msgTS := ""
+	if len(parts) >= 5 {
+		msgTS = parts[4]
 	}
-	if s.accessViewerID(ctx, cb.User.ID) == "" {
-		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Your Slack account is not linked to an approved wick user, so nothing was saved.")
+	if len(parts) >= 6 && cardExpired([]string{"", "", "", parts[5]}) {
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "This Fill in card expired before you saved, so nothing was saved. Ask the agent for a new one.")
 		return
 	}
-	groups, _ := s.resolveUserGroups(cb.User.ID)
-	if ok, _ := s.allowedCfg(s.snapshot(), cb.User.ID, groups, chatID); !ok {
-		s.accessEphemeral(chatID, threadTS, cb.User.ID, "You may not talk to this agent here, so nothing was saved.")
+	s.cfgMu.Lock()
+	closed := msgTS != "" && s.cfgClosed[msgTS]
+	s.cfgMu.Unlock()
+	if closed {
+		// Cancelled, expired or filled by someone else while this modal
+		// was open.
+		s.accessEphemeral(chatID, threadTS, cb.User.ID, "This Fill in card was closed before you saved, so nothing was saved.")
+		return
+	}
+	if !s.mayActOnCard(ctx, cb, chatID, threadTS) {
 		return
 	}
 	values := viewStateValues(cb.View)
@@ -268,9 +399,5 @@ func (s *Channel) handleConfigSubmit(ctx context.Context, cb slackgo.Interaction
 		return
 	}
 	s.accessEphemeral(chatID, threadTS, cb.User.ID, "🔧 Saved "+strings.Join(keys, ", ")+". Only you see this message.")
-	name := cb.User.Name
-	if name == "" {
-		name = "<@" + cb.User.ID + ">"
-	}
-	s.finishConfigCard(ctx, sessionID, instID, chatID, cardTS, "", name, keys)
+	s.finishConfigCard(ctx, sessionID, instID, chatID, msgTS, "", slackName(cb), keys)
 }

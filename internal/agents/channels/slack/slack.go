@@ -378,6 +378,7 @@ type Channel struct {
 
 	cfgMu     sync.Mutex
 	cfgCards  map[string]cfgCardRef // open Fill in cards by "session|instance"; guarded by cfgMu
+	cfgClosed map[string]bool       // ts of Fill in cards already closed; guarded by cfgMu
 	cfg       agentconfig.SlackChannelConfig
 	pubURL    string
 	api       *slackgo.Client
@@ -4925,6 +4926,10 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 	}
 	if action.BlockID == cfgCardBlockID && action.ActionID == cfgFillAction {
 		s.handleConfigFill(ctx, cb, action)
+		return
+	}
+	if action.BlockID == cfgCardBlockID && action.ActionID == cfgCancelAction {
+		s.handleConfigCancel(ctx, cb, action)
 		return
 	}
 	if action.BlockID == cardBlockID {
