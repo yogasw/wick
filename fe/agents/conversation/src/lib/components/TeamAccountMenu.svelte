@@ -29,6 +29,52 @@
   };
   let { viewerName, viewerEmail = "", viewerAvatar = "", isAdmin = false, viewingAs = "", appVersion = "", wickVersion = "", buildCommit = "", theme, onSettings }: Props = $props();
 
+  type SourceDetails = {
+    kind: string;
+    repository?: string;
+    branch?: string;
+    upstream?: string;
+    revision?: string;
+    tag?: string;
+    commit_date?: string;
+    source_version?: string;
+    build_time?: string;
+    checked_at?: string;
+    dirty?: boolean;
+    behind?: number;
+    ahead?: number;
+    latest_release?: string;
+    newer_releases?: number;
+    compare_error?: string;
+    release_error?: string;
+  };
+
+  let detailsOpen = $state(false);
+  let details = $state<SourceDetails | null>(null);
+  let loadingDetails = $state(false);
+  let detailsError = $state("");
+  const shortCommit = $derived(/^[0-9a-f]{13,40}$/i.test(buildCommit) ? buildCommit.slice(0, 12) : buildCommit);
+  function displayDate(value?: string) {
+    if (!value) return "Unknown";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  }
+  async function toggleDetails() {
+    detailsOpen = !detailsOpen;
+    if (!detailsOpen || loadingDetails) return;
+    loadingDetails = true;
+    detailsError = "";
+    try {
+      const res = await fetch("/api/build-source", { credentials: "same-origin" });
+      if (!res.ok) throw new Error("Build details unavailable");
+      details = await res.json() as SourceDetails;
+    } catch {
+      detailsError = "Unable to check build details. Click the info button again to retry.";
+    } finally {
+      loadingDetails = false;
+    }
+  }
+
   let open = $state(false);
   let root = $state<HTMLDivElement>();
   let button = $state<HTMLButtonElement>();
@@ -38,6 +84,7 @@
 
   async function close(refocus: boolean) {
     open = false;
+    detailsOpen = false;
     if (refocus) {
       await tick();
       button?.focus();
@@ -69,7 +116,7 @@
     aria-label="Account menu"
     aria-haspopup="menu"
     aria-expanded={open}
-    onclick={() => (open = !open)}
+    onclick={() => { if (open) void close(false); else open = true; }}
   >
     <!-- Same avatar as the Agents sidebar's account row (nav.templ). -->
     {#if viewerAvatar}
@@ -82,7 +129,7 @@
     <svg class="h-3.5 w-3.5 shrink-0 text-black-700 transition-transform dark:text-black-600 {open ? '' : 'rotate-180'}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6" /></svg>
   </button>
   {#if open}
-    <div class="absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-white-300 bg-white-100 shadow-lg dark:border-navy-600 dark:bg-navy-700" role="menu" aria-label="Account" data-account-menu>
+    <div class="absolute bottom-full left-0 z-50 mb-2 max-h-[80vh] w-64 overflow-y-auto rounded-xl border border-white-300 bg-white-100 shadow-lg dark:border-navy-600 dark:bg-navy-700" role="menu" aria-label="Account" data-account-menu>
       <div class="border-b border-white-300 px-4 py-3 dark:border-navy-600">
         <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">{viewerName || "You"}</p>
         {#if viewerEmail}<p class="truncate text-xs text-black-700 dark:text-black-600">{viewerEmail}</p>{/if}
@@ -154,7 +201,43 @@
         <div class="border-t border-white-300 px-4 py-2 text-xs text-black-700 dark:border-navy-600 dark:text-black-600" data-testid="versions">
           {#if appVersion}<p class="flex justify-between"><span>App</span><span>{appVersion}</span></p>{/if}
           {#if wickVersion}<p class="flex justify-between"><span>Wick</span><span>{wickVersion}</span></p>{/if}
-          {#if buildCommit}<p class="flex justify-between gap-2"><span>Commit</span><span class="font-mono" title={buildCommit}>{/^[0-9a-f]{13,40}$/i.test(buildCommit) ? buildCommit.slice(0, 12) : buildCommit}</span></p>{/if}
+          <div class="flex items-center justify-between gap-2">
+            {#if buildCommit}<span>Commit</span><span class="ml-auto font-mono" title={buildCommit}>{shortCommit}</span>{:else}<span>Build details</span>{/if}
+            <button type="button" class="rounded p-0.5 hover:bg-white-300 focus-visible:ring-2 focus-visible:ring-green-400 dark:hover:bg-navy-600" aria-label="Build information" aria-expanded={detailsOpen} title="Build source, commit and release status" onclick={toggleDetails}>
+              <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v1"/></svg>
+            </button>
+          </div>
+          {#if detailsOpen}
+            <div class="mt-2 space-y-1 border-t border-white-300 pt-2 dark:border-navy-600" data-testid="build-details" aria-live="polite">
+              {#if loadingDetails}<p>Checking upstream…</p>{/if}
+              {#if detailsError}<p>{detailsError}</p>{/if}
+              {#if details}
+                <p class="font-medium">{details.kind === "source" ? "Source build" : details.kind === "release" ? "Wick release" : "Build source unknown"}</p>
+                {#if details.repository}<p class="break-all">Repository: {details.repository}</p>{/if}
+                {#if details.branch}<p class="break-all">Branch: {details.branch}</p>{/if}
+                {#if details.tag}<p class="break-all">Tag: {details.tag}</p>{/if}
+                {#if details.upstream}<p class="break-all">Upstream: {details.upstream}</p>{/if}
+                {#if details.revision}
+                  <p class="break-all">Revision: <span class="font-mono" title={details.revision}>{details.revision.slice(0, 12)}</span></p>
+                  {#if details.repository}<a class="underline" href={"https://github.com/" + details.repository + "/commit/" + details.revision} target="_blank" rel="noopener noreferrer">View commit on GitHub</a>{/if}
+                {/if}
+                {#if details.dirty}<p>Dirty build — revision is the base commit; local edits are not included in the comparison.</p>{/if}
+                {#if details.commit_date}<p>Commit date: {displayDate(details.commit_date)}</p>{/if}
+                {#if details.build_time}<p>Built: {displayDate(details.build_time)}</p>{/if}
+                {#if details.behind !== undefined && details.ahead !== undefined}
+                  <p>Behind origin: <strong>{details.behind}</strong> commits</p>
+                  <p>Ahead of origin: <strong>{details.ahead}</strong> commits</p>
+                {:else if details.compare_error}<p>{details.compare_error}</p>{/if}
+                <div class="border-t border-white-300 pt-1 dark:border-navy-600">
+                  {#if details.source_version}<p>Wick base version: {details.source_version}</p>{/if}
+                  {#if details.latest_release}<p>Latest stable release: {details.latest_release}</p>{/if}
+                  {#if details.newer_releases !== undefined}<p><strong>{details.newer_releases}</strong> newer official releases</p>{:else if details.release_error}<p>{details.release_error}</p>{/if}
+                  <a class="underline" href="https://github.com/yogasw/wick/releases" target="_blank" rel="noopener noreferrer">View official releases</a>
+                </div>
+                {#if details.checked_at}<p class="opacity-70">Checked: {displayDate(details.checked_at)}</p>{/if}
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
       <form method="POST" action="/auth/logout" class="border-t border-white-300 py-1 dark:border-navy-600">
