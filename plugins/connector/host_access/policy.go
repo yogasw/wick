@@ -10,8 +10,10 @@ import (
  "strings"
 )
 
+// defaultPolicy is used only when settings are empty. No capability is granted until an administrator explicitly configures it.
 const defaultPolicy = `{"version":1,"filesystem":{"default":"deny","rules":[]},"terminal":{"mode":"disabled"},"system":{"allow":[]}}`
 
+// Rule scopes filesystem permissions to a path. Recursive defaults to true; a deny always wins even when another rule permits a child.
 type Rule struct {
  Path string `json:"path"`
  Recursive *bool `json:"recursive,omitempty"`
@@ -19,6 +21,7 @@ type Rule struct {
  Deny []string `json:"deny,omitempty"`
  Approval []string `json:"approval,omitempty"`
 }
+// Policy is the versioned configuration shared by every operation. Read it from the current call instead of caching it across settings changes.
 type Policy struct {
  Version int `json:"version"`
  Filesystem struct {
@@ -38,16 +41,20 @@ type Policy struct {
  System struct { Allow []string `json:"allow"` } `json:"system"`
 }
 
+// fsOps is the canonical set of native filesystem verbs accepted by rules.
 var fsOps = []string{"list","read","search","stat","create","write","edit","mkdir","delete","copy","move","disk_usage"}
+// contains checks literal operation membership, including the explicit wildcard.
 func contains(xs []string, value string) bool {
  for _, x := range xs { if x == value || x == "*" { return true } }
  return false
 }
+// validateOps rejects misspelled permission names rather than silently ignoring a security rule.
 func validateOps(xs []string, allowed []string) error {
  for _, x := range xs { if x!="*" && !contains(allowed,x) { return fmt.Errorf("unknown operation %q",x) } }
  return nil
 }
 
+// absolutePath normalizes the supported home alias and rejects relative paths and traversal before any filesystem access.
 func absolutePath(raw string) (string,error) {
  if raw=="" || strings.ContainsRune(raw,0) { return "",errors.New("absolute path required") }
  for _, part := range strings.Split(filepath.ToSlash(raw), "/") { if part == ".." { return "", errors.New("parent traversal is not allowed") } }
@@ -63,11 +70,13 @@ func absolutePath(raw string) (string,error) {
  for _, part:=range strings.Split(filepath.ToSlash(raw),"/") { if part==".." { return "",errors.New("parent traversal is not allowed") } }
  return filepath.Clean(raw),nil
 }
+// within uses component boundaries, not string prefixes, so /work does not authorize /work-secret.
 func within(base,p string) bool {
  rel,err:=filepath.Rel(base,p)
  return err==nil && rel!=".." && !strings.HasPrefix(rel,".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
+// loadPolicy validates the complete JSON document before any operation can use it. Invalid settings must never degrade to permissive defaults.
 func loadPolicy(raw string) (Policy,error) {
  var p Policy
  if strings.TrimSpace(raw)=="" || raw=="{}" { raw=defaultPolicy }
@@ -92,6 +101,7 @@ func loadPolicy(raw string) (Policy,error) {
  return p,nil
 }
 
+// globParts matches path segments, with ** matching zero or more directory levels.
 func globParts(pattern, parts []string) bool {
  if len(pattern)==0{return len(parts)==0}
  if pattern[0]=="**" {
@@ -100,10 +110,12 @@ func globParts(pattern, parts []string) bool {
  if len(parts)==0{return false}
  matched,_:=filepath.Match(pattern[0],parts[0]);return matched&&globParts(pattern[1:],parts[1:])
 }
+// protected applies a basename or path glob to the normalized path.
 func protected(pattern,p string) bool {
  if !strings.Contains(pattern,"/"){matched,_:=filepath.Match(pattern,filepath.Base(p));return matched}
  return globParts(strings.Split(strings.TrimPrefix(filepath.ToSlash(pattern),"/"),"/"),strings.Split(strings.TrimPrefix(filepath.ToSlash(p),"/"),"/"))
 }
+// fileVerdict is the single native filesystem policy decision: protected pattern, deny, approval, allow, then default.
 func (p Policy) fileVerdict(op, name string) (string,string) {
  if !contains(fsOps,op){return "deny","unknown operation"}
  // Never expose these to native file operations even if broad defaults allow.
@@ -120,11 +132,13 @@ func (p Policy) fileVerdict(op, name string) (string,string) {
  if allow||p.Filesystem.Default=="allow"{return "allow","policy allows operation"}
  return "deny","default deny"
 }
+// authorize normalizes and checks a path without touching the file. The filesystem backend still validates the actual descriptor.
 func (p Policy) authorize(op,raw string)(string,error){
  name,err:=absolutePath(raw);if err!=nil{return "",err}
  v,reason:=p.fileVerdict(op,name);if v!="allow"{return "",fmt.Errorf("%s: %s (%s)",op,reason,v)}
  return name,nil
 }
+// commandVerdict evaluates the requested executable and literal argument prefix. It is not a sandbox or a parser of shell programs.
 func (p Policy) commandVerdict(name string, args []string, shell bool)(string,string){
  t:=p.Terminal
  if t.Mode=="disabled"{return "deny","terminal disabled"}
