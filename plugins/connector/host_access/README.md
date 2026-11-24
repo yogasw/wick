@@ -14,7 +14,9 @@ administrator can change the policy in instance settings. Do not enable
 
 Native file operations use descriptor-relative, no-follow operations on
 Linux/Termux. Symlinks, hardlinked files, special files, traversal, and
-recursive deletion are refused. This is not an OS sandbox against other
+recursive deletion are refused. Directory traversal needs search permission on
+ancestors, while listing still needs read permission on the target directory.
+This is not an OS sandbox against other
 processes with the same host UID; protect the Wick installation, config,
 database, plugin binaries and credentials with appropriately narrow rules.
 External concurrent changes can still race optimistic edits.
@@ -74,10 +76,12 @@ Build and install separately from the core binary:
 ```sh
 cd plugins
 wick plugin build --kind connector host_access --target linux/arm64
-wick-agent plugin install bin/host_access-0.1.0-linux-arm64.zip
+wick-agent plugin install bin/host_access-0.1.1-linux-arm64.zip
 ```
 
 The test suite exercises policy precedence, invalid JSON, path traversal,
 symlink/hardlink protection, optimistic edits, bounded search and permission
-defaults. Wick's connector execution history provides the usual run audit;
+defaults. On Android, the hardlink fixture test is skipped only if the OS
+itself refuses to create a hardlink; other platforms exercise the plugin's
+hardlink rejection directly. Wick's connector execution history provides the usual run audit;
 do not put secrets in command arguments or file contents sent to an agent.
