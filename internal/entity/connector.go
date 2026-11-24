@@ -284,6 +284,9 @@ type ConnectorAccount struct {
 	//
 	// Example: {"send_message":false,"get_channel_history":true}
 	OpOverrides string `gorm:"type:text;default:''"`
+	// HealthDisabledOps holds only this credential's failing health checks (op key to reason).
+	// Empty means unchecked; a successful check stores an empty JSON object.
+	HealthDisabledOps string `gorm:"type:text;default:''"`
 	// AuthError is the last call's auth failure on this account (token
 	// revoked, refresh refused), so the UI can ask for a reconnect before
 	// the next call fails too. Cleared by a reconnect or a call that works.
