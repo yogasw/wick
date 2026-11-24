@@ -153,8 +153,9 @@ export async function deleteConnectorRow(key: string, id: string): Promise<void>
   await apiPost(`${rowBase(key, id)}/delete`);
 }
 
-export async function runHealthCheck(key: string, id: string): Promise<HealthCheckResult> {
-  return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
+export async function runHealthCheck(key: string, id: string, accountId?: string): Promise<HealthCheckResult> {
+  const account = accountId ? `/accounts/${encodeURIComponent(accountId)}` : "";
+  return apiPost<HealthCheckResult>(`${rowBase(key, id)}${account}/health-check`);
 }
 
 /* Save the caller's own values for a per-user token instance (bearer /
