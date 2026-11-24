@@ -2,6 +2,26 @@
 
 Operational rules for coding agents (Claude Code, etc.) working in this repo. Human onboarding lives in [README.md](README.md).
 
+## Required workflow for every code change
+
+Read this file first, even when editing through the GitHub API or an MCP
+connector instead of a local checkout. Then read the development skill for the
+subsystem (see "Skills to use") and one existing implementation next to the code
+you are about to change. Copy its shape; do not invent a parallel helper,
+component or architecture for a small fix.
+
+1. **Scope.** Change only what the request needs. Unrelated cleanup goes in a
+   separate change. Never revert or overwrite local edits you did not make.
+2. **Implement** the whole change (code + tests + docs/skills) before committing.
+3. **Check** with the commands in "Before declaring a task done" and read your
+   own full diff once more for leftovers, debug output and accidental edits.
+4. **Commit and push** following "Git and pull request quality".
+5. **Report** the commands you actually ran and their result. A check you could
+   not run is reported as *not run*, never as passed.
+
+`develop` has no automatic CI. The checks above are the only gate, so run them
+locally before every push; do not wait for, or point to, a CI that will not run.
+
 ## Running the app (agent flow)
 
 When an agent needs to start the server — e.g. to verify a UI change — use a **one-shot** flow, not watch mode:
@@ -44,11 +64,56 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 
 ## Before declaring a task done
 
-- `templ generate && go build ./...` passes.
+Minimum for any Go change:
+
+```bash
+templ generate          # only when .templ files changed
+gofmt -l .              # must print nothing for files you touched
+go vet ./<changed packages>/...
+go test ./<changed packages>/...      # add -race for concurrency changes
+go build ./...
+```
+
+| Also changed | Additional check |
+|---|---|
+| `fe/` | `cd fe && npm run check`, plus the relevant unit tests; click through the changed UI in a browser |
+| Host Access connector | `bash scripts/check-connector-quality.sh host_access` |
+| External plugin | test inside the `plugins` module; rebuild the plugin when its manifest/contract changes |
+| UI (any) | tool grid / Ctrl+K palette look right in light and dark mode |
+| Docs only | re-read the rendered diff; check links and commands against current source |
+
+- Bug fix → add a regression test that fails without the fix. New behaviour →
+  unit tests for the normal case, edge cases and the error path. Assert
+  behaviour, not source text.
+- A pre-existing unrelated failure is reported separately; never weaken or
+  skip a test to make it pass.
 - Any process you started is stopped.
-- Changes on the tool grid / Ctrl+K palette look right in both light and dark mode (if UI changed).
 
 ## Code conventions
+
+### Readable code (the rules most often broken)
+
+- **Formatting.** `gofmt` for Go, the repo's existing formatter for FE. No
+  semicolon-chained statements, no several statements on one line, no
+  hand-minified code, no 300-character lines.
+- **Small named functions.** A handler parses input, calls named helpers and
+  writes output. If a function needs a comment block to explain its sections,
+  split it into functions named after those sections. Keep nesting shallow with
+  early returns.
+- **Comments explain why.** Every new package and exported identifier gets a doc
+  comment. Inside functions, comment only non-obvious decisions: security,
+  compatibility, concurrency, fallbacks, magic values. Do not narrate the code
+  line by line, and update comments the code no longer matches.
+- **Reuse before writing.** Search for an existing helper, component or
+  pattern first (`grep` the symbol). Duplicated validation, a second HTTP
+  client wrapper or a copy-pasted Svelte component is a review blocker.
+- **Errors.** Wrap with context (`fmt.Errorf("load config: %w", err)`), pass
+  `ctx` through, close what you open. No ignored errors, no silent fallback to
+  a more permissive default.
+- **Logs.** Use the existing structured logger with identifiers and durations.
+  Never log credentials, tokens, env vars, command arguments or file contents.
+- **UI.** Use the design system and shared components; keep light/dark theme,
+  responsive layout and keyboard access working.
 
 ### Connector code quality
 
@@ -69,7 +134,7 @@ Use `github.com/yogasw/wick/pkg/safeexec` for subprocess execution, including
 plugins that run on Termux. Resolve executable names before command creation.
 Safeexec is a compatibility layer, not a sandbox.
 
-### Never call `os/exec.LookPath` directly — use `internal/safeexec.LookPath`
+### Never call `os/exec.LookPath` directly in host runtime — use `pkg/safeexec.LookPath`
 
 Go's `os/exec.LookPath` uses the `faccessat2(2)` syscall to check executable permissions. Android's seccomp filter on devices that still ship a 4.x kernel (Android 13 userland on top of kernel 4.14 is a real, in-the-wild combination) rejects `faccessat2` with `SIGSYS` instead of the `ENOSYS` that Go's runtime expects, killing the process before its fallback to plain `faccessat` can fire.
 
@@ -78,7 +143,33 @@ Anything that runs inside `wick-agent` (everything under `internal/agents/`, `in
 - **Replace `exec.LookPath(name)`** with `safeexec.LookPath(name)`.
 - **Before `exec.Command(name, ...)` where `name` may be a bare binary name** (anything without `/`), call `safeexec.ResolveBin(name)` first and pass the resolved absolute path. `exec.Command` calls `LookPath` internally during `Cmd` construction whenever the argument has no slash, which trips the same `faccessat2` chain.
 
-CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) runs on the developer's build host — kernel ≥ 5.8 in practice — and stays on stdlib `exec.LookPath` since `wick build` / `wick init` / `wick doctor` never run inside `wick-agent`.
+CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) can also run on Termux. Prefer `pkg/safeexec` for new or changed subprocess call sites; do not assume the developer's kernel supports `faccessat2`. Preserve existing working compatibility helpers.
+
+## Git and pull request quality
+
+A commit is **one logical change**, not one edited file.
+
+- Code, its tests and its docs/skill update go in the **same commit**. Never a
+  commit per file, per typo or per formatting fix. Unrelated fixes go in
+  separate commits.
+- Each commit builds and passes its tests on its own.
+- Message: Conventional Commits, `type(scope): imperative summary`. Non-trivial
+  changes get a body: why, design trade-off, how it was verified. No "update
+  file", "fix again", "WIP".
+- **Editing through the GitHub API:** build one commit for all changed files with
+  the Git Tree/Commit API and move the branch ref with a fast-forward update.
+  Do not call the contents API once per file. If the available tool can only
+  commit one file at a time, say so and work on a feature branch/draft PR, not
+  on `develop`.
+- Before committing, read `git status` and the staged diff: no build artifacts,
+  generated noise, local config, secrets or unrelated files.
+- No force push, history rewrite, hard reset or amending someone else's commit
+  without explicit permission.
+- Branches: small verified fixes may be pushed straight to `develop`; larger
+  features, risky changes and anything you could not fully verify go through a
+  PR against `develop`. `master` and release branches are not pushed to directly.
+- A PR description states the problem, the solution, any migration/security
+  impact, and the exact checks run (including skipped or failing ones).
 
 ## Skills to use
 
