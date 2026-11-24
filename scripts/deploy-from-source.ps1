@@ -295,7 +295,14 @@ function Wick-Self {
     Say "version $ver"
     if (-not $DryRun) { $yml = Get-Content -Raw wick.yml; Set-Content -NoNewline wick.yml ([regex]::new('(?m)^version:.*$').Replace($yml, "version: $ver", 1)) }
     Get-ChildItem bin -Filter "$App-windows-*" -ErrorAction SilentlyContinue | Remove-Item -Force
-    Say "build ($Target)"; Run wick @('build', '--target', $Target)
+    $oldSource = $env:WICK_BUILD_SOURCE_DIR; $oldRef = $env:WICK_BUILD_REF
+    try {
+      $env:WICK_BUILD_SOURCE_DIR = $Src
+      $env:WICK_BUILD_REF = if ($NoPull) { "" } else { $Ref }
+      Say "build ($Target)"; Run wick @('build', '--target', $Target)
+    } finally {
+      $env:WICK_BUILD_SOURCE_DIR = $oldSource; $env:WICK_BUILD_REF = $oldRef
+    }
     Install-Build $exe (Join-Path $Dir "bin\$App-windows-$Arch.exe")
   } finally { Pop-Location }
 }

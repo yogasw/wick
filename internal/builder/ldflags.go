@@ -6,6 +6,8 @@ import (
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/yogasw/wick/internal/buildsource"
 )
 
 // obfPATKey MUST match app/app.go patObfKey — runtime XORs back with it.
@@ -54,7 +56,13 @@ func assembleLDFlags(cfg Config) []string {
 	}
 	// A source deploy builds a scaffold, not the source checkout itself.
 	// Stamp the actual source SHA, or mark uncommitted source as dirty.
-	if commit := os.Getenv("WICK_BUILD_COMMIT"); commit == "dirty" || regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(commit) {
+	commit := os.Getenv("WICK_BUILD_COMMIT")
+	if meta, ok := sourceMetadata(); ok {
+		flags = append(flags, "-X github.com/yogasw/wick/internal/buildsource.Encoded="+buildsource.Encode(meta))
+		commit = meta.Revision
+		if meta.Dirty { commit = "dirty" }
+	}
+	if commit == "dirty" || regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(commit) {
 		flags = append(flags, "-X github.com/yogasw/wick/app.BuildCommit="+commit)
 	}
 	if cfg.GitHubPAT != "" {
