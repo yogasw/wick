@@ -51,6 +51,9 @@ func sidebarResizeCSS(space string, width int) string {
 @media (min-width:%dpx){%s{width:var(--wick-sidebar-w,%s)}[data-sidebar-resize]{display:block}}
 [data-sidebar-resize]::after{content:"";position:absolute;top:0;bottom:0;left:3px;width:2px;background:#22c55e;opacity:0;transition:opacity 120ms}
 [data-sidebar-resize]:hover::after,html.wick-sidebar-resizing [data-sidebar-resize]::after{opacity:1}
+[data-space-sidebar]:has([data-account-menu],details[open] [data-account-panel]) [data-sidebar-resize]{visibility:hidden;pointer-events:none}
+[data-space-sidebar]:has([data-account-menu],details[open] [data-account-panel]) [data-sidebar-resize]::after{opacity:0}
+[data-space-sidebar]:has([data-account-menu],details[open] [data-account-panel]) [data-space-account]{position:relative;z-index:30}
 html.wick-sidebar-resizing,html.wick-sidebar-resizing *{cursor:col-resize!important;user-select:none!important}
 </style>`, saved, bp, sel, def)
 }
