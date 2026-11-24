@@ -129,8 +129,22 @@ describe("TeamAccountMenu", () => {
   });
 
   test("versions show when known", async () => {
-    mount({ appVersion: "1.2.3", wickVersion: "0.9.0" });
+    mount({ appVersion: "1.2.3", wickVersion: "0.9.0", buildCommit: "1234567890abcdef1234567890abcdef12345678" });
     await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     expect(screen.getByTestId("versions").textContent).toContain("1.2.3");
+    expect(screen.getByTestId("versions").textContent).toContain("0.9.0");
+    expect(screen.getByText("1234567890ab").getAttribute("title")).toBe("1234567890abcdef1234567890abcdef12345678");
+  });
+
+  test("unknown commit is explicit", async () => {
+    const { button } = mount({ appVersion: "1.2.3", buildCommit: "unknown" });
+    await fireEvent.click(button);
+    expect(screen.getByTestId("versions").textContent).toContain("unknown");
+  });
+
+  test("missing commit is omitted", async () => {
+    const { button } = mount({ appVersion: "1.2.3" });
+    await fireEvent.click(button);
+    expect(screen.queryByText("Commit")).toBeNull();
   });
 });

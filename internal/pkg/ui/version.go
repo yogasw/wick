@@ -11,6 +11,7 @@ import "context"
 // from updater) to keep the view layer free of a dependency on the
 // updater package — the server maps the cache's snapshot into this.
 type VersionInfo struct {
+	BuildCommit    string // source revision embedded in the running binary
 	AppVersion     string // running app version, RAW for display (e.g. "v0.1.63" or "dev")
 	AppDev         bool   // dev/pseudo build — show a neutral "dev" badge, no comparison
 	AppLatest      string // latest app release, when known

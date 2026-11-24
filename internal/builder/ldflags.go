@@ -3,6 +3,8 @@ package builder
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"regexp"
 	"time"
 )
 
@@ -49,6 +51,11 @@ func assembleLDFlags(cfg Config) []string {
 		// which left "Built" reading "unknown"); this overrides it everywhere
 		// with the actual compile time, which is what "Built" should mean.
 		fmt.Sprintf("-X github.com/yogasw/wick/app.BuildTime=%s", time.Now().UTC().Format(time.RFC3339)),
+	}
+	// A source deploy builds a scaffold, not the source checkout itself.
+	// Stamp the actual source SHA, or mark uncommitted source as dirty.
+	if commit := os.Getenv("WICK_BUILD_COMMIT"); commit == "dirty" || regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(commit) {
+		flags = append(flags, "-X github.com/yogasw/wick/app.BuildCommit="+commit)
 	}
 	if cfg.GitHubPAT != "" {
 		flags = append(flags, fmt.Sprintf("-X github.com/yogasw/wick/app.GitHubPATEnc=%s", obfuscatePAT(cfg.GitHubPAT)))

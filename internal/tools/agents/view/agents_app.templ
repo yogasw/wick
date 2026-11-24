@@ -115,6 +115,7 @@ templ AgentsApp(vm AgentsAppVM) {
 				data-viewing-as={ ui.ImpersonationFromContext(ctx).ActingAs }
 				data-app-version={ ui.VersionInfoFromContext(ctx).AppVersion }
 				data-wick-version={ ui.VersionInfoFromContext(ctx).WickVersion }
+				data-build-commit={ ui.VersionInfoFromContext(ctx).BuildCommit }
 				data-theme-mode={ vm.ThemeMode }
 				data-theme-light={ vm.ThemeLight }
 				data-theme-dark={ vm.ThemeDark }

@@ -79,6 +79,7 @@
     viewingAs: appEl?.dataset.viewingAs ?? "",
     appVersion: appEl?.dataset.appVersion ?? "",
     wickVersion: appEl?.dataset.wickVersion ?? "",
+    buildCommit: appEl?.dataset.buildCommit ?? "",
   };
   const themeMode = appEl?.dataset.themeMode;
   const theme =

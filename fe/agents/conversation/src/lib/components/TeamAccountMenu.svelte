@@ -21,12 +21,13 @@
     viewingAs?: string;
     appVersion?: string;
     wickVersion?: string;
+    buildCommit?: string;
     /** The Light/Dark switch: the mode on screen and the user's paired
         theme ids, posted to wick's /theme. null hides it (signed out). */
     theme: { mode: "light" | "dark"; light: string; dark: string } | null;
     onSettings: () => void;
   };
-  let { viewerName, viewerEmail = "", viewerAvatar = "", isAdmin = false, viewingAs = "", appVersion = "", wickVersion = "", theme, onSettings }: Props = $props();
+  let { viewerName, viewerEmail = "", viewerAvatar = "", isAdmin = false, viewingAs = "", appVersion = "", wickVersion = "", buildCommit = "", theme, onSettings }: Props = $props();
 
   let open = $state(false);
   let root = $state<HTMLDivElement>();
@@ -149,10 +150,11 @@
           </div>
         {/if}
       </div>
-      {#if appVersion || wickVersion}
+      {#if appVersion || wickVersion || buildCommit}
         <div class="border-t border-white-300 px-4 py-2 text-xs text-black-700 dark:border-navy-600 dark:text-black-600" data-testid="versions">
           {#if appVersion}<p class="flex justify-between"><span>App</span><span>{appVersion}</span></p>{/if}
           {#if wickVersion}<p class="flex justify-between"><span>Wick</span><span>{wickVersion}</span></p>{/if}
+          {#if buildCommit}<p class="flex justify-between gap-2"><span>Commit</span><span class="font-mono" title={buildCommit}>{/^[0-9a-f]{13,40}$/i.test(buildCommit) ? buildCommit.slice(0, 12) : buildCommit}</span></p>{/if}
         </div>
       {/if}
       <form method="POST" action="/auth/logout" class="border-t border-white-300 py-1 dark:border-navy-600">
