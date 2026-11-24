@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "type": "module",
   "dependencies": {
-    "@wick-fe/common-sse-worker": "*"
+    "@wick-fe/common-sse-worker": "*",
+    "@wick-fe/common-ui": "*"
   },
   "scripts": {
     "dev": "vite",
