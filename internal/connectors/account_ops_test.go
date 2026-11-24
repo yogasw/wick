@@ -90,16 +90,16 @@ func TestResolveAccountOps(t *testing.T) {
 		assert.False(t, got["off_at_instance"].Inherited)
 	})
 
-	t.Run("the health-check lock is a ceiling no override can lift", func(t *testing.T) {
+	t.Run("the account health-check lock is a ceiling no override can lift", func(t *testing.T) {
 		// Forcing it on would only buy an error from the provider: the
 		// credential genuinely lacks the permission.
-		acc := &entity.ConnectorAccount{OpOverrides: `{"locked":true}`}
+		acc := &entity.ConnectorAccount{OpOverrides: `{"locked":true}`, HealthDisabledOps: `{"locked":"needs scope: chat:write"}`}
 		got := byKey(ResolveAccountOps(acc, instance, keys))
 
 		assert.False(t, got["locked"].Enabled)
 		assert.True(t, got["locked"].SystemDisabled)
 		assert.Equal(t, "needs scope: chat:write", got["locked"].Reason)
-		assert.False(t, got["locked"].Inherited)
+		assert.True(t, got["locked"].Inherited, "the manual instance default remains on")
 	})
 
 	t.Run("every requested key comes back, in order", func(t *testing.T) {
@@ -128,7 +128,8 @@ func TestAccountOpEnabled(t *testing.T) {
 		{"inherits off", &entity.ConnectorAccount{}, OpState{Enabled: false}, "send", false},
 		{"forced off beats instance on", &entity.ConnectorAccount{OpOverrides: `{"send":false}`}, OpState{Enabled: true}, "send", false},
 		{"forced on beats instance off", &entity.ConnectorAccount{OpOverrides: `{"send":true}`}, OpState{Enabled: false}, "send", true},
-		{"system lock beats forced on", &entity.ConnectorAccount{OpOverrides: `{"send":true}`}, OpState{Enabled: true, SystemDisabled: true}, "send", false},
+		{"account health lock beats forced on", &entity.ConnectorAccount{OpOverrides: `{"send":true}`, HealthDisabledOps: `{"send":"missing scope"}`}, OpState{Enabled: true}, "send", false},
+		{"shared health lock does not affect account", &entity.ConnectorAccount{}, OpState{Enabled: true, SystemDisabled: true}, "send", true},
 		{"an override for another op does not leak", &entity.ConnectorAccount{OpOverrides: `{"other":true}`}, OpState{Enabled: false}, "send", false},
 		{"legacy list still disables", &entity.ConnectorAccount{DisabledOps: `["send"]`}, OpState{Enabled: true}, "send", false},
 	}
