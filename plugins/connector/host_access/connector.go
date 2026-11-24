@@ -28,7 +28,7 @@ type writeInput struct {
 	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=SHA256 returned by file_read."`
 }
 type createInput struct {
-	Path    string `wick:"required;desc=New file path; existing files refused."`
+	Path    string `wick:"required;desc=New file path, existing files refused."`
 	Content string `wick:"textarea;desc=Text content."`
 }
 type editInput struct {
@@ -39,11 +39,11 @@ type editInput struct {
 }
 type copyInput struct {
 	Path        string `wick:"required;desc=Source file."`
-	Destination string `wick:"required;desc=New destination file; no overwrite."`
+	Destination string `wick:"required;desc=New destination file, no overwrite."`
 }
 type moveInput struct {
 	Path           string `wick:"required;desc=Source file."`
-	Destination    string `wick:"required;desc=New destination file; no overwrite."`
+	Destination    string `wick:"required;desc=New destination file, no overwrite."`
 	ExpectedSHA256 string `wick:"key=expected_sha256;required;desc=Source SHA256."`
 }
 type listInput struct {
@@ -59,7 +59,7 @@ type searchInput struct {
 }
 type execInput struct {
 	Command        string `wick:"required;desc=Executable name or absolute path."`
-	ArgsJSON       string `wick:"key=args_json;textarea;desc=JSON array of literal argument strings; no shell expansion."`
+	ArgsJSON       string `wick:"key=args_json;textarea;desc=JSON array of literal argument strings, no shell expansion."`
 	Cwd            string `wick:"required;desc=Absolute allowed working directory."`
 	TimeoutSeconds int    `wick:"desc=Optional timeout, capped by policy."`
 }
