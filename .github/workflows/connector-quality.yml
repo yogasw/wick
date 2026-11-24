@@ -1,0 +1,29 @@
+name: Connector quality
+
+on:
+  pull_request:
+    branches: [develop, master]
+    paths:
+      - 'plugins/connector/**'
+      - 'scripts/check-connector-quality.sh'
+      - '.github/workflows/connector-quality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/go.mod
+          cache-dependency-path: |
+            go.sum
+            plugins/go.sum
+      - name: Check Host Access
+        run: bash scripts/check-connector-quality.sh host_access
