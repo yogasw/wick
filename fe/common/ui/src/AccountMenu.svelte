@@ -246,6 +246,7 @@
                   <input type="hidden" name="redirect" value={here()} />
                   <button
                     type="submit"
+                    title={themes.find(choice => choice.ID === t.id)?.Label || t.label}
                     role="menuitemradio"
                     aria-checked={theme.mode === t.mode}
                     class="{seg} {theme.mode === t.mode
@@ -254,7 +255,7 @@
                   >{t.label}</button>
                 </form>
               {/each}
-              {#if themes.length}<button type="button" class="ml-0.5 border-l border-white-400 dark:border-navy-600 px-1.5 text-black-700 dark:text-black-600" data-account-theme-toggle aria-label="Pick theme" aria-expanded={themeOpen} onclick={() => { themeOpen = !themeOpen; }}><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d={themeOpen ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"}/></svg></button>{/if}
+              {#if themes.length}<button type="button" class="ml-0.5 border-l border-white-400 dark:border-navy-600 px-1.5 text-black-700 dark:text-black-600" data-account-theme-toggle title="Choose theme palette" aria-label="Pick theme" aria-expanded={themeOpen} onclick={() => { themeOpen = !themeOpen; }}><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d={themeOpen ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"}/></svg></button>{/if}
             </span>
           </div>
           {#if themeOpen}
@@ -317,6 +318,7 @@
           {#if liveMessage}<p class="break-words">{liveMessage}</p>{/if}
           {#if pending && !swapped && live?.swap?.to}<p class="mt-1 text-black-700 dark:text-black-600">Next: {live.swap.to}</p>{/if}
           {#if pending && !swapped && live?.auto_swap?.blocking?.length}<p class="mt-1 break-words text-black-700 dark:text-black-600">{live.auto_swap.blocking.join(", ")}</p>{/if}
+          {#if pending && !swapped && !failed && !swapping && live?.auto_swap?.next_check_in}<p class="mt-1 text-black-700 dark:text-black-600">Next check: {live.auto_swap.next_check_in}s</p>{/if}
           {#if swapped}<button type="button" class="mt-1 font-medium text-green-600 dark:text-green-400" onclick={() => location.reload()}>Reload page</button>
           {:else if liveMessage && isAdmin}<a href="/admin/advanced/software-update" class="mt-1 inline-block font-medium text-green-600 dark:text-green-400">Details</a>{/if}
           {#if statusUnavailable}<p class="mt-1 text-black-700 dark:text-black-600">Live status unavailable</p>{/if}
