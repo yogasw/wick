@@ -50,6 +50,25 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 
 ## Code conventions
 
+### Connector code quality
+
+Use `plugins/connector/httpbin/main.go` and `connector.go` as the style reference.
+Keep package comments, a readable module declaration, typed input schemas and
+named handlers. Split policy, validation, I/O and UI rendering by responsibility.
+Explain why each non-obvious function or security decision exists; comments
+should describe invariants and trade-offs, not repeat the code. Avoid dense
+semicolon-separated statements and inline multi-step handlers. Use structured
+logs for operation outcomes and durations; never log credentials or raw file
+and command payloads.
+
+Run `gofmt -w` on changed Go files before committing, then run `go vet` and
+the relevant unit tests. For Host Access use
+`bash scripts/check-connector-quality.sh host_access`. Report actual test results;
+do not call a change verified merely because its build compiled.
+Use `github.com/yogasw/wick/pkg/safeexec` for subprocess execution, including
+plugins that run on Termux. Resolve executable names before command creation.
+Safeexec is a compatibility layer, not a sandbox.
+
 ### Never call `os/exec.LookPath` directly — use `internal/safeexec.LookPath`
 
 Go's `os/exec.LookPath` uses the `faccessat2(2)` syscall to check executable permissions. Android's seccomp filter on devices that still ship a 4.x kernel (Android 13 userland on top of kernel 4.14 is a real, in-the-wild combination) rejects `faccessat2` with `SIGSYS` instead of the `ENOSYS` that Go's runtime expects, killing the process before its fallback to plain `faccessat` can fire.
