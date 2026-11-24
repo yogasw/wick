@@ -13,6 +13,10 @@ templ sidebarResize(space string, width int) {
 			if (window.__wickSidebarResize) return;
 			window.__wickSidebarResize = true;
 			var root = document.documentElement;
+			function menuOpen(h) {
+				var sidebar = h && h.closest("[data-space-sidebar]");
+				return !!(sidebar && sidebar.querySelector("[data-account-menu], details[open] [data-account-panel]"));
+			}
 			function save(h, w) {
 				fetch(h.getAttribute("data-sidebar-resize"), {
 					method: "PUT",
@@ -24,7 +28,7 @@ templ sidebarResize(space string, width int) {
 			document.addEventListener("pointerdown", function (e) {
 				var h = e.target.closest && e.target.closest("[data-sidebar-resize]");
 				var aside = h && h.closest("[data-space-sidebar]");
-				if (!aside || e.button !== 0) return;
+				if (!aside || e.button !== 0 || menuOpen(h)) return;
 				e.preventDefault();
 				var x0 = e.clientX, w0 = Math.round(aside.getBoundingClientRect().width), w = w0;
 				root.classList.add("wick-sidebar-resizing");
@@ -45,7 +49,7 @@ templ sidebarResize(space string, width int) {
 			});
 			document.addEventListener("dblclick", function (e) {
 				var h = e.target.closest && e.target.closest("[data-sidebar-resize]");
-				if (!h) return;
+				if (!h || menuOpen(h)) return;
 				root.style.setProperty("--wick-sidebar-w", h.getAttribute("data-default"));
 				save(h, 0);
 			});
