@@ -6,7 +6,7 @@ import (
 )
 
 func TestNextPatch(t *testing.T) {
-	for in, want := range map[string]string{"0.1.692": "0.1.693", "v1.9": "1.10", "dev": "", "": "", "1.x": ""} {
+	for in, want := range map[string]string{"0.1.692": "0.1.693", "v1.9": "1.10", "dev": "", "": "", "1.x": "", "v1.19.0.35-source-build": "v1.19.0.36-source-build", "1.19.0.35-source-build": "1.19.0.36-source-build"} {
 		if got := nextPatch(in); got != want {
 			t.Errorf("nextPatch(%q) = %q, want %q", in, got, want)
 		}
