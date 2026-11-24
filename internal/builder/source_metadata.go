@@ -1,17 +1,22 @@
 package builder
 
 import (
-	"os"
 	"github.com/yogasw/wick/pkg/safeexec"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/yogasw/wick/internal/buildsource"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 )
 
 func sourceGit(dir string, args ...string) string {
-	out, err := safeexec.Command("git", append([]string{"-C", dir}, args...)...).Output()
-	if err != nil { return "" }
+	cmd := safeexec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = envscrub.ScrubOSEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
 	return strings.TrimSpace(string(out))
 }
 
@@ -21,22 +26,30 @@ func sourceGit(dir string, args ...string) string {
 func sourceMetadata() (buildsource.Metadata, bool) {
 	dir := os.Getenv("WICK_BUILD_SOURCE_DIR")
 	if dir == "" {
-		out, err := safeexec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Dir}}{{end}}", "github.com/yogasw/wick").Output()
-		if err != nil { return buildsource.Metadata{}, false }
+		cmd := safeexec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Dir}}{{end}}", "github.com/yogasw/wick")
+		cmd.Env = envscrub.ScrubOSEnv()
+		out, err := cmd.Output()
+		if err != nil {
+			return buildsource.Metadata{}, false
+		}
 		dir = strings.TrimSpace(string(out))
 	}
-	if dir == "" { return buildsource.Metadata{}, false }
+	if dir == "" {
+		return buildsource.Metadata{}, false
+	}
 	rev := sourceGit(dir, "rev-parse", "HEAD")
-	if len(rev) != 40 { return buildsource.Metadata{}, false }
+	if len(rev) != 40 {
+		return buildsource.Metadata{}, false
+	}
 
 	version, _ := os.ReadFile(filepath.Join(dir, "VERSION"))
 	m := buildsource.Metadata{
-		Kind: "source",
-		Revision: rev,
-		CommitDate: sourceGit(dir, "log", "-1", "--format=%cI", rev),
+		Kind:          "source",
+		Revision:      rev,
+		CommitDate:    sourceGit(dir, "log", "-1", "--format=%cI", rev),
 		SourceVersion: buildsource.StableVersion(string(version)),
-		Repository: buildsource.GitHubRepository(sourceGit(dir, "remote", "get-url", "origin")),
-		Branch: sourceGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD"),
+		Repository:    buildsource.GitHubRepository(sourceGit(dir, "remote", "get-url", "origin")),
+		Branch:        sourceGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD"),
 	}
 	// The deploy script records clean/dirty before generating build artifacts.
 	// If no stamp was supplied, inspect the local tracked working tree.
@@ -46,7 +59,9 @@ func sourceMetadata() (buildsource.Metadata, bool) {
 	case stamped != "":
 		m.Dirty = true
 	default:
-		out, err := safeexec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=no").Output()
+		cmd := safeexec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=no")
+		cmd.Env = envscrub.ScrubOSEnv()
+		out, err := cmd.Output()
 		m.Dirty = err != nil || strings.TrimSpace(string(out)) != ""
 	}
 	if m.Repository != "" && m.Branch != "" {
