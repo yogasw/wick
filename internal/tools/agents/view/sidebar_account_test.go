@@ -166,3 +166,18 @@ func TestSidebarResizeHandleShownOnDesktop(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentAccountSharedMount(t *testing.T) {
+	for _, u := range []*entity.User{namedAdmin(), {ID:"member", Name:"Member", Role:entity.RoleUser, Approved:true}} {
+		ctx := login.WithUser(context.Background(), u, nil)
+		ctx = ui.WithVersionInfo(ctx, ui.VersionInfo{AppVersion:"v1.2.3", BuildCommit:"abcdef1234567890", AppUpdateKnown:true, AppUpdate:true})
+		var sb strings.Builder
+		if err := AgentsLayout(AgentsLayoutVM{Base:"/tools/agents", ShellAssetURL:"/shell.js"}).Render(ctx, &sb); err != nil { t.Fatal(err) }
+		got := accountPanel(t, sb.String())
+		for _, want := range []string{"data-shared-account-menu", "data-account-themes", "data-theme-light", "data-theme-dark", "data-serving-pid", "data-update-available", "abcdef1234567890", "Dracula"} {
+			if !strings.Contains(got, want) { t.Errorf("missing shared account data: %s", want) }
+		}
+		if strings.Contains(got, "data-settings-href=") != u.IsAdmin() { t.Error("Agent settings mount permission changed") }
+		if strings.Contains(got, "data-account-panel") { t.Error("legacy account menu also rendered") }
+	}
+}
