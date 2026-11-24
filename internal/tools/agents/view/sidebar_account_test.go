@@ -181,3 +181,14 @@ func TestAgentAccountSharedMount(t *testing.T) {
 		if strings.Contains(got, "data-account-panel") { t.Error("legacy account menu also rendered") }
 	}
 }
+
+func TestAccountMenuSuppressesSidebarResize(t *testing.T) {
+ for _, space := range []string{"agents", "team"} {
+  css := sidebarResizeCSS(space, 0)
+  for _, want := range []string{"[data-account-menu],details[open] [data-account-panel]", "visibility:hidden;pointer-events:none", "[data-space-account]{position:relative;z-index:30}"} {
+   if !strings.Contains(css, want) { t.Errorf("%s: missing %s", space, want) }
+  }
+ }
+ got := renderLayout(t, namedAdmin(), "")
+ if !strings.Contains(got, "menuOpen(h)") { t.Error("missing resize event guard") }
+}
