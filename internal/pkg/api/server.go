@@ -3834,7 +3834,8 @@ func NewServer() *Server {
 			for _, key := range []string{"swap", "auto_swap", "last_handover"} {
 				if value, ok := state[key]; ok { out[key] = value }
 			}
-			_, out["previous_draining"] = state["draining"]
+			_, previousDraining := state["draining"]
+			out["previous_draining"] = previousDraining
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "private, no-store")
