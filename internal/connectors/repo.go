@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -439,7 +440,9 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 				err := tx.Where("connector_id = ? AND wick_user_id = ? AND external_user_id = ?", acc.ConnectorID, acc.WickUserID, acc.ExternalUserID).First(&old).Error
 				if err == nil {
 					acc.OpOverrides, acc.DisabledOps, acc.HealthDisabledOps = old.OpOverrides, old.DisabledOps, old.HealthDisabledOps
-					if acc.RefreshToken == "" { acc.RefreshToken = old.RefreshToken }
+					if acc.RefreshToken == "" {
+						acc.RefreshToken = old.RefreshToken
+					}
 				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 					return err
 				}
@@ -538,8 +541,12 @@ func (r *Repo) SetAccountHealthDisabledOps(ctx context.Context, accountID, acces
 	res := r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
 		Where("id = ? AND access_token = ?", accountID, accessToken).
 		UpdateColumn("health_disabled_ops", locksJSON)
-	if res.Error != nil { return res.Error }
-	if res.RowsAffected == 0 { return fmt.Errorf("account credential changed during health check; retry") }
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("account credential changed during health check; retry")
+	}
 	return nil
 }
 
