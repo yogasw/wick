@@ -139,8 +139,61 @@ func TestOverviewEscapesPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := out.(map[string]string)["html"]
+	body := out.(map[string]any)["html"].(string)
 	if strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;") {
 		t.Fatal("policy widget did not escape HTML")
+	}
+}
+
+func TestPolicyEditorActions(t *testing.T) {
+	draft := strings.Replace(defaultPolicy, `"mode":"disabled"`, `"mode":"whitelist"`, 1)
+	for _, action := range []string{"", "raw", "preview", "format", "reset", "defaults"} {
+		resp, err := policyEditor(defaultPolicy, draft, action)
+		if err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		if _, ok := resp["fields"]; ok {
+			t.Fatalf("%s unexpectedly writes config", action)
+		}
+	}
+	resp, err := policyEditor(defaultPolicy, draft, "apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, ok := resp["fields"].(map[string]string)
+	if !ok || len(fields) != 1 {
+		t.Fatalf("expected one policy write: %v", resp)
+	}
+	p, err := loadPolicy(fields["policy_json"])
+	if err != nil || p.Terminal.Mode != "whitelist" {
+		t.Fatalf("incorrect saved draft: %v", err)
+	}
+}
+
+func TestPolicyEditorInvalidDraftDoesNotWrite(t *testing.T) {
+	for _, draft := range []string{"", "{}", "{", `{"version":2}`, "</textarea><script>alert(1)</script>"} {
+		resp, err := policyEditor(defaultPolicy, draft, "apply")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := resp["fields"]; ok {
+			t.Fatal("invalid draft requested a config write")
+		}
+		body := resp["html"].(string)
+		if !strings.Contains(body, "ha-error") || strings.Contains(body, "<script>") {
+			t.Fatal("invalid or unsafe error rendering")
+		}
+	}
+}
+
+func TestPolicyEditorFormattingPreservesHomeAlias(t *testing.T) {
+	draft := `{"version":1,"filesystem":{"default":"deny","rules":[{"path":"~/projects","allow":["read"]}]},"terminal":{"mode":"disabled"},"system":{"allow":[]}}`
+	resp, err := policyEditor(defaultPolicy, draft, "apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := resp["fields"].(map[string]string)["policy_json"]
+	if !strings.Contains(raw, `"~/projects"`) {
+		t.Fatal("formatting expanded a user-authored path")
 	}
 }

@@ -10,8 +10,8 @@ import (
 // Config contains the single saved policy and its read-only manager widget.
 // Policy is not session-overridable because it controls host permissions.
 type Config struct {
-	PolicyJSON string `wick:"key=policy_json;textarea;session_locked;desc=Versioned JSON policy. Empty denies all operations. Only trusted administrators may configure this instance."`
-	Overview   string `wick:"html=policy_overview;desc=Read-only summary of the saved JSON policy."`
+	PolicyJSON string `wick:"key=policy_json;hidden;session_locked;desc=Versioned JSON policy managed by the Policy Manager."`
+	Overview   string `wick:"html=policy_overview;desc=Review and edit the saved policy in the Policy Manager."`
 }
 
 type pathInput struct {
@@ -71,8 +71,12 @@ type shellInput struct {
 type validateInput struct {
 	PolicyJSON string `wick:"key=policy_json;required;textarea;desc=Proposed policy JSON. Validation never changes settings."`
 }
+
+// overviewInput is the custom HTML widget's form contract. Browser identifies
+// the button action, while RawJSON is the unsaved operator draft.
 type overviewInput struct {
-	Browser string `wick:"desc=Current widget value; ignored."`
+	Browser string `wick:"desc=Policy editor action."`
+	RawJSON string `wick:"key=raw_json;textarea;desc=Unsaved policy JSON."`
 }
 
 type checkInput struct {
@@ -118,7 +122,7 @@ func Module() connector.Module {
 					"Simulate one path or command rule; no operation executed. Does not guarantee runtime access.",
 					checkInput{}, checkPolicy, d),
 				connector.OpConfigOnly("policy_overview", "Policy overview",
-					"Render saved policy summary.",
+					"Render and operate the settings-only policy editor.",
 					overviewInput{}, overview, d),
 			),
 			connector.Cat("Files", "Bounded file operations with policy checks and no symlink following.",

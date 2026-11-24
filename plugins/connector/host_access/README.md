@@ -56,7 +56,10 @@ part of this initial release. Do not confuse a command filter with either.
 }
 ```
 
-The manager displays a read-only policy summary next to its JSON settings.
+The manager's custom Policy Manager offers Overview and Raw JSON views,
+formatting, validation, a default-deny draft, and reload from storage. Only
+Validate & Apply writes the hidden policy_json setting through Wick's normal
+config UI. Preview and formatting do not change permissions.
 `policy_get`, `policy_validate`, and `policy_check` are non-mutating. Native
 mutations and terminal operations are destructive-marked so they start
 disabled; enable only the necessary operations. There is deliberately no
@@ -76,7 +79,7 @@ Build and install separately from the core binary:
 ```sh
 cd plugins
 wick plugin build --kind connector host_access --target linux/arm64
-wick-agent plugin install bin/host_access-0.1.1-linux-arm64.zip
+wick-agent plugin install bin/host_access-0.1.2-linux-arm64.zip
 ```
 
 The test suite exercises policy precedence, invalid JSON, path traversal,
