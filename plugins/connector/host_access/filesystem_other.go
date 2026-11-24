@@ -20,3 +20,4 @@ func replaceFile(string,[]byte,string)error{return unsupported}
 func mkdir(string)error{return unsupported}
 func removeFile(string,bool)error{return unsupported}
 func diskUsage(string)(map[string]any,error){return nil,unsupported}
+func moveFile(string,string,string)error{return unsupported}
