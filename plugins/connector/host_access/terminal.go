@@ -20,8 +20,8 @@ import (
 // cappedOutput bounds captured stdout and stderr independently, while
 // continuing to consume output so a noisy child cannot deadlock.
 type cappedOutput struct {
-	mu sync.Mutex
-	buf bytes.Buffer
+	mu        sync.Mutex
+	buf       bytes.Buffer
 	truncated bool
 }
 
