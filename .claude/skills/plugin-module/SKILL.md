@@ -101,6 +101,10 @@ the catalog match. They must all be the same string, so:
 `main.go`/`Module()` split is convention; `wickplugin.Serve` is the whole runtime —
 it serves the gRPC plugin, and answers `--dump-manifest` at build time.
 
+## Code quality before packaging
+
+Use the HTTPBin sample for package comments, metadata layout, typed operation schemas and named handlers. Document non-obvious invariants and security boundaries, not just what a statement does. Format changed Go files using `gofmt -w`, run `go vet` and package tests before installing. Never log credentials, raw file contents or terminal arguments. Host Access additionally uses `bash scripts/check-connector-quality.sh host_access` as its quality gate. Use `pkg/safeexec` for host-compatible subprocess execution.
+
 ## Building: `wick plugin build`
 
 Production side, run from the `wick` dev CLI (NOT the app). Output is a **zip**, not a
