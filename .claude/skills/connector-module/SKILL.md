@@ -611,3 +611,7 @@ The retention job [`internal/jobs/connector-runs-purge`](../../../internal/jobs/
 - Public API: [`pkg/connector/`](../../../pkg/connector/) — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `OpConfigOnly`, `ExecuteFunc`, `Ctx`
 - MCP server: [`internal/mcp/`](../../../internal/mcp/)
 - Retention job: [`internal/jobs/connector-runs-purge/`](../../../internal/jobs/connector-runs-purge/)
+
+## Connected-account health checks
+
+A module HealthCheck must inspect the credential supplied in its Ctx. The manager checks a selected connected account with its own tokens and persists missing permissions separately from the instance health report and manual operation overrides. Never fall back to a different account's refresh token. OAuth consent rechecks the saved account; a probe error preserves the previous report.

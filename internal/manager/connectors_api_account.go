@@ -45,7 +45,7 @@ type accountOpJSON struct {
 	// back to when the override is cleared. Shown next to an override so
 	// "override off" and "inherited off" do not look identical.
 	Inherited bool `json:"inherited"`
-	// SystemDisabled is the health-check lock on the instance. It outranks
+	// SystemDisabled is the health-check lock on this account. It outranks
 	// any override, so the UI locks the control rather than offering a
 	// switch that cannot take effect.
 	SystemDisabled bool   `json:"system_disabled"`
@@ -131,7 +131,7 @@ func (h *Handler) apiAccountDetail(w http.ResponseWriter, r *http.Request) {
 		state := connectors.AccountOpInherit
 		if st.Overridden {
 			state = connectors.AccountOpOff
-			if st.Enabled {
+			if connectors.AccountOpOverrides(acc)[op.Key] {
 				state = connectors.AccountOpOn
 			}
 		}
@@ -184,4 +184,25 @@ func (h *Handler) apiSetAccountOpOverride(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"key": opKey, "state": body.State})
+}
+
+// apiAccountHealthCheck checks every operation against the selected account only.
+func (h *Handler) apiAccountHealthCheck(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	row, acc, errResp, ok := h.loadAccountForRow(r, user, r.PathValue("accountID"))
+	if !ok {
+		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
+		return
+	}
+	if !h.canManageAccount(user, row, acc) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not allowed"})
+		return
+	}
+	result, err := h.connectors.RunAccountHealthCheck(ctx, row.ID, acc.ID, userID(user))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "newly_locked": result.NewlyLocked, "newly_cleared": result.NewlyCleared})
 }
