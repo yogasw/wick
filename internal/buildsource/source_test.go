@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
 const revision = "0123456789012345678901234567890123456789"
 
 func TestSourceComparison(t *testing.T) {
-	requests := 0
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests.Add(1)
 		switch r.URL.Path {
 		case "/repos/yogasw/wick/compare/"+revision+"...develop":
 			_ = json.NewEncoder(w).Encode(map[string]int{"ahead_by": 7, "behind_by": 2})
@@ -35,7 +36,7 @@ func TestSourceComparison(t *testing.T) {
 	if s.Behind == nil || *s.Behind != 7 || s.Ahead == nil || *s.Ahead != 2 { t.Fatalf("bad direction: %+v",s) }
 	if s.NewerReleases == nil || *s.NewerReleases != 2 || s.LatestRelease != "v1.4.0" { t.Fatalf("bad releases: %+v",s) }
 	_ = c.Snapshot(context.Background())
-	if requests != 2 { t.Fatalf("expected cached response, got %d requests", requests) }
+	if requests.Load() != 2 { t.Fatalf("expected cached response, got %d requests", requests.Load()) }
 }
 
 func TestReleaseComparison(t *testing.T) {
