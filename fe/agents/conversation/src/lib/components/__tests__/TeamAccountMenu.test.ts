@@ -136,9 +136,15 @@ describe("TeamAccountMenu", () => {
     expect(screen.getByText("1234567890ab").getAttribute("title")).toBe("1234567890abcdef1234567890abcdef12345678");
   });
 
-  test("missing commit is omitted and unknown commit is explicit", async () => {
+  test("unknown commit is explicit", async () => {
     const { button } = mount({ appVersion: "1.2.3", buildCommit: "unknown" });
     await fireEvent.click(button);
     expect(screen.getByTestId("versions").textContent).toContain("unknown");
+  });
+
+  test("missing commit is omitted", async () => {
+    const { button } = mount({ appVersion: "1.2.3" });
+    await fireEvent.click(button);
+    expect(screen.queryByText("Commit")).toBeNull();
   });
 });
