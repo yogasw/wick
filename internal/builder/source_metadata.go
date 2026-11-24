@@ -2,7 +2,7 @@ package builder
 
 import (
 	"os"
-	"os/exec"
+	"github.com/yogasw/wick/pkg/safeexec"
 	"path/filepath"
 	"strings"
 
@@ -10,7 +10,7 @@ import (
 )
 
 func sourceGit(dir string, args ...string) string {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := safeexec.Command("git", append([]string{"-C", dir}, args...)...).Output()
 	if err != nil { return "" }
 	return strings.TrimSpace(string(out))
 }
@@ -21,7 +21,7 @@ func sourceGit(dir string, args ...string) string {
 func sourceMetadata() (buildsource.Metadata, bool) {
 	dir := os.Getenv("WICK_BUILD_SOURCE_DIR")
 	if dir == "" {
-		out, err := exec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Dir}}{{end}}", "github.com/yogasw/wick").Output()
+		out, err := safeexec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Dir}}{{end}}", "github.com/yogasw/wick").Output()
 		if err != nil { return buildsource.Metadata{}, false }
 		dir = strings.TrimSpace(string(out))
 	}
@@ -46,7 +46,7 @@ func sourceMetadata() (buildsource.Metadata, bool) {
 	case stamped != "":
 		m.Dirty = true
 	default:
-		out, err := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=no").Output()
+		out, err := safeexec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=no").Output()
 		m.Dirty = err != nil || strings.TrimSpace(string(out)) != ""
 	}
 	if m.Repository != "" && m.Branch != "" {
@@ -54,7 +54,7 @@ func sourceMetadata() (buildsource.Metadata, bool) {
 		if strings.HasPrefix(up, "origin/") {
 			m.Upstream = up
 			m.CompareRef = strings.TrimPrefix(up, "origin/")
-		} else if up == "" && sourceGit(dir, "rev-parse", "--verify", "refs/remotes/origin/"+m.Branch) != "" {
+		} else if up == "" && (sourceGit(dir, "rev-parse", "--verify", "refs/remotes/origin/"+m.Branch) != "" || os.Getenv("WICK_BUILD_REF") == m.Branch) {
 			m.Upstream = "origin/" + m.Branch
 			m.CompareRef = m.Branch
 		}
