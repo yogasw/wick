@@ -123,3 +123,7 @@ The `wickmanager` connector is surfaced differently: its operations appear direc
 ## Encrypted values
 
 Some connector responses carry `wick_enc_<...>` tokens. These are ciphertext handles — you can pass them to another operation, but you cannot read them and must not try. That is the point: credentials flow between operations without ever entering the conversation.
+
+## OAuth account permissions
+
+In Manage Operations for a connected account, use **Check Permissions** to check all of that account's operations. Reconnecting through OAuth rechecks the new grant automatically. A failed permission check on the shared instance credential or another account does not lock this account. Recovered permissions clear health locks without changing manual on/off overrides.
