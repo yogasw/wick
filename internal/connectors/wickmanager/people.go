@@ -28,7 +28,7 @@ type PeopleSource interface {
 	ManageCreateTag(ctx context.Context, name, description string, isGroup, isFilter bool) (map[string]any, error)
 	ManageUpdateTag(ctx context.Context, ref string, p admin.TagPatch) (map[string]any, error)
 	ManageDeleteTag(ctx context.Context, ref string) (string, error)
-	ManageGetSignup() (admin.SignupSettings, error)
+	ManageGetSignup(ctx context.Context) (admin.SignupSettings, error)
 	ManageSetSignup(ctx context.Context, p admin.SignupPatch) (admin.SignupSettings, error)
 }
 
@@ -79,6 +79,7 @@ type signupSetInput struct {
 	AutoRegister       string `wick:"dropdown=keep|true|false;default=keep;desc=true: a first Google sign-in creates the account. false: only existing accounts and admin emails can sign in."`
 	AutoApproveDomains string `wick:"desc=Comma list of email domains approved at sign-in without an admin (e.g. example.com). Exact domain, no subdomains. Pass - to clear. Empty = keep."`
 	AllowedDomains     string `wick:"desc=Comma list of domains allowed to sign in at all. Pass - to clear (allow every domain). Empty = keep."`
+	AutoApproveTags    string `wick:"desc=Comma list of tag names or ids given to an account when it is auto-approved (Google sign-in or a chat channel such as Slack), e.g. the tag that opens Agents. Replaces the list. Pass - to clear. Empty = keep."`
 }
 
 type alertsSetInput struct {
@@ -115,10 +116,10 @@ func peopleOps(h *handlers) []connector.Operation {
 			"Delete a tag; everyone and everything carrying it loses it. Access: ADMIN ONLY. UI: <app_url>/admin/tags.",
 			tagDeleteInput{}, h.tagDelete, wickdocs.Docs{}),
 		connector.Op("signup_get", "Get Sign-up Settings",
-			"Google sign-in sign-up settings: auto_register, auto_approve_domains, allowed_domains. Access: ADMIN ONLY. UI: <app_url>/admin/advanced/sso.",
+			"Google sign-in sign-up settings: auto_register, auto_approve_domains, auto_approve_tags, allowed_domains. The auto-approve domains and tags apply to chat-channel registrations (Slack) too. Access: ADMIN ONLY. UI: <app_url>/admin/advanced/sso.",
 			emptyInput{}, h.signupGet, wickdocs.Docs{}),
 		connector.Op("signup_set", "Set Sign-up Settings",
-			"Change auto-register and the auto-approve / allowed email domains. Auto-approved accounts are plain users, never admin. Access: ADMIN ONLY. UI: <app_url>/admin/advanced/sso.",
+			"Change auto-register, the auto-approve / allowed email domains, and the tags auto-approved accounts receive. Auto-approved accounts are plain users, never admin. Access: ADMIN ONLY. UI: <app_url>/admin/advanced/sso.",
 			signupSetInput{}, h.signupSet, wickdocs.Docs{}),
 		connector.Op("user_alerts_get", "Get Account Alert Targets",
 			"Where admin notices about accounts (new user waiting, user approved, account needs linking) go, plus the chat doors (instance keys) the caller is linked on, to build a target from. Access: ADMIN ONLY.",
@@ -293,7 +294,7 @@ func (h *handlers) tagDelete(c *connector.Ctx) (any, error) {
 
 func (h *handlers) signupGet(c *connector.Ctx) (any, error) {
 	return h.peopleCall(c, "signup_get", func(src PeopleSource, ctx context.Context) (any, error) {
-		return src.ManageGetSignup()
+		return src.ManageGetSignup(ctx)
 	})
 }
 
@@ -304,8 +305,17 @@ func (h *handlers) signupSet(c *connector.Ctx) (any, error) {
 			AutoApproveDomains: keepOrClear(c.Input("auto_approve_domains")),
 			AllowedDomains:     keepOrClear(c.Input("allowed_domains")),
 		}
-		if p.AutoRegister == nil && p.AutoApproveDomains == nil && p.AllowedDomains == nil {
-			return nil, errors.New("nothing to change: pass auto_register, auto_approve_domains or allowed_domains")
+		if raw := keepOrClear(c.Input("auto_approve_tags")); raw != nil {
+			refs := []string{}
+			for _, r := range strings.Split(*raw, ",") {
+				if r = strings.TrimSpace(r); r != "" {
+					refs = append(refs, r)
+				}
+			}
+			p.AutoApproveTags = &refs
+		}
+		if p.AutoRegister == nil && p.AutoApproveDomains == nil && p.AllowedDomains == nil && p.AutoApproveTags == nil {
+			return nil, errors.New("nothing to change: pass auto_register, auto_approve_domains, auto_approve_tags or allowed_domains")
 		}
 		return src.ManageSetSignup(ctx, p)
 	})

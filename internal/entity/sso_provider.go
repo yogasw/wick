@@ -21,6 +21,12 @@ type SSOProvider struct {
 	// account waits for an admin, as before. Auto-approval never grants the
 	// admin role.
 	AutoApproveDomains string `gorm:"type:text"`
+	// AutoApproveTags is a comma-separated list of tag ids given to an
+	// account at the moment it is auto-approved (by AutoApproveDomains, on
+	// any door: Google sign-in or a chat channel). Empty = no tags, as before.
+	// Applied once, on approval: an admin removing a tag later is not undone
+	// by the next sign-in.
+	AutoApproveTags string `gorm:"type:text"`
 	// DisableAutoRegister stops this provider from creating accounts: an
 	// email with no wick account yet is refused at sign-in instead of being
 	// recorded as a pending user. False (the zero value) keeps the old

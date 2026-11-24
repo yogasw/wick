@@ -79,6 +79,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
+	"github.com/yogasw/wick/internal/buildsource"
 	"github.com/yogasw/wick/internal/channelidentity"
 	"github.com/yogasw/wick/internal/codemode"
 	"github.com/yogasw/wick/internal/configs"
@@ -136,7 +137,6 @@ import (
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	toolplugin "github.com/yogasw/wick/internal/tools/plugin"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
-	"github.com/yogasw/wick/internal/buildsource"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
@@ -2117,11 +2117,15 @@ func NewServer() *Server {
 		Usage:  func() wickmanager.UsageSource { return adminUsage },
 		People: func() wickmanager.PeopleSource { return adminPeople },
 		LiveHandover: func() map[string]any {
-			if adminSystem == nil { return nil }
+			if adminSystem == nil {
+				return nil
+			}
 			return adminSystem.ServingPayload()
 		},
 		ForceSwap: func(expectedVersion string) (map[string]any, error) {
-			if adminSystem == nil { return nil, fmt.Errorf("system handler unavailable") }
+			if adminSystem == nil {
+				return nil, fmt.Errorf("system handler unavailable")
+			}
 			return adminSystem.ManagerForceSwap(expectedVersion)
 		},
 		AlertDoors: func(ctx context.Context, userID string) []string {
@@ -2443,6 +2447,13 @@ func NewServer() *Server {
 				// would let any user with their own bot mint pending accounts.
 				autoRegister: func() bool {
 					return configsSvc.GetOwned("agents", "channel_auto_register") == "true"
+				},
+				// Same auto-approve domain list as Google sign-in. Slack
+				// reports the workspace's verified email, so a listed domain
+				// is the same claim the Google path accepts.
+				autoApprove: func(email string) (bool, []string) {
+					p := ssoSvc.SignupPolicy(entity.SSOProviderGoogle, email)
+					return p.AutoApprove, login.SplitIDs(p.Tags)
 				},
 				// Which bot this resolver serves. A recorded identity must be
 				// messaged back through the SAME instance: a Slack user id only

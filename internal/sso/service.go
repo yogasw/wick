@@ -116,6 +116,8 @@ type UpdateInput struct {
 	AllowedDomains string
 	// AutoApproveDomains: comma-separated; empty = nobody is auto-approved.
 	AutoApproveDomains string
+	// AutoApproveTags: comma-separated tag ids given on auto-approval.
+	AutoApproveTags string
 	// DisableAutoRegister refuses sign-in for emails with no account yet.
 	DisableAutoRegister bool
 }
@@ -124,6 +126,7 @@ type UpdateInput struct {
 func (s *Service) Update(ctx context.Context, provider string, in UpdateInput) error {
 	in.AllowedDomains = normalizeDomains(in.AllowedDomains)
 	in.AutoApproveDomains = normalizeDomains(in.AutoApproveDomains)
+	in.AutoApproveTags = normalizeIDs(in.AutoApproveTags)
 	if err := s.repo.Update(ctx, provider, in); err != nil {
 		return err
 	}
@@ -150,6 +153,9 @@ type SignupPolicy struct {
 	AllowCreate bool
 	// AutoApprove: the account is approved without an admin.
 	AutoApprove bool
+	// Tags: comma-separated tag ids to give the account when this policy
+	// approves it. Empty unless AutoApprove.
+	Tags string
 }
 
 // SignupPolicy reports how a sign-in through provider treats email. An
@@ -159,10 +165,30 @@ func (s *Service) SignupPolicy(provider, email string) SignupPolicy {
 	if !ok {
 		return SignupPolicy{}
 	}
-	return SignupPolicy{
+	out := SignupPolicy{
 		AllowCreate: !p.DisableAutoRegister,
 		AutoApprove: p.AutoApproveDomains != "" && domainListed(p.AutoApproveDomains, email),
 	}
+	if out.AutoApprove {
+		out.Tags = p.AutoApproveTags
+	}
+	return out
+}
+
+// normalizeIDs trims, de-duplicates and re-joins a comma-separated id list,
+// keeping the first-seen order.
+func normalizeIDs(raw string) string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return strings.Join(out, ",")
 }
 
 // emailDomain returns the lowercased domain of email, or "" when malformed.

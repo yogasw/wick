@@ -70,6 +70,21 @@ func (n *Notifier) NotifyAdminsNewUser(ctx context.Context, newUser *entity.User
 	n.notifyAdmins(ctx, newUser.ID, title, body, n.link("/admin/users"), "new user "+newUser.Email)
 }
 
+// NotifyAdminsAutoApproved tells admins a channel registration was approved
+// without them, because its email domain is on the auto-approve list.
+//
+// No action is asked for; the notice is the audit trail. An approval nobody
+// clicked is exactly the one an admin should be able to notice and undo.
+func (n *Notifier) NotifyAdminsAutoApproved(ctx context.Context, user *entity.User, source string) {
+	if n == nil || user == nil {
+		return
+	}
+	title := "User auto-approved"
+	body := fmt.Sprintf("%s (%s) registered via %s and was approved automatically (email domain is on the auto-approve list).",
+		displayName(user), user.Email, source)
+	n.notifyAdmins(ctx, user.ID, title, body, n.link("/admin/users"), "auto-approve notice "+user.Email)
+}
+
 // NotifyUserApproved tells a user their account was approved, on every door
 // they have — including the channel they registered from, which is where they
 // are most likely to be looking.

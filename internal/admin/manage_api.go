@@ -314,6 +314,8 @@ type SignupSettings struct {
 	AutoRegister       bool   `json:"auto_register"`
 	AllowedDomains     string `json:"allowed_domains"`
 	AutoApproveDomains string `json:"auto_approve_domains"`
+	// AutoApproveTags names the tags an auto-approved account receives.
+	AutoApproveTags []string `json:"auto_approve_tags"`
 }
 
 // SignupPatch changes sign-up settings; nil fields keep their value.
@@ -321,18 +323,35 @@ type SignupPatch struct {
 	AutoRegister       *bool
 	AllowedDomains     *string
 	AutoApproveDomains *string
+	// AutoApproveTags replaces the tag list (names or ids); empty slice clears.
+	AutoApproveTags *[]string
 }
 
 // ManageGetSignup reads the Google provider's sign-up settings.
-func (h *Handler) ManageGetSignup() (SignupSettings, error) {
+func (h *Handler) ManageGetSignup(ctx context.Context) (SignupSettings, error) {
 	p, ok := h.sso.Get(entity.SSOProviderGoogle)
 	if !ok {
 		return SignupSettings{}, errors.New("google SSO provider not found")
 	}
-	return SignupSettings{
+	out := SignupSettings{
 		Provider: p.Provider, Enabled: p.Enabled, AutoRegister: !p.DisableAutoRegister,
 		AllowedDomains: p.AllowedDomains, AutoApproveDomains: p.AutoApproveDomains,
-	}, nil
+		AutoApproveTags: []string{},
+	}
+	if p.AutoApproveTags != "" {
+		names := map[string]string{}
+		if tags, err := h.repo.ListTags(ctx); err == nil {
+			for _, t := range tags {
+				names[t.ID] = t.Name
+			}
+		}
+		for _, id := range strings.Split(p.AutoApproveTags, ",") {
+			if n, ok := names[id]; ok {
+				out.AutoApproveTags = append(out.AutoApproveTags, n)
+			}
+		}
+	}
+	return out, nil
 }
 
 // ManageSetSignup changes sign-up settings and keeps the OAuth client fields.
@@ -344,7 +363,7 @@ func (h *Handler) ManageSetSignup(ctx context.Context, p SignupPatch) (SignupSet
 	in := sso.UpdateInput{
 		ClientID: cur.ClientID, ClientSecret: cur.ClientSecret, Enabled: cur.Enabled,
 		AllowedDomains: cur.AllowedDomains, AutoApproveDomains: cur.AutoApproveDomains,
-		DisableAutoRegister: cur.DisableAutoRegister,
+		AutoApproveTags: cur.AutoApproveTags, DisableAutoRegister: cur.DisableAutoRegister,
 	}
 	if p.AutoRegister != nil {
 		in.DisableAutoRegister = !*p.AutoRegister
@@ -355,8 +374,46 @@ func (h *Handler) ManageSetSignup(ctx context.Context, p SignupPatch) (SignupSet
 	if p.AutoApproveDomains != nil {
 		in.AutoApproveDomains = *p.AutoApproveDomains
 	}
+	if p.AutoApproveTags != nil {
+		ids, err := h.assignableTagIDs(ctx, *p.AutoApproveTags)
+		if err != nil {
+			return SignupSettings{}, err
+		}
+		in.AutoApproveTags = strings.Join(ids, ",")
+	}
 	if err := h.sso.Update(ctx, entity.SSOProviderGoogle, in); err != nil {
 		return SignupSettings{}, err
 	}
-	return h.ManageGetSignup()
+	return h.ManageGetSignup(ctx)
+}
+
+// assignableTagIDs resolves tag names or ids to ids, refusing unknown and
+// system tags (system tags belong to the admin role, never handed out).
+func (h *Handler) assignableTagIDs(ctx context.Context, refs []string) ([]string, error) {
+	tags, err := h.repo.ListTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		var hit *entity.Tag
+		for _, t := range tags {
+			if t.ID == ref || strings.EqualFold(t.Name, ref) {
+				hit = t
+				break
+			}
+		}
+		if hit == nil {
+			return nil, fmt.Errorf("unknown tag %q", ref)
+		}
+		if hit.IsSystem {
+			return nil, fmt.Errorf("tag %q is a system tag and cannot be given to users", hit.Name)
+		}
+		ids = append(ids, hit.ID)
+	}
+	return ids, nil
 }

@@ -56,6 +56,7 @@ func (r *repo) Update(ctx context.Context, provider string, in UpdateInput) erro
 			"enabled":               in.Enabled,
 			"allowed_domains":       in.AllowedDomains,
 			"auto_approve_domains":  in.AutoApproveDomains,
+			"auto_approve_tags":     in.AutoApproveTags,
 			"disable_auto_register": in.DisableAutoRegister,
 		}).Error
 }

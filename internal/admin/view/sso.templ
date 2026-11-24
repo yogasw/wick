@@ -9,7 +9,7 @@ import (
 // SSOPage lists every SSO provider. Each provider is a card with an
 // inline edit form — there's only Google for now, but the UI scales
 // to any providers Bootstrap registers.
-templ SSOPage(rows []entity.SSOProvider, callbackURL string, user *entity.User) {
+templ SSOPage(rows []entity.SSOProvider, callbackURL string, user *entity.User, tags []*entity.Tag) {
 	@AdminLayout("Admin · SSO", "advanced", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -21,7 +21,7 @@ templ SSOPage(rows []entity.SSOProvider, callbackURL string, user *entity.User) 
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Configure single sign-on. Disable a provider to hide its button on the login page. The callback URL below is what you paste into the provider's authorized redirect URIs.</p>
 			<div class="mt-6 flex flex-col gap-4">
 				for _, row := range rows {
-					@ssoCard(row, callbackURL)
+					@ssoCard(row, callbackURL, tags)
 				}
 			</div>
 		</main>
@@ -141,7 +141,7 @@ templ domainChipsScript() {
 	</script>
 }
 
-templ ssoCard(row entity.SSOProvider, callbackURL string) {
+templ ssoCard(row entity.SSOProvider, callbackURL string, tags []*entity.Tag) {
 	<form
 		method="POST"
 		action={ templ.SafeURL("/admin/advanced/sso/" + row.Provider) }
@@ -197,6 +197,7 @@ templ ssoCard(row entity.SSOProvider, callbackURL string) {
 				</span>
 			</label>
 			@domainChipsField("auto_approve_domains", "Auto-approve email domains", "Accounts from these domains are approved at sign-in, without an admin, as a regular user (never admin). Leave empty to approve every account by hand.", row.AutoApproveDomains)
+			@autoApproveTagsField(row.AutoApproveTags, tags)
 		</div>
 		<div class="mt-5 flex flex-col gap-1.5">
 			<label class="text-sm font-medium text-black-900 dark:text-white-100">Authorized redirect URI</label>
@@ -282,4 +283,45 @@ func secretPlaceholder(row entity.SSOProvider) string {
 		return "Paste the OAuth client secret"
 	}
 	return "•••••••• (set — leave blank to keep)"
+}
+
+// autoApproveTagsField picks the tags an auto-approved account receives. Only
+// filter tags that are not system tags are offered: filter tags are the ones
+// that gate access, and system tags belong to the admin role.
+templ autoApproveTagsField(raw string, tags []*entity.Tag) {
+	<div class="mt-5 flex flex-col gap-1.5">
+		<label class="text-sm font-medium text-black-900 dark:text-white-100">Tags for auto-approved users</label>
+		<p class="text-xs text-black-700 dark:text-black-600">Given once, when an account is auto-approved (Google sign-in or a chat channel such as Slack). Pick the tag that opens the tools new users need, e.g. Agents. Removing a tag from a user later is not undone.</p>
+		if len(assignableTags(tags)) == 0 {
+			<p class="text-xs text-black-700 dark:text-black-600">No filter tags yet. Create one under Tags first.</p>
+		} else {
+			<div class="mt-1 grid max-h-64 grid-cols-1 gap-1 overflow-y-auto rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-2 sm:grid-cols-2 lg:grid-cols-3" data-testid="auto-approve-tags">
+				for _, t := range assignableTags(tags) {
+					<label class="flex items-center gap-2 rounded px-1.5 py-1 text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700">
+						<input type="checkbox" name="auto_approve_tags" value={ t.ID } checked?={ idListed(raw, t.ID) } class="h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"/>
+						<span class="truncate">{ t.Name }</span>
+					</label>
+				}
+			</div>
+		}
+	</div>
+}
+
+func assignableTags(tags []*entity.Tag) []*entity.Tag {
+	out := make([]*entity.Tag, 0, len(tags))
+	for _, t := range tags {
+		if t != nil && t.IsFilter && !t.IsSystem {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func idListed(raw, id string) bool {
+	for _, v := range strings.Split(raw, ",") {
+		if strings.TrimSpace(v) == id {
+			return true
+		}
+	}
+	return false
 }

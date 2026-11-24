@@ -23,6 +23,8 @@ func TestSignupPolicy(t *testing.T) {
 		{"subdomain is not the domain", entity.SSOProvider{AutoApproveDomains: "acme.test"}, "dev@mail.acme.test", SignupPolicy{AllowCreate: true}},
 		{"registration closed", entity.SSOProvider{DisableAutoRegister: true}, "dev@acme.test", SignupPolicy{}},
 		{"closed but domain approves existing", entity.SSOProvider{DisableAutoRegister: true, AutoApproveDomains: "acme.test"}, "dev@acme.test", SignupPolicy{AutoApprove: true}},
+		{"approved domain carries tags", entity.SSOProvider{AutoApproveDomains: "acme.test", AutoApproveTags: "t1,t2"}, "dev@acme.test", SignupPolicy{AllowCreate: true, AutoApprove: true, Tags: "t1,t2"}},
+		{"pending domain gets no tags", entity.SSOProvider{AutoApproveDomains: "acme.test", AutoApproveTags: "t1"}, "dev@other.test", SignupPolicy{AllowCreate: true}},
 		{"malformed email", entity.SSOProvider{AutoApproveDomains: "acme.test"}, "acme.test", SignupPolicy{AllowCreate: true}},
 	}
 	for _, tc := range cases {
@@ -54,5 +56,11 @@ func TestIsEmailAllowedUnchanged(t *testing.T) {
 	open := svcWith(entity.SSOProvider{Provider: entity.SSOProviderGoogle})
 	if !open.IsEmailAllowed(entity.SSOProviderGoogle, "dev@other.test") {
 		t.Fatal("empty list must allow every domain")
+	}
+}
+
+func TestNormalizeIDs(t *testing.T) {
+	if got := normalizeIDs(" a, b,,a , c "); got != "a,b,c" {
+		t.Fatalf("normalizeIDs = %q", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/yogasw/wick/internal/sso"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -29,7 +30,8 @@ func isTermuxHost() bool {
 func (h *Handler) ssoPage(w http.ResponseWriter, r *http.Request) {
 	rows := h.sso.List()
 	callbackURL := h.configs.AppURL() + sso.CallbackPath
-	view.SSOPage(rows, callbackURL, login.GetUser(r.Context())).Render(r.Context(), w)
+	tags, _ := h.repo.ListTags(r.Context())
+	view.SSOPage(rows, callbackURL, login.GetUser(r.Context()), tags).Render(r.Context(), w)
 }
 
 func (h *Handler) updateSSO(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +55,7 @@ func (h *Handler) updateSSO(w http.ResponseWriter, r *http.Request) {
 		Enabled:             enabled,
 		AllowedDomains:      allowedDomains,
 		AutoApproveDomains:  r.FormValue("auto_approve_domains"),
+		AutoApproveTags:     strings.Join(r.Form["auto_approve_tags"], ","),
 		DisableAutoRegister: r.FormValue("auto_register") != "true",
 	}
 	if err := h.sso.Update(r.Context(), provider, in); err != nil {

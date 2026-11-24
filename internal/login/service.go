@@ -104,8 +104,10 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, avatar string) (*
 // UpsertSSOUser records a provider sign-in under the provider's signup
 // policy. See repo.UpsertSSOUser; ErrRegistrationClosed means the email has
 // no account and the provider does not create one.
-func (s *Service) UpsertSSOUser(ctx context.Context, email, name, avatar string, allowCreate, autoApprove bool) (*entity.User, error) {
-	return s.repo.UpsertSSOUser(ctx, strings.ToLower(email), name, avatar, s.adminEmails, allowCreate, autoApprove)
+//
+// tagIDs are given to the account only when this call approves it.
+func (s *Service) UpsertSSOUser(ctx context.Context, email, name, avatar string, allowCreate, autoApprove bool, tagIDs []string) (*entity.User, error) {
+	return s.repo.UpsertSSOUser(ctx, strings.ToLower(email), name, avatar, s.adminEmails, allowCreate, autoApprove, tagIDs)
 }
 
 // GetUserByEmail resolves an account by its email. The Source panel uses it
@@ -533,6 +535,33 @@ func (s *Service) RegisterChannelUser(ctx context.Context, email, name, source s
 		return "", err
 	}
 	return u.ID, nil
+}
+
+// ApproveChannelUser approves an account a channel registered, once the
+// install's signup policy says its email domain needs no admin, and gives it
+// tagIDs. Returns true only when this call changed it, so the caller announces
+// each approval once and tags are not re-added after an admin removed them.
+// The role is untouched: an auto-approved account stays a plain user.
+func (s *Service) ApproveChannelUser(ctx context.Context, id string, tagIDs []string) (bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return false, errors.New("user id is required")
+	}
+	changed, err := s.repo.ApproveUser(ctx, id)
+	if err != nil || !changed {
+		return changed, err
+	}
+	return true, s.repo.AddUserTags(ctx, id, tagIDs)
+}
+
+// SplitIDs turns a comma-separated id list into a slice, dropping blanks.
+func SplitIDs(raw string) []string {
+	var out []string
+	for _, id := range strings.Split(raw, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // SetEmail updates the user's email address. Used by the first-login

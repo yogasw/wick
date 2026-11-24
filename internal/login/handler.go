@@ -219,7 +219,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policy := h.sso.SignupPolicy(entity.SSOProviderGoogle, info.Email)
-	user, err := h.svc.UpsertSSOUser(r.Context(), info.Email, info.Name, info.Picture, policy.AllowCreate, policy.AutoApprove)
+	user, err := h.svc.UpsertSSOUser(r.Context(), info.Email, info.Name, info.Picture, policy.AllowCreate, policy.AutoApprove, SplitIDs(policy.Tags))
 	if errors.Is(err, ErrRegistrationClosed) {
 		http.Redirect(w, r, "/auth/login?error=No+account+for+this+email.+Ask+an+admin+to+add+you.", http.StatusFound)
 		return

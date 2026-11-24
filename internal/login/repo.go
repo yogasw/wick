@@ -66,7 +66,7 @@ var ErrRegistrationClosed = errors.New("registration is closed")
 // approves a new account at once, and approves an existing pending one on
 // its next sign-in. The role still comes only from adminEmails: an
 // auto-approved account is a plain user.
-func (r *repo) UpsertSSOUser(ctx context.Context, email, name, avatar string, adminEmails map[string]bool, allowCreate, autoApprove bool) (*entity.User, error) {
+func (r *repo) UpsertSSOUser(ctx context.Context, email, name, avatar string, adminEmails map[string]bool, allowCreate, autoApprove bool, tagIDs []string) (*entity.User, error) {
 	var u entity.User
 	err := r.db.WithContext(ctx).Where("email = ?", email).First(&u).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) && !allowCreate && !adminEmails[email] {
@@ -84,6 +84,9 @@ func (r *repo) UpsertSSOUser(ctx context.Context, email, name, avatar string, ad
 			return nil, err
 		}
 		out.Approved = true
+		if err := r.AddUserTags(ctx, out.ID, tagIDs); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -163,6 +166,38 @@ func (r *repo) CreateChannelUser(ctx context.Context, email, name, source string
 		return nil, err
 	}
 	return &u, nil
+}
+
+// ApproveUser marks one account approved. Returns false when it was already
+// approved (or does not exist), so a caller announces only a real change.
+func (r *repo) ApproveUser(ctx context.Context, id string) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&entity.User{}).
+		Where("id = ? AND approved = ?", id, false).
+		Update("approved", true)
+	return res.RowsAffected > 0, res.Error
+}
+
+// AddUserTags gives an account the listed tags on top of the ones it has.
+// Ids that name no tag, or a system tag, are skipped: the list comes from a
+// setting that can outlive a deleted tag, and system tags are owned by the
+// role, never handed out.
+func (r *repo) AddUserTags(ctx context.Context, userID string, tagIDs []string) error {
+	if userID == "" || len(tagIDs) == 0 {
+		return nil
+	}
+	var valid []string
+	if err := r.db.WithContext(ctx).Model(&entity.Tag{}).
+		Where("id IN ? AND is_system = ?", tagIDs, false).
+		Pluck("id", &valid).Error; err != nil {
+		return err
+	}
+	for _, id := range valid {
+		ut := entity.UserTag{UserID: userID, TagID: id}
+		if err := r.db.WithContext(ctx).Where(ut).FirstOrCreate(&ut).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *repo) ListApprovedAdmins(ctx context.Context) ([]*entity.User, error) {

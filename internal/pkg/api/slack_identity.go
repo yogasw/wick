@@ -28,6 +28,11 @@ type slackUserResolver struct {
 	identities *channelidentity.Store
 	// notifier announces a fresh registration to admins. nil = no notices.
 	notifier *channelidentity.Notifier
+	// autoApprove reports whether an email's domain is on the install's
+	// auto-approve list (the same list Google sign-in uses). Read live. nil =
+	// never: a channel whose email is a synthetic stand-in (Telegram) must not
+	// set it.
+	autoApprove func(email string) (ok bool, tagIDs []string)
 	// instanceKey names WHICH Slack bot/workspace this resolver serves, so a
 	// recorded identity can be messaged back through the same one.
 	instanceKey string
@@ -64,6 +69,12 @@ func (r slackUserResolver) RegisterFromChannel(ctx context.Context, email, name,
 			Msg("channel identity: auto-register failed")
 		return "", err
 	}
+	// An email on the auto-approve list is approved right here, so the
+	// message that triggered the registration is answered instead of being
+	// refused with "pending approval".
+	if r.approveIfListed(ctx, id, email, source) {
+		return id, nil
+	}
 	log.Info().Str("source", source).Str("user_id", id).
 		Msg("channel identity: registered pending user, awaiting admin approval")
 
@@ -79,6 +90,39 @@ func (r slackUserResolver) RegisterFromChannel(ctx context.Context, email, name,
 		}
 	}
 	return id, nil
+}
+
+// approveIfListed approves a pending account whose email domain is on the
+// auto-approve list and tells the admins. Reports whether the account is
+// approved afterwards because of it.
+//
+// Applies to an account that already sat pending too (registered before the
+// domain was listed), the same way a Google sign-in approves a pending account
+// on its next sign-in.
+func (r slackUserResolver) approveIfListed(ctx context.Context, id, email, source string) bool {
+	if r.users == nil || r.autoApprove == nil || id == "" || email == "" {
+		return false
+	}
+	ok, tagIDs := r.autoApprove(email)
+	if !ok {
+		return false
+	}
+	changed, err := r.users.ApproveChannelUser(ctx, id, tagIDs)
+	if err != nil {
+		log.Warn().Err(err).Str("source", source).Str("user_id", id).
+			Msg("channel identity: auto-approve failed")
+		return false
+	}
+	if changed {
+		log.Info().Str("source", source).Str("user_id", id).
+			Msg("channel identity: registered user auto-approved by email domain")
+		if r.notifier != nil {
+			if u, uerr := r.users.GetUserByID(ctx, id); uerr == nil && u != nil {
+				r.notifier.NotifyAdminsAutoApproved(ctx, u, source)
+			}
+		}
+	}
+	return true
 }
 
 // RecordIdentity remembers that a Slack account maps to a wick user, so later
@@ -131,7 +175,13 @@ func (r slackUserResolver) IsApproved(ctx context.Context, wickUserID string) bo
 		return false
 	}
 	u, err := r.users.GetUserByID(ctx, wickUserID)
-	return err == nil && u != nil && u.Approved
+	if err != nil || u == nil {
+		return false
+	}
+	if u.Approved {
+		return true
+	}
+	return r.approveIfListed(ctx, u.ID, u.Email, "slack")
 }
 
 // channelSenderFunc adapts Registry.SendDirect to channelidentity.ChannelSender
