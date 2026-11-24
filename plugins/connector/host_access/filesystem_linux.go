@@ -7,7 +7,6 @@ import (
  "crypto/sha256"
  "encoding/hex"
  "errors"
- "fmt"
  "io"
  "os"
  "path/filepath"
@@ -111,4 +110,47 @@ func diskUsage(name string)(map[string]any,error){
  var s unix.Statfs_t;if err=unix.Fstatfs(fd,&s);err!=nil{return nil,err}
  return map[string]any{"path":name,"total_bytes":uint64(s.Blocks)*uint64(s.Bsize),"available_bytes":uint64(s.Bavail)*uint64(s.Bsize),"free_bytes":uint64(s.Bfree)*uint64(s.Bsize)},nil
 }
-func fileUnsupported()error{return fmt.Errorf("filesystem not supported")}
+// moveFile uses a no-replace rename. Do not fall back to copy-and-delete
+// or ordinary rename if the filesystem/kernel does not support it.
+func moveFile(source, dest, expected string) error {
+	if expected == "" {
+		return errors.New("expected_sha256 is required")
+	}
+	sfd, sb, err := parentFD(source)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(sfd)
+	dfd, db, err := parentFD(dest)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(dfd)
+	fd, err := unix.Openat(sfd, sb, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), source)
+	defer f.Close()
+	var before, after unix.Stat_t
+	if err := unix.Fstat(fd, &before); err != nil {
+		return err
+	}
+	if before.Mode&unix.S_IFMT != unix.S_IFREG || before.Nlink != 1 {
+		return errors.New("not a regular single-link file")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > maxFileBytes || digest(data) != expected {
+		return errors.New("expected_sha256 mismatch or file too large")
+	}
+	if err := unix.Fstatat(sfd, sb, &after, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
+	if before.Dev != after.Dev || before.Ino != after.Ino || before.Ctim != after.Ctim || before.Mtim != after.Mtim || after.Nlink != 1 {
+		return errors.New("source changed during move")
+	}
+	return unix.Renameat2(sfd, sb, dfd, db, unix.RENAME_NOREPLACE)
+}
