@@ -35,13 +35,16 @@ func OAuthMeta() *connector.OAuthMeta {
 			"https://www.googleapis.com/auth/presentations",
 			// Gmail: read, send, drafts, and label modification.
 			"https://www.googleapis.com/auth/gmail.modify",
+			"https://www.googleapis.com/auth/gmail.readonly",
 			"https://www.googleapis.com/auth/gmail.send",
 			"https://www.googleapis.com/auth/gmail.compose",
 			// Calendar: full read/write (covers events + read-only).
 			"https://www.googleapis.com/auth/calendar",
+			"https://www.googleapis.com/auth/calendar.readonly",
 			// Meet: create spaces + read conference data (records, recordings, transcripts).
-			// meetings.space.created is a superset of meetings.space.readonly.
+			// Created grants access to app-created spaces; readonly covers other accessible spaces.
 			"https://www.googleapis.com/auth/meetings.space.created",
+			"https://www.googleapis.com/auth/meetings.space.readonly",
 			"https://www.googleapis.com/auth/userinfo.email",
 		}, " "),
 		DisplayName: "Google Workspace",
