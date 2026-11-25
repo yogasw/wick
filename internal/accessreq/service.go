@@ -261,7 +261,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		for _, a := range autos {
 			autoOwner[items[a.idx].ID] = a.rule.OwnerID
 		}
-		s.execute(req, run, func(it entity.AccessRequestItem) string { return autoOwner[it.ID] }, "")
+		runAs := func(it entity.AccessRequestItem) string { return autoOwner[it.ID] }
+		if len(run) == len(items) && req.After == "" && pl.supersedes == nil {
+			// Every action is the rule's to approve: nobody has anything to
+			// click, so no card. Run them now, like a plain execute, and
+			// hand the results straight back to the caller.
+			s.runQuiet(ctx, req, run, runAs)
+			v, err := s.ViewFor(ctx, req.ID, "")
+			v.AutoRan = err == nil
+			return v, err
+		}
+		s.execute(req, run, runAs, "")
 	}
 	s.publish(ctx, req.ID)
 	if pl.supersedes != nil {
@@ -759,33 +769,7 @@ func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequest
 				return
 			}
 		}
-		for _, it := range items {
-			// Re-read the request: an earlier action may have been denied,
-			// failed, or run in another click since this one was approved.
-			if _, cur, err := s.store.request(ctx, req.ID); err == nil {
-				if prev, bad := earlierUnfinished(cur, it); bad {
-					msg := fmt.Sprintf("skipped: action %d (%s) did not succeed (%s), so this one was not run", prev.Idx+1, prev.OpKey, prev.Status)
-					if ferr := s.store.finishItem(ctx, it.ID, ItemSkipped, "", "", msg); ferr != nil {
-						log.Warn().Err(ferr).Str("item", it.ID).Msg("accessreq: record skip failed")
-					}
-					continue
-				}
-			}
-			var params map[string]any
-			_ = json.Unmarshal([]byte(it.Params), &params)
-			user := runAs(it)
-			runID, result, err := s.cat.Run(ctx, user, it.ConnectorID, it.OpKey, it.AccountID, params)
-			status, errText := ItemOK, ""
-			if err != nil {
-				status, errText = ItemError, truncate(err.Error(), maxResultChars)
-			}
-			if ferr := s.store.finishItem(ctx, it.ID, status, runID, truncate(result, maxResultChars), errText); ferr != nil {
-				log.Warn().Err(ferr).Str("item", it.ID).Msg("accessreq: record result failed")
-			}
-			if err == nil && grantBy != "" {
-				s.leaveGrant(ctx, req, it, grantBy)
-			}
-		}
+		s.runItems(ctx, req, items, runAs, grantBy)
 		s.afterChange(ctx, req.ID, true)
 	}
 	if s.sync {
@@ -793,6 +777,58 @@ func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequest
 		return
 	}
 	go work()
+}
+
+// runQuiet runs a request whose actions a rule approved in full, inline
+// and without a card or a wake: the caller gets the outcome in its own
+// tool result. The request stays on record (web list, audit).
+func (s *Service) runQuiet(ctx context.Context, req entity.AccessRequest, items []entity.AccessRequestItem, runAs func(entity.AccessRequestItem) string) {
+	items = append([]entity.AccessRequestItem(nil), items...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Idx < items[j].Idx })
+	lk, _ := s.runLocks.LoadOrStore(req.ID, &sync.Mutex{})
+	mu := lk.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	rctx, cancel := context.WithTimeout(WithSession(context.WithoutCancel(ctx), req.SessionID), runTimeout)
+	defer cancel()
+	s.runItems(rctx, req, items, runAs, "")
+	if n, err := s.store.pendingCount(rctx, req.ID); err == nil && n == 0 {
+		if closed, _ := s.store.setRequestStatus(rctx, req.ID, StatusPending, StatusDone); closed {
+			s.releaseFollowers(rctx, req.ID)
+		}
+	}
+}
+
+// runItems runs approved items in order and records each outcome; an
+// item whose earlier action did not succeed is skipped.
+func (s *Service) runItems(ctx context.Context, req entity.AccessRequest, items []entity.AccessRequestItem, runAs func(entity.AccessRequestItem) string, grantBy string) {
+	for _, it := range items {
+		// Re-read the request: an earlier action may have been denied,
+		// failed, or run in another click since this one was approved.
+		if _, cur, err := s.store.request(ctx, req.ID); err == nil {
+			if prev, bad := earlierUnfinished(cur, it); bad {
+				msg := fmt.Sprintf("skipped: action %d (%s) did not succeed (%s), so this one was not run", prev.Idx+1, prev.OpKey, prev.Status)
+				if ferr := s.store.finishItem(ctx, it.ID, ItemSkipped, "", "", msg); ferr != nil {
+					log.Warn().Err(ferr).Str("item", it.ID).Msg("accessreq: record skip failed")
+				}
+				continue
+			}
+		}
+		var params map[string]any
+		_ = json.Unmarshal([]byte(it.Params), &params)
+		user := runAs(it)
+		runID, result, err := s.cat.Run(ctx, user, it.ConnectorID, it.OpKey, it.AccountID, params)
+		status, errText := ItemOK, ""
+		if err != nil {
+			status, errText = ItemError, truncate(err.Error(), maxResultChars)
+		}
+		if ferr := s.store.finishItem(ctx, it.ID, status, runID, truncate(result, maxResultChars), errText); ferr != nil {
+			log.Warn().Err(ferr).Str("item", it.ID).Msg("accessreq: record result failed")
+		}
+		if err == nil && grantBy != "" {
+			s.leaveGrant(ctx, req, it, grantBy)
+		}
+	}
 }
 
 // earlierPending returns the first action before it that is still

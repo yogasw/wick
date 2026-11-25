@@ -116,6 +116,10 @@ func fileRecorded(ctx context.Context, sessionID string, rr *recordReq, acts []a
 		return nil, err
 	}
 	out := accessSummary(v)
+	if v.AutoRan {
+		out["next"] = autoRanNext
+		return out, nil
+	}
 	out["next"] = "The writes are filed as one card. Tell the person what you asked for and end your turn; approved writes run on their own, in order — do not run them yourself."
 	return out, nil
 }

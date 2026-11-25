@@ -156,6 +156,9 @@ func WickRequestAccess(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 	out := accessSummary(v)
 	if err == nil {
 		out["next"] = "Tell the person what you asked for and end your turn. The outcome arrives in this conversation; approved actions run on their own — do not run them yourself."
+		if v.AutoRan {
+			out["next"] = autoRanNext
+		}
 	}
 	writeAccessResult(w, req, rsp, out, err)
 }
@@ -165,6 +168,11 @@ func WickRequestAccess(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 // or the raw parameters only leaks details into the conversation.
 const accessReplyNote = "The card is already posted where this conversation lives. In your reply do NOT repeat the request id, " +
 	"who can approve or decided, the params or any config_override. One short line is enough, e.g. \"Waiting for approval.\""
+
+// autoRanNext is the guidance when a rule approved every action: they
+// already ran inside this call and no card was posted.
+const autoRanNext = "A rule approved every action, so they already ran in this call and no card was posted: the results are in actions. " +
+	"Carry on with your work as after a normal execute; do not run them again and do not say you are waiting for approval."
 
 // accessSummary is the request as the agent sees it: outcomes and, at
 // most, the approver group label from a rule. No person's name is
@@ -199,6 +207,10 @@ func accessSummary(v accessreq.View) map[string]any {
 		}
 	}
 	out := map[string]any{"request_id": v.ID, "status": v.Status, "pending": v.Pending, "actions": items, "reply_note": accessReplyNote}
+	if v.AutoRan {
+		out["auto_ran"] = true
+		delete(out, "reply_note")
+	}
 	if v.Key != "" {
 		out["key"] = v.Key
 	}

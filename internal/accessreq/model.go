@@ -288,6 +288,9 @@ type View struct {
 	Origin map[string]string
 	// Pending counts items still waiting.
 	Pending int
+	// AutoRan is set on the view Create returns when a rule approved
+	// every action: they already ran, and no card was posted.
+	AutoRan bool
 	// Key, Version, SupersededBy and After: see entity.AccessRequest.
 	Key          string
 	Version      int

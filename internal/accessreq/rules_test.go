@@ -288,3 +288,43 @@ func TestAlwaysAskCardOffersTimedModesAndGrantPasses(t *testing.T) {
 		t.Fatalf("grant leaked to another target: %v", err)
 	}
 }
+
+type countPub struct{ n int }
+
+func (p *countPub) Publish(context.Context, View) (map[string]string, error) {
+	p.n++
+	return nil, nil
+}
+
+func TestAutoApproveAllRunsWithoutCard(t *testing.T) {
+	e := newEnv(t)
+	saveRule(t, e, "owner-a", stagingAuto)
+	pub := &countPub{}
+	e.svc.AddPublisher(pub)
+	woke := 0
+	e.svc.SetWaker(func(context.Context, string, string) error { woke++; return nil })
+	v := e.create(t, act("c-apps", "update_setting", map[string]any{"app_code": "acme-stag"}))
+	if !v.AutoRan || v.Status != StatusDone || v.Items[0].Status != ItemOK {
+		t.Fatalf("view = auto %v status %s item %s", v.AutoRan, v.Status, v.Items[0].Status)
+	}
+	if len(e.cat.runs) != 1 || e.cat.runs[0].user != "owner-a" {
+		t.Fatalf("runs = %+v", e.cat.runs)
+	}
+	if pub.n != 0 || woke != 0 {
+		t.Fatalf("published %d, woke %d: an all-auto request needs no card", pub.n, woke)
+	}
+}
+
+func TestAutoApprovePartlyStillPostsCard(t *testing.T) {
+	e := newEnv(t)
+	saveRule(t, e, "owner-a", stagingAuto)
+	pub := &countPub{}
+	e.svc.AddPublisher(pub)
+	v := e.create(t,
+		act("c-apps", "update_setting", map[string]any{"app_code": "acme-stag"}),
+		act("c-notes", "update_page", map[string]any{"page_id": "p1"}),
+	)
+	if v.AutoRan || pub.n == 0 {
+		t.Fatalf("auto %v published %d: a card is still needed for the manual action", v.AutoRan, pub.n)
+	}
+}
