@@ -328,3 +328,32 @@ func TestAutoApprovePartlyStillPostsCard(t *testing.T) {
 		t.Fatalf("auto %v published %d: a card is still needed for the manual action", v.AutoRan, pub.n)
 	}
 }
+
+func TestAutoApproveAllShowsCardWhenAsked(t *testing.T) {
+	e := newEnv(t)
+	saveRule(t, e, "owner-a", stagingAuto)
+	pub := &countPub{}
+	e.svc.AddPublisher(pub)
+	v, err := e.svc.Create(context.Background(), CreateInput{SessionID: "sess-1", AgentID: "agent-1", Reason: "r", ShowCard: true,
+		Actions: []ActionInput{{ConnectorID: "c-apps", OpKey: "update_setting", Params: map[string]any{"app_code": "acme-stag"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.AutoRan || pub.n == 0 {
+		t.Fatalf("auto %v published %d: show_card must keep the card", v.AutoRan, pub.n)
+	}
+}
+
+func TestRuleShowCardKeepsCard(t *testing.T) {
+	e := newEnv(t)
+	saveRule(t, e, "owner-a", "show_card: true\n"+stagingAuto)
+	pub := &countPub{}
+	e.svc.AddPublisher(pub)
+	v := e.create(t, act("c-apps", "update_setting", map[string]any{"app_code": "acme-stag"}))
+	if v.AutoRan || pub.n == 0 {
+		t.Fatalf("auto %v published %d: the rule asked for the card", v.AutoRan, pub.n)
+	}
+	if _, err := ParseRule("name: a\neffect: require\nshow_card: true\nwhen: {ops: [x.*]}"); err == nil {
+		t.Fatal("show_card accepted on require")
+	}
+}

@@ -262,7 +262,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 			autoOwner[items[a.idx].ID] = a.rule.OwnerID
 		}
 		runAs := func(it entity.AccessRequestItem) string { return autoOwner[it.ID] }
-		if len(run) == len(items) && req.After == "" && pl.supersedes == nil {
+		showCard := in.ShowCard
+		for _, a := range autos {
+			showCard = showCard || ruleShowsCard(&a.rule)
+		}
+		if len(run) == len(items) && req.After == "" && pl.supersedes == nil && !showCard {
 			// Every action is the rule's to approve: nobody has anything to
 			// click, so no card. Run them now, like a plain execute, and
 			// hand the results straight back to the caller.
@@ -1085,6 +1089,16 @@ func ruleAlwaysAsks(r *entity.AccessRule) bool {
 	}
 	d, err := ParseRule(r.Doc)
 	return err == nil && d.AlwaysAsk
+}
+
+// ruleShowsCard reports whether an auto_approve rule asks for the card
+// even when it approves a request in full.
+func ruleShowsCard(r *entity.AccessRule) bool {
+	if r == nil {
+		return false
+	}
+	d, err := ParseRule(r.Doc)
+	return err == nil && d.ShowCard
 }
 
 // ErrNeedsApproval marks a call an always_ask rule holds for a person.

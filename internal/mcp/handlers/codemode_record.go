@@ -27,6 +27,8 @@ type recordReq struct {
 	Reason string
 	Key    string
 	After  string
+	// ShowCard posts the card even when a rule approves every write.
+	ShowCard bool
 }
 
 func recordReqOf(args map[string]any) (*recordReq, error) {
@@ -36,12 +38,13 @@ func recordReqOf(args map[string]any) (*recordReq, error) {
 	}
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return nil, errors.New(`request_access must be an object: {"reason": "...", "key": "...", "after": "..."}`)
+		return nil, errors.New(`request_access must be an object: {"reason": "...", "key": "...", "after": "...", "show_card": false}`)
 	}
 	r := &recordReq{}
 	r.Reason, _ = m["reason"].(string)
 	r.Key, _ = m["key"].(string)
 	r.After, _ = m["after"].(string)
+	r.ShowCard, _ = m["show_card"].(bool)
 	r.Reason = strings.TrimSpace(r.Reason)
 	if r.Reason == "" {
 		return nil, errors.New("request_access.reason is required: one or two sentences saying what the writes change and why, for the approver")
@@ -110,7 +113,7 @@ func fileRecorded(ctx context.Context, sessionID string, rr *recordReq, acts []a
 		return nil, fmt.Errorf("the script recorded %d writes; one card holds at most %d. Split the work (e.g. by input range) and file each part with its own key, ordered with after", len(acts), accessreq.MaxActions)
 	}
 	v, err := AccessRequests.Create(ctx, accessreq.CreateInput{
-		SessionID: sessionID, AgentID: connectors.AgentIDOf(ctx), Reason: rr.Reason, Key: rr.Key, After: rr.After, Actions: acts,
+		SessionID: sessionID, AgentID: connectors.AgentIDOf(ctx), Reason: rr.Reason, Key: rr.Key, After: rr.After, ShowCard: rr.ShowCard, Actions: acts,
 	})
 	if err != nil {
 		return nil, err

@@ -39,12 +39,14 @@ func AccessRequestDescriptor() ToolDescriptor {
 		Name: accessRequestTool,
 		Description: "Ask a person to approve connector actions YOUR access cannot run (wick_execute refused them: " +
 			"\"not allowed for this agent\", a read-only grant, a role that may only read, or an access rule that holds the call " +
-			"for a person). Use it too for an action your access DOES allow when your instructions say that target needs a " +
+			"for a person). Try wick_execute FIRST: an action a project auto_approve rule covers already runs on a plain wick_execute, " +
+			"as the rule's owner, with no card, so never file a request for it up front. Use it too for an action your access DOES allow when your instructions say that target needs a " +
 			"person's approval first (a post to another team's channel, say): file it here instead of running it. One request carries up to 50 " +
 			"exact actions ({tool_id, params}, the same shape as wick_execute). A card appears where this conversation lives " +
 			"(the Slack thread, the web); an approver opens it, sees every action with its real parameters, and decides each " +
 			"one: once, for 1 / 8 / 24 hours or for this session (same operation on the same target, and the same config_override, only), or deny (standing access is a rule, set in the project settings, Access requests). Approved actions run with the APPROVER's access — you do NOT run " +
-			"them again. This call returns at once with status pending: say what you asked for and END YOUR TURN; the " +
+			"them again. When a rule approves EVERY action, the request runs inline and returns auto_ran: true with the results (no card unless show_card): carry on as after a normal execute. " +
+			"Otherwise this call returns at once with status pending: say what you asked for and END YOUR TURN; the " +
 			"outcome of every action is delivered to this conversation later. An approval holds for those exact parameters " +
 			"only; changed parameters need a new request. Never ask for something the user did not want done. " +
 			"To propose a project's access rule (only when a person asked for it), use tool_id conn:wick-access-rules/save_rule " +
@@ -69,6 +71,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 				"supersedes": map[string]any{"type": "string", "description": "create: id (or key) of an untouched request of this session that this one replaces."},
 				"after":      map[string]any{"type": "string", "description": "create: id or key of a request of this session that must finish OK before this one runs."},
 				"force":      map[string]any{"type": "boolean", "description": "create: file even when a pending request has the same tool and target (rare; normally replace it with key)."},
+				"show_card":  map[string]any{"type": "boolean", "description": "create: post the card even when a rule auto-approves every action. Default false: such a request runs inline like a plain execute and returns its results, no card. Set it only when the person asked to see the card."},
 				"actions": map[string]any{
 					"type":        "array",
 					"description": "create: the actions to approve, in order.",
@@ -135,6 +138,7 @@ func WickRequestAccess(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 	in.Supersedes, _ = args["supersedes"].(string)
 	in.After, _ = args["after"].(string)
 	in.Force, _ = args["force"].(bool)
+	in.ShowCard, _ = args["show_card"].(bool)
 	in.Reason, _ = args["reason"].(string)
 	in.Reason = strings.TrimSpace(in.Reason)
 	if in.Reason == "" {
@@ -172,7 +176,8 @@ const accessReplyNote = "The card is already posted where this conversation live
 // autoRanNext is the guidance when a rule approved every action: they
 // already ran inside this call and no card was posted.
 const autoRanNext = "A rule approved every action, so they already ran in this call and no card was posted: the results are in actions. " +
-	"Carry on with your work as after a normal execute; do not run them again and do not say you are waiting for approval."
+	"Carry on with your work as after a normal execute; do not run them again and do not say you are waiting for approval. " +
+	"Next time call wick_execute directly for actions like these: the same rule approves them there, no request needed."
 
 // accessSummary is the request as the agent sees it: outcomes and, at
 // most, the approver group label from a rule. No person's name is

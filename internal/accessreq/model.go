@@ -164,6 +164,9 @@ type CreateInput struct {
 	After string
 	// Force files the request even when a pending one looks the same.
 	Force bool
+	// ShowCard posts the card even when a rule approves every action
+	// (default: such a request runs inline, without a card).
+	ShowCard bool
 }
 
 // Decision is one approver choice on one item.

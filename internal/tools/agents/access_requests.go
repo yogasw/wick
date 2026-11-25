@@ -85,6 +85,7 @@ func accessReady(c *tool.Ctx) bool {
 const accessRuleExample = `name: staging-apps-auto
 effect: auto_approve        # or: require (a card every call, once only) / deny / approvers
 simulate: true              # log "would auto-approve" first; set false to act
+# show_card: true           # auto_approve only: still post the card when every action is approved (default: run inline, no card)
 when:
   ops: [apps.*, bots.*]
   kind: [read, write]       # delete is never auto-approved

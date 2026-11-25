@@ -50,6 +50,10 @@ type RuleDoc struct {
 	// access refused. A send the agent may make on its own (a post to
 	// another team's channel) then still waits for a person's card.
 	AlwaysAsk bool `json:"always_ask,omitempty" yaml:"always_ask,omitempty"`
+	// ShowCard (auto_approve only) still posts the card for a request
+	// the rule approves in full, so people see what ran. Without it such
+	// a request runs inline like a plain execute, with no card.
+	ShowCard bool `json:"show_card,omitempty" yaml:"show_card,omitempty"`
 	// Approvers is the mode of an approvers rule: add (default) or only.
 	Approvers string `json:"approvers,omitempty" yaml:"approvers,omitempty"`
 	// ApproversLabel names, on the card, who an approvers rule lets in
@@ -127,6 +131,9 @@ func (d RuleDoc) Validate() error {
 	}
 	if d.AlwaysAsk && d.Effect != EffectRequire && d.Effect != EffectDeny {
 		return fmt.Errorf("always_ask is only for effect: require or deny")
+	}
+	if d.ShowCard && d.Effect != EffectAutoApprove {
+		return fmt.Errorf("show_card is only for effect: auto_approve")
 	}
 	if len(d.When.Ops) == 0 {
 		return fmt.Errorf("when.ops is required: name the operations, e.g. [notion.update_page] or [apps.*]")

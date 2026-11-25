@@ -252,7 +252,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Return a small summary, not raw data (results over 20 KB are cut). " +
 				"Pass exactly one of code or script_path. Prefer script_path for a script reused across runs or a watch code step: a file relative to this session's project folder, read fresh every run; vary it through `input`. " +
 				"Result: {ok, result, error, logs, calls:[{tool_id, label, ok, ms, error}], duration_ms}; a failed script is isError with the calls already made listed.\n\n" +
-				"WRITES THAT NEED APPROVAL: pass request_access {reason, key?, after?} to run the script as a dry run: reads run as usual, every write (destructive op) is NOT run but recorded and returns {recorded:true}; " +
+				"WRITES THAT NEED APPROVAL: pass request_access {reason, key?, after?, show_card?} to run the script as a dry run: reads run as usual, every write (destructive op) is NOT run but recorded and returns {recorded:true}; " +
 				"the recorded writes become ONE wick_request_access card (in call order, max 50) and the result carries access_request. Use it when a script's writes are outside your access; a script that needs a write's real answer to continue cannot be recorded.",
 			InputSchema: map[string]any{
 				"type": "object",
