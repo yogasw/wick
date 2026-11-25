@@ -297,3 +297,21 @@ func TestTypedApproveMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestCardNamesTheAccountItRunsOn(t *testing.T) {
+	v := longAccessView(1)
+	v.Items[0].ConnectorLabel = "Chat: Bot A"
+	v.Items[0].AccountLabel = "person-a"
+	b, _ := json.Marshal(accessCardBlocks(v))
+	if !strings.Contains(string(b), "Chat: Bot A · account person-a") {
+		t.Fatalf("card hides the account: %s", b)
+	}
+	v = longAccessView(8)
+	for i := range v.Items {
+		v.Items[i].AccountLabel = "person-a"
+	}
+	b, _ = json.Marshal(accessCardBlocks(v))
+	if !strings.Contains(string(b), "(write · account person-a)") {
+		t.Fatalf("grouped card hides the account: %s", b)
+	}
+}

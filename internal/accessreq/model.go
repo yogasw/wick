@@ -211,6 +211,12 @@ type Catalog interface {
 	Run(ctx context.Context, userID, connectorID, opKey, accountID string, params map[string]any) (runID, result string, err error)
 }
 
+// AccountLabels is the optional part of a Catalog that names a
+// connector account, so a card says whose account an action runs on.
+type AccountLabels interface {
+	AccountLabel(ctx context.Context, accountID string) string
+}
+
 // Directory is who people and sessions are.
 type Directory interface {
 	User(ctx context.Context, id string) (Person, bool)
@@ -308,6 +314,10 @@ type ItemView struct {
 	OpKey          string
 	OpName         string
 	Kind           string
+	// AccountID / AccountLabel: the connector account the action runs on
+	// ("" = the instance's own credential).
+	AccountID    string
+	AccountLabel string
 	// Target is a one-line, server-computed summary of what the action
 	// touches, built from its real parameters.
 	Target string

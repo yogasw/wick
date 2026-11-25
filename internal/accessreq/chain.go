@@ -156,7 +156,7 @@ func (e *SimilarError) Error() string {
 
 // similarPending finds a pending request of the session with actions on
 // the same tool and target as acts.
-func (s *Service) similarPending(ctx context.Context, sessionID string, acts []ActionInput) *SimilarError {
+func (s *Service) similarPending(ctx context.Context, sessionID, key string, acts []ActionInput) *SimilarError {
 	want := map[string]bool{}
 	for _, a := range acts {
 		want[actionSig(a.ConnectorID, a.OpKey, stringify(a.Params))] = true
@@ -169,6 +169,9 @@ func (s *Service) similarPending(ctx context.Context, sessionID string, acts []A
 		r := reqs[i]
 		if r.Status != StatusPending {
 			continue
+		}
+		if key != "" && r.Key != "" && r.Key != key {
+			continue // two named steps of a plan: different on purpose
 		}
 		_, items, err := s.store.request(ctx, r.ID)
 		if err != nil {

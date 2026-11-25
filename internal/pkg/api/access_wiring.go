@@ -139,6 +139,15 @@ func (a accessCatalog) Run(ctx context.Context, userID, connectorID, opKey, acco
 	return a.svc.RunOwn(ctx, userID, connectorID, opKey, accountID, params)
 }
 
+// AccountLabel names a connector account for the card ("" when unknown).
+func (a accessCatalog) AccountLabel(ctx context.Context, accountID string) string {
+	acc, err := a.svc.GetAccount(ctx, accountID)
+	if err != nil || acc == nil {
+		return ""
+	}
+	return acc.DisplayName
+}
+
 // accessDirectory is accessreq.Directory over users, sessions and the Team.
 type accessDirectory struct {
 	users  *login.Service

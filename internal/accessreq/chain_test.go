@@ -215,3 +215,27 @@ func TestPendingInThreadFindsOpenCard(t *testing.T) {
 		t.Fatalf("other thread = %v", got)
 	}
 }
+
+func TestDifferentKeysAreNotSimilar(t *testing.T) {
+	e := newEnv(t)
+	e.createIn(t, CreateInput{Key: "step-1", Actions: []ActionInput{act("c-chat", "post_message", map[string]any{"channel": "C1", "text": "a"})}})
+	// Another named step to the same channel is a different step.
+	e.createIn(t, CreateInput{Key: "step-2", Actions: []ActionInput{act("c-chat", "post_message", map[string]any{"channel": "C1", "text": "b"})}})
+	// No key: still caught.
+	if _, err := e.svc.Create(context.Background(), CreateInput{SessionID: "sess-1", AgentID: "agent-1", Reason: "r",
+		Actions: []ActionInput{act("c-chat", "post_message", map[string]any{"channel": "C1", "text": "c"})}}); err == nil {
+		t.Fatal("an unnamed repeat was not refused")
+	}
+}
+
+func TestAfterAFailedRequestIsRefused(t *testing.T) {
+	e := newEnv(t)
+	first := e.createIn(t, CreateInput{Key: "step-1", Actions: []ActionInput{act("c-notes", "update_page", map[string]any{"page_id": "p1"})}})
+	e.cat.runErr = errors.New("upstream said no")
+	approveAll(t, e, first)
+	_, err := e.svc.Create(context.Background(), CreateInput{SessionID: "sess-1", AgentID: "agent-1", Reason: "r", Key: "step-2", After: "step-1",
+		Actions: []ActionInput{act("c-apps", "update_setting", map[string]any{"app_id": "a1"})}})
+	if err == nil || !strings.Contains(err.Error(), "never run") {
+		t.Fatalf("after a failed request = %v", err)
+	}
+}

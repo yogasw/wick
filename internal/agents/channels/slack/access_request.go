@@ -342,6 +342,11 @@ func itemHeading(it accessreq.ItemView) string {
 	if label == "" {
 		label = it.ConnectorKey
 	}
+	if it.AccountLabel != "" {
+		// The account it runs on, not only the instance's name: an
+		// instance named after one bot can run on another account.
+		label += " · account " + it.AccountLabel
+	}
 	return fmt.Sprintf("*%d. `%s.%s`* · %s (%s)", it.Idx+1, it.ConnectorKey, it.OpKey, escapeMrkdwn(label), it.Kind)
 }
 
@@ -428,6 +433,7 @@ func afterLine(v accessreq.View) string {
 // opGroup is every action of one operation on one card.
 type opGroup struct {
 	key, kind string
+	account   string
 	n         int
 	counts    map[string]int
 }
@@ -437,10 +443,14 @@ func groupItems(items []accessreq.ItemView) []*opGroup {
 	byKey := map[string]*opGroup{}
 	for _, it := range items {
 		k := it.ConnectorKey + "." + it.OpKey
-		g := byKey[k]
+		label := ""
+		if it.AccountLabel != "" {
+			label = " · account " + it.AccountLabel
+		}
+		g := byKey[k+label]
 		if g == nil {
-			g = &opGroup{key: k, kind: it.Kind, counts: map[string]int{}}
-			byKey[k] = g
+			g = &opGroup{key: k, account: label, kind: it.Kind, counts: map[string]int{}}
+			byKey[k+label] = g
 			order = append(order, g)
 		}
 		g.n++
@@ -465,7 +475,7 @@ func statusCounts(c map[string]int) string {
 func groupLines(items []accessreq.ItemView) string {
 	var b strings.Builder
 	for _, g := range groupItems(items) {
-		fmt.Fprintf(&b, "• `%s` × %d (%s) — %s\n", g.key, g.n, g.kind, statusCounts(g.counts))
+		fmt.Fprintf(&b, "• `%s` × %d (%s%s) — %s\n", g.key, g.n, g.kind, escapeMrkdwn(g.account), statusCounts(g.counts))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

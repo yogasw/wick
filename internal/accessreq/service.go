@@ -23,8 +23,10 @@ const (
 	// MaxActions is high enough for one plan step on one card: actions
 	// run one after another and stop at the first failure, so a long
 	// card is no riskier than several short ones.
-	MaxActions          = 50
-	MaxOpenPerSession   = 5
+	MaxActions = 50
+	// MaxOpenPerSession leaves room for a plan's steps queued with after
+	// (replaced cards do not count).
+	MaxOpenPerSession   = 10
 	maxResultChars      = 1500
 	maxParamChars       = 300
 	runTimeout          = 5 * time.Minute
@@ -118,8 +120,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
+	if pl.after != "" {
+		// Filing behind a request that already failed would only make a
+		// card that can never run.
+		if prev, _, err := s.store.request(ctx, pl.after); err == nil {
+			if state, _ := s.afterState(ctx, &entity.AccessRequest{After: prev.ID}); state == AfterFailed {
+				return View{}, fmt.Errorf("after: request %s already finished without success (failed, denied or cancelled), so this one would never run; fix that step first (file it again with its key) and run after the new one", refName(prev))
+			}
+		}
+	}
 	if pl.supersedes == nil && strings.TrimSpace(in.After) == "" && pl.after == "" && !in.Force {
-		if sim := s.similarPending(ctx, in.SessionID, in.Actions); sim != nil {
+		if sim := s.similarPending(ctx, in.SessionID, pl.key, in.Actions); sim != nil {
 			return View{}, sim
 		}
 	}
@@ -432,7 +443,10 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 			ID: it.ID, Idx: it.Idx, ConnectorID: it.ConnectorID, ConnectorKey: it.ConnectorKey,
 			ConnectorLabel: it.ConnectorLabel, OpKey: it.OpKey, OpName: it.OpName, Kind: it.Kind,
 			Status: it.Status, Mode: it.Mode, DecidedAt: it.DecidedAt, Note: it.Note,
-			Result: it.Result, Error: it.Error,
+			Result: it.Result, Error: it.Error, AccountID: it.AccountID,
+		}
+		if al, ok := s.cat.(AccountLabels); ok && it.AccountID != "" {
+			iv.AccountLabel = al.AccountLabel(ctx, it.AccountID)
 		}
 		iv.DecidedBy = s.personName(ctx, it.DecidedBy)
 		var params map[string]any
