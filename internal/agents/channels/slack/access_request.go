@@ -91,7 +91,8 @@ func (s *Channel) PublishAccessRequest(ctx context.Context, v accessreq.View) (m
 	if mainChat, mainThread, ok := s.mainThreadOf(ctx, api, chatID, threadTS); ok {
 		chatID, threadTS = mainChat, mainThread
 	}
-	opts := []slackgo.MsgOption{slackgo.MsgOptionText(fallback, false), slackgo.MsgOptionBlocks(blocks...)}
+	opts := []slackgo.MsgOption{slackgo.MsgOptionText(fallback, false), slackgo.MsgOptionBlocks(blocks...),
+		slackgo.MsgOptionDisableLinkUnfurl(), slackgo.MsgOptionDisableMediaUnfurl()}
 	if threadTS != "" {
 		opts = append(opts, slackgo.MsgOptionTS(threadTS))
 	}
@@ -377,16 +378,34 @@ func keyTag(v accessreq.View) string {
 	return fmt.Sprintf(" · `%s` v%d", escapeMrkdwn(v.Key), v.Version)
 }
 
-// refLink is a link to another request's card (or web page).
-func refLink(r *accessreq.Ref) string {
-	name := escapeMrkdwn(r.Name())
+// refLink names another request's card. A card in the same thread is
+// named, not linked: a Slack permalink there unfurls into a copy of that
+// card and the thread reads every card twice. Only a card elsewhere gets
+// a link (posted with unfurls off).
+func refLink(r *accessreq.Ref, v accessreq.View, where string) string {
+	name := "`" + escapeMrkdwn(r.Name()) + "`"
+	if r.Key != "" {
+		name += " (request `" + shortID(r.ID) + "`)"
+	}
+	if sameThread(r.Origin, v.Origin) {
+		return name + " " + where + " in this thread"
+	}
 	if u := r.Origin["slack_permalink"]; u != "" {
-		return "<" + u + "|" + name + ">"
+		return "<" + u + "|" + escapeMrkdwn(r.Name()) + ">"
 	}
 	if r.URL != "" {
-		return "<" + r.URL + "|" + name + ">"
+		return "<" + r.URL + "|" + escapeMrkdwn(r.Name()) + ">"
 	}
-	return "`" + name + "`"
+	return name
+}
+
+// sameThread: both cards sit in one Slack thread (or the other card's
+// place is unknown, which in practice is this thread too).
+func sameThread(a, b map[string]string) bool {
+	if a["slack_channel"] == "" || b["slack_channel"] == "" {
+		return true
+	}
+	return a["slack_channel"] == b["slack_channel"] && a["slack_thread"] == b["slack_thread"]
 }
 
 // afterLine says which request this one waits for and where it stands.
@@ -394,7 +413,7 @@ func afterLine(v accessreq.View) string {
 	if v.AfterRef == nil {
 		return ""
 	}
-	line := "⏭ Runs after " + refLink(v.AfterRef)
+	line := "⏭ Runs after " + refLink(v.AfterRef, v, "above")
 	switch v.AfterState {
 	case accessreq.AfterWaiting:
 		line += " · _waiting for it to finish OK (approving now is fine: it runs then)_"
@@ -500,8 +519,10 @@ func inlinePayload(v accessreq.View) string {
 // payloadLine points to the full payload: the file in the thread, else
 // the web page.
 func payloadLine(v accessreq.View) string {
-	if u := v.Origin["slack_file_permalink"]; u != "" {
-		return "📎 Full payload: <" + u + "|" + payloadFileName(v) + "> · also in *Review & decide*"
+	if v.Origin["slack_file_permalink"] != "" {
+		// The file sits right under the card; a link would unfurl a
+		// second preview of it.
+		return "📎 Full payload: file `" + payloadFileName(v) + "` right below this card · also in *Review & decide*"
 	}
 	if v.URL != "" {
 		return "📎 Full payload: <" + v.URL + "|web page> · also in *Review & decide*"
@@ -584,7 +605,7 @@ func accessCardBlocks(v accessreq.View) []map[string]any {
 	if v.Status == accessreq.StatusSuperseded {
 		line := "↪️ Replaced by a newer version"
 		if v.Replacement != nil {
-			line = "↪️ Replaced by " + refLink(v.Replacement) + ": decide that card instead"
+			line = "↪️ Replaced by " + refLink(v.Replacement, v, "below") + ": decide that card instead"
 		}
 		blocks = append(blocks, section(line))
 		blocks = append(blocks, contextBlock(fmt.Sprintf("Request `%s` · closed", shortID(v.ID))))

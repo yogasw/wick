@@ -174,13 +174,16 @@ func TestLongCardGroupsActionsAndHidesPayload(t *testing.T) {
 	}
 	b, _ := json.Marshal(raw)
 	s := string(b)
-	for _, want := range []string{"acme.update_field", "× 26", "acme.update_form", "× 14", "step-2", "v2", "files.example.com/F1", "Approve all (40)"} {
+	for _, want := range []string{"acme.update_field", "× 26", "acme.update_form", "× 14", "step-2", "v2", "step-2-v2.json", "right below this card", "Approve all (40)"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("long card misses %q", want)
 		}
 	}
 	if strings.Contains(s, strings.Repeat("x", 80)) {
 		t.Error("long card shows the payload inline")
+	}
+	if strings.Contains(s, "files.example.com") {
+		t.Error("the payload file is linked (it unfurls a second preview)")
 	}
 }
 
@@ -195,11 +198,20 @@ func TestSmallSinglePayloadStaysInline(t *testing.T) {
 func TestReplacedCardLinksNewVersion(t *testing.T) {
 	v := longAccessView(3)
 	v.Status = accessreq.StatusSuperseded
-	v.Replacement = &accessreq.Ref{ID: "55555555", Key: "step-2", Version: 3, Origin: map[string]string{"slack_permalink": "https://x.slack.com/archives/C01TESTCHAN/p1"}}
+	v.Origin = map[string]string{"slack_channel": "C01TESTCHAN", "slack_thread": "1.0"}
+	v.Replacement = &accessreq.Ref{ID: "55555555", Key: "step-2", Version: 3,
+		Origin: map[string]string{"slack_channel": "C01TESTCHAN", "slack_thread": "1.0", "slack_permalink": "https://x.slack.com/archives/C01TESTCHAN/p1"}}
 	b, _ := json.Marshal(accessCardBlocks(v))
 	s := string(b)
-	if !strings.Contains(s, "replaced") || !strings.Contains(s, "x.slack.com/archives/C01TESTCHAN/p1|step-2 v3") {
+	// Same thread: named, never linked (a permalink unfurls a copy of the card).
+	if !strings.Contains(s, "replaced") || !strings.Contains(s, "step-2 v3") || !strings.Contains(s, "below in this thread") || strings.Contains(s, "x.slack.com") {
 		t.Fatalf("replaced card = %s", s)
+	}
+	// Another thread: linked.
+	v.Replacement.Origin["slack_thread"] = "9.9"
+	b, _ = json.Marshal(accessCardBlocks(v))
+	if !strings.Contains(string(b), "x.slack.com/archives/C01TESTCHAN/p1|step-2 v3") {
+		t.Fatalf("card in another thread is not linked: %s", b)
 	}
 	if strings.Contains(s, accessApproveAll) {
 		t.Fatal("replaced card still has buttons")
@@ -211,7 +223,7 @@ func TestAfterAndFailureLines(t *testing.T) {
 	v.AfterRef = &accessreq.Ref{ID: "66666666", Key: "step-1", Version: 1}
 	v.AfterState = accessreq.AfterWaiting
 	b, _ := json.Marshal(accessCardBlocks(v))
-	if !strings.Contains(string(b), "Runs after `step-1 v1`") {
+	if !strings.Contains(string(b), "Runs after `step-1 v1` (request `66666666`) above in this thread") {
 		t.Fatalf("after line missing: %s", b)
 	}
 	for i := range v.Items {
