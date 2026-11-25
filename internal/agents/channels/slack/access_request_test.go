@@ -214,7 +214,16 @@ func TestAfterAndFailureLines(t *testing.T) {
 	if !strings.Contains(string(b), "Runs after `step-1 v1`") {
 		t.Fatalf("after line missing: %s", b)
 	}
-	v.Items[3].Status, v.Items[3].Error = accessreq.ItemError, "422 bad field"
+	for i := range v.Items {
+		switch {
+		case i < 3:
+			v.Items[i].Status = accessreq.ItemOK
+		case i == 3:
+			v.Items[i].Status, v.Items[i].Error = accessreq.ItemError, "422 bad field"
+		default:
+			v.Items[i].Status = accessreq.ItemSkipped
+		}
+	}
 	v.Counts = map[string]int{accessreq.ItemOK: 3, accessreq.ItemError: 1, accessreq.ItemSkipped: 6}
 	v.Status, v.Pending = accessreq.StatusDone, 0
 	b, _ = json.Marshal(accessCardBlocks(v))
