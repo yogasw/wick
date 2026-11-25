@@ -3,7 +3,10 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"sync"
+	"time"
 
+	"github.com/rs/zerolog/log"
 	slackgo "github.com/slack-go/slack"
 )
 
@@ -186,12 +189,80 @@ func rawMap(cb slackgo.InteractionCallback) map[string]any {
 	return m
 }
 
+// SetWorkflowWants wires the check "does an enabled workflow listen to
+// this event" (nil = unknown, treated as no).
+func (s *Channel) SetWorkflowWants(fn func(event string) bool) {
+	s.cfgMu.Lock()
+	s.workflowWants = fn
+	s.cfgMu.Unlock()
+}
+
+func (s *Channel) workflowWanted(event string) bool {
+	s.cfgMu.Lock()
+	fn := s.workflowWants
+	s.cfgMu.Unlock()
+	return fn != nil && fn(event)
+}
+
+// reactedMessage is what a reaction workflow gets to know about the
+// message that was reacted to.
+type reactedMessage struct {
+	text, thread, botID string
+	at                  time.Time
+}
+
+// reactedCache keeps a fetched message for a while, shared by every bot
+// instance: several reactions on one message (or several bots seeing the
+// same reaction) cost one Slack call.
+var reactedCache sync.Map // channel/ts -> reactedMessage
+
+const reactedCacheTTL = 10 * time.Minute
+
+// reactedMessageOf reads the reacted message (text, its thread, the bot
+// that wrote it) with one conversations.replies call: Slack accepts a
+// reply's ts there as well as a thread root's or a plain message's.
+func (s *Channel) reactedMessageOf(ctx context.Context, channelID, ts string) (reactedMessage, bool) {
+	key := channelID + "/" + ts
+	if v, ok := reactedCache.Load(key); ok {
+		if m := v.(reactedMessage); time.Since(m.at) < reactedCacheTTL {
+			return m, true
+		}
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return reactedMessage{}, false
+	}
+	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slackgo.GetConversationRepliesParameters{
+		ChannelID: channelID, Timestamp: ts, Oldest: ts, Latest: ts, Inclusive: true, Limit: 2,
+	})
+	if err != nil {
+		log.Debug().Str("channel", "slack").Err(err).Str("slack_channel", channelID).Str("ts", ts).
+			Msg("reaction workflow: reacted message not readable; payload goes without its text")
+		return reactedMessage{}, false
+	}
+	for _, m := range msgs {
+		if m.Timestamp != ts {
+			continue
+		}
+		out := reactedMessage{text: m.Text, thread: m.ThreadTimestamp, botID: m.BotID, at: time.Now()}
+		if out.thread == "" {
+			out.thread = ts
+		}
+		reactedCache.Store(key, out)
+		return out, true
+	}
+	return reactedMessage{}, false
+}
+
 // emitReactionWorkflow fires slack.reaction / slack.reaction_removed.
 // Slack pushes these, so a workflow reacting to an emoji needs no
-// polling. Nothing else is fetched per reaction: the payload is what the
-// event carries. The bot's own reactions are skipped (loop guard), and
-// the event key names the reactor and emoji so different reactions on
-// one message are not collapsed into one.
+// polling. Only when an enabled workflow listens to the event is the
+// reacted message read (once, cached) so its text and thread ride along
+// and can be filtered on. The bot's own reactions are skipped (loop
+// guard), and the event key names the reactor and emoji so different
+// reactions on one message are not collapsed into one.
 func (s *Channel) emitReactionWorkflow(ctx context.Context, event, user, itemUser, reaction, channelID, ts string, added bool) {
 	if user == "" || reaction == "" || channelID == "" || ts == "" || s.isBotUser(user) {
 		return
@@ -200,7 +271,7 @@ func (s *Channel) emitReactionWorkflow(ctx context.Context, event, user, itemUse
 	if !added {
 		key += "/removed"
 	}
-	s.emitWorkflow(ctx, event, map[string]any{
+	payload := map[string]any{
 		"user":       user,
 		"reaction":   reaction,
 		"channel_id": channelID,
@@ -209,5 +280,17 @@ func (s *Channel) emitReactionWorkflow(ctx context.Context, event, user, itemUse
 		"added":      added,
 		"is_dm":      len(channelID) > 0 && channelID[0] == 'D',
 		"event_key":  key,
-	})
+		"text":       "",
+		"thread":     "",
+		"is_reply":   false,
+	}
+	if s.workflowWanted(event) {
+		if m, ok := s.reactedMessageOf(ctx, channelID, ts); ok {
+			payload["text"] = m.text
+			payload["thread"] = m.thread
+			payload["is_reply"] = m.thread != ts
+			payload["item_bot_id"] = m.botID
+		}
+	}
+	s.emitWorkflow(ctx, event, payload)
 }

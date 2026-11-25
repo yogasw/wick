@@ -16,6 +16,7 @@ type SlackReactionMatch struct {
 	AllowedChannels string `wick:"picker=slack.channels;visible_when=mode:whitelist;key=channel_id;desc=Only in these channels"`
 	AllowedUsers    string `wick:"picker=slack.users;visible_when=mode:whitelist;key=user;desc=Only when one of these people reacts"`
 	ItemUsers       string `wick:"picker=slack.users;visible_when=mode:whitelist;key=item_user;desc=Only on messages written by these users or bots"`
+	TextContains    string `wick:"visible_when=mode:whitelist;key=text_contains;desc=Only when the reacted message contains this text (case-insensitive)"`
 }
 
 // ReactionEvent is the payload of a reaction added to (or removed from)
@@ -56,6 +57,10 @@ func reactionDescriptor(event, name, desc string) integration.EventDescriptor {
 				"payload.item_user":   "Who wrote the reacted message (a user or a bot user id). Filter on it to react only to a bot's answers.",
 				"payload.added":       "true on slack.reaction, false on slack.reaction_removed.",
 				"payload.is_dm":       "True when channel_id starts with D.",
+				"payload.text":        "Text of the reacted message (read once from Slack, cached).",
+				"payload.thread":      "Thread root ts of the reacted message (== payload.ts for a top-level post). Pass to reply_thread to answer in that thread.",
+				"payload.is_reply":    "True when the reacted message is a reply inside a thread.",
+				"payload.item_bot_id": "Bot id (B…) when a bot wrote the reacted message.",
 				"payload.bot_user_id": "Slack user ID of the wick bot that RECEIVED this event.",
 			},
 			Quirks: []string{
@@ -63,6 +68,7 @@ func reactionDescriptor(event, name, desc string) integration.EventDescriptor {
 				"Reactions by the receiving bot itself are skipped, so a workflow that adds a reaction cannot loop.",
 				"The Slack app needs the reaction_added / reaction_removed events and reactions:read (the shipped manifest has them).",
 				"Filter activation needs BOTH MatchEnabled:true AND a non-empty Match map.",
+				"text / thread / is_reply are read from Slack only while an enabled workflow listens to this event, once per message (cached 10 minutes); if Slack refuses the read they are empty.",
 			},
 			PairWith: []string{
 				"channel:slack.reply_thread",

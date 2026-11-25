@@ -799,6 +799,20 @@ func webhookFullPath(wfID, slug string) string {
 	return "/" + wfID + "/" + clean
 }
 
+// Subscribed reports whether an enabled workflow has a trigger on this
+// exact channel event (wildcard triggers do not count). A channel uses it
+// to skip extra lookups an event needs only when someone listens.
+func (r *Router) Subscribed(channel, event string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, ref := range r.index["channel/"+channel+"/"+event] {
+		if w, ok := r.defs[ref.ID]; ok && w.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 // reindexLocked rebuilds the index entries for one workflow. Caller
 // must hold r.mu.
 func (r *Router) reindexLocked(w workflow.Workflow) {

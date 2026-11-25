@@ -507,6 +507,9 @@ type Channel struct {
 	// commands, view submissions, …). nil when no workflow router is
 	// attached; channel-only deployments leave it nil with no overhead.
 	workflowEmit WorkflowEventSink
+	// workflowWants says whether an enabled workflow listens to an event
+	// (SetWorkflowWants); nil = no.
+	workflowWants func(event string) bool
 
 	// halted is set by Stop (the instance is being retired: switched
 	// off, removed) and cleared only by Start; Reload and the watchdog
@@ -2036,11 +2039,11 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			s.handleAgentSessionStopped(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
 			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, true)
-			s.emitReactionWorkflow(ctx, "reaction", ev.User, ev.ItemUser, ev.Reaction, ev.Item.Channel, ev.Item.Timestamp, true)
+			go s.emitReactionWorkflow(context.WithoutCancel(ctx), "reaction", ev.User, ev.ItemUser, ev.Reaction, ev.Item.Channel, ev.Item.Timestamp, true)
 			s.handleReactionAdded(ctx, ev)
 		case *slackevents.ReactionRemovedEvent:
 			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, false)
-			s.emitReactionWorkflow(ctx, "reaction_removed", ev.User, ev.ItemUser, ev.Reaction, ev.Item.Channel, ev.Item.Timestamp, false)
+			go s.emitReactionWorkflow(context.WithoutCancel(ctx), "reaction_removed", ev.User, ev.ItemUser, ev.Reaction, ev.Item.Channel, ev.Item.Timestamp, false)
 			s.handleReactionRemoved(ev)
 		}
 	}

@@ -85,6 +85,7 @@ func AttachSlackWorkflowSinkKeyed(ch *agentslack.Channel, router *trigger.Router
 	if ch == nil || router == nil {
 		return
 	}
+	ch.SetWorkflowWants(func(event string) bool { return router.Subscribed("slack", event) })
 	ch.SetWorkflowEventSink(func(ctx context.Context, event string, payload map[string]any) {
 		if payload == nil {
 			payload = map[string]any{}
