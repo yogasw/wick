@@ -164,3 +164,42 @@ func collectSensitiveValues(mod connector.Module, op *connector.Operation, confi
 	}
 	return out
 }
+
+// ResealForRunner turns the per-user wick_enc_ tokens in m that owner can
+// open into master (wick_cenc_) tokens, so an op that runs as another user
+// (the approver of an access request, or the owner of the rule that
+// auto-approved it) can still use the secrets the session's own user
+// stored. Without it the run decrypts with the runner's key and fails
+// with "message authentication failed". Values that are not per-user
+// tokens, or that owner cannot open, are left untouched (the run then
+// reports the decrypt error as before). m itself is never modified.
+func ResealForRunner(svc *enc.Service, m map[string]string, owner, runner string) map[string]string {
+	if svc == nil || svc.Disabled() || len(m) == 0 || owner == "" || owner == runner {
+		return m
+	}
+	var out map[string]string
+	for k, v := range m {
+		if !enc.IsToken(v) {
+			continue
+		}
+		plain, err := svc.DecryptValue(v, owner)
+		if err != nil {
+			continue
+		}
+		tok, err := svc.EncryptMaster(plain)
+		if err != nil {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(m))
+			for kk, vv := range m {
+				out[kk] = vv
+			}
+		}
+		out[k] = tok
+	}
+	if out == nil {
+		return m
+	}
+	return out
+}

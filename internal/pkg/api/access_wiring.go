@@ -402,6 +402,28 @@ func (a accessCatalog) runSession(ctx context.Context, t connectors.SessionInsta
 	if err != nil {
 		return "", "", err
 	}
+	// The session's own user stored (or passed) its secrets as per-user
+	// tokens; this run is as the approver or rule owner, whose key cannot
+	// open them. Re-seal them as master tokens first. Keys a human locked
+	// keep their value, so their seal still matches.
+	if owner := agentstool.SessionUserOf(accessreq.SessionOf(ctx)); owner != "" && owner != u.ID {
+		unlocked := make(map[string]string, len(t.Config))
+		for k, v := range t.Config {
+			if _, locked := t.LockSeals[k]; !locked {
+				unlocked[k] = v
+			}
+		}
+		resealed := connectors.ResealForRunner(a.svc.Enc(), unlocked, owner, u.ID)
+		cfg := make(map[string]string, len(t.Config))
+		for k, v := range t.Config {
+			cfg[k] = v
+		}
+		for k, v := range resealed {
+			cfg[k] = v
+		}
+		t.Config = cfg
+		override = connectors.ResealForRunner(a.svc.Enc(), override, owner, u.ID)
+	}
 	res, err := a.svc.Execute(connectors.WithoutAgentScope(ctx), connectors.ExecuteParams{
 		ConnectorID: connectorID, OperationKey: opKey, Input: mcphandlers.StringifyArgs(params), RawInput: params,
 		Source: entity.ConnectorRunSourceMCP, UserID: u.ID, IsAdmin: u.IsAdmin(),
