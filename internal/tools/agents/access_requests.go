@@ -218,7 +218,17 @@ func accessViewDTO(v accessreq.View) map[string]any {
 		"pending": v.Pending, "items": items, "viewer_can_decide": v.ViewerCanDecide,
 		"viewer_reason": v.ViewerReason, "viewer_reason_code": v.ViewerReasonCode,
 		"created_at": v.CreatedAt, "asked_by": askedByName(v.AskedBy),
+		"key": v.Key, "version": v.Version, "after": refJSON(v.AfterRef), "after_state": v.AfterState,
+		"replaced_by": refJSON(v.Replacement),
 	}
+}
+
+// refJSON is another request a view points to, for the web card.
+func refJSON(r *accessreq.Ref) map[string]any {
+	if r == nil {
+		return nil
+	}
+	return map[string]any{"id": r.ID, "name": r.Name(), "url": r.URL}
 }
 
 func accessRequestViewJSON(c *tool.Ctx) {

@@ -12,7 +12,7 @@ export type AccessItemView = {
   op_name: string;
   kind: "read" | "write" | "send" | "delete" | string;
   target: string;
-  status: "pending" | "running" | "ok" | "error" | "denied" | string;
+  status: "pending" | "queued" | "running" | "ok" | "error" | "skipped" | "denied" | string;
   mode: string;
   decided_by: string;
   note: string;
@@ -36,7 +36,15 @@ export type AccessRequestView = {
   /** Whose message the agent was answering when it asked ("" = nobody: a schedule, another agent). */
   asked_by?: string;
   reason: string;
-  status: "pending" | "done" | "cancelled" | string;
+  status: "pending" | "done" | "cancelled" | "superseded" | string;
+  /** The plan step this request belongs to, and its version (v2 replaced v1). */
+  key?: string;
+  version?: number;
+  /** The request this one runs after, and where it stands (waiting / ok / failed). */
+  after?: AccessRef | null;
+  after_state?: string;
+  /** The newer version that replaced this one. */
+  replaced_by?: AccessRef | null;
   pending: number;
   url: string;
   items: AccessItemView[];
@@ -44,6 +52,8 @@ export type AccessRequestView = {
   viewer_reason: string;
   viewer_reason_code: string;
 };
+
+export type AccessRef = { id: string; name: string; url: string };
 
 export type AccessCard = {
   id: string;
@@ -70,6 +80,8 @@ export function accessStatusIcon(status: string): string {
     case "error": return "❌";
     case "denied": return "⛔";
     case "running": return "🔄";
+    case "queued": return "⏸️";
+    case "skipped": return "⏭️";
   }
   return "⏳";
 }
@@ -93,6 +105,8 @@ export function itemLine(it: AccessItemView): string {
     case "ok": return `Approved ${mode} by ${it.decided_by} · OK`;
     case "error": return `Approved ${mode} by ${it.decided_by} · error: ${it.error}`;
     case "denied": return `Denied by ${it.decided_by}${it.note ? `: ${it.note}` : ""}`;
+    case "queued": return `Approved ${mode} by ${it.decided_by} · waiting for the request it runs after`;
+    case "skipped": return `Not run: ${it.error.replace(/^skipped: /, "")}`;
   }
   return it.status;
 }
@@ -107,4 +121,22 @@ export function kindHint(kind: string): string {
     a full panel (not linked, not an approver, no own access). */
 export function noAccess(v: AccessRequestView): boolean {
   return !v.viewer_can_decide && !!v.viewer_reason && v.viewer_reason_code !== "already_decided" && v.viewer_reason_code !== "inactive";
+}
+
+/** headerSuffix is " · deploy-step-2 v2 · replaced" for the card's title line. */
+export function headerSuffix(v: AccessRequestView | null | undefined): string {
+  if (!v) return "";
+  let out = "";
+  if (v.key) out += ` · ${v.key} v${v.version ?? 1}`;
+  else if ((v.version ?? 1) > 1) out += ` · v${v.version}`;
+  if (v.status === "cancelled") out += " · cancelled";
+  if (v.status === "superseded") out += " · replaced";
+  return out;
+}
+
+/** afterText says which request this one waits for ("" when none). */
+export function afterText(v: AccessRequestView | null | undefined): string {
+  if (!v?.after) return "";
+  const state = v.after_state === "waiting" ? "waiting for it to finish OK" : v.after_state === "ok" ? "finished OK" : v.after_state === "failed" ? "did not finish OK, so this does not run" : "";
+  return `Runs after ${v.after.name}${state ? ` · ${state}` : ""}`;
 }

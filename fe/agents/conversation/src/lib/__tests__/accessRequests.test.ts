@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accessCardOf, itemLine, noAccess, kindHint, type AccessItemView, type AccessRequestView } from "../accessRequests.js";
+import { accessCardOf, afterText, headerSuffix, itemLine, noAccess, kindHint, type AccessItemView, type AccessRequestView } from "../accessRequests.js";
 
 const item = (over: Partial<AccessItemView> = {}): AccessItemView => ({
   id: "i1", n: 1, connector_key: "notes", connector_label: "Notes", op_key: "update_page", op_name: "", kind: "write",
@@ -54,5 +54,22 @@ describe("kindHint", () => {
     expect(kindHint("send")).toBe("");
     expect(kindHint("delete")).toContain("Once");
     expect(kindHint("write")).toBe("");
+  });
+});
+
+describe("plan steps", () => {
+  it("names the key and version, and a replaced card", () => {
+    expect(headerSuffix(view({ key: "step-2", version: 2 }))).toBe(" · step-2 v2");
+    expect(headerSuffix(view({ key: "step-2", version: 1, status: "superseded" }))).toBe(" · step-2 v1 · replaced");
+    expect(headerSuffix(view())).toBe("");
+    expect(accessCardOf("x", { view: JSON.stringify(view({ status: "superseded" })) }).open).toBe(false);
+  });
+  it("says which request it runs after", () => {
+    expect(afterText(view())).toBe("");
+    expect(afterText(view({ after: { id: "r0", name: "step-1 v1", url: "" }, after_state: "waiting" }))).toBe("Runs after step-1 v1 · waiting for it to finish OK");
+  });
+  it("labels queued and skipped actions", () => {
+    expect(itemLine(item({ status: "queued", mode: "once", decided_by: "Owner" }))).toContain("waiting for the request it runs after");
+    expect(itemLine(item({ status: "skipped", error: "skipped: action 2 failed" }))).toBe("Not run: action 2 failed");
   });
 });

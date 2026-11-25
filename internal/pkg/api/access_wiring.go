@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -250,11 +251,28 @@ func (p accessPublisher) Publish(ctx context.Context, v accessreq.View) (map[str
 // wireAccessRequests builds the access-request service and connects it
 // to the connector hook, the MCP tool, the Slack cards, the web page and
 // the session wake-up.
+// accessTurnNote holds the access-request service for the pool's turn
+// note (set once wired; empty before).
+var accessTurnNote atomic.Pointer[accessreq.Service]
+
+// accessRequestsNote is the session's [access requests] turn line, ""
+// before access requests are wired or when there is nothing to say.
+func accessRequestsNote(sessionID string) string {
+	ar := accessTurnNote.Load()
+	if ar == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return ar.TurnNote(ctx, sessionID)
+}
+
 func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Service, teamSvc *team.Service,
 	reg *agentchannels.Registry, deliver func(ctx context.Context, sessionID, text string) error, _ func() string,
 	layout agentconfig.Layout) *accessreq.Service {
 	ar := accessreq.New(accessreq.NewStore(db), accessCatalog{svc: svc, users: users, layout: layout}, accessDirectory{users: users, team: teamSvc, ids: channelidentity.NewStore(db), layout: layout})
 	accessRules = ar
+	accessTurnNote.Store(ar)
 	ar.AddPublisher(accessPublisher{reg: reg})
 	ar.AddPublisher(agentstool.AccessWebPublisher{})
 	ar.AddPublisher(agentstool.AccessFilePublisher{Layout: layout, Project: auditPlaces{layout: layout}.SessionProject})
@@ -393,4 +411,15 @@ func (a accessCatalog) runSession(ctx context.Context, t connectors.SessionInsta
 		return runID, "", errors.New(body)
 	}
 	return res.RunID, res.ResponseJSON, nil
+}
+
+// joinNotes joins the non-empty turn-note blocks with a blank line.
+func joinNotes(notes ...string) string {
+	var out []string
+	for _, n := range notes {
+		if strings.TrimSpace(n) != "" {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }

@@ -20,7 +20,10 @@ import (
 
 // Limits that keep a card readable and an agent from flooding approvers.
 const (
-	MaxActions          = 10
+	// MaxActions is high enough for one plan step on one card: actions
+	// run one after another and stop at the first failure, so a long
+	// card is no riskier than several short ones.
+	MaxActions          = 50
 	MaxOpenPerSession   = 5
 	maxResultChars      = 1500
 	maxParamChars       = 300
@@ -111,8 +114,22 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	if len(in.Actions) > MaxActions {
 		return View{}, fmt.Errorf("at most %d actions per request", MaxActions)
 	}
-	if n, err := s.store.countOpen(ctx, in.SessionID); err == nil && n >= MaxOpenPerSession {
-		return View{}, fmt.Errorf("this session already has %d open access requests; wait for a decision or cancel one", n)
+	pl, err := s.planFor(ctx, in)
+	if err != nil {
+		return View{}, err
+	}
+	if pl.supersedes == nil && strings.TrimSpace(in.After) == "" && pl.after == "" && !in.Force {
+		if sim := s.similarPending(ctx, in.SessionID, in.Actions); sim != nil {
+			return View{}, sim
+		}
+	}
+	if n, err := s.store.countOpen(ctx, in.SessionID); err == nil {
+		if pl.supersedes != nil {
+			n-- // replaced, so no longer open
+		}
+		if n >= MaxOpenPerSession {
+			return View{}, fmt.Errorf("this session already has %d open access requests; wait for a decision, cancel one, or replace one (same key, or supersedes)", n)
+		}
 	}
 	now := s.now()
 	req := entity.AccessRequest{
@@ -123,6 +140,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		ProjectID:       s.sessionProject(in.SessionID),
 		Reason:          strings.TrimSpace(in.Reason),
 		Status:          StatusPending,
+		Key:             pl.key,
+		Version:         pl.version,
+		After:           pl.after,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -199,6 +219,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	if err := s.store.createRequest(ctx, &req, items); err != nil {
 		return View{}, fmt.Errorf("save request: %w", err)
 	}
+	if pl.supersedes != nil {
+		if ok, err := s.store.supersede(ctx, pl.supersedes.ID, req.ID); err != nil || !ok {
+			// Someone decided on it meanwhile: keep both, in order.
+			if req.After == "" {
+				req.After = pl.supersedes.ID
+				_ = s.store.setAfter(ctx, req.ID, req.After)
+			}
+			pl.supersedes = nil
+		}
+	}
 	if len(autos) > 0 {
 		var run []entity.AccessRequestItem
 		for n, a := range autos {
@@ -223,6 +253,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		s.execute(req, run, func(it entity.AccessRequestItem) string { return autoOwner[it.ID] }, "")
 	}
 	s.publish(ctx, req.ID)
+	if pl.supersedes != nil {
+		// After the new card is posted, so the old one can link to it.
+		s.publish(ctx, pl.supersedes.ID)
+		s.releaseFollowers(ctx, req.ID)
+	}
 	return s.ViewFor(ctx, req.ID, "")
 }
 
@@ -346,6 +381,18 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 	v := View{
 		ID: req.ID, SessionID: req.SessionID, AgentID: req.AgentID, AgentName: req.AgentName,
 		Reason: req.Reason, Status: req.Status, CreatedAt: req.CreatedAt, ViewerID: viewerID,
+		Key: req.Key, Version: req.Version, SupersededBy: req.SupersededBy, After: req.After,
+		Counts: map[string]int{},
+	}
+	if v.Version == 0 {
+		v.Version = 1
+	}
+	if req.After != "" {
+		v.AfterState, _ = s.afterState(ctx, req)
+		v.AfterRef = s.refOf(ctx, req.After)
+	}
+	if req.SupersededBy != "" {
+		v.Replacement = s.refOf(ctx, req.SupersededBy)
 	}
 	if s.dir != nil && req.RequesterUserID != "" {
 		if p, ok := s.dir.User(ctx, req.RequesterUserID); ok {
@@ -401,9 +448,10 @@ func (s *Service) view(ctx context.Context, req *entity.AccessRequest, items []e
 		if it.Status == ItemPending {
 			v.Pending++
 		}
-		if it.Status == ItemRunning {
+		if it.Status == ItemRunning || it.Status == ItemQueued {
 			v.Pending++
 		}
+		v.Counts[it.Status]++
 		if it.Status == ItemPending {
 			// The rule label is computed for every undecided item, also
 			// once the request ended, so no view falls back to names.
@@ -448,7 +496,7 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 		names, extra = []string{iv.ApproversText}, ""
 	}
 	switch {
-	case req.Status == StatusCancelled:
+	case req.Status == StatusCancelled || req.Status == StatusSuperseded:
 		iv.LockedCode, iv.LockedReason = ReasonInactive, "This request is no longer active."
 	case it.Status != ItemPending:
 		iv.LockedCode = ReasonDecided
@@ -489,6 +537,9 @@ func (s *Service) lockFor(ctx context.Context, req *entity.AccessRequest, it ent
 func (s *Service) viewerReason(req *entity.AccessRequest, v View, known bool, viewer Person, isRole bool) (string, string) {
 	if req.Status == StatusCancelled {
 		return "This request is no longer active.", ReasonInactive
+	}
+	if req.Status == StatusSuperseded {
+		return "A newer version replaced this request: decide that one instead.", ReasonInactive
 	}
 	if v.Pending == 0 {
 		return "Every action in this request has been decided.", ReasonDecided
@@ -657,6 +708,7 @@ func (s *Service) Cancel(ctx context.Context, id, sessionID string) error {
 		return errors.New("this request is no longer pending")
 	}
 	s.publish(ctx, id)
+	s.releaseFollowers(ctx, id)
 	return nil
 }
 
@@ -673,13 +725,33 @@ func (s *Service) execute(req entity.AccessRequest, items []entity.AccessRequest
 		defer mu.Unlock()
 		ctx, cancel := context.WithTimeout(WithSession(context.Background(), req.SessionID), runTimeout)
 		defer cancel()
+		// A request that runs after another waits for it: approved
+		// actions are queued until it finished OK, skipped when it did
+		// not.
+		if cur, _, err := s.store.request(ctx, req.ID); err == nil {
+			switch state, prev := s.afterState(ctx, cur); state {
+			case AfterWaiting:
+				ids := make([]string, 0, len(items))
+				for _, it := range items {
+					ids = append(ids, it.ID)
+				}
+				if err := s.store.queueItems(ctx, ids); err != nil {
+					log.Warn().Err(err).Str("request", req.ID).Msg("accessreq: queue items failed")
+				}
+				s.publish(ctx, req.ID)
+				return
+			case AfterFailed:
+				s.skipAll(ctx, cur, prev)
+				return
+			}
+		}
 		for _, it := range items {
 			// Re-read the request: an earlier action may have been denied,
 			// failed, or run in another click since this one was approved.
 			if _, cur, err := s.store.request(ctx, req.ID); err == nil {
 				if prev, bad := earlierUnfinished(cur, it); bad {
 					msg := fmt.Sprintf("skipped: action %d (%s) did not succeed (%s), so this one was not run", prev.Idx+1, prev.OpKey, prev.Status)
-					if ferr := s.store.finishItem(ctx, it.ID, ItemError, "", "", msg); ferr != nil {
+					if ferr := s.store.finishItem(ctx, it.ID, ItemSkipped, "", "", msg); ferr != nil {
 						log.Warn().Err(ferr).Str("item", it.ID).Msg("accessreq: record skip failed")
 					}
 					continue
@@ -761,12 +833,16 @@ func (s *Service) leaveGrant(ctx context.Context, req entity.AccessRequest, it e
 // afterChange redraws the card, closes a fully decided request and, when
 // wake is set, tells the session what happened.
 func (s *Service) afterChange(ctx context.Context, id string, wake bool) {
+	closed := false
 	if n, err := s.store.pendingCount(ctx, id); err == nil && n == 0 {
-		_, _ = s.store.setRequestStatus(ctx, id, StatusPending, StatusDone)
+		closed, _ = s.store.setRequestStatus(ctx, id, StatusPending, StatusDone)
 	}
 	s.publish(ctx, id)
 	if wake {
 		s.wakeSession(ctx, id)
+	}
+	if closed {
+		s.releaseFollowers(ctx, id)
 	}
 }
 
@@ -790,8 +866,23 @@ func (s *Service) wakeSession(ctx context.Context, id string) {
 // of every decided action, written by wick from the stored results.
 func WakeText(v View) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[access request %s] Update on the actions you asked for:\n", short(v.ID))
+	name := short(v.ID)
+	if v.Key != "" {
+		name = fmt.Sprintf("%s · key %q v%d", short(v.ID), v.Key, v.Version)
+	}
+	fmt.Fprintf(&b, "[access request %s] Update on the actions you asked for:\n", name)
+	// A long card: one line per action that did not just run OK, and a
+	// short result each, so the wake stays readable.
+	long := len(v.Items) > 10
+	resultLimit := wakeResultCharLimit
+	if long {
+		resultLimit = 200
+		fmt.Fprintf(&b, "%d action(s): %s\n", len(v.Items), countsLine(v.Counts))
+	}
 	for _, it := range v.Items {
+		if long && it.Status == ItemOK && it.Result == "" {
+			continue
+		}
 		fmt.Fprintf(&b, "%d. %s.%s", it.Idx+1, it.ConnectorKey, it.OpKey)
 		if it.Target != "" {
 			fmt.Fprintf(&b, " (%s)", it.Target)
@@ -800,8 +891,16 @@ func WakeText(v View) string {
 		case ItemOK:
 			fmt.Fprintf(&b, " — approved %s, ran OK", modeLabel(it.Mode))
 			if it.Result != "" {
-				fmt.Fprintf(&b, "\n   result: %s", truncate(it.Result, wakeResultCharLimit))
+				fmt.Fprintf(&b, "\n   result: %s", truncate(it.Result, resultLimit))
 			}
+		case ItemQueued:
+			after := "the request it runs after"
+			if v.AfterRef != nil {
+				after = v.AfterRef.Name()
+			}
+			fmt.Fprintf(&b, " — approved %s, waiting for %s to finish OK", modeLabel(it.Mode), after)
+		case ItemSkipped:
+			fmt.Fprintf(&b, " — not run: %s", it.Error)
 		case ItemError:
 			fmt.Fprintf(&b, " — approved %s, FAILED: %s", modeLabel(it.Mode), it.Error)
 		case ItemDenied:
@@ -819,6 +918,8 @@ func WakeText(v View) string {
 	switch {
 	case v.Status == StatusCancelled:
 		b.WriteString("The request was cancelled.")
+	case v.Status == StatusSuperseded:
+		b.WriteString("A newer version replaced this request.")
 	case v.Pending > 0:
 		fmt.Fprintf(&b, "%d action(s) still pending; you will be told when they are decided. Do not re-run approved actions yourself.", v.Pending)
 	default:
@@ -1376,6 +1477,28 @@ func decidedText(it ItemView) string {
 		return fmt.Sprintf("Approved %s by %s%s. Result: OK.", modeLabel(it.Mode), it.DecidedBy, at)
 	case ItemError:
 		return fmt.Sprintf("Approved %s by %s%s. Result: error.", modeLabel(it.Mode), it.DecidedBy, at)
+	case ItemQueued:
+		return fmt.Sprintf("Approved %s by %s%s, waiting for the request it runs after.", modeLabel(it.Mode), it.DecidedBy, at)
+	case ItemSkipped:
+		return "Not run: " + it.Error
 	}
 	return "Already decided."
 }
+
+// countsLine is "3 ok · 1 failed · 2 waiting" in a fixed order.
+func countsLine(c map[string]int) string {
+	order := []struct{ st, label string }{
+		{ItemOK, "ok"}, {ItemError, "failed"}, {ItemSkipped, "skipped"}, {ItemDenied, "denied"},
+		{ItemRunning, "running"}, {ItemQueued, "queued"}, {ItemPending, "waiting"},
+	}
+	var parts []string
+	for _, o := range order {
+		if n := c[o.st]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, o.label))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// CountsLine is countsLine for channels.
+func CountsLine(c map[string]int) string { return countsLine(c) }

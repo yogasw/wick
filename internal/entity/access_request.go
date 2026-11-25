@@ -31,11 +31,24 @@ type AccessRequest struct {
 	// never as a fact.
 	Reason string `gorm:"type:text"`
 	// Status: pending until every item is decided, then done; cancelled
-	// when the agent withdrew it or the session went away.
+	// when the agent withdrew it or the session went away; superseded
+	// when a newer version replaced it before anything ran.
 	Status string `gorm:"type:varchar(16);not null;index:idx_access_req_status"`
 	// Origin is where the card was posted, as JSON (channel, chat, thread,
 	// instance, message ts). Empty for a request with no chat surface.
-	Origin    string    `gorm:"type:text"`
+	Origin string `gorm:"type:text"`
+	// Key is the agent's stable name for one step of its plan (e.g.
+	// "deploy-step-2"). A new request with the same key in the same
+	// session replaces a still untouched one (Version + 1) or follows one
+	// that already ran (After).
+	Key     string `gorm:"column:req_key;type:text;not null;default:'';index:idx_access_req_key"`
+	Version int    `gorm:"not null;default:1"`
+	// SupersededBy is the request that replaced this one (status
+	// superseded).
+	SupersededBy string `gorm:"type:varchar(36);not null;default:''"`
+	// After is a request that must finish OK before this one runs.
+	// Approving early is fine: the approved actions wait (queued).
+	After     string    `gorm:"column:after_id;type:varchar(36);not null;default:'';index:idx_access_req_after"`
 	CreatedAt time.Time `gorm:"not null"`
 	UpdatedAt time.Time `gorm:"not null"`
 }
@@ -64,7 +77,8 @@ type AccessRequestItem struct {
 	// Kind is read, write, send or delete. send and delete cannot be
 	// approved "always"; delete only "once".
 	Kind string `gorm:"type:varchar(16);not null"`
-	// Status: pending, running, ok, error, denied.
+	// Status: pending, queued (approved, waiting for the request it runs
+	// after), running, ok, error, skipped, denied.
 	Status string `gorm:"type:varchar(16);not null"`
 	// Mode the approver picked: once, hour, session, always ("" while
 	// pending or when denied).

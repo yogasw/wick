@@ -1161,7 +1161,11 @@ func NewServer() *Server {
 		OnSessionMeta: syncSessionMeta,
 		// Sessions linked to this one that are working right now, in front
 		// of each user turn (sessionlink).
-		TurnNote: func(sessionID string) string { return sessionlink.Note(agentsLayout, sessionID, time.Now()) },
+		// The session's own access requests too, so the agent replaces a
+		// step instead of filing a second card after a compaction.
+		TurnNote: func(sessionID string) string {
+			return joinNotes(sessionlink.Note(agentsLayout, sessionID, time.Now()), accessRequestsNote(sessionID))
+		},
 		// Ticket auto-join, then auto-create: both can key off the opening
 		// text, which is only knowable here — not when the session was
 		// created. A project with no rules costs one meta read.
@@ -3838,12 +3842,14 @@ func NewServer() *Server {
 			"pid": os.Getpid(), "app_version": snap.AppVersion, "wick_version": snap.WickVersion,
 			"commit": buildCommit, "official": snap.IsOfficial,
 			"update_available": (snap.AppUpdateKnown && snap.AppUpdate) || (snap.WickUpdateKnown && snap.WickUpdate),
-			"handing_over": upgrade.HandingOver(), "draining": upgrade.Draining(),
+			"handing_over":     upgrade.HandingOver(), "draining": upgrade.Draining(),
 		}
 		if user.IsAdmin() && adminSystem != nil {
 			state := adminSystem.ServingPayload()
 			for _, key := range []string{"swap", "auto_swap", "last_handover"} {
-				if value, ok := state[key]; ok { out[key] = value }
+				if value, ok := state[key]; ok {
+					out[key] = value
+				}
 			}
 			_, previousDraining := state["draining"]
 			out["previous_draining"] = previousDraining

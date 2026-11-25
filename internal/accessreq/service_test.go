@@ -643,7 +643,7 @@ func TestMultiActionStopsAfterFailure(t *testing.T) {
 	if len(e.cat.runs) != 1 {
 		t.Fatalf("runs = %+v, the second action must not run after the first failed", e.cat.runs)
 	}
-	if out.Items[1].Status != ItemError || !strings.Contains(out.Items[1].Error, "skipped") {
+	if out.Items[1].Status != ItemSkipped || !strings.Contains(out.Items[1].Error, "skipped") {
 		t.Fatalf("second item = %+v", out.Items[1])
 	}
 	if out.Status != StatusDone {
@@ -680,7 +680,7 @@ func TestDeniedEarlierActionSkipsLaterOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(e.cat.runs) != 0 || out.Items[1].Status != ItemError {
+	if len(e.cat.runs) != 0 || out.Items[1].Status != ItemSkipped {
 		t.Fatalf("runs %+v item %+v", e.cat.runs, out.Items[1])
 	}
 }

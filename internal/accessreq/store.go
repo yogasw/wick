@@ -78,7 +78,7 @@ func (s *Store) finishItem(ctx context.Context, itemID, status, runID, result, e
 func (s *Store) pendingCount(ctx context.Context, requestID string) (int64, error) {
 	var n int64
 	err := s.db.WithContext(ctx).Model(&entity.AccessRequestItem{}).
-		Where("request_id = ? AND status IN ?", requestID, []string{ItemPending, ItemRunning}).Count(&n).Error
+		Where("request_id = ? AND status IN ?", requestID, []string{ItemPending, ItemRunning, ItemQueued}).Count(&n).Error
 	return n, err
 }
 
@@ -239,4 +239,99 @@ func (s *Store) pruneFinished(ctx context.Context, cutoff time.Time) (int64, err
 func (s *Store) projectGrants(ctx context.Context, projectID string, now time.Time) ([]entity.AccessGrant, error) {
 	var out []entity.AccessGrant
 	return out, s.db.WithContext(ctx).Where("project_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", projectID, now).Order("created_at DESC").Find(&out).Error
+}
+
+// sessionRequests lists a session's requests, newest first.
+func (s *Store) sessionRequests(ctx context.Context, sessionID string, limit int) ([]entity.AccessRequest, error) {
+	var out []entity.AccessRequest
+	q := s.db.WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at DESC, version DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	return out, q.Find(&out).Error
+}
+
+// latestByKey is the newest request of a session filed under key.
+func (s *Store) latestByKey(ctx context.Context, sessionID, key string) (*entity.AccessRequest, error) {
+	var r entity.AccessRequest
+	err := s.db.WithContext(ctx).Where("session_id = ? AND req_key = ?", sessionID, key).Order("version DESC, created_at DESC").First(&r).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// supersede marks old as replaced by newID (only while it is still
+// pending) and points the requests that ran after it at newID.
+func (s *Store) supersede(ctx context.Context, oldID, newID string) (bool, error) {
+	ok := false
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&entity.AccessRequest{}).Where("id = ? AND status = ?", oldID, StatusPending).
+			Updates(map[string]any{"status": StatusSuperseded, "superseded_by": newID, "updated_at": time.Now()})
+		if res.Error != nil {
+			return res.Error
+		}
+		ok = res.RowsAffected == 1
+		if !ok {
+			return nil
+		}
+		return tx.Model(&entity.AccessRequest{}).Where("after_id = ? AND id <> ?", oldID, newID).
+			Update("after_id", newID).Error
+	})
+	return ok, err
+}
+
+// followers are the requests that run after id.
+func (s *Store) followers(ctx context.Context, id string) ([]entity.AccessRequest, error) {
+	var out []entity.AccessRequest
+	return out, s.db.WithContext(ctx).Where("after_id = ? AND status = ?", id, StatusPending).Order("created_at").Find(&out).Error
+}
+
+// moveItems moves a request's items in one of from to status to, with an
+// error text (for skipped items).
+func (s *Store) moveItems(ctx context.Context, requestID string, from []string, to, errText string) error {
+	up := map[string]any{"status": to}
+	if errText != "" {
+		up["error"] = errText
+	}
+	return s.db.WithContext(ctx).Model(&entity.AccessRequestItem{}).
+		Where("request_id = ? AND status IN ?", requestID, from).Updates(up).Error
+}
+
+// requestByPrefix finds a session's request by full id or an id prefix
+// of at least 8 characters.
+func (s *Store) requestByPrefix(ctx context.Context, sessionID, id string) (*entity.AccessRequest, error) {
+	var out []entity.AccessRequest
+	if err := s.db.WithContext(ctx).Where("session_id = ? AND id LIKE ?", sessionID, id+"%").Limit(2).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	if len(out) != 1 {
+		return nil, ErrNotFound
+	}
+	return &out[0], nil
+}
+
+// pendingInThread lists the pending requests whose card sits in a Slack
+// thread.
+func (s *Store) pendingInThread(ctx context.Context, chatID, threadTS string) ([]entity.AccessRequest, error) {
+	var out []entity.AccessRequest
+	return out, s.db.WithContext(ctx).Where("status = ? AND origin LIKE ? AND origin LIKE ?", StatusPending,
+		`%"slack_channel":"`+chatID+`"%`, `%"slack_thread":"`+threadTS+`"%`).Find(&out).Error
+}
+
+func (s *Store) setAfter(ctx context.Context, id, after string) error {
+	return s.db.WithContext(ctx).Model(&entity.AccessRequest{}).Where("id = ?", id).Update("after_id", after).Error
+}
+
+// queueItems parks approved (running) items until the request they run
+// after finished.
+func (s *Store) queueItems(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Model(&entity.AccessRequestItem{}).
+		Where("id IN ? AND status = ?", ids, ItemRunning).Update("status", ItemQueued).Error
 }

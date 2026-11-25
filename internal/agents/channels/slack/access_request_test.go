@@ -142,3 +142,137 @@ func TestCancelledCardNamesNobody(t *testing.T) {
 		t.Fatalf("cancelled card misses the not-decided line: %s", s)
 	}
 }
+
+func longAccessView(n int) accessreq.View {
+	v := accessreq.View{ID: "33333333-4444", AgentName: "@helper", Reason: "step 2 of the plan", Status: accessreq.StatusPending,
+		Key: "step-2", Version: 2, Counts: map[string]int{}, ViewerCanDecide: true}
+	for i := 0; i < n; i++ {
+		op := "update_field"
+		if i%3 == 0 {
+			op = "update_form"
+		}
+		it := accessreq.ItemView{ID: "i" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Idx: i, ConnectorKey: "acme", OpKey: op,
+			Kind: accessreq.KindWrite, Target: "field_id=f1", Status: accessreq.ItemPending, CanDecide: true,
+			Modes: []string{"once", "hour"}, ParamsJSON: `{"field_id":"f1","value":"` + strings.Repeat("x", 80) + `"}`,
+			Approvers: []accessreq.Person{{ID: "u1", Name: "Approver A"}}}
+		v.Items = append(v.Items, it)
+		v.Counts[it.Status]++
+		v.Pending++
+	}
+	return v
+}
+
+func TestLongCardGroupsActionsAndHidesPayload(t *testing.T) {
+	v := longAccessView(40)
+	v.Origin = map[string]string{"slack_file_permalink": "https://files.example.com/F1"}
+	raw := accessCardBlocks(v)
+	if _, err := blocksFromJSON(raw); err != nil {
+		t.Fatalf("blocks: %v", err)
+	}
+	if len(raw) > 12 {
+		t.Fatalf("a 40-action card has %d blocks, want a short card", len(raw))
+	}
+	b, _ := json.Marshal(raw)
+	s := string(b)
+	for _, want := range []string{"acme.update_field", "× 26", "acme.update_form", "× 14", "step-2", "v2", "files.example.com/F1", "Approve all (40)"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("long card misses %q", want)
+		}
+	}
+	if strings.Contains(s, strings.Repeat("x", 80)) {
+		t.Error("long card shows the payload inline")
+	}
+}
+
+func TestSmallSinglePayloadStaysInline(t *testing.T) {
+	v := longAccessView(1)
+	b, _ := json.Marshal(accessCardBlocks(v))
+	if !strings.Contains(string(b), strings.Repeat("x", 80)) {
+		t.Fatal("a single small payload should stay on the card")
+	}
+}
+
+func TestReplacedCardLinksNewVersion(t *testing.T) {
+	v := longAccessView(3)
+	v.Status = accessreq.StatusSuperseded
+	v.Replacement = &accessreq.Ref{ID: "55555555", Key: "step-2", Version: 3, Origin: map[string]string{"slack_permalink": "https://x.slack.com/archives/C01TESTCHAN/p1"}}
+	b, _ := json.Marshal(accessCardBlocks(v))
+	s := string(b)
+	if !strings.Contains(s, "replaced") || !strings.Contains(s, "x.slack.com/archives/C01TESTCHAN/p1|step-2 v3") {
+		t.Fatalf("replaced card = %s", s)
+	}
+	if strings.Contains(s, accessApproveAll) {
+		t.Fatal("replaced card still has buttons")
+	}
+}
+
+func TestAfterAndFailureLines(t *testing.T) {
+	v := longAccessView(10)
+	v.AfterRef = &accessreq.Ref{ID: "66666666", Key: "step-1", Version: 1}
+	v.AfterState = accessreq.AfterWaiting
+	b, _ := json.Marshal(accessCardBlocks(v))
+	if !strings.Contains(string(b), "Runs after `step-1 v1`") {
+		t.Fatalf("after line missing: %s", b)
+	}
+	v.Items[3].Status, v.Items[3].Error = accessreq.ItemError, "422 bad field"
+	v.Counts = map[string]int{accessreq.ItemOK: 3, accessreq.ItemError: 1, accessreq.ItemSkipped: 6}
+	v.Status, v.Pending = accessreq.StatusDone, 0
+	b, _ = json.Marshal(accessCardBlocks(v))
+	s := string(b)
+	if !strings.Contains(s, "Stopped at action 4") || !strings.Contains(s, "6 action(s) after it were not run") {
+		t.Fatalf("failure summary missing: %s", s)
+	}
+}
+
+func TestBulkReviewModalOneDecision(t *testing.T) {
+	v := longAccessView(40)
+	m := reviewModal(v, "33333333-4444|C1|1.2")
+	if _, err := toModalRequest(m); err != nil {
+		t.Fatalf("modal: %v", err)
+	}
+	blocks := m["blocks"].([]map[string]any)
+	if len(blocks) >= 100 {
+		t.Fatalf("modal has %d blocks", len(blocks))
+	}
+	b, _ := json.Marshal(m)
+	s := string(b)
+	if !strings.Contains(s, accessAllBlock) || strings.Contains(s, accessItemBlockPfx) {
+		t.Fatal("a long request gets one decision, not one picker per action")
+	}
+	if !strings.Contains(s, `"value":"hour"`) || strings.Contains(s, `"value":"session"`) {
+		t.Fatal("bulk modes must be the ones every action offers")
+	}
+	ds := bulkDecisions(v, accessreq.ModeDeny, "not now")
+	if len(ds) != 40 || ds[0].Note != "not now" {
+		t.Fatalf("bulk decisions = %d", len(ds))
+	}
+}
+
+func TestPayloadFileIsWholeAndNamedByKey(t *testing.T) {
+	v := longAccessView(40)
+	if got := payloadFileName(v); got != "step-2-v2.json" {
+		t.Fatalf("name = %q", got)
+	}
+	var doc struct {
+		Actions []struct {
+			N      int            `json:"n"`
+			Params map[string]any `json:"params"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal(payloadFile(v), &doc); err != nil || len(doc.Actions) != 40 || doc.Actions[39].Params["field_id"] != "f1" {
+		t.Fatalf("payload file: %v %d", err, len(doc.Actions))
+	}
+}
+
+func TestTypedApproveMatches(t *testing.T) {
+	for _, s := range []string{"approve", "Approved ✅", "<@U01ABCDEF> approve", "ok approve", "setuju", "acc"} {
+		if !typedApproveRe.MatchString(s) {
+			t.Errorf("%q should match", s)
+		}
+	}
+	for _, s := range []string{"approve the second card only after the fix", "accessible?", "please review"} {
+		if typedApproveRe.MatchString(s) {
+			t.Errorf("%q should not match", s)
+		}
+	}
+}

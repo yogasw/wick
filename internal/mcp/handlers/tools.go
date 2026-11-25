@@ -251,7 +251,9 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"  return t.messages.filter(m => m.user === input.user).map(m => m.text);\n" +
 				"Return a small summary, not raw data (results over 20 KB are cut). " +
 				"Pass exactly one of code or script_path. Prefer script_path for a script reused across runs or a watch code step: a file relative to this session's project folder, read fresh every run; vary it through `input`. " +
-				"Result: {ok, result, error, logs, calls:[{tool_id, label, ok, ms, error}], duration_ms}; a failed script is isError with the calls already made listed.",
+				"Result: {ok, result, error, logs, calls:[{tool_id, label, ok, ms, error}], duration_ms}; a failed script is isError with the calls already made listed.\n\n" +
+				"WRITES THAT NEED APPROVAL: pass request_access {reason, key?, after?} to run the script as a dry run: reads run as usual, every write (destructive op) is NOT run but recorded and returns {recorded:true}; " +
+				"the recorded writes become ONE wick_request_access card (in call order, max 50) and the result carries access_request. Use it when a script's writes are outside your access; a script that needs a write's real answer to continue cannot be recorded.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -270,6 +272,15 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"input": map[string]any{
 						"description": "Optional JSON value exposed to the script as `input` (ids, a previous snapshot, …).",
+					},
+					"request_access": map[string]any{
+						"type":        "object",
+						"description": "Dry run for approval: {reason (required, for the approver), key (plan step name), after (id or key of the request it runs after)}. Writes are recorded instead of run and filed as one access card.",
+						"properties": map[string]any{
+							"reason": map[string]any{"type": "string"},
+							"key":    map[string]any{"type": "string"},
+							"after":  map[string]any{"type": "string"},
+						},
 					},
 					"timeout_ms": map[string]any{
 						"type":        "integer",

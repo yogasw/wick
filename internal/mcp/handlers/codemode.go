@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/accessreq"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -51,13 +52,34 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		return
 	}
 
+	rr, err := recordReqOf(args)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), "")
+		return
+	}
+	if rr != nil && (sessionID == "" || !SessionTrusted(r.Context(), sessionID)) {
+		rsp.ToolError(w, req.ID, "request_access is only available from an agent session", "")
+		return
+	}
+	rec := &writeRecorder{}
 	host := codemode.Host{
 		Runners: CodeModeRunners,
 		Install: CodeModeInstall,
 		Check: func(ctx context.Context, toolID string) error {
-			return checkToolAccess(ctx, svc, layout, toolID, sessionID, user, tagIDs)
+			err := checkToolAccess(ctx, svc, layout, toolID, sessionID, user, tagIDs)
+			if err != nil && rr != nil && err.Error() == "not allowed for this agent" && toolIsWrite(ctx, svc, layout, sessionID, toolID) {
+				return nil // recorded, not run: the card asks for it
+			}
+			return err
 		},
 		Exec: func(ctx context.Context, toolID string, params map[string]any) (string, error) {
+			if rr != nil && toolIsWrite(ctx, svc, layout, sessionID, toolID) {
+				connectorID, opKey, accountID, perr := ParseToolIDFull(toolID)
+				if perr != nil {
+					return "", perr
+				}
+				return recordStub(rec.add(accessreq.ActionInput{ConnectorID: connectorID, OpKey: opKey, AccountID: accountID, Params: params})), nil
+			}
 			return executeOneFrom(ctx, r, svc, layout, toolID, params, sessionID, user, tagIDs, entity.ConnectorRunSourceCodeMode)
 		},
 		Describe: func(toolID string) (string, bool) { return describeTool(r.Context(), svc, toolID) },
@@ -73,7 +95,20 @@ func WickRunCode(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 	// The audit above keeps every call; the model gets them folded.
 	shown := *res
 	shown.Calls = codemode.CompactCalls(res.Calls)
-	out, err := json.Marshal(shown)
+	var out []byte
+	if rr != nil && res.OK {
+		filed, ferr := fileRecorded(r.Context(), sessionID, rr, rec.actions())
+		if ferr != nil {
+			rsp.ToolError(w, req.ID, "the dry run finished but no card was filed: "+ferr.Error(), "")
+			return
+		}
+		out, err = json.Marshal(struct {
+			codemode.Result
+			AccessRequest map[string]any `json:"access_request"`
+		}{shown, filed})
+	} else {
+		out, err = json.Marshal(shown)
+	}
 	if err != nil {
 		rsp.ToolError(w, req.ID, "failed to encode result: "+err.Error(), "")
 		return

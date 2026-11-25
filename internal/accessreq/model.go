@@ -29,6 +29,9 @@ const (
 	StatusPending   = "pending"
 	StatusDone      = "done"
 	StatusCancelled = "cancelled"
+	// StatusSuperseded: a newer version (same key, or supersedes) replaced
+	// it before anything ran.
+	StatusSuperseded = "superseded"
 )
 
 // Item statuses.
@@ -38,6 +41,11 @@ const (
 	ItemOK      = "ok"
 	ItemError   = "error"
 	ItemDenied  = "denied"
+	// ItemQueued: approved, waiting for the request this one runs after.
+	ItemQueued = "queued"
+	// ItemSkipped: approved (or still waiting) but never run, because an
+	// earlier action or the request it runs after did not succeed.
+	ItemSkipped = "skipped"
 )
 
 // Modes an approver picks per action. ModeDeny is a decision, not a
@@ -75,6 +83,7 @@ const (
 	ReasonInactive       = "inactive"
 	ReasonModeNotAllowed = "mode_not_allowed"
 	ReasonEarlierPending = "earlier_pending"
+	ReasonSimilar        = "similar_pending"
 )
 
 // ClassifyOp names the kind of an operation from its key and its own
@@ -144,6 +153,17 @@ type CreateInput struct {
 	AgentID   string
 	Reason    string
 	Actions   []ActionInput
+	// Key names one step of the agent's plan. Filing the same key again
+	// replaces the earlier request while nothing of it ran, else follows
+	// it (After).
+	Key string
+	// Supersedes replaces another untouched request of this session
+	// explicitly (any key).
+	Supersedes string
+	// After is a request of this session that must finish OK first.
+	After string
+	// Force files the request even when a pending one looks the same.
+	Force bool
 }
 
 // Decision is one approver choice on one item.
@@ -262,6 +282,20 @@ type View struct {
 	Origin map[string]string
 	// Pending counts items still waiting.
 	Pending int
+	// Key, Version, SupersededBy and After: see entity.AccessRequest.
+	Key          string
+	Version      int
+	SupersededBy string
+	After        string
+	// AfterState says where the request it runs after stands ("" when
+	// none): waiting, ok, failed.
+	AfterState string
+	// Counts per item status, for the compact card.
+	Counts map[string]int
+	// AfterRef is the request this one runs after; Replacement the one
+	// that replaced it (nil when none).
+	AfterRef    *Ref
+	Replacement *Ref
 }
 
 // ItemView is one action as a viewer sees it.

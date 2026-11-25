@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yogasw/wick/internal/accessreq"
 	"github.com/yogasw/wick/internal/connectors"
@@ -16,6 +17,7 @@ var AccessRequests interface {
 	Create(ctx context.Context, in accessreq.CreateInput) (accessreq.View, error)
 	ViewFor(ctx context.Context, id, viewerID string) (accessreq.View, error)
 	Cancel(ctx context.Context, id, sessionID string) error
+	SessionRequests(ctx context.Context, sessionID string, limit int) ([]accessreq.View, error)
 }
 
 const accessRequestTool = "wick_request_access"
@@ -38,7 +40,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 		Description: "Ask a person to approve connector actions YOUR access cannot run (wick_execute refused them: " +
 			"\"not allowed for this agent\", a read-only grant, a role that may only read, or an access rule that holds the call " +
 			"for a person). Use it too for an action your access DOES allow when your instructions say that target needs a " +
-			"person's approval first (a post to another team's channel, say): file it here instead of running it. One request carries up to 10 " +
+			"person's approval first (a post to another team's channel, say): file it here instead of running it. One request carries up to 50 " +
 			"exact actions ({tool_id, params}, the same shape as wick_execute). A card appears where this conversation lives " +
 			"(the Slack thread, the web); an approver opens it, sees every action with its real parameters, and decides each " +
 			"one: once, for 1 / 8 / 24 hours or for this session (same operation on the same target, and the same config_override, only), or deny (standing access is a rule, set in the project settings, Access requests). Approved actions run with the APPROVER's access — you do NOT run " +
@@ -49,13 +51,24 @@ func AccessRequestDescriptor() ToolDescriptor {
 			"with params {project_id, doc: the rule as YAML, rule_id: to change an existing one, reason}; it is saved only when " +
 			"the project's owner or an admin approves it. " +
 			"Works only where the session's project turned access requests on (project settings); elsewhere it refuses and a refused op simply stays refused. " +
-			"action=status reads a request, action=cancel withdraws one. " +
+			"ONE CARD PER PLAN STEP: put the whole step in one request (actions run in order and stop at the first failure; the rest is skipped) instead of many small cards. " +
+			"Give each step a stable key (e.g. \"deploy-step-2\"). Filing the same key again REPLACES the earlier card while none of it was decided (it becomes v2, the old card says \"replaced\"); " +
+			"once part of it ran, the new one follows it instead. supersedes=<id> replaces another untouched request explicitly. " +
+			"after=<id or key>: the card can be approved any time but runs only after that request finished OK, and is skipped when it did not. " +
+			"A create that repeats a pending request's tool and target is refused with how to replace it; pass force=true only to keep both cards on purpose. " +
+			"Every turn opens with an [access requests] line listing this session's requests, so check it before filing. " +
+			"action=list shows every request of this session, action=status reads one, action=cancel withdraws one. " +
+			"Do not post the payload or a \"card X ran\" message to the thread yourself: the card shows the summary, a payload file and the result. " +
 			"When you tell the person, keep it to one line (\"waiting for approval\"): never repeat the request id, who can approve, the params or config_override; the card already shows them.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action": map[string]any{"type": "string", "enum": []string{"create", "status", "cancel"},
-					"description": "create (default), status or cancel."},
+				"action": map[string]any{"type": "string", "enum": []string{"create", "status", "cancel", "list"},
+					"description": "create (default), list, status or cancel."},
+				"key":        map[string]any{"type": "string", "description": "create: a stable name for this plan step, e.g. \"deploy-step-2\". The same key again replaces the untouched earlier card (v2) or follows the one that already ran."},
+				"supersedes": map[string]any{"type": "string", "description": "create: id (or key) of an untouched request of this session that this one replaces."},
+				"after":      map[string]any{"type": "string", "description": "create: id or key of a request of this session that must finish OK before this one runs."},
+				"force":      map[string]any{"type": "boolean", "description": "create: file even when a pending request has the same tool and target (rare; normally replace it with key)."},
 				"actions": map[string]any{
 					"type":        "array",
 					"description": "create: the actions to approve, in order.",
@@ -69,7 +82,7 @@ func AccessRequestDescriptor() ToolDescriptor {
 					},
 				},
 				"reason":     map[string]any{"type": "string", "description": "create (required): one or two plain sentences for the approver: WHAT each action changes (which record, field or draft, from what to what) and WHY (the case it fixes). Shown on the card as your claim, so the approver can decide without opening the web."},
-				"request_id": map[string]any{"type": "string", "description": "status / cancel: the request id create returned."},
+				"request_id": map[string]any{"type": "string", "description": "status / cancel: the request id create returned (or its key)."},
 			},
 		},
 		Annotations: &ToolAnnotation{Title: "Request access", ReadOnlyHint: PtrBool(false)},
@@ -91,25 +104,37 @@ func WickRequestAccess(w http.ResponseWriter, r *http.Request, req RPCRequest, r
 	action, _ := args["action"].(string)
 	switch strings.TrimSpace(action) {
 	case "", "create":
+	case "list":
+		vs, err := AccessRequests.SessionRequests(ctx, sessionID, 30)
+		rows := make([]map[string]any, 0, len(vs))
+		for _, v := range vs {
+			rows = append(rows, accessListRow(v))
+		}
+		writeAccessResult(w, req, rsp, map[string]any{"requests": rows}, err)
+		return
 	case "status":
 		id, _ := args["request_id"].(string)
-		v, err := AccessRequests.ViewFor(ctx, strings.TrimSpace(id), "")
-		if err == nil && v.SessionID != sessionID {
-			err = accessreq.ErrNotFound
-		}
+		v, err := accessViewByRef(ctx, sessionID, strings.TrimSpace(id))
 		writeAccessResult(w, req, rsp, accessSummary(v), err)
 		return
 	case "cancel":
 		id, _ := args["request_id"].(string)
-		err := AccessRequests.Cancel(ctx, strings.TrimSpace(id), sessionID)
-		writeAccessResult(w, req, rsp, map[string]any{"request_id": id, "status": accessreq.StatusCancelled}, err)
+		v, err := accessViewByRef(ctx, sessionID, strings.TrimSpace(id))
+		if err == nil {
+			err = AccessRequests.Cancel(ctx, v.ID, sessionID)
+		}
+		writeAccessResult(w, req, rsp, map[string]any{"request_id": v.ID, "status": accessreq.StatusCancelled}, err)
 		return
 	default:
-		rsp.ToolError(w, req.ID, "action must be create, status or cancel", accessRequestTool)
+		rsp.ToolError(w, req.ID, "action must be create, list, status or cancel", accessRequestTool)
 		return
 	}
 	raw, _ := args["actions"].([]any)
 	in := accessreq.CreateInput{SessionID: sessionID, AgentID: connectors.AgentIDOf(ctx)}
+	in.Key, _ = args["key"].(string)
+	in.Supersedes, _ = args["supersedes"].(string)
+	in.After, _ = args["after"].(string)
+	in.Force, _ = args["force"].(bool)
 	in.Reason, _ = args["reason"].(string)
 	in.Reason = strings.TrimSpace(in.Reason)
 	if in.Reason == "" {
@@ -174,6 +199,18 @@ func accessSummary(v accessreq.View) map[string]any {
 		}
 	}
 	out := map[string]any{"request_id": v.ID, "status": v.Status, "pending": v.Pending, "actions": items, "reply_note": accessReplyNote}
+	if v.Key != "" {
+		out["key"] = v.Key
+	}
+	if v.Version > 1 {
+		out["version"] = v.Version
+	}
+	if v.AfterRef != nil {
+		out["after"] = map[string]any{"request_id": v.AfterRef.ID, "name": v.AfterRef.Name(), "state": v.AfterState}
+	}
+	if v.Replacement != nil {
+		out["replaced_by"] = v.Replacement.ID
+	}
 	if len(groups) > 0 {
 		out["approver_group"] = strings.Join(groups, "; ")
 	}
@@ -192,4 +229,56 @@ func writeAccessResult(w http.ResponseWriter, req RPCRequest, rsp Responder, out
 func itoa(i int) string {
 	b, _ := json.Marshal(i)
 	return string(b)
+}
+
+// accessViewByRef finds a request of this session by id, id prefix or
+// key (its newest version).
+func accessViewByRef(ctx context.Context, sessionID, ref string) (accessreq.View, error) {
+	if ref == "" {
+		return accessreq.View{}, accessreq.ErrNotFound
+	}
+	if v, err := AccessRequests.ViewFor(ctx, ref, ""); err == nil {
+		if v.SessionID != sessionID {
+			return accessreq.View{}, accessreq.ErrNotFound
+		}
+		return v, nil
+	}
+	vs, err := AccessRequests.SessionRequests(ctx, sessionID, 100)
+	if err != nil {
+		return accessreq.View{}, err
+	}
+	for _, v := range vs { // newest first: a key names its latest version
+		if v.Key == ref || (len(ref) >= 8 && strings.HasPrefix(v.ID, ref)) {
+			return v, nil
+		}
+	}
+	return accessreq.View{}, accessreq.ErrNotFound
+}
+
+// accessListRow is one request in action=list: like a todo line.
+func accessListRow(v accessreq.View) map[string]any {
+	row := map[string]any{
+		"request_id": v.ID, "status": v.Status, "version": v.Version, "actions": len(v.Items),
+		"counts": accessreq.CountsLine(v.Counts), "created_at": v.CreatedAt.Format(time.RFC3339),
+	}
+	if v.Key != "" {
+		row["key"] = v.Key
+	}
+	if v.AfterRef != nil {
+		row["after"] = v.AfterRef.Name()
+		row["after_state"] = v.AfterState
+	}
+	if v.Replacement != nil {
+		row["replaced_by"] = v.Replacement.ID
+	}
+	if v.URL != "" {
+		row["url"] = v.URL
+	}
+	for _, it := range v.Items {
+		if it.Status == accessreq.ItemError {
+			row["stopped_at"] = map[string]any{"n": it.Idx + 1, "tool": it.ConnectorKey + "." + it.OpKey, "error": it.Error}
+			break
+		}
+	}
+	return row
 }

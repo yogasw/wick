@@ -75,7 +75,9 @@ func TestCardHasApproveAllAndPayload(t *testing.T) {
 			t.Errorf("card misses %q", want)
 		}
 	}
+	// The quick button counts the actions still waiting for a decision.
 	v.Pending = 1
+	v.Items[1].Status = accessreq.ItemOK
 	raw, _ = json.Marshal(accessCardBlocks(v))
 	if !strings.Contains(string(raw), "Approve once") {
 		t.Error("one waiting action: the quick button approves it once")

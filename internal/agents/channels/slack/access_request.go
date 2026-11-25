@@ -41,6 +41,7 @@ const (
 	accessSavingCallback = "access_req_saving"
 	accessNoteBlock      = "access_note"
 	accessItemBlockPfx   = "access_item:"
+	accessAllBlock       = "access_all"
 	maxSectionText       = 2900
 )
 
@@ -102,7 +103,51 @@ func (s *Channel) PublishAccessRequest(ctx context.Context, v accessreq.View) (m
 	if err != nil {
 		return nil, fmt.Errorf("post access request card: %w", err)
 	}
-	return map[string]string{"slack_channel": chatID, "slack_ts": ts, "slack_thread": threadTS}, nil
+	origin := map[string]string{"slack_channel": chatID, "slack_ts": ts, "slack_thread": threadTS}
+	if pl, perr := api.GetPermalinkContext(ctx, &slackgo.PermalinkParameters{Channel: chatID, Ts: ts}); perr == nil && pl != "" {
+		origin["slack_permalink"] = pl
+	}
+	// The full payload goes in the thread once, as a file anyone can open,
+	// unless the card already shows it inline. The card is then edited
+	// to link it.
+	if inlinePayload(v) == "" {
+		fileThread := threadTS
+		if fileThread == "" {
+			fileThread = ts
+		}
+		if link := s.uploadPayloadFile(ctx, api, v, chatID, fileThread); link != "" {
+			origin["slack_file_permalink"] = link
+			v.Origin = origin
+			if b2, berr := blocksFromJSON(accessCardBlocks(v)); berr == nil {
+				_ = s.withBackoffErr(func() error {
+					_, _, _, err := api.UpdateMessageContext(ctx, chatID, ts, slackgo.MsgOptionText(fallback, false), slackgo.MsgOptionBlocks(b2...))
+					return err
+				})
+			}
+		}
+	}
+	return origin, nil
+}
+
+// uploadPayloadFile posts the request's payload as a JSON file in the
+// thread and returns its permalink ("" when Slack refused, e.g. the bot
+// lacks files:write; the card then points to the review modal and web).
+func (s *Channel) uploadPayloadFile(ctx context.Context, api *slackgo.Client, v accessreq.View, chatID, threadTS string) string {
+	body := payloadFile(v)
+	name := payloadFileName(v)
+	f, err := api.UploadFileContext(ctx, slackgo.UploadFileParameters{
+		Reader: bytes.NewReader(body), FileSize: len(body), Filename: name, Title: name,
+		Channel: chatID, ThreadTimestamp: threadTS, SnippetType: "json",
+	})
+	if err != nil || f == nil {
+		log.Info().Str("channel", "slack").Err(err).Msg("access request: payload file not uploaded; the card points to the review modal instead")
+		return ""
+	}
+	info, _, _, err := api.GetFileInfoContext(ctx, f.ID, 0, 0)
+	if err != nil || info == nil {
+		return ""
+	}
+	return info.Permalink
 }
 
 // threadLinkRe finds a Slack message link: channel, message ts and the
@@ -223,6 +268,10 @@ func accessStatusIcon(status string) string {
 		return "🚫"
 	case accessreq.ItemRunning:
 		return "🔄"
+	case accessreq.ItemQueued:
+		return "⏸️"
+	case accessreq.ItemSkipped:
+		return "⏭️"
 	}
 	return "⏳"
 }
@@ -263,6 +312,10 @@ func itemStatusLine(it accessreq.ItemView) string {
 		return line
 	case accessreq.ItemRunning:
 		return approvedBy(it) + " · Run: _running…_"
+	case accessreq.ItemQueued:
+		return approvedBy(it) + " · Run: _waiting for the request it runs after_"
+	case accessreq.ItemSkipped:
+		return "Run: *not run* · _" + escapeMrkdwn(clipText(strings.TrimPrefix(it.Error, "skipped: "), 300)) + "_"
 	case accessreq.ItemOK:
 		return approvedBy(it) + " · Run: *succeeded*"
 	case accessreq.ItemError:
@@ -291,66 +344,332 @@ func itemHeading(it accessreq.ItemView) string {
 	return fmt.Sprintf("*%d. `%s.%s`* · %s (%s)", it.Idx+1, it.ConnectorKey, it.OpKey, escapeMrkdwn(label), it.Kind)
 }
 
-// accessCardBlocks is the short card in the thread: one line per action
-// with its status, and the buttons while anything waits.
+// Card sizes. Up to cardDetailItems actions the card lists each one;
+// more, and it groups them per operation, so one plan step fits on one
+// short card however many actions it has. The review modal gives each
+// action its own picker up to modalDetailItems, then one decision for
+// all (Slack caps a modal at 100 blocks).
+const (
+	cardDetailItems  = 5
+	modalDetailItems = 12
+	inlinePayloadMax = 500
+)
+
+// countStatus counts the items in one status.
+func countStatus(v accessreq.View, status string) int {
+	n := 0
+	for _, it := range v.Items {
+		if it.Status == status {
+			n++
+		}
+	}
+	return n
+}
+
+// keyTag is " · `key` v2" for a request filed under a key.
+func keyTag(v accessreq.View) string {
+	if v.Key == "" {
+		if v.Version > 1 {
+			return fmt.Sprintf(" · v%d", v.Version)
+		}
+		return ""
+	}
+	return fmt.Sprintf(" · `%s` v%d", escapeMrkdwn(v.Key), v.Version)
+}
+
+// refLink is a link to another request's card (or web page).
+func refLink(r *accessreq.Ref) string {
+	name := escapeMrkdwn(r.Name())
+	if u := r.Origin["slack_permalink"]; u != "" {
+		return "<" + u + "|" + name + ">"
+	}
+	if r.URL != "" {
+		return "<" + r.URL + "|" + name + ">"
+	}
+	return "`" + name + "`"
+}
+
+// afterLine says which request this one waits for and where it stands.
+func afterLine(v accessreq.View) string {
+	if v.AfterRef == nil {
+		return ""
+	}
+	line := "⏭ Runs after " + refLink(v.AfterRef)
+	switch v.AfterState {
+	case accessreq.AfterWaiting:
+		line += " · _waiting for it to finish OK (approving now is fine: it runs then)_"
+	case accessreq.AfterOK:
+		line += " · _finished OK_"
+	case accessreq.AfterFailed:
+		line += " · _did not finish OK, so this card does not run_"
+	}
+	return line
+}
+
+// opGroup is every action of one operation on one card.
+type opGroup struct {
+	key, kind string
+	n         int
+	counts    map[string]int
+}
+
+func groupItems(items []accessreq.ItemView) []*opGroup {
+	var order []*opGroup
+	byKey := map[string]*opGroup{}
+	for _, it := range items {
+		k := it.ConnectorKey + "." + it.OpKey
+		g := byKey[k]
+		if g == nil {
+			g = &opGroup{key: k, kind: it.Kind, counts: map[string]int{}}
+			byKey[k] = g
+			order = append(order, g)
+		}
+		g.n++
+		g.counts[it.Status]++
+	}
+	return order
+}
+
+// statusCounts is "🟢 17 · 🔴 1 · ⏭ 2" (only the statuses present).
+func statusCounts(c map[string]int) string {
+	var parts []string
+	for _, st := range []string{accessreq.ItemOK, accessreq.ItemError, accessreq.ItemSkipped, accessreq.ItemDenied,
+		accessreq.ItemRunning, accessreq.ItemQueued, accessreq.ItemPending} {
+		if n := c[st]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", accessStatusIcon(st), n))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// groupLines is the grouped body of a long card.
+func groupLines(items []accessreq.ItemView) string {
+	var b strings.Builder
+	for _, g := range groupItems(items) {
+		fmt.Fprintf(&b, "• `%s` × %d (%s) — %s\n", g.key, g.n, g.kind, statusCounts(g.counts))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// whoCanLine is who may approve, once for the whole card.
+func whoCanLine(items []accessreq.ItemView) string {
+	for _, it := range items {
+		if it.Status != accessreq.ItemPending {
+			continue
+		}
+		who := approverList(it.Approvers)
+		if it.ApproversText != "" {
+			who = it.ApproversText
+		}
+		return "_Waiting · who can approve: " + escapeMrkdwn(who) + "_"
+	}
+	return ""
+}
+
+// failureLine names where a run stopped and how much was skipped after.
+func failureLine(v accessreq.View) string {
+	for _, it := range v.Items {
+		if it.Status != accessreq.ItemError {
+			continue
+		}
+		line := fmt.Sprintf("🔴 Stopped at action %d (`%s.%s`): `%s`", it.Idx+1, it.ConnectorKey, it.OpKey, escapeMrkdwn(clipText(it.Error, 300)))
+		if n := countStatus(v, accessreq.ItemSkipped); n > 0 {
+			line += fmt.Sprintf("\n⏭ %d action(s) after it were not run", n)
+		}
+		return line
+	}
+	if n := countStatus(v, accessreq.ItemSkipped); n > 0 && v.AfterState == accessreq.AfterFailed {
+		return fmt.Sprintf("⏭ %d action(s) not run: the request this one runs after did not finish OK", n)
+	}
+	return ""
+}
+
+// inlinePayload is the one small payload a single-action card still
+// shows in full ("" when the card points to the file instead).
+func inlinePayload(v accessreq.View) string {
+	if len(v.Items) != 1 {
+		return ""
+	}
+	p := payloadPreview(v.Items[0], inlinePayloadMax+1)
+	if len([]rune(p)) > inlinePayloadMax {
+		return ""
+	}
+	return p
+}
+
+// payloadLine points to the full payload: the file in the thread, else
+// the web page.
+func payloadLine(v accessreq.View) string {
+	if u := v.Origin["slack_file_permalink"]; u != "" {
+		return "📎 Full payload: <" + u + "|" + payloadFileName(v) + "> · also in *Review & decide*"
+	}
+	if v.URL != "" {
+		return "📎 Full payload: <" + v.URL + "|web page> · also in *Review & decide*"
+	}
+	return "📎 Full payload: in *Review & decide*"
+}
+
+func payloadFileName(v accessreq.View) string {
+	name := "request-" + shortID(v.ID)
+	if v.Key != "" {
+		name = fileSafe(v.Key) + "-v" + fmt.Sprint(v.Version)
+	}
+	return name + ".json"
+}
+
+func fileSafe(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
+}
+
+// payloadFile is the full (masked) payload as one JSON document, posted
+// once in the thread so anyone can read it, approver or not.
+func payloadFile(v accessreq.View) []byte {
+	type action struct {
+		N      int    `json:"n"`
+		Tool   string `json:"tool"`
+		Kind   string `json:"kind"`
+		Target string `json:"target,omitempty"`
+		Params any    `json:"params"`
+	}
+	doc := struct {
+		Request string   `json:"request"`
+		Key     string   `json:"key,omitempty"`
+		Version int      `json:"version"`
+		After   string   `json:"after,omitempty"`
+		Reason  string   `json:"reason,omitempty"`
+		Actions []action `json:"actions"`
+	}{Request: v.ID, Key: v.Key, Version: v.Version, Reason: v.Reason}
+	if v.AfterRef != nil {
+		doc.After = v.AfterRef.Name()
+	}
+	for _, it := range v.Items {
+		var params any
+		if it.ParamsJSON != "" {
+			_ = json.Unmarshal([]byte(it.ParamsJSON), &params)
+		}
+		params = unfoldJSON(params)
+		doc.Actions = append(doc.Actions, action{N: it.Idx + 1, Tool: it.ConnectorKey + "." + it.OpKey, Kind: it.Kind, Target: it.Target, Params: params})
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(doc)
+	return buf.Bytes()
+}
+
+// accessCardBlocks is the short card in the thread: a summary of the
+// actions (each one, or grouped per operation when there are many), one
+// line on who can approve, a pointer to the full payload, and the
+// buttons while anything waits. The same message is edited as the
+// request moves on, so the result lands on the card itself.
 func accessCardBlocks(v accessreq.View) []map[string]any {
-	title := fmt.Sprintf("🔐 *%s* asks to run %d action(s)", escapeMrkdwn(agentLabel(v)), len(v.Items))
-	if v.Status == accessreq.StatusCancelled {
-		title = fmt.Sprintf("🔐 ~%s asked to run %d action(s)~ · *cancelled*", escapeMrkdwn(agentLabel(v)), len(v.Items))
+	title := fmt.Sprintf("🔐 *%s* asks to run %d action(s)%s", escapeMrkdwn(agentLabel(v)), len(v.Items), keyTag(v))
+	switch v.Status {
+	case accessreq.StatusCancelled:
+		title = fmt.Sprintf("🔐 ~%s asked to run %d action(s)~%s · *cancelled*", escapeMrkdwn(agentLabel(v)), len(v.Items), keyTag(v))
+	case accessreq.StatusSuperseded:
+		title = fmt.Sprintf("🔐 ~%s asked to run %d action(s)~%s · *replaced*", escapeMrkdwn(agentLabel(v)), len(v.Items), keyTag(v))
 	}
 	blocks := []map[string]any{section(title)}
+	if v.Status == accessreq.StatusSuperseded {
+		line := "↪️ Replaced by a newer version"
+		if v.Replacement != nil {
+			line = "↪️ Replaced by " + refLink(v.Replacement) + ": decide that card instead"
+		}
+		blocks = append(blocks, section(line))
+		blocks = append(blocks, contextBlock(fmt.Sprintf("Request `%s` · closed", shortID(v.ID))))
+		return blocks
+	}
 	if v.Reason != "" {
 		blocks = append(blocks, section(whyLine(v.Reason)))
 	}
+	if l := afterLine(v); l != "" {
+		blocks = append(blocks, section(l))
+	}
 	waiting := v.Status == accessreq.StatusPending && v.Pending > 0
-	for _, it := range v.Items {
-		text := accessStatusIcon(it.Status) + " " + itemHeading(it)
-		if it.OpName != "" && it.OpName != it.OpKey {
-			text += "\n_" + escapeMrkdwn(it.OpName) + "_"
+	ended := v.Status != accessreq.StatusPending
+	if len(v.Items) <= cardDetailItems {
+		for _, it := range v.Items {
+			text := accessStatusIcon(it.Status) + " " + itemHeading(it)
+			if it.OpName != "" && it.OpName != it.OpKey {
+				text += "\n_" + escapeMrkdwn(it.OpName) + "_"
+			}
+			if it.Target != "" {
+				text += "\n" + escapeMrkdwn(it.Target)
+			}
+			if it.Status == accessreq.ItemPending && !ended && it.Note != "" {
+				text += "\nℹ️ _" + escapeMrkdwn(clipText(it.Note, 300)) + "_"
+			}
+			if it.Status == accessreq.ItemPending && ended {
+				// A request that ended (cancelled, expired) leaves its
+				// undecided items pending: say so instead of a "who can
+				// approve" line, which would list people by name.
+				text += "\n_Not decided · request " + escapeMrkdwn(v.Status) + "_"
+			} else if it.Status != accessreq.ItemPending {
+				text += "\n" + itemStatusLine(it)
+			}
+			blocks = append(blocks, section(text))
 		}
-		if it.Target != "" {
-			text += "\n" + escapeMrkdwn(it.Target)
+	} else {
+		blocks = append(blocks, section(groupLines(v.Items)))
+		if n := countStatus(v, accessreq.ItemPending); ended && n > 0 {
+			blocks = append(blocks, contextBlock(fmt.Sprintf("_%d action(s) not decided · request %s_", n, escapeMrkdwn(v.Status))))
 		}
-		if it.Status == accessreq.ItemPending && v.Status != accessreq.StatusPending {
-			// A request that ended (cancelled, expired) leaves its undecided
-			// items pending: say so instead of a "who can approve" line,
-			// which no rule labels any more and would list people by name.
-			text += "\n_Not decided · request " + escapeMrkdwn(v.Status) + "_"
-		} else {
-			text += "\n" + itemStatusLine(it)
-		}
-		blocks = append(blocks, section(text))
-		// While it waits, the payload itself: approvers check it here
-		// without opening the web page.
-		if it.Status == accessreq.ItemPending && waiting {
-			blocks = append(blocks, section("```"+escapeMrkdwn(payloadPreview(it, cardPayloadChars(len(v.Items))))+"```"))
-		}
+	}
+	if l := failureLine(v); l != "" && len(v.Items) > cardDetailItems {
+		blocks = append(blocks, section(l))
 	}
 	if waiting {
-		approve := "Approve once"
-		confirm := "Run this action once, now, with your own access?"
-		if v.Pending > 1 {
-			approve = fmt.Sprintf("Approve all (%d)", v.Pending)
-			confirm = fmt.Sprintf("Run all %d waiting actions once, now, with your own access? Actions you may not approve stay waiting.", v.Pending)
+		if l := whoCanLine(v.Items); l != "" {
+			blocks = append(blocks, contextBlock(l))
 		}
-		elems := []any{
-			map[string]any{"type": "button", "action_id": accessApproveAll, "value": v.ID, "style": "primary", "text": plain(approve),
-				"confirm": map[string]any{
-					"title":   plain("Approve"),
-					"text":    map[string]any{"type": "plain_text", "text": confirm},
-					"confirm": plain("Approve"),
-					"deny":    plain("Cancel"),
-				}},
-			map[string]any{"type": "button", "action_id": accessReviewAction, "value": v.ID, "text": plain("Review & decide")},
-			map[string]any{"type": "button", "action_id": accessDenyAction, "value": v.ID, "style": "danger", "text": plain("Deny")},
+		if p := inlinePayload(v); p != "" {
+			blocks = append(blocks, section("```"+escapeMrkdwn(p)+"```"))
+		} else {
+			blocks = append(blocks, contextBlock(payloadLine(v)))
 		}
-		blocks = append(blocks, map[string]any{"type": "actions", "block_id": accessBlockID, "elements": elems})
+		if n := countStatus(v, accessreq.ItemPending); n > 0 {
+			approve := "Approve once"
+			confirm := "Run this action once, now, with your own access?"
+			if n > 1 {
+				approve = fmt.Sprintf("Approve all (%d)", n)
+				confirm = fmt.Sprintf("Run all %d waiting actions once, in order, with your own access? They stop at the first failure. Actions you may not approve stay waiting.", n)
+			}
+			if v.AfterRef != nil && v.AfterState == accessreq.AfterWaiting {
+				confirm += " They run once " + v.AfterRef.Name() + " finished OK."
+			}
+			elems := []any{
+				map[string]any{"type": "button", "action_id": accessApproveAll, "value": v.ID, "style": "primary", "text": plain(approve),
+					"confirm": map[string]any{
+						"title":   plain("Approve"),
+						"text":    map[string]any{"type": "plain_text", "text": clipText(confirm, 300)},
+						"confirm": plain("Approve"),
+						"deny":    plain("Cancel"),
+					}},
+				map[string]any{"type": "button", "action_id": accessReviewAction, "value": v.ID, "text": plain("Review & decide")},
+				map[string]any{"type": "button", "action_id": accessDenyAction, "value": v.ID, "style": "danger", "text": plain("Deny")},
+			}
+			blocks = append(blocks, map[string]any{"type": "actions", "block_id": accessBlockID, "elements": elems})
+		}
 	}
-	footer := fmt.Sprintf("Request `%s` · approved actions run with the approver's own access", shortID(v.ID))
+	footer := fmt.Sprintf("Request `%s` · approved actions run in order with the approver's own access", shortID(v.ID))
 	if !waiting {
 		// Decided or ended: the "approved actions run…" hint read as if
 		// something was approved on a card that was denied.
 		footer = fmt.Sprintf("Request `%s` · closed", shortID(v.ID))
+		if c := statusCounts(v.Counts); c != "" && len(v.Items) > 1 {
+			footer += " · " + c
+		}
 	}
 	blocks = append(blocks, contextBlock(footer))
 	return blocks
@@ -366,19 +685,6 @@ func shortID(id string) string {
 // whyLine is the agent's explanation as the card and the modal show it.
 func whyLine(reason string) string {
 	return "*Why:* " + escapeMrkdwn(clipText(reason, 500)) + " _(agent's words, unverified)_"
-}
-
-// cardPayloadChars is how much of each action's payload the thread card
-// shows: room for one action's draft, less each when there are many, so
-// the card stays readable and within Slack's limits.
-func cardPayloadChars(items int) int {
-	switch {
-	case items <= 1:
-		return 1800
-	case items <= 3:
-		return 900
-	}
-	return 400
 }
 
 // modalPayloadChars fits one Slack section (3000) with room to spare.
@@ -496,8 +802,14 @@ func reviewModal(v accessreq.View, meta string) map[string]any {
 	if v.Reason != "" {
 		blocks = append(blocks, section(whyLine(v.Reason)))
 	}
+	if l := afterLine(v); l != "" {
+		blocks = append(blocks, section(l))
+	}
 	if !v.ViewerCanDecide {
 		blocks = append(blocks, section("⛔ *"+escapeMrkdwn(v.ViewerReason)+"*"))
+	}
+	if len(v.Items) > modalDetailItems {
+		return bulkReviewModal(v, meta, blocks)
 	}
 	for _, it := range v.Items {
 		blocks = append(blocks, map[string]any{"type": "divider"})
@@ -562,6 +874,111 @@ func reviewModal(v accessreq.View, meta string) map[string]any {
 	return modalBase(title, accessDecideCallback, meta, capBlocks(blocks), submit)
 }
 
+// bulkModes are the modes every decidable action offers (safest
+// first), so one decision can apply to all of them.
+func bulkModes(v accessreq.View) (modes []string, decidable, locked int) {
+	var common map[string]bool
+	first := true
+	for _, it := range v.Items {
+		if it.Status != accessreq.ItemPending {
+			continue
+		}
+		if !it.CanDecide {
+			locked++
+			continue
+		}
+		decidable++
+		set := map[string]bool{}
+		for _, m := range it.Modes {
+			set[m] = true
+		}
+		if first {
+			common, first = set, false
+			continue
+		}
+		for m := range common {
+			if !set[m] {
+				delete(common, m)
+			}
+		}
+	}
+	for _, m := range []string{accessreq.ModeOnce, accessreq.ModeHour, accessreq.Mode8h, accessreq.Mode24h, accessreq.ModeSession} {
+		if common[m] {
+			modes = append(modes, m)
+		}
+	}
+	return modes, decidable, locked
+}
+
+// bulkReviewModal is the review modal of a long card: the actions
+// grouped per operation, a pointer to the full payload, and ONE decision
+// for every action the viewer may decide (they run in order and stop at
+// the first failure).
+func bulkReviewModal(v accessreq.View, meta string, blocks []map[string]any) map[string]any {
+	blocks = append(blocks, map[string]any{"type": "divider"})
+	blocks = append(blocks, section(groupLines(v.Items)))
+	if l := failureLine(v); l != "" {
+		blocks = append(blocks, section(l))
+	}
+	blocks = append(blocks, contextBlock(payloadLine(v)))
+	// A few sample targets, so the approver sees what is touched.
+	var samples []string
+	for _, it := range v.Items {
+		if it.Target != "" && len(samples) < 5 {
+			samples = append(samples, fmt.Sprintf("%d. `%s.%s` %s", it.Idx+1, it.ConnectorKey, it.OpKey, escapeMrkdwn(clipText(it.Target, 120))))
+		}
+	}
+	if len(samples) > 0 {
+		blocks = append(blocks, contextBlock("Targets, first ones: "+strings.Join(samples, " · ")))
+	}
+	submit := ""
+	modes, decidable, locked := bulkModes(v)
+	if v.ViewerCanDecide && decidable > 0 {
+		var opts []any
+		for _, m := range append(modes, accessreq.ModeDeny) {
+			opts = append(opts, map[string]any{"text": plain(accessreq.ModeLabel(m)), "value": m})
+		}
+		blocks = append(blocks, map[string]any{"type": "divider"})
+		blocks = append(blocks, map[string]any{
+			"type": "input", "block_id": accessAllBlock,
+			"label":   plain(fmt.Sprintf("Decision for the %d action(s) you may decide", decidable)),
+			"element": map[string]any{"type": "radio_buttons", "action_id": "mode", "options": opts},
+		})
+		if locked > 0 {
+			blocks = append(blocks, contextBlock(fmt.Sprintf("%d action(s) outside your access stay waiting for another approver.", locked)))
+		}
+		blocks = append(blocks, map[string]any{
+			"type": "input", "block_id": accessNoteBlock, "optional": true,
+			"label":   plain("Note for the agent (sent with a deny)"),
+			"element": map[string]any{"type": "plain_text_input", "action_id": "text", "multiline": true},
+		})
+		blocks = append(blocks, contextBlock("Approved actions run right away, in order, with your access, and stop at the first failure."))
+		submit = "Save decision"
+	}
+	title := "Access request"
+	if !v.ViewerCanDecide && v.ViewerReasonCode != accessreq.ReasonDecided {
+		title = "No access"
+	}
+	return modalBase(title, accessDecideCallback, meta, capBlocks(blocks), submit)
+}
+
+// bulkDecisions turns the one decision of a bulk modal into a decision
+// per action the viewer may decide.
+func bulkDecisions(v accessreq.View, mode, note string) []accessreq.Decision {
+	var ds []accessreq.Decision
+	for _, it := range v.Items {
+		if it.Status != accessreq.ItemPending || !it.CanDecide {
+			continue
+		}
+		d := accessreq.Decision{ItemID: it.ID, Mode: mode}
+		if mode == accessreq.ModeDeny {
+			d.Note = note
+		}
+		ds = append(ds, d)
+	}
+	return ds
+}
+
 // denyModal confirms denying every action the viewer may decide.
 func denyModal(v accessreq.View, meta string) map[string]any {
 	if !v.ViewerCanDecide {
@@ -569,7 +986,21 @@ func denyModal(v accessreq.View, meta string) map[string]any {
 	}
 	blocks := []map[string]any{section(fmt.Sprintf("Deny these actions *%s* asked for?", escapeMrkdwn(agentLabel(v))))}
 	others := 0
+	if len(v.Items) > modalDetailItems {
+		var mine []accessreq.ItemView
+		for _, it := range v.Items {
+			if it.CanDecide {
+				mine = append(mine, it)
+			} else if it.Status == accessreq.ItemPending {
+				others++
+			}
+		}
+		blocks = append(blocks, section(groupLines(mine)))
+	}
 	for _, it := range v.Items {
+		if len(v.Items) > modalDetailItems {
+			break
+		}
 		if !it.CanDecide {
 			if it.Status == accessreq.ItemPending {
 				others++
@@ -828,7 +1259,17 @@ func resultModal(v accessreq.View, meta string, failed []string) map[string]any 
 		blocks = append(blocks, section("• "+escapeMrkdwn(strings.Join(failed, "\n• "))))
 	}
 	running := false
+	if len(v.Items) > modalDetailItems {
+		blocks = append(blocks, section(groupLines(v.Items)))
+		if l := failureLine(v); l != "" {
+			blocks = append(blocks, section(l))
+		}
+		running = countStatus(v, accessreq.ItemRunning) > 0
+	}
 	for _, it := range v.Items {
+		if len(v.Items) > modalDetailItems {
+			break
+		}
 		blocks = append(blocks, map[string]any{"type": "divider"})
 		text := accessStatusIcon(it.Status) + " " + itemHeading(it)
 		if it.Target != "" {
@@ -866,6 +1307,18 @@ func (s *Channel) handleAccessSubmit(ctx context.Context, cb slackgo.Interaction
 	var err error
 	if cb.View.CallbackID == accessDenyCallback {
 		_, results, err = AccessRequests.DenyAll(ctx, reqID, viewer, note)
+	} else if mode := stateSelected(values, accessAllBlock, "mode"); mode != "" {
+		v, verr := AccessRequests.ViewFor(ctx, reqID, viewer)
+		if verr != nil {
+			s.accessSubmitMessage(ctx, cb, chatID, threadTS, "⚠️ Could not load the request: "+verr.Error())
+			return
+		}
+		ds := bulkDecisions(v, mode, note)
+		if len(ds) == 0 {
+			s.accessSubmitMessage(ctx, cb, chatID, threadTS, "Nothing left for you to decide on this request.")
+			return
+		}
+		_, results, err = AccessRequests.Decide(ctx, reqID, viewer, ds)
 	} else {
 		var ds []accessreq.Decision
 		for blockID := range values {
@@ -1012,4 +1465,29 @@ func withSenderHeader(view map[string]any, name, icon string) map[string]any {
 	els = append(els, mrkdwn("*"+escapeMrkdwn(name)+"*"))
 	view["blocks"] = append([]map[string]any{{"type": "context", "elements": els}}, blocks...)
 	return view
+}
+
+// typedApproveRe matches a short message that only says "approve" (in a
+// few ways, mentions allowed in front).
+var typedApproveRe = regexp.MustCompile(`(?i)^\s*(<@[a-z0-9]+>[\s,]*)*(ok[\s,]*)?(approve|approved|approval|acc|setuju|di-?approve|udah di-?approve|sudah di-?approve)\b[\s.!👍✅]*$`)
+
+// threadCards is the optional part of the access-request service that
+// finds the open cards of a thread.
+type threadCards interface {
+	PendingInThread(ctx context.Context, chatID, threadTS string) []string
+}
+
+// nudgeTypedApprove answers a typed "approve" under an open access card
+// with an ephemeral hint: only the button approves (with the clicker's
+// access, recorded on the card). The agent does not have to say it.
+func (s *Channel) nudgeTypedApprove(ctx context.Context, chatID, threadTS, ts, userID, text string) {
+	if threadTS == "" || threadTS == ts || userID == "" || len([]rune(text)) > 80 || !typedApproveRe.MatchString(text) {
+		return
+	}
+	tc, ok := AccessRequests.(threadCards)
+	if !ok || len(tc.PendingInThread(ctx, chatID, threadTS)) == 0 {
+		return
+	}
+	s.accessEphemeral(chatID, threadTS, userID, "To approve, use the *Approve* button on the access card in this thread. "+
+		"A typed \"approve\" does not run anything: the button runs the actions with your own access and records the decision.")
 }

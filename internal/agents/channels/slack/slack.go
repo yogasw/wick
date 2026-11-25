@@ -1971,6 +1971,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"event_key":    slackEventKey(ev.Channel, ev.TimeStamp),
 			}
 			s.emitWorkflow(ctx, "message", msgPayload)
+			// "approve" typed under an open access card does nothing:
+			// tell the person (only them) to use the button.
+			go s.nudgeTypedApprove(context.WithoutCancel(ctx), ev.Channel, ev.ThreadTimeStamp, ev.TimeStamp, ev.User, ev.Text)
 			// A top-level post (no parent thread_ts, or thread_ts == its own
 			// ts) STARTS a thread. Fire the separate thread_started event so
 			// workflows can trigger on new threads only, not replies. Same

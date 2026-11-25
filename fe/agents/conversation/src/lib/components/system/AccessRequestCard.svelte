@@ -10,7 +10,7 @@
   import { WickClientLayer } from "@wick-fe/common-api";
   import type { ConversationTurn } from "../../types/agents.js";
   import {
-    accessCardOf, accessStatusIcon, itemLine, kindHint, noAccess, MODE_LABEL,
+    accessCardOf, accessStatusIcon, afterText, headerSuffix, itemLine, kindHint, noAccess, MODE_LABEL,
     type AccessRequestView,
   } from "../../accessRequests.js";
   import { getAccessRequestView, sendAccessDecisions, type AccessDecideResult } from "../../api/accessRequests.js";
@@ -83,8 +83,14 @@
 <div data-testid="access-request" data-state={card.open ? "pending" : "settled"} class="flex w-full max-w-md flex-col gap-1.5 rounded-xl border border-amber-400/40 bg-white-100 px-3 py-2 text-left text-xs shadow-sm dark:bg-navy-800">
   <div class="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
     <span aria-hidden="true">🔐</span>
-    <span>{card.view?.agent ?? "The agent"} asks to run {card.view?.items.length ?? 0} action(s){card.view?.status === "cancelled" ? " · cancelled" : ""}</span>
+    <span>{card.view?.agent ?? "The agent"} asks to run {card.view?.items.length ?? 0} action(s){headerSuffix(card.view)}</span>
   </div>
+  {#if card.view?.replaced_by}
+    <p class="text-[11px] text-black-700 dark:text-black-500" data-testid="access-replaced">↪️ Replaced by {card.view.replaced_by.name}: decide that card instead.</p>
+  {/if}
+  {#if afterText(card.view)}
+    <p class="text-[11px] text-black-700 dark:text-black-500" data-testid="access-after">⏭ {afterText(card.view)}</p>
+  {/if}
   {#if card.view?.reason}
     <p class="rounded-md border-l-2 border-amber-400 bg-white-200 px-2 py-1 text-[11px] text-black-800 dark:bg-navy-900 dark:text-black-600"><span class="text-black-700 dark:text-black-500">Agent's claim (unverified):</span> {card.view.reason}</p>
   {/if}
