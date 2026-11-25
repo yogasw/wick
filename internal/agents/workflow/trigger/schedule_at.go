@@ -26,6 +26,9 @@ type ScheduleAtScheduler struct {
 	// RemoveFn is called (id, triggerID) when a delete_after trigger fires.
 	// Optional — pass nil to skip the post-fire cleanup.
 	RemoveFn func(id, triggerID string)
+	// stopped is set by Stop: this process no longer owns trigger intake,
+	// so a later Sync (a workflow file edited during a drain) arms nothing.
+	stopped bool
 }
 
 type timerKey struct {
@@ -47,6 +50,9 @@ func NewScheduleAtScheduler(r *Router) *ScheduleAtScheduler {
 func (s *ScheduleAtScheduler) Sync(id string, w workflow.Workflow) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
 
 	// Build the new set of desired timers.
 	wanted := map[string]workflow.Trigger{}
@@ -104,6 +110,19 @@ func (s *ScheduleAtScheduler) Unsync(id string) {
 			t.Stop()
 			delete(s.timers, k)
 		}
+	}
+}
+
+// Stop cancels every pending timer and arms no new one. Called when this
+// process hands trigger intake to a successor, which arms its own timers:
+// one that fired here as well would run the workflow twice.
+func (s *ScheduleAtScheduler) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
+	for k, t := range s.timers {
+		t.Stop()
+		delete(s.timers, k)
 	}
 }
 

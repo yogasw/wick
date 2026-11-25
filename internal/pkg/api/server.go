@@ -4049,6 +4049,25 @@ func (s *Server) startChannelListeners(ctx context.Context) {
 	})
 }
 
+// resyncAfterPredecessor waits for the draining predecessor to exit, then
+// reads back the session meta its last turns wrote to disk.
+func (s *Server) resyncAfterPredecessor(ctx context.Context) {
+	dir := s.agentsLayout.BaseDir
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		if _, draining := upgrade.ReadDrainState(dir); !draining {
+			s.resyncSessions()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // startIntakeWatchers starts what must run in one process only and so
 // moves with the intake baton: background-set replay and the workflow
 // watcher.
@@ -4522,9 +4541,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		close(intakeHeld)
 		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
 		if s.resyncSessions != nil && upg.IsChild() {
-			// The predecessor is gone now; whatever turns it ran since our
-			// boot read only reached disk.
+			// The predecessor hands the baton over when its drain BEGINS, so
+			// it may still be finishing turns: read what reached disk now,
+			// and once more when it has exited.
 			go s.resyncSessions()
+			go s.resyncAfterPredecessor(ctx)
 		}
 		s.startChannels(ctx)
 		if s.teamHub != nil {
@@ -4916,6 +4937,14 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 		upgrade.ReleaseChannels()
 		go s.handOverChannels(logger, drainDir)
 	}
+	// Hand cron, workflow triggers and scheduled messages over now, not when
+	// the drain ends. This process fires none of them any more (the schedule
+	// runner skips while draining, and it refuses the agent turns they start),
+	// so keeping the baton until it exits leaves NOTHING running them: one
+	// stuck delegation would stop every schedule and monitor for as long as
+	// the drain lasts. Runs already in flight here keep going and the drain
+	// still waits for them.
+	go s.releaseIntakeEarly(logger, batonCh)
 	stopPublish := make(chan struct{})
 	go func() {
 		t := time.NewTicker(3 * time.Second)
@@ -5002,9 +5031,27 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 		baton.Release()
 		logger.Info().Msg("upgrade: intake baton handed to the successor")
 	default:
-		logger.Warn().Msg("upgrade: no intake baton held — successor may already have taken over")
+		// The usual case: releaseIntakeEarly handed it over when the drain began.
 	}
 	logger.Info().Msg("upgrade: drained, exiting")
+}
+
+// releaseIntakeEarly runs at the start of a drain. It stops this process's
+// workflow triggers, then releases the intake baton so the successor starts
+// cron, workflow triggers and scheduled messages while this process finishes
+// its remaining work. The triggers stop BEFORE the baton goes, so a tick is
+// never fired by both processes.
+func (s *Server) releaseIntakeEarly(logger *zerolog.Logger, batonCh chan *upgrade.IntakeBaton) {
+	if s.wfMgr != nil {
+		s.wfMgr.StopTriggers()
+	}
+	select {
+	case baton := <-batonCh:
+		baton.Release()
+		logger.Info().Msg("upgrade: intake baton handed to the successor at drain start — cron and schedules run there now")
+	default:
+		logger.Warn().Msg("upgrade: no intake baton held at drain start — successor may already have taken over")
+	}
 }
 
 // Stdio MCP entry points (BuildMCPHandler, RunMCPStdio, resolveWickGateBin)

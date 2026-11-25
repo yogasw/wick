@@ -17,14 +17,14 @@ func TestDrainingProcessRefusesInternalTurns(t *testing.T) {
 	p := &Pool{}
 	idle := &runEntry{state: state.New(nil)}
 	idle.state.Apply(event.AgentEvent{Type: event.Done}) // turn over: lifecycle idle
-	working := &runEntry{state: state.New(nil)} // spawning counts as running
+	working := &runEntry{state: state.New(nil)}          // spawning counts as running
 
 	drainingNow = func() bool { return false }
 	if p.refuseWhileDrainingLocked(nil, false, "team") {
 		t.Fatal("refused while not draining")
 	}
 	drainingNow = func() bool { return true }
-	for _, src := range []string{"team", "subagent", "schedule", "cli", "agent", "workflow"} {
+	for _, src := range []string{"team", "subagent", "schedule", "cli", "agent"} {
 		if !p.refuseWhileDrainingLocked(nil, false, src) {
 			t.Errorf("%s: a new turn was let in while draining", src)
 		}
@@ -35,9 +35,9 @@ func TestDrainingProcessRefusesInternalTurns(t *testing.T) {
 			t.Errorf("%s: refused into a turn already running here", src)
 		}
 	}
-	for _, src := range []string{"slack", "telegram", "ui", ""} {
+	for _, src := range []string{"slack", "telegram", "ui", "", "workflow"} {
 		if p.refuseWhileDrainingLocked(nil, false, src) {
-			t.Errorf("%s: channel intake refused while draining", src)
+			t.Errorf("%s: refused while draining (channel intake, or a workflow run already in flight here)", src)
 		}
 	}
 }

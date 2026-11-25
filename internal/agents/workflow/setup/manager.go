@@ -286,6 +286,19 @@ func (m *Manager) StartCron(ctx context.Context) {
 	}
 }
 
+// StopTriggers stops cron and schedule_at from firing in this process,
+// leaving the router workers to finish the runs already queued or running.
+// Used when a draining process hands trigger intake to its successor.
+// Safe to call before Stop, and more than once.
+func (m *Manager) StopTriggers() {
+	if m.Cron != nil {
+		m.Cron.Stop()
+	}
+	if m.ScheduleAt != nil {
+		m.ScheduleAt.Stop()
+	}
+}
+
 // Stop drains the router workers cleanly.
 func (m *Manager) Stop() {
 	if m.Cron != nil {

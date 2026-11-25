@@ -3025,9 +3025,15 @@ var ErrHandedOver = errors.New("wick is handing over to a new build: this proces
 // keeps channel intake (Slack, Telegram, …) until it exits, so those are
 // not refused; these come from in-process paths that also run in the
 // successor.
+//
+// "workflow" is not among them. A draining process hands its cron and
+// trigger intake to the successor as soon as the drain starts, so a
+// workflow turn that still arrives here belongs to a run already in flight
+// in this process: refusing it fails that run mid-node, and a run kept
+// alive by a long drain would fail on every agent node it reaches.
 var drainRefused = map[string]bool{
 	"team": true, "subagent": true, "schedule": true, "watch": true, "agent": true,
-	"agentctl": true, "cli": true, "workflow": true, "failover": true,
+	"agentctl": true, "cli": true, "failover": true,
 }
 
 // drainingNow is upgrade.Draining; tests swap it.
