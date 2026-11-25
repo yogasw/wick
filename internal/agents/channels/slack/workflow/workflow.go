@@ -65,6 +65,7 @@ func RegisterAll(reg *integration.Registry, pick ChannelPicker) {
 	// Events — inbound (Slack → workflow trigger).
 	registerEventMessage(reg)
 	registerEventThreadStarted(reg)
+	registerEventReaction(reg)
 	registerEventAppMention(reg)
 	registerEventAppHomeOpened(reg)
 	registerEventBlockAction(reg)

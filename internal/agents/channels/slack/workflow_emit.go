@@ -185,3 +185,29 @@ func rawMap(cb slackgo.InteractionCallback) map[string]any {
 	}
 	return m
 }
+
+// emitReactionWorkflow fires slack.reaction / slack.reaction_removed.
+// Slack pushes these, so a workflow reacting to an emoji needs no
+// polling. Nothing else is fetched per reaction: the payload is what the
+// event carries. The bot's own reactions are skipped (loop guard), and
+// the event key names the reactor and emoji so different reactions on
+// one message are not collapsed into one.
+func (s *Channel) emitReactionWorkflow(ctx context.Context, event, user, itemUser, reaction, channelID, ts string, added bool) {
+	if user == "" || reaction == "" || channelID == "" || ts == "" || s.isBotUser(user) {
+		return
+	}
+	key := "reaction:" + channelID + "/" + ts + "/" + reaction + "/" + user
+	if !added {
+		key += "/removed"
+	}
+	s.emitWorkflow(ctx, event, map[string]any{
+		"user":       user,
+		"reaction":   reaction,
+		"channel_id": channelID,
+		"ts":         ts,
+		"item_user":  itemUser,
+		"added":      added,
+		"is_dm":      len(channelID) > 0 && channelID[0] == 'D',
+		"event_key":  key,
+	})
+}

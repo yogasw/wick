@@ -2036,9 +2036,11 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			s.handleAgentSessionStopped(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
 			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, true)
+			s.emitReactionWorkflow(ctx, "reaction", ev.User, ev.ItemUser, ev.Reaction, ev.Item.Channel, ev.Item.Timestamp, true)
 			s.handleReactionAdded(ctx, ev)
 		case *slackevents.ReactionRemovedEvent:
 			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, false)
+			s.emitReactionWorkflow(ctx, "reaction_removed", ev.User, ev.ItemUser, ev.Reaction, ev.Item.Channel, ev.Item.Timestamp, false)
 			s.handleReactionRemoved(ev)
 		}
 	}
