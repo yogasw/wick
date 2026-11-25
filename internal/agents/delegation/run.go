@@ -1442,6 +1442,39 @@ func (s *Service) InflightCount() int {
 // there is no constructor to put this in.
 func (s *Service) RegisterDrain() {
 	upgrade.Register("delegations", s.InflightCount)
+	upgrade.RegisterStuckCancel("delegations", s.InterruptInflight)
+}
+
+// InterruptInflight stops every delegation still running under this process,
+// the same way a person pressing Stop would: partial work is kept and the
+// leader is told the result is interrupted. A draining process calls it once
+// the drain has outlived upgrade.StuckWorkTimeout, so a hung sub-agent cannot
+// hold the previous generation — and with it every later deploy — forever.
+func (s *Service) InterruptInflight(ctx context.Context) int {
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.inflight))
+	for id := range s.inflight {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+	stopped := 0
+	for _, id := range ids {
+		out, err := s.Interrupt(ctx, id, "", true)
+		if err != nil {
+			log.Warn().Err(err).Str("delegation", id).Msg("delegation: could not stop a delegation that outlived the drain")
+			// Release the waiter anyway, so the drain is not held by it.
+			if s.cancelInflight(id) {
+				stopped++
+			}
+			continue
+		}
+		if out != OutcomeAlreadyDone {
+			stopped++
+		}
+		log.Warn().Str("delegation", id).Str("outcome", string(out)).
+			Msg("delegation: stopped — it outlived the drain's stuck-work timeout")
+	}
+	return stopped
 }
 
 func (s *Service) trackInflight(id string, cancel context.CancelFunc) {

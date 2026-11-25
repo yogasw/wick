@@ -4964,6 +4964,25 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 		}
 	}()
 	defer close(stopPublish)
+	// Cancellable work that has run past the stuck-work timeout is stopped
+	// (see upgrade.RegisterStuckCancel), so one hung sub-agent cannot keep
+	// this generation — and every deploy after it — waiting forever.
+	if limit := upgrade.StuckWorkTimeout(); limit > 0 {
+		go func() {
+			t := time.NewTimer(limit)
+			defer t.Stop()
+			select {
+			case <-stopPublish:
+				return
+			case <-t.C:
+			}
+			stopped := upgrade.CancelStuck(context.Background())
+			if len(stopped) > 0 {
+				logger.Warn().Interface("stopped", stopped).Dur("after", limit).
+					Msg("upgrade: stopped work that outlived the drain's stuck-work timeout")
+			}
+		}()
+	}
 
 	quiet := upgrade.DrainQuiet()
 	ev := logger.Info().Strs("outstanding", upgrade.Busy()).Dur("settle", quiet)

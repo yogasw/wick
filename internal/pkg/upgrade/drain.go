@@ -330,4 +330,52 @@ func Wait(ctx context.Context) []string { return Default.Wait(ctx) }
 func WaitSettled(ctx context.Context, quiet time.Duration) []string {
 	return Default.WaitSettled(ctx, quiet)
 }
-func Total() int                        { return Default.Total() }
+func Total() int { return Default.Total() }
+
+// Stuck work: a draining process waits for its work however long it takes,
+// but a unit that never ends (a sub-agent that hangs, a delegation whose
+// waiter lost its child) would keep the old generation alive forever and
+// block every deploy after it. A subsystem that can stop such work cleanly —
+// recording what it had, telling whoever waits — registers a canceller here,
+// and the drain calls it once StuckWorkTimeout has passed.
+var (
+	stuckMu      sync.Mutex
+	stuckCancels = map[string]func(context.Context) int{}
+)
+
+// RegisterStuckCancel declares how to stop name's outstanding work after a
+// drain has run past StuckWorkTimeout. fn returns how many units it stopped.
+func RegisterStuckCancel(name string, fn func(context.Context) int) {
+	if name == "" || fn == nil {
+		return
+	}
+	stuckMu.Lock()
+	stuckCancels[name] = fn
+	stuckMu.Unlock()
+}
+
+// CancelStuck runs every registered canceller and reports what each stopped
+// (subsystems that stopped nothing are left out).
+func CancelStuck(ctx context.Context) map[string]int {
+	stuckMu.Lock()
+	fns := make(map[string]func(context.Context) int, len(stuckCancels))
+	for k, v := range stuckCancels {
+		fns[k] = v
+	}
+	stuckMu.Unlock()
+	out := map[string]int{}
+	for name, fn := range fns {
+		if n := fn(ctx); n > 0 {
+			out[name] = n
+		}
+	}
+	return out
+}
+
+// StuckWorkTimeout is how long a drain lets cancellable work (see
+// RegisterStuckCancel) run before stopping it. WICK_DRAIN_STUCK_TIMEOUT
+// overrides it (any Go duration; 0 turns it off). Only cancellable work is
+// affected: agent turns, workflow runs and the rest are still waited for.
+func StuckWorkTimeout() time.Duration {
+	return envDuration("WICK_DRAIN_STUCK_TIMEOUT", 30*time.Minute)
+}
