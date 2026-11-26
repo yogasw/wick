@@ -73,3 +73,13 @@ func TestCaptainPolicyOffStaysOff(t *testing.T) {
 		t.Fatal("CaptainRulesOn with the setting off")
 	}
 }
+
+func TestCaptainPolicyRuleDocIsValid(t *testing.T) {
+	d, err := ParseRule(captainPolicyRule("owner-a").Doc)
+	if err != nil {
+		t.Fatalf("captain policy rule doc does not parse: %v", err)
+	}
+	if !d.ShowCard {
+		t.Fatal("captain policy rule must keep the card")
+	}
+}

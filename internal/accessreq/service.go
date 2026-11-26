@@ -377,7 +377,7 @@ func onlyRuleSaves(actions []ActionInput) bool {
 // captainPolicyRule stands in for a rule: the save runs as the owner,
 // and the card stays posted so the change is on record.
 func captainPolicyRule(owner string) entity.AccessRule {
-	return entity.AccessRule{Name: CaptainPolicyRuleName, OwnerID: owner, Doc: "name: captain\neffect: auto_approve\nshow_card: true\nwhen: {kind: [write]}"}
+	return entity.AccessRule{Name: CaptainPolicyRuleName, OwnerID: owner, Doc: "name: captain\neffect: auto_approve\nshow_card: true\nwhen: {ops: [\"" + RulesConnectorID + ".save_rule\"], kind: [write]}"}
 }
 
 // Enabled reports whether access requests are on for a session.
