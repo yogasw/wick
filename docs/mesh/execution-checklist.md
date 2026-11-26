@@ -94,3 +94,22 @@ Never mark an entire section done based on a helper or test of a mock. Update th
 ## Continuation — persistent node identity (Superpowers)
 - Base: c2cac48049f93b2a1d692db722d23ef95bbcf829. Task brief: OpenNodeIdentity(dir string) returns the same Ed25519 key across restart and concurrent opens, creates private seed atomically, refuses unsafe or corrupt state instead of changing identity. Files: meshstate/identity.go and identity_test.go. RED: isolated cloud standard-library-only Go 1.23.2, stub with explicit unimplemented error, GO111MODULE=off go test -count=1 -run '^TestNodeIdentity' . failed on concurrent/restart behavior as expected. GREEN: GO111MODULE=off go test -race -count=10 -run '^TestNodeIdentity' . passed (1.140s), including 16 simultaneous opens and rejection of corrupt/public/symlink/directory seed. Expected Git blobs identity.go ed658660d83197ad40821aa5d1c3626b61f54d4f, identity_test.go f7b91fd575cf55cbd768bfd07707954a3a5ccc38. Full Go 1.26 CI pending. Ruling: dedicated private directory under pre-existing trusted parent, hard-link publication + fsync, fail closed on unsupported filesystem; Windows and ARM64/runtime validation remain pending. Key rotation, lifecycle and real listener remain unfinished. No key material is replicated or exposed by this API.
 - CI 45830432143 at c2cac48: Mesh plugin and real PostgreSQL success, baseline still running at last check. Next inspect final CI, connect identity to plugin-owned runtime with explicit lifecycle; continue remaining queue. No completion claim for C or overall goal.
+
+## Mandatory final acceptance gates (user, 2026-11-26)
+All 12 must be satisfied with current-commit evidence; no partial completion counts.
+- [ ] Seluruh 25 bagian plan terpenuhi
+- [ ] Core dan integrasi Mesh selesai
+- [ ] Connector selesai
+- [ ] Service plugin selesai
+- [ ] Tools dan dashboard HTML selesai
+- [ ] SDK dan distributed orchestration selesai
+- [ ] Sinkronisasi data, file, dan mobile selesai
+- [ ] Failover, quorum, dan MCP gateway selesai
+- [ ] UI/UX desktop dan mobile teruji
+- [ ] Unit, integration, REST, E2E, race dan security test lulus
+- [ ] Seluruh temuan audit diperbaiki
+- [ ] PR ke develop siap
+
+## Continuation — dedicated peer listener
+- Base: 121fefa6d8c9c569588dacf2d08646f1ee48a090. CI 45830939566 at 121fefa: mesh-plugin and change-feed-postgres success; baseline was still in progress. Task: explicit TLS listener lifecycle, bounded HTTP server, rejection of unsafe TLS configuration, actual socket test with client certificate and cancellation.
+- RED: isolated cloud Go 1.23.2, stub returns not implemented; GO111MODULE=off go test -count=1 -run '^TestPeerListener' . failed as expected at TestPeerListenerLifecycle. GREEN: GO111MODULE=off go test -race -count=10 -run '^TestPeerListener' . passed (1.308s). Git blobs peer_listener.go 46ab3de09bd851db304ffb167223a43de7d74ffc and peer_listener_test.go c8327ac5863f25bd3a0fec23bb102d071ffef6bc. Fixture verifies certificate requirement, not pinning itself; actual pinning is in ServerTLS. Added StartResultPeer wiring to existing pinned TLS and ResultHandler; full integration verification pending. Next: exercise this wiring with actual paired nodes and restart, certificate rotation, service lifecycle. No host activation or deployment. No gate marked complete.
