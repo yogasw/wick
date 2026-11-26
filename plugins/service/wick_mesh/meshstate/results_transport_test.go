@@ -6,6 +6,7 @@ import (
  "crypto/rand"
  "net/http/httptest"
  "path/filepath"
+ "strings"
  "testing"
  "time"
 )
@@ -41,6 +42,11 @@ func TestResultTransportOfflineAndRevocation(t *testing.T){
  if n,e:=pull(mobile);e!=nil||n!=2{t.Fatal(n,e)}
  if n,e:=pull(mobile);e!=nil||n!=2{t.Fatal("repeat pull",n,e)}
  if v,e:=dst.Received(aid,2);e!=nil||v.JobID!="two"{t.Fatal(v,e)}
+ // A receiver budget that fits one result but not two must still make progress.
+ for _,id:=range []string{"three","four"}{if _,e=src.Publish(FinalResult{JobID:id,State:Completed,Summary:strings.Repeat("x",512)});e!=nil{t.Fatal(e)}}
+ restricted.Rules["results"]=Rule{Mode:ResultOnly,Direction:Pull,ByteBudget:850}
+ if n,e:=pull(restricted);e!=nil||n!=3{t.Fatal("budget page 1",n,e)}
+ if n,e:=pull(restricted);e!=nil||n!=4{t.Fatal("budget page 2",n,e)}
  if e=as.Revoke(bid);e!=nil{t.Fatal(e)}
  if _,e=pull(mobile);e==nil{t.Fatal("revoked peer received results")}
 }

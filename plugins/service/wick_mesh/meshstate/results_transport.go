@@ -18,6 +18,8 @@ const ResultRoute="/mesh/v1/results"
 const maxResultWire=MaxResultPage*(MaxResultBytes+128)+4096
 // resultTransfer additionally checks data class: metadata-only and on-demand
 // scopes cannot silently authorize the background final-result stream.
+func resultOrigin(s *Results)string{s.mu.Lock();defer s.mu.Unlock();return s.disk.Origin}
+func peerLocalID(s *PeerStore)string{s.mu.Lock();defer s.mu.Unlock();return s.data.LocalID}
 func resultTransfer(p Policy,outbound,wifi bool,size int64)bool{
  rule,ok:=p.Rules["results"]
  return ok&&(rule.Mode==Replicate||rule.Mode==ResultOnly)&&p.AllowsTransfer("results",outbound,wifi,size)
@@ -27,22 +29,23 @@ func resultTransfer(p Policy,outbound,wifi bool,size int64)bool{
 // listener. The stream is for a single trust scope; per-object ACLs are still
 // required before adapters publish real multi-user Wick job data.
 func ResultHandler(store *Results,peers *PeerStore,policy func()Policy,wifi func()bool,clock func()time.Time)(http.Handler,error){
- if store==nil||peers==nil||policy==nil||wifi==nil||clock==nil||store.disk.Origin!=peers.data.LocalID{return nil,errors.New("invalid result handler configuration")}
+ if store==nil||peers==nil||policy==nil||wifi==nil||clock==nil||resultOrigin(store)!=peerLocalID(peers){return nil,errors.New("invalid result handler configuration")}
  mux:=http.NewServeMux()
  mux.HandleFunc("GET "+ResultRoute,func(w http.ResponseWriter,r *http.Request){
  w.Header().Set("Cache-Control","no-store")
  if _,e:=RequestPeer(r.TLS,peers,"results",false,clock());e!=nil{http.Error(w,"forbidden",403);return}
  p:=policy();isWiFi:=wifi()
  if !resultTransfer(p,true,isWiFi,0){http.Error(w,"result transfer disabled",403);return}
- q,e:=url.ParseQuery(r.URL.RawQuery);if e!=nil||len(q)!=2||len(q["after"])!=1||len(q["limit"])!=1{http.Error(w,"invalid cursor",400);return}
+ q,e:=url.ParseQuery(r.URL.RawQuery);if e!=nil||len(q)!=3||len(q["after"])!=1||len(q["limit"])!=1||len(q["max_bytes"])!=1{http.Error(w,"invalid cursor",400);return}
  after,e:=strconv.ParseUint(q.Get("after"),10,64);if e!=nil{http.Error(w,"invalid cursor",400);return}
  limit,e:=strconv.Atoi(q.Get("limit"));if e!=nil||limit<1||limit>MaxResultPage{http.Error(w,"invalid limit",400);return}
+ requestedMax,e:=strconv.ParseInt(q.Get("max_bytes"),10,64);if e!=nil||requestedMax<1||requestedMax>int64(maxResultWire){http.Error(w,"invalid byte limit",400);return}
  page,e:=store.Page(after,limit);if e!=nil{http.Error(w,"cursor unavailable",409);return}
  // Reduce batch size rather than splitting a single result or exceeding
  // the configured per-transfer budget. Never hide a budget-blocked item.
  for{
  b,e:=json.Marshal(page);if e!=nil{http.Error(w,"result unavailable",500);return}
- if len(b)<=maxResultWire&&resultTransfer(p,true,isWiFi,int64(len(b))){
+ if int64(len(b))<=requestedMax&&resultTransfer(p,true,isWiFi,int64(len(b))){
  w.Header().Set("Content-Type","application/json");_,_=w.Write(b);return
  }
  if len(page.Events)<=1{http.Error(w,"result exceeds transfer budget",413);return}
@@ -55,13 +58,14 @@ func ResultHandler(store *Results,peers *PeerStore,policy func()Policy,wifi func
 // the received events with their cursor. The endpoint is a configured peer
 // address, never derived from job input or a redirect.
 func PullResults(ctx context.Context,endpoint,target string,cert tls.Certificate,peers *PeerStore,dst *Results,policy Policy,wifi bool,clock func()time.Time)(uint64,error){
- if peers==nil||dst==nil||clock==nil||dst.disk.Origin!=peers.data.LocalID||!resultTransfer(policy,false,wifi,0){return 0,errors.New("result pull disabled or invalid")}
+ if peers==nil||dst==nil||clock==nil||resultOrigin(dst)!=peerLocalID(peers)||!resultTransfer(policy,false,wifi,0){return 0,errors.New("result pull disabled or invalid")}
  if _,e:=peers.Authorize(target,"results",true);e!=nil{return 0,e}
  u,e:=url.Parse(endpoint)
  if e!=nil||u.Scheme!="https"||u.Hostname()==""||u.User!=nil||u.RawQuery!=""||u.ForceQuery||u.Fragment!=""||u.Opaque!=""||u.RawPath!=""||strings.TrimRight(u.Path,"/")!=""{return 0,errors.New("invalid peer endpoint")}
  cursor,e:=dst.Cursor(target);if e!=nil{return 0,e}
  cfg,e:=ClientTLS(cert,peers,target,clock);if e!=nil{return cursor,e}
- u.Path=ResultRoute;q:=url.Values{};q.Set("after",strconv.FormatUint(cursor,10));q.Set("limit",strconv.Itoa(MaxResultPage));u.RawQuery=q.Encode()
+ max:=int64(maxResultWire);if budget:=policy.Rules["results"].ByteBudget;budget>0&&budget<max{max=budget}
+ u.Path=ResultRoute;q:=url.Values{};q.Set("after",strconv.FormatUint(cursor,10));q.Set("limit",strconv.Itoa(MaxResultPage));q.Set("max_bytes",strconv.FormatInt(max,10));u.RawQuery=q.Encode()
  req,e:=http.NewRequestWithContext(ctx,http.MethodGet,u.String(),nil);if e!=nil{return cursor,errors.New("invalid result request")}
  req.Header.Set("Accept","application/json")
  tr:=&http.Transport{TLSClientConfig:cfg,TLSHandshakeTimeout:5*time.Second,MaxResponseHeaderBytes:16<<10,DisableCompression:true}
@@ -70,7 +74,6 @@ func PullResults(ctx context.Context,endpoint,target string,cert tls.Certificate
  resp,e:=client.Do(req);if e!=nil{return cursor,errors.New("peer unavailable or authentication failed")}
  defer resp.Body.Close()
  if resp.StatusCode!=200{return cursor,errors.New("peer refused result pull")}
- max:=int64(maxResultWire);if budget:=policy.Rules["results"].ByteBudget;budget>0&&budget<max{max=budget}
  b,e:=io.ReadAll(io.LimitReader(resp.Body,max+1));if e!=nil||int64(len(b))>max||!resultTransfer(policy,false,wifi,int64(len(b))){return cursor,errors.New("result transfer exceeds limit")}
  var page ResultPage
  dec:=json.NewDecoder(bytes.NewReader(b));dec.DisallowUnknownFields()
