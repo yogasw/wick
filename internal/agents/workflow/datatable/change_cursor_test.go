@@ -12,13 +12,13 @@ import (
 func TestChangeCursorRestartAndRebootstrap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cursor.db")
 	db := openChangeFeedTest(t,path)
-	runChangeCursorContract(t,db,"cursor_scope")
+	runChangeCursorContract(t,db,"cursor-scope")
 	sqlDB,_ := db.DB()
 	if err := sqlDB.Close(); err != nil { t.Fatal(err) }
 	db = openChangeFeedTest(t,path)
 	f,err := InstallChangeFeed(db)
 	if err != nil { t.Fatal(err) }
-	after,events,err := f.ReadForPeer("cursor_scope",strings.Repeat("a",64),10)
+	after,events,err := f.ReadForPeer("cursor-scope",strings.Repeat("a",64),10)
 	if err != nil || after != 5 || len(events)!=0 { t.Fatalf("durable cursor: %d %+v %v",after,events,err) }
 }
 

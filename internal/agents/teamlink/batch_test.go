@@ -1,6 +1,7 @@
 package teamlink
 
 import (
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"context"
 	"errors"
 	"os"
@@ -406,7 +407,7 @@ func TestRestartRedeliversOutboxAndHeldReplies(t *testing.T) {
 	// orderly restart must wait for the completed reply to reach the task file.
 	waitFor(t, "the persisted held reply", func() bool {
 		rec, ok := readRecord(filepath.Join(dir, a.TaskID+".json"))
-		return ok && rec.Finished && rec.State == "completed" && rec.Reply == "anton: held"
+		return ok && rec.Finished && stateName(a2a.TaskState(rec.State)) == "completed" && rec.Reply == "anton: held"
 	})
 	waitFor(t, "the persisted solo outbox", func() bool {
 		data, err := os.ReadFile(filepath.Join(dir, faninDir, "outbox.json"))
