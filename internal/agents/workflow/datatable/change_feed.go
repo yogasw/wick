@@ -54,7 +54,7 @@ func InstallChangeFeed(db *gorm.DB) (*ChangeFeed, error) {
 	dialect := db.Dialector.Name()
 	if dialect != "sqlite" && dialect != "postgres" { return nil, fmt.Errorf("change feed: unsupported dialect %q", dialect) }
 	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.AutoMigrate(&ChangeScope{}, &ChangeEvent{}); err != nil { return err }
+		if err := tx.AutoMigrate(&ChangeScope{}, &ChangeEvent{}, &ChangeCursor{}); err != nil { return err }
 		for _, tr := range changeTriggers {
 			name := "wick_dt_feed_" + tr.name
 			// The allocator updates only next_row_id; that is not a schema

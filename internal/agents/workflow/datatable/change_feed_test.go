@@ -118,4 +118,5 @@ func TestChangeFeedPostgres(t *testing.T) {
 	for i,e := range events {
 		if e.Sequence != int64(i+1) || e.Kind != want[i] { t.Fatalf("event %d: %+v",i,e) }
 	}
+	runChangeCursorContract(t,db,"cursor_pg")
 }
