@@ -18,7 +18,7 @@ import (
 // decision; the agent only drafts them. There is no other way for an agent
 // to write a rule.
 const (
-	rulesConnectorID = "wick-access-rules"
+	rulesConnectorID = accessreq.RulesConnectorID
 	rulesOpSave      = "save_rule"
 )
 

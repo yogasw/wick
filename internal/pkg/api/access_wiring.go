@@ -156,6 +156,28 @@ type accessDirectory struct {
 	layout agentconfig.Layout
 }
 
+// CaptainRuleOwner is the owner of sessionID's agent when that agent is
+// the owner's Captain, working in its own chat, with "Auto-approve the
+// Captain's access proposals" on All, and the latest request came from
+// that owner: its access-rule saves then apply at once, like a persona
+// change. "" otherwise.
+func (d accessDirectory) CaptainRuleOwner(ctx context.Context, sessionID string) string {
+	if d.team == nil || sessionID == "" {
+		return ""
+	}
+	mgr, err := d.team.ManagerFor(ctx, sessionID)
+	if err != nil || !mgr.IsCaptain || mgr.OwnerUserID == "" {
+		return ""
+	}
+	if team.NormalizeAutoApprove(team.DecodeCaptainPolicy(mgr.CaptainPolicy).AutoApprove) != team.AutoApproveAll {
+		return ""
+	}
+	if !agentstool.RequestedByOwner(sessionID, mgr.OwnerUserID) {
+		return ""
+	}
+	return mgr.OwnerUserID
+}
+
 // SessionProject names a session's project, for project-scoped rules and
 // the project's request history.
 // LastAsker names the person behind a session's latest turn.
@@ -307,7 +329,9 @@ func wireAccessRequests(db *gorm.DB, svc *connectors.Service, users *login.Servi
 		defer cancel()
 		return ar.HoldsConnector(ctx, sessionID, instanceID)
 	})
-	mcphandlers.AccessRequestsOn = ar.Enabled
+	mcphandlers.AccessRequestsOn = func(sessionID string) bool {
+		return ar.Enabled(sessionID) || ar.CaptainRulesOn(context.Background(), sessionID)
+	}
 	svc.SetAccessCheck(func(ctx context.Context, q connectors.AccessQuery) (string, string, error) {
 		return ar.Check(ctx, accessreq.Action{
 			SessionID: q.SessionID, AgentID: q.AgentID, ConnectorID: q.ConnectorID, ConnectorKey: q.ConnectorKey,

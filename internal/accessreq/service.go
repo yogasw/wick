@@ -107,7 +107,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 	if strings.TrimSpace(in.SessionID) == "" {
 		return View{}, errors.New("an access request needs a session: call it from an agent session")
 	}
-	if !s.Enabled(in.SessionID) {
+	// The owner's Captain, with "Auto-approve the Captain's access
+	// proposals" on All, saves access rules the way it changes a persona:
+	// at once, as the owner, with the card kept for the record. Only a
+	// request made of rule saves and nothing else qualifies.
+	captainOwner := ""
+	if onlyRuleSaves(in.Actions) {
+		captainOwner = s.captainRuleOwner(ctx, in.SessionID)
+	}
+	if !s.Enabled(in.SessionID) && captainOwner == "" {
 		return View{}, ErrOff
 	}
 	if len(in.Actions) == 0 {
@@ -224,6 +232,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (View, error) {
 		}
 		if v.Effect == EffectAutoApprove {
 			autos = append(autos, auto{idx: i, rule: *v.Rule})
+		} else if captainOwner != "" {
+			autos = append(autos, auto{idx: i, rule: captainPolicyRule(captainOwner)})
 		}
 		items = append(items, item)
 	}
@@ -321,6 +331,53 @@ func (s *Service) sessionProject(sessionID string) string {
 // overrides — a refused op stays refused as it always was.
 type ProjectSwitches interface {
 	AccessRequestsOn(projectID string) bool
+}
+
+// RulesConnectorID is the pseudo connector of save_rule, the action an
+// agent files to propose a project's access rule.
+const RulesConnectorID = "wick-access-rules"
+
+// CaptainPolicyRuleName names, on the card, the Captain auto-approve
+// setting that approved a rule save.
+const CaptainPolicyRuleName = "Captain auto-approve (Settings › Captain)"
+
+// CaptainRules is the optional part of a Directory that says whether a
+// session is the owner's Captain with its access proposals auto-approved
+// for everything, asked by that owner. It returns the owner, or "".
+type CaptainRules interface {
+	CaptainRuleOwner(ctx context.Context, sessionID string) string
+}
+
+func (s *Service) captainRuleOwner(ctx context.Context, sessionID string) string {
+	if cr, ok := s.dir.(CaptainRules); ok && sessionID != "" {
+		return cr.CaptainRuleOwner(ctx, sessionID)
+	}
+	return ""
+}
+
+// CaptainRulesOn reports whether a session may save access rules through
+// the Captain auto-approve setting, even where its project left access
+// requests off.
+func (s *Service) CaptainRulesOn(ctx context.Context, sessionID string) bool {
+	return s.captainRuleOwner(ctx, sessionID) != ""
+}
+
+func onlyRuleSaves(actions []ActionInput) bool {
+	if len(actions) == 0 {
+		return false
+	}
+	for _, a := range actions {
+		if a.ConnectorID != RulesConnectorID {
+			return false
+		}
+	}
+	return true
+}
+
+// captainPolicyRule stands in for a rule: the save runs as the owner,
+// and the card stays posted so the change is on record.
+func captainPolicyRule(owner string) entity.AccessRule {
+	return entity.AccessRule{Name: CaptainPolicyRuleName, OwnerID: owner, Doc: "name: captain\neffect: auto_approve\nshow_card: true\nwhen: {kind: [write]}"}
 }
 
 // Enabled reports whether access requests are on for a session.

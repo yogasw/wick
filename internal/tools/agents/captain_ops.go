@@ -544,6 +544,10 @@ const autoApprovedBy = "auto-approve (Captain policy)"
 // teammate agent's message, a schedule, a workflow, a listen-mode post —
 // may carry someone else's words, so it gets the card. Anything
 // unreadable is false too.
+// RequestedByOwner reports whether the latest request in sessionID came
+// from owner (the Captain auto-approve gate, shared with access rules).
+func RequestedByOwner(sessionID, owner string) bool { return requestedByOwner(sessionID, owner) }
+
 func requestedByOwner(sessionID, owner string) bool {
 	if globalMgr == nil || owner == "" {
 		return false
