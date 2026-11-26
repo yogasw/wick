@@ -402,6 +402,16 @@ func TestRestartRedeliversOutboxAndHeldReplies(t *testing.T) {
 	turns1.line("anton") <- "anton: held"
 	settled(t, h1, a.TaskID, "completed")
 	waitFor(t, "the outbox entry", func() bool { return h1.pendingDeliveries() == 1 })
+	// GetTask reports in-memory completion before persist finishes. A simulated
+	// orderly restart must wait for the completed reply to reach the task file.
+	waitFor(t, "the persisted held reply", func() bool {
+		rec, ok := readRecord(filepath.Join(dir, a.TaskID+".json"))
+		return ok && rec.Finished && rec.State == "completed" && rec.Reply == "anton: held"
+	})
+	waitFor(t, "the persisted solo outbox", func() bool {
+		data, err := os.ReadFile(filepath.Join(dir, faninDir, "outbox.json"))
+		return err == nil && strings.Contains(string(data), "nina: solo")
+	})
 
 	// Restart: vera's turn ran in the process that is gone.
 	h2, _, note2 := newFanHub(t, true)
