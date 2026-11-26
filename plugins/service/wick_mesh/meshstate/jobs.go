@@ -107,6 +107,7 @@ func (s *LocalJobs) Accept(id string,input json.RawMessage)(Job,error){
 }
 func (s *LocalJobs) Claim(id,owner string,now time.Time,ttl time.Duration)(Job,error){
  s.mu.Lock();defer s.mu.Unlock()
+ if s.poisoned{return Job{},ErrUnavailable}
  j,ok:=s.data.Jobs[id];if !ok{return Job{},ErrNotFound}
  if owner==""||ttl<=0||ttl>time.Hour{return Job{},ErrLease}
  if j.State!=Pending&&(j.State!=Running||now.Before(j.Deadline)){return Job{},ErrUnavailable}
@@ -116,6 +117,7 @@ func (s *LocalJobs) Claim(id,owner string,now time.Time,ttl time.Duration)(Job,e
 }
 func (s *LocalJobs) mutateLease(id,owner string,fence uint64,now time.Time,fn func(*Job)error)(Job,error){
  s.mu.Lock();defer s.mu.Unlock()
+ if s.poisoned{return Job{},ErrUnavailable}
  j,ok:=s.data.Jobs[id];if !ok{return Job{},ErrNotFound}
  if j.State!=Running||j.Owner!=owner||j.Fence!=fence||!now.Before(j.Deadline){return Job{},ErrLease}
  if e:=fn(&j);e!=nil{return Job{},e}
@@ -143,6 +145,7 @@ func (s *LocalJobs) Finish(id,owner string,fence uint64,now time.Time,state Stat
 }
 func (s *LocalJobs) Cancel(id string)(Job,error){
  s.mu.Lock();defer s.mu.Unlock()
+ if s.poisoned{return Job{},ErrUnavailable}
  j,ok:=s.data.Jobs[id];if !ok{return Job{},ErrNotFound}
  if j.State==Cancelled{return cloneJob(j),nil}
  if j.State!=Pending&&j.State!=Running{return Job{},ErrUnavailable}
