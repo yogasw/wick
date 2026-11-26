@@ -55,3 +55,29 @@ jobs:
         with:
           name: mesh-coverage
           path: mesh-coverage.out
+  change-feed-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wick_test
+          POSTGRES_PASSWORD: wick_test
+          POSTGRES_DB: wick_change_feed_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wick_test -d wick_change_feed_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Transactional SQLite and PostgreSQL change feed
+        env:
+          WICK_TEST_CHANGE_FEED_POSTGRES: "host=localhost port=5432 user=wick_test password=wick_test dbname=wick_change_feed_test sslmode=disable"
+        run: go test -race -count=1 -timeout 5m -run '^TestChangeFeed' ./internal/agents/workflow/datatable

@@ -2,7 +2,7 @@
 
 Source of truth: [approved original 25-section plan](implementation-plan.md).
 Branch: feat/wick-mesh. Target PR: develop. Do not merge or deploy to production without authorization.
-Last verified source checkpoint: 44ff5980b12981524767b2617906482d1be3ac62, full CI success [45755826106](https://github.com/yogasw/wick/actions/runs/45755826106). Plan copied in 7dec1d9. This is NOT completion of Mesh.
+Last verified CI checkpoint: 89f3b2e3f415ba582f1930fa193e5093cb84f08d, baseline and mesh-plugin success [45795654415](https://github.com/yogasw/wick/actions/runs/45795654415). Plan copied in 7dec1d9. This is NOT completion of Mesh.
 
 ## Execution loop (mandatory on every run)
 1. Read this ledger and the original plan from GitHub. Read current branch head and CI logs; reconcile concurrent commits. Termux is not a prerequisite.
@@ -22,6 +22,8 @@ Last verified source checkpoint: 44ff5980b12981524767b2617906482d1be3ac62, full 
 - CI: .github/workflows/mesh-ci.yml builds/tests core + three plugins; repeated REST/integration, race, 720 convergence permutations and coverage.
 - No evidence of live integrated Mesh runtime, real host auth E2E, quorum or complete UI.
 
+- Core datatable opt-in transactional metadata feed added in bb186d8b42c23444f03d37dfef690c28634ef868; captures actual row/schema writes and deletions, durable per-slug sequence, bounded reads. No payload export, global identity, authorized remote access, runtime activation or per-peer ACK yet. New tests not yet verified.
+
 ## Acceptance matrix — all 25 original sections
 | Section | Current state | Unfinished evidence gate |
 | --- | --- | --- |
@@ -29,7 +31,7 @@ Last verified source checkpoint: 44ff5980b12981524767b2617906482d1be3ac62, full 
 | 2 Architecture | Partial | Core hooks, outbox, runtime, registry and adapters |
 | 3 Roles/network | Partial | Runtime capability/quotas, metered policy, no HP transit |
 | 4 Selective sync | Partial | Per-object scopes, ACL, preview/backup/identity |
-| 5 Protocol | Partial | Transactional outbox, durable dedup ACK, field deltas, snapshots/retention |
+| 5 Protocol | Partial | Metadata change feed implemented (pending CI); payload/field deltas, global IDs, durable dedup ACK, snapshots/retention remain |
 | 6 Versions | Partial | Per-scope negotiation, quarantine, migrations, signed rollback |
 | 7 Orchestration | Partial local only | Real consensus, fencing, DAG/recovery/retry/side effects |
 | 8 SDK/pilot | Pending | Split/execute/reduce, House Hunt pilot, rate limits |
@@ -67,3 +69,10 @@ Last verified source checkpoint: 44ff5980b12981524767b2617906482d1be3ac62, full 
 ## Per-run log format
 Date/time UTC | head before | code/test commit | paths | exact CI run/step results | remaining gates | next concrete task | blockers and attempts.
 Never mark an entire section done based on a helper or test of a mock. Update this file only with evidence. Keep original plan intact.
+
+## Run 2026-11-26
+- Head before: 89f3b2e3f415ba582f1930fa193e5093cb84f08d; run 45795654415 baseline and mesh-plugin success confirmed.
+- Code/test commit: bb186d8b42c23444f03d37dfef690c28634ef868; paths internal/agents/workflow/datatable/change_feed.go and change_feed_test.go. Explicit SQLite/PostgreSQL trigger installation, opt-in per resource, transactional sequence and event insert, metadata-only, rollback/restart tests. No remote ACL or replication readiness claim.
+- Follow-up in this ledger's commit: durable snapshot_required boundary on every activation after a disabled interval; actual PostgreSQL service CI job and test; existing SQLite tests adjusted. Check exact branch head and workflow run before marking any test passed. Prior push may be cancelled by concurrency.
+- Blocker: cloud git ls-remote cannot resolve github.com; local Go 1.23.2 versus repo Go 1.26.0. GitHub connector writes succeeded. Connector commit-workflow query filters to PR runs and returned empty; combined status empty. New CI not verified, no pass claim.
+- Next: inspect actual CI for new head, fix failures, prove concurrent PostgreSQL sequence ordering and rebootstrap; implement peer cursor/ACK and authorized payload/snapshot adapters, integrate explicit lifecycle and ACL. Add source audit ADR and threat model. Queue A/B remain open.

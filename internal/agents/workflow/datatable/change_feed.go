@@ -34,16 +34,16 @@ func (ChangeEvent) TableName() string { return "wick_dt_change_events" }
 type ChangeFeed struct { db *gorm.DB }
 
 type changeTrigger struct {
-	name, table, operation, scope, row, kind, predicate string
+	name, table, operation, scope, row, kind string
 }
 
 var changeTriggers = []changeTrigger{
-	{"row_insert","wick_data_table_rows","INSERT","NEW.table_slug","NEW.id","row_insert",""},
-	{"row_update","wick_data_table_rows","UPDATE","NEW.table_slug","NEW.id","row_update",""},
-	{"row_delete","wick_data_table_rows","DELETE","OLD.table_slug","OLD.id","row_delete",""},
-	{"table_insert","wick_data_tables","INSERT","NEW.slug","NULL","table_insert",""},
-	{"table_update","wick_data_tables","UPDATE","NEW.slug","NULL","table_update",""},
-	{"table_delete","wick_data_tables","DELETE","OLD.slug","NULL","table_delete",""},
+	{"row_insert","wick_data_table_rows","INSERT","NEW.table_slug","NEW.id","row_insert"},
+	{"row_update","wick_data_table_rows","UPDATE","NEW.table_slug","NEW.id","row_update"},
+	{"row_delete","wick_data_table_rows","DELETE","OLD.table_slug","OLD.id","row_delete"},
+	{"table_insert","wick_data_tables","INSERT","NEW.slug","NULL","table_insert"},
+	{"table_update","wick_data_tables","UPDATE","NEW.slug","NULL","table_update"},
+	{"table_delete","wick_data_tables","DELETE","OLD.slug","NULL","table_delete"},
 }
 
 // InstallChangeFeed installs transactional triggers for SQLite and PostgreSQL.
@@ -106,8 +106,20 @@ $feed$`,name,tr.scope,tr.scope,tr.kind,tr.row)
 // eventual consumer; this API does not assert replica readiness.
 func (f *ChangeFeed) SetEnabled(slug string, enabled bool) error {
 	if err := parse.ValidateID(slug); err != nil { return err }
-	return f.db.Exec(`INSERT INTO wick_dt_change_scopes (slug,sequence,enabled) VALUES (?,0,?)
-ON CONFLICT (slug) DO UPDATE SET enabled = excluded.enabled`,slug,enabled).Error
+	return f.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`INSERT INTO wick_dt_change_scopes (slug,sequence,enabled) VALUES (?,0,FALSE)
+ON CONFLICT (slug) DO NOTHING`,slug).Error; err != nil { return err }
+		if !enabled {
+			return tx.Exec("UPDATE wick_dt_change_scopes SET enabled = FALSE WHERE slug = ?",slug).Error
+		}
+		res := tx.Exec("UPDATE wick_dt_change_scopes SET enabled = TRUE, sequence = sequence + 1 WHERE slug = ? AND enabled = FALSE",slug)
+		if res.Error != nil { return res.Error }
+		if res.RowsAffected == 0 { return nil }
+		// Explicit durable boundary: a consumer cannot mistake a stream
+		// resumed after an unobserved interval for continuous history.
+		return tx.Exec(`INSERT INTO wick_dt_change_events (slug,sequence,version,kind,row_id)
+SELECT slug,sequence,1,'snapshot_required',NULL FROM wick_dt_change_scopes WHERE slug = ?`,slug).Error
+	})
 }
 
 // Read returns a bounded ordered page for exactly one local scope. Delivery,
