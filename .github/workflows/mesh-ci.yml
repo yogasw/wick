@@ -27,3 +27,20 @@ jobs:
         run: go test -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
       - name: Race tests
         run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
+  mesh-plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/go.mod
+          cache-dependency-path: |
+            go.sum
+            plugins/go.sum
+      - name: Mesh plugin build
+        run: go build ./plugins/service/wick_mesh/...
+      - name: Mesh plugin vet
+        run: go vet ./plugins/service/wick_mesh/...
+      - name: Mesh unit and race tests
+        run: go test -race -count=1 -timeout 5m ./plugins/service/wick_mesh/...
