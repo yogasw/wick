@@ -1,0 +1,29 @@
+name: Mesh CI
+on:
+  push:
+    branches: [feat/wick-mesh]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Generate templates
+        run: |
+          go mod download
+          go install github.com/a-h/templ/cmd/templ@$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          templ generate ./...
+      - name: Build
+        run: go build ./internal/... ./cmd/... ./pkg/...
+      - name: Vet
+        run: go vet ./internal/... ./cmd/... ./pkg/...
+      - name: Unit tests
+        run: go test -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
+      - name: Race tests
+        run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
