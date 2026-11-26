@@ -222,14 +222,21 @@ type ViewerIdentities interface {
 // itemRole decides whether viewer may approve one action: the default
 // role (admin, session owner, agent owner) and the approvers rules that
 // match it. "add" rules let in whoever their script allows; "only" rules
-// must allow every approver. reason explains a refusal by a script.
+// must allow every approver, and whoever they all allow approves. reason explains a refusal by a script.
 func (s *Service) itemRole(ctx context.Context, a Action, viewer Person, defaultRole bool, rules []approverRule) (ok bool, reason string) {
 	if len(rules) == 0 {
 		return defaultRole, ""
 	}
-	var ids map[string]string
+	ids := map[string]string{}
 	if vi, has := s.dir.(ViewerIdentities); has {
-		ids = vi.Identities(ctx, viewer.ID)
+		for k, v := range vi.Identities(ctx, viewer.ID) {
+			ids[k] = v
+		}
+	}
+	// The account the person clicked with wins over a stored link: it
+	// is who is deciding right now, and often the only one there is.
+	for k, v := range ViewerIdentitiesOf(ctx) {
+		ids[k] = v
 	}
 	input := scriptInput(a, viewerInput(viewer, ids))
 	added := false
@@ -252,6 +259,9 @@ func (s *Service) itemRole(ctx context.Context, a Action, viewer Person, default
 				}
 				return false, "Rule \"" + ar.rule.Name + "\" decides who may approve this: " + why + "."
 			}
+			// The card names an "only" rule as who approves, so whoever
+			// it allows approves, not just the default approvers.
+			added = true
 			continue
 		}
 		if allow {

@@ -1066,6 +1066,13 @@ func capBlocks(b []map[string]any) []map[string]any {
 // accessViewerID maps a Slack user to the wick user approving as them:
 // the linked channel identity first, then a connected Slack account, then
 // the Slack profile email. Bots never approve.
+// accessCtx carries the clicker's Slack id to approver rule scripts
+// (input.viewer.slack_id), also when their wick account was found by
+// email and has no linked Slack identity.
+func accessCtx(ctx context.Context, slackUserID string) context.Context {
+	return accessreq.WithViewerIdentity(ctx, "slack_id", slackUserID)
+}
+
 func (s *Channel) accessViewerID(ctx context.Context, slackUserID string) string {
 	if s.isBotUser(slackUserID) {
 		return ""
@@ -1128,6 +1135,7 @@ func (s *Channel) handleAccessClick(ctx context.Context, cb slackgo.InteractionC
 	if AccessRequests == nil {
 		view = modalBase("Access request", "access_req_off", meta, []map[string]any{section("Approvals are not available on this wick.")}, "")
 	} else {
+		ctx = accessCtx(ctx, cb.User.ID)
 		viewer := s.accessViewerID(ctx, cb.User.ID)
 		v, verr := AccessRequests.ViewFor(ctx, reqID, viewer)
 		switch {
@@ -1176,6 +1184,7 @@ func (s *Channel) handleAccessApproveAll(ctx context.Context, cb slackgo.Interac
 		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Approvals are not available on this wick.")
 		return
 	}
+	ctx = accessCtx(ctx, cb.User.ID)
 	viewer := s.accessViewerID(ctx, cb.User.ID)
 	if viewer == "" {
 		s.accessEphemeral(chatID, threadTS, cb.User.ID, "Your Slack account is not linked to an approved wick user, so nothing was approved.")
@@ -1327,6 +1336,7 @@ func (s *Channel) handleAccessSubmit(ctx context.Context, cb slackgo.Interaction
 		return
 	}
 	reqID, chatID, threadTS := parts[0], parts[1], parts[2]
+	ctx = accessCtx(ctx, cb.User.ID)
 	viewer := s.accessViewerID(ctx, cb.User.ID)
 	if viewer == "" {
 		s.accessSubmitMessage(ctx, cb, chatID, threadTS, "⛔ Your Slack account is not linked to an approved wick user, so nothing was decided.")

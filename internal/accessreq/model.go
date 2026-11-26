@@ -424,3 +424,28 @@ func SessionOf(ctx context.Context) string {
 	v, _ := ctx.Value(sessionCtxKey{}).(string)
 	return v
 }
+
+type viewerIDsCtxKey struct{}
+
+// WithViewerIdentity names an account of the person deciding, as the
+// channel they clicked in saw it (e.g. "slack_id" of the Slack clicker).
+// Approver scripts read it as input.viewer.<key>, ahead of the accounts
+// linked to the wick user, so a person signed in by email alone still
+// carries the Slack id they clicked with.
+func WithViewerIdentity(ctx context.Context, key, value string) context.Context {
+	if key == "" || value == "" {
+		return ctx
+	}
+	ids := map[string]string{}
+	for k, v := range ViewerIdentitiesOf(ctx) {
+		ids[k] = v
+	}
+	ids[key] = value
+	return context.WithValue(ctx, viewerIDsCtxKey{}, ids)
+}
+
+// ViewerIdentitiesOf lists what WithViewerIdentity set (nil when none).
+func ViewerIdentitiesOf(ctx context.Context) map[string]string {
+	v, _ := ctx.Value(viewerIDsCtxKey{}).(map[string]string)
+	return v
+}

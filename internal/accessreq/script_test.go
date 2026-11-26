@@ -234,6 +234,45 @@ func TestApproversOnlyNarrowsDefaultApprovers(t *testing.T) {
 	}
 }
 
+// A person signed in by email has no linked chat identity; the id the
+// channel saw them click with reaches the script instead.
+func TestApproversOnlyUsesClickerIdentityFromContext(t *testing.T) {
+	e := newEnv(t)
+	e.cat.can["stranger|c-notes"] = true
+	withIdentities(e, map[string]map[string]string{"stranger": {"email": "dev@example.com"}})
+	fr := &fakeRunner{fn: func(_ string, in map[string]any) (any, error) {
+		return map[string]any{"allow": viewerField(in, "chat_id") == "U-OK", "reason": "not in the ops channel"}, nil
+	}}
+	e.svc.SetScriptRunner(fr.run)
+	saveRule(t, e, "admin-z", approversRule("only"))
+	v := e.create(t, act("c-notes", "update_page", map[string]any{"page_id": "p1"}))
+	ctx := context.Background()
+
+	if sv, _ := e.svc.ViewFor(ctx, v.ID, "stranger"); sv.Items[0].CanDecide {
+		t.Fatalf("unlinked viewer passed without a clicker id: %+v", sv.Items[0])
+	}
+	cctx := WithViewerIdentity(ctx, "chat_id", "U-OK")
+	sv, _ := e.svc.ViewFor(cctx, v.ID, "stranger")
+	if !sv.Items[0].CanDecide {
+		t.Fatalf("clicker id did not reach the script: %+v", sv.Items[0])
+	}
+	_, res, _ := e.svc.Decide(cctx, v.ID, "stranger", []Decision{{ItemID: v.Items[0].ID, Mode: ModeOnce}})
+	if len(res) != 1 || !res[0].OK {
+		t.Fatalf("clicker decide = %+v", res)
+	}
+}
+
+func TestWithViewerIdentityOverridesAndKeeps(t *testing.T) {
+	ctx := WithViewerIdentity(context.Background(), "a", "1")
+	ctx = WithViewerIdentity(ctx, "b", "2")
+	ctx = WithViewerIdentity(ctx, "", "x")
+	ctx = WithViewerIdentity(ctx, "c", "")
+	got := ViewerIdentitiesOf(ctx)
+	if len(got) != 2 || got["a"] != "1" || got["b"] != "2" {
+		t.Fatalf("identities = %v", got)
+	}
+}
+
 func TestSimulateScriptReportsResultAndLogs(t *testing.T) {
 	e := newEnv(t)
 	fr := &fakeRunner{fn: func(string, map[string]any) (any, error) {
