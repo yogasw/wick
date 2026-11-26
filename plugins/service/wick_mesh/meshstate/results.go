@@ -5,6 +5,7 @@ import (
  "encoding/json"
  "errors"
  "fmt"
+ "io"
  "os"
  "path/filepath"
  "sync"
@@ -80,7 +81,7 @@ func OpenResults(path,origin string)(*Results,error){
  f,e:=os.Open(path);if errors.Is(e,os.ErrNotExist){return s,nil};if e!=nil{return nil,e};defer f.Close()
  info,e:=f.Stat();if e!=nil{return nil,e}
  if !info.Mode().IsRegular()||info.Size()>MaxResultStoreBytes{return nil,errors.New("invalid result store file")}
- b,e:=os.ReadFile(path);if e!=nil{return nil,e}
+ b,e:=io.ReadAll(io.LimitReader(f,MaxResultStoreBytes+1));if e!=nil{return nil,e};if len(b)>MaxResultStoreBytes{return nil,errors.New("result store size exceeded")}
  if e=json.Unmarshal(b,&s.disk);e!=nil{return nil,e}
  if s.disk.Version!=1||s.disk.Origin!=origin||s.disk.Remote==nil||len(s.disk.Remote)>1024{return nil,errors.New("invalid result store version or origin")}
  if e=checkEvents(s.disk.Local);e!=nil{return nil,e}
