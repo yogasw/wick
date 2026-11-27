@@ -46,12 +46,15 @@ func SignEnvelope(key ed25519.PrivateKey,sender,recipient,route string,body []by
  e.Signature=base64.RawStdEncoding.EncodeToString(ed25519.Sign(key,b))
  return e,nil
 }
-// ReplayWindow is deliberately process-local. Restart-safe command handlers
-// must additionally persist replay/operation receipts before side effects.
+// ReplayWindow is process-local unless opened with OpenReplayWindow.
+// Durable nonce admission is not an atomic external side-effect receipt.
 type ReplayWindow struct {
  mu sync.Mutex
  seen map[string]time.Time
  capacity int
+ last time.Time
+ path string
+ poisoned bool
 }
 func NewReplayWindow(capacity int)(*ReplayWindow,error){
  if capacity<1||capacity>1000000{return nil,errors.New("invalid replay capacity")}
@@ -66,11 +69,16 @@ func (r *ReplayWindow) Verify(e Envelope,key ed25519.PublicKey,expectedSender,re
  if err!=nil||len(sig)!=ed25519.SignatureSize{return errors.New("invalid signature")}
  b,err:=e.unsigned();if err!=nil||!ed25519.Verify(key,b,sig){return errors.New("invalid signature")}
  r.mu.Lock();defer r.mu.Unlock()
+ now=now.UTC()
+ if r.poisoned||now.Before(r.last){return errors.New("replay state unavailable or clock rolled back")}
+ r.last=now
  for k,until:=range r.seen{if !now.Before(until){delete(r.seen,k)}}
  id:=e.Sender+"\x00"+e.Nonce
  if _,ok:=r.seen[id];ok{return errors.New("replayed envelope")}
  if len(r.seen)>=r.capacity{return errors.New("replay window full")}
- r.seen[id]=sent.Add(skew)
+ // Retain for the maximum accepted skew, even if this call uses less.
+ r.seen[id]=sent.Add(5*time.Minute)
+ if r.path!=""{if err:=r.saveReplay();err!=nil{r.poisoned=true;return err}}
  return nil
 }
 // NegotiateVersion returns the highest exact shared supported wire revision.
