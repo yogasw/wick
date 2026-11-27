@@ -22,6 +22,10 @@ jobs:
         working-directory: fe
       - run: npm run build
         working-directory: fe
+      - run: npx playwright install --with-deps chromium
+        working-directory: fe
+      - run: npx playwright test --config common/ui/playwright.effort.config.ts
+        working-directory: fe
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 45
