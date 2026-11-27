@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -67,6 +68,7 @@ type TeamAgentItem struct {
 	SystemPrompt         string                `json:"system_prompt"`
 	Provider             string                `json:"provider"`
 	Model                string                `json:"model"`
+	Effort               string                `json:"effort,omitempty"`
 	Preset               string                `json:"preset"`
 	Features             team.Features         `json:"features"`
 	Avatar               team.Avatar           `json:"avatar"`
@@ -274,6 +276,9 @@ type teamAgentWriteReq struct {
 	SystemPrompt *string `json:"system_prompt"`
 	Provider     *string `json:"provider"`
 	Model        *string `json:"model"`
+	// Effort is the default reasoning effort on the agent's provider +
+	// model; nil keeps it while the pair stays and drops it when it changes.
+	Effort *string `json:"effort"`
 	// Preset is read on create only, for the new project's defaults (a
 	// duplicated agent keeps its original's preset).
 	Preset               *string                 `json:"preset"`
@@ -1126,6 +1131,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 			it.Icon, it.Description = m.Icon, m.Description
 			it.SystemPrompt = m.Defaults.SystemAddon
 			it.Provider, it.Model, it.Preset = m.Defaults.Provider, m.Defaults.Model, m.Defaults.Preset
+			it.Effort = m.Defaults.Effort
 			it.OwnProject = project.IsAgentProject(m)
 			it.ShowInProjects = project.ShowsInProjects(m)
 		}
@@ -1144,11 +1150,29 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 // put on m: only a CHANGED provider is the caller's choice, so re-saving
 // the one already there never locks an editor out of the persona.
 func requireTeamProviderChange(c *tool.Ctx, m project.Meta, req teamAgentWriteReq) bool {
+	if !requireTeamEffort(c, m, req) {
+		return false
+	}
 	if req.Provider == nil {
 		return true
 	}
 	prov := strings.TrimSpace(*req.Provider)
 	return prov == m.Defaults.Provider || requireProviderKeyAccess(c, prov)
+}
+
+// requireTeamEffort refuses an effort the agent's provider + model (as the
+// same write leaves them) does not offer.
+func requireTeamEffort(c *tool.Ctx, m project.Meta, req teamAgentWriteReq) bool {
+	if req.Effort == nil {
+		return true
+	}
+	next := m
+	applyProjectFields(&next, req)
+	if _, err := nextDefaultEffort(c.Context(), next.Defaults, "", req.Effort); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return false
+	}
+	return true
 }
 
 func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
@@ -1174,6 +1198,7 @@ func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
 	}
 	set(&m.Description, req.Description, false)
 	set(&m.Defaults.SystemAddon, req.SystemPrompt, false)
+	pairBefore := m.Defaults.Provider + "\x00" + m.Defaults.Model
 	if req.Provider != nil {
 		set(&m.Defaults.Provider, req.Provider, true)
 		// A model id is scoped to one instance; switching the provider
@@ -1189,6 +1214,21 @@ func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
 			m.Defaults.Model = nv
 			changed = true
 		}
+	}
+	// The effort belongs to the provider + model pair: a new pair without a
+	// new effort drops it. Validated by requireTeamEffort before this runs.
+	if req.Effort != nil {
+		nv := strings.TrimSpace(*req.Effort)
+		if nv == provider.EffortDefault {
+			nv = ""
+		}
+		if m.Defaults.Effort != nv {
+			m.Defaults.Effort = nv
+			changed = true
+		}
+	} else if m.Defaults.Effort != "" && pairBefore != m.Defaults.Provider+"\x00"+m.Defaults.Model {
+		m.Defaults.Effort = ""
+		changed = true
 	}
 	// Only the agent's own project can be hidden, so only it takes the flag.
 	if req.ShowInProjects != nil && project.IsAgentProject(*m) && project.SetShowInProjects(m, *req.ShowInProjects) {

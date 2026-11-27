@@ -679,6 +679,7 @@ func Register(r tool.Router) {
 	r.GET("/projects", projectsRedirect) // legacy entry → all chats
 	r.GET("/projects/options", projectOptionsJSON)
 	r.GET("/providers/options", providerOptionsJSON)
+	r.GET("/providers/effort", getProviderEffort)
 	r.GET("/providers/options/{type}/{name}/models", providerOptionModelsJSON)
 	r.GET("/presets/options", presetOptionsJSON)
 	r.GET("/projects/{id}", projectSettingsPage) // owner-only inside, rendered as a page

@@ -40,6 +40,11 @@ type Defaults struct {
 	// not a missing value.
 	Model       string `json:"model,omitempty"`
 	SystemAddon string `json:"system_addon,omitempty"`
+	// Effort is the reasoning effort chats run with on Provider + Model
+	// when they pick none: "" = the model default, else a native id the
+	// model offers ("default" is stored as ""). Like Model, it belongs to
+	// that pair and is cleared when either changes without a new one.
+	Effort string `json:"effort,omitempty"`
 }
 
 // Meta is the persisted shape of a project.

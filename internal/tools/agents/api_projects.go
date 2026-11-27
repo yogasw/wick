@@ -106,7 +106,10 @@ type ProjectSettingsResponse struct {
 	// in that instance's own id space (for wick, down to a live-set leaf).
 	// Only meaningful alongside DefaultProvider.
 	DefaultModel string `json:"default_model"`
-	SystemAddon  string `json:"system_addon"`
+	// DefaultEffort is the reasoning effort on DefaultProvider +
+	// DefaultModel ("" = the model default).
+	DefaultEffort string `json:"default_effort"`
+	SystemAddon   string `json:"system_addon"`
 	// Widget is this project's stored HTML-artifact CSP override — the raw
 	// override, NOT the resolved policy: the editor has to show what the
 	// project itself sets, separately from what it inherits.
@@ -223,6 +226,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		DefaultPreset:   p.Meta.Defaults.Preset,
 		DefaultProvider: p.Meta.Defaults.Provider,
 		DefaultModel:    p.Meta.Defaults.Model,
+		DefaultEffort:   p.Meta.Defaults.Effort,
 		SystemAddon:     p.Meta.Defaults.SystemAddon,
 		CreatedAt:       p.Meta.CreatedAt.Format("2006-01-02"),
 		PresetList:      presetList,
@@ -277,6 +281,9 @@ func apiProjectUpdate(c *tool.Ctx) {
 		Provider    string `json:"provider"`
 		Model       string `json:"model"`
 		SystemAddon string `json:"system_addon"`
+		// Effort is the default reasoning effort on provider + model. nil
+		// = keep it while the pair stays, drop it when the pair changes.
+		Effort *string `json:"effort"`
 		// Widget carries the project's CSP override. A nil pointer means
 		// "leave it as it is" — distinct from a zero value, which means
 		// "stop overriding and inherit the global policy". Older clients
@@ -310,9 +317,16 @@ func apiProjectUpdate(c *tool.Ctx) {
 	if prov := strings.TrimSpace(req.Provider); prov != meta.Defaults.Provider && !requireProviderKeyAccess(c, prov) {
 		return
 	}
+	oldPair := meta.Defaults.Provider + "\x00" + meta.Defaults.Model
 	meta.Defaults.Provider = strings.TrimSpace(req.Provider)
 	meta.Defaults.Model = modelWithProvider(req.Provider, req.Model)
 	meta.Defaults.SystemAddon = req.SystemAddon
+	if eff, err := nextDefaultEffort(c.Context(), meta.Defaults, oldPair, req.Effort); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	} else {
+		meta.Defaults.Effort = eff
+	}
 
 	// The path is only shown to the owner or an admin (projectPathFor), so
 	// anyone else's form comes back without it; their save keeps the folder
