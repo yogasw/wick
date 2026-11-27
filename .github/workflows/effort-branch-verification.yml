@@ -1,0 +1,38 @@
+name: Effort branch verification (temporary)
+on:
+  push:
+    branches: [feat/unified-reasoning-effort]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: fe/package-lock.json
+      - run: npm ci
+        working-directory: fe
+      - run: npm test
+        working-directory: fe
+      - run: npm run build
+        working-directory: fe
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - run: go install github.com/a-h/templ/cmd/templ@$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+      - run: templ generate ./...
+      - run: go build ./internal/... ./cmd/... ./pkg/...
+      - run: go test -count=1 -timeout 10m ./internal/... ./cmd/... ./pkg/...
+      - run: go test -race -count=1 -timeout 10m ./internal/agents/provider/...
