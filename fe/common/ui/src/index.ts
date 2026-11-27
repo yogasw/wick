@@ -146,3 +146,6 @@ export { default as UsageMiniRings } from "./usage/UsageMiniRings.svelte";
 // Usage base (types + parser + shared store); also importable on its own
 // as "@wick-fe/common-ui/usage".
 export * from "./usage/base/index.js";
+
+export { default as EffortPicker } from "./EffortPicker.svelte";
+export type { EffortPickerConfig } from "./effort-picker.mjs";
