@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
-import { withModelListMeta, optionModelsWithMeta } from "@wick-fe/common-ui";
+import { withModelListMeta, optionModelsWithMeta, type EffortInfo } from "@wick-fe/common-ui";
 import type { ProviderOption, ProviderModelOption } from "../types/agents.js";
 import { cachedProjectRows, invalidateProjectOptions, type ProjectOptionRow } from "./projectOptionsCache.js";
 
@@ -134,3 +134,11 @@ export async function createSessionInProject(
   const body = (await res.text().catch(() => "")).trim();
   throw new Error(body || `create session failed: ${res.status}`);
 }
+
+// Reasoning effort of the session's active agent: what its provider + model
+// offers and what it is set to. A POST saves a pick for the next turn.
+export const getSessionEffort = (base: string, sessionId: string) =>
+  apiGetE<EffortInfo>(`${base}/sessions/${encodeURIComponent(sessionId)}/effort`);
+
+export const setSessionEffort = (base: string, sessionId: string, effort: string) =>
+  apiPostE<EffortInfo>(`${base}/sessions/${encodeURIComponent(sessionId)}/effort`, { effort });

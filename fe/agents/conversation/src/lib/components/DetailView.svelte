@@ -8,7 +8,7 @@
   import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk, toastWarn, pushToast, dismissToast } from "@wick-fe/common-stores";
-  import { Button, ConfirmDialog, Composer, Modal } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, Composer, Modal, effortPickerConfig, type EffortInfo } from "@wick-fe/common-ui";
   import { seedUsage, glanceFromWire } from "@wick-fe/common-ui/usage";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
@@ -32,7 +32,7 @@
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, getTurnBlob, cancelRun, sendPostback, decideApprovalCard } from "../api/sessions.js";
   import { lockCard } from "../actionCard.js";
   import { APIError } from "@wick-fe/common-api";
-  import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject, getSessionEffort, setSessionEffort } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getTodos, type TodoList } from "../api/todos.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
@@ -915,6 +915,34 @@
   // provider instance's own default model applies.
   let activeModelID = $state("");
   let activeProjectId = $state<string | null>(null);
+  // Reasoning effort of the active agent on its current provider + model,
+  // re-read whenever either changes (each model offers its own stops).
+  let effortInfo = $state<EffortInfo | null>(null);
+  let effortSeq = 0;
+  async function loadEffort() {
+    const seq = ++effortSeq;
+    try {
+      const info = await Effect.runPromise(getSessionEffort(base, sessionId).pipe(Effect.provide(WickClientLayer)));
+      if (seq === effortSeq) effortInfo = info;
+    } catch {
+      if (seq === effortSeq) effortInfo = null; // no picker rather than a wrong one
+    }
+  }
+  $effect(() => {
+    void sessionId;
+    void activeProvider;
+    void activeModelID;
+    untrack(() => void loadEffort());
+  });
+  async function handleEffortChange(effort: string) {
+    try {
+      effortInfo = await run(setSessionEffort(base, sessionId, effort).pipe(Effect.provide(WickClientLayer)));
+    } catch (e: unknown) {
+      toastError(`Effort: ${e instanceof Error ? e.message : String(e)}`);
+      void loadEffort();
+    }
+  }
+  const effortConfig = $derived(effortPickerConfig(effortInfo, (v) => void handleEffortChange(v)));
   // Sub-agent roles are edited where they are scoped: the project's
   // Sub-agents tab, or the global roles page for a chat with no project.
   const rolesHref = $derived(
@@ -3540,6 +3568,7 @@
             queueLabel={composerQueueLabel}
             onStop={handleStopFromComposer}
             toolbarExtra={composerToolbarExtra}
+            effort={readOnly ? undefined : effortConfig}
           />
           </div>
         </div>
