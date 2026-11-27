@@ -1,6 +1,6 @@
 # Unified provider reasoning effort
 
-Status: in progress. Initial resolver contract only; not yet wired to production UI or spawn paths.
+Status: in progress. Initial resolver contract and isolated effort picker implemented. Composer accepts optional caller-supplied capability data. Production callers and spawn paths are not wired yet; do not merge.
 
 ## User-facing behavior
 
@@ -30,7 +30,8 @@ Status: in progress. Initial resolver contract only; not yet wired to production
 - [ ] Discover model-specific options/defaults for nested model sets and actual supported CLI versions; no inferred capability from vendor name alone.
 - [ ] Persist selection across provider, model, project, agent, team, workflow and failover config; migrate legacy settings safely.
 - [ ] Wire REST/session APIs, permissions, model list metadata and typed frontend contract.
-- [ ] Build reusable discrete horizontal effort slider (not a card carousel) and compact composer button; integrate both Composer and ProviderPicker model drill stacks.
+- [x] Implement reusable discrete horizontal effort slider and animated gauge; isolated Node and Chromium fixture checks passed.
+- [ ] Connect real provider capabilities to the composer, verify mobile keyboard viewport, and integrate both Composer and ProviderPicker model drill stacks.
 - [ ] Integrate instance/project/agent/team/member/subagent/workflow settings and failover target picker.
 - [ ] Carry effective effort through spawn, warm sessions, model retry, failover and return-home; prevent stale state or cross-agent leaks.
 - [ ] Tests: capability contract, default/inherit/off, per-model validation, argv/env/API payloads, persistence, failover, live provider probes, mobile drag/release/tap/keyboard, dynamic gauge needle/preview/cancel/default/provider switch, desktop keyboard, reduced motion, cancel, busy turn behavior.

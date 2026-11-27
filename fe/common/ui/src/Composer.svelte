@@ -10,6 +10,8 @@
        - commands: `/` command menu (omit → `/` inert)
        - submitLabel: text beside the send arrow (omit → icon only) */
   import type { Snippet } from "svelte";
+  import EffortPicker from "./EffortPicker.svelte";
+  import type { EffortPickerConfig } from "./effort-picker.mjs";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
   import CapabilityChips from "./CapabilityChips.svelte";
@@ -87,6 +89,8 @@
         for a caller-specific setting (a remote agent's repository and
         branch). The caller owns its own popover. */
     toolbarExtra?: Snippet;
+    /** Model-specific effort options, resolved and persisted by the caller. */
+    effort?: EffortPickerConfig;
   };
 
   /** ContextMeter is the composer's view of the model's context window.
@@ -127,6 +131,7 @@
     queueLabel = "",
     onStop,
     toolbarExtra,
+    effort,
   }: Props = $props();
 
   let text = $state("");
@@ -1708,6 +1713,7 @@
 
     <!-- right: context ring + provider chip (Claude-style) + send -->
     <div class="ml-auto flex items-center gap-2 min-w-0">
+      {#if effort && effort.options.length > 1}<EffortPicker config={effort}/>{/if}
       {#if caption}
         <span data-testid="composer-caption" title={caption} class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700" style="max-width: 14rem">{caption}</span>
       {/if}
