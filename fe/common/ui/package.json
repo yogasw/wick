@@ -30,6 +30,6 @@
     "ace-builds": "^1.44.0"
   },
   "scripts": {
-    "test:unit": "vitest run"
+    "test:unit": "vitest run && node --test src/effort-ui.node-test.mjs"
   }
 }
