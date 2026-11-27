@@ -19,6 +19,9 @@ package provider
 type ModelSeed struct {
 	ID   string
 	Desc string
+	// Variants are the model's reasoning variants as its catalog lists
+	// them (opencode's per-model `variants`); empty when it lists none.
+	Variants []string
 }
 
 // ModelEntry is one operator-curated model on an instance: the alias plus its

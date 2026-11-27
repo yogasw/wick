@@ -42,6 +42,11 @@ type AgentEntry struct {
 	// "0" = disabled; "<n>" = budget. Set per workflow agent node from its
 	// thinking + max_thinking_tokens inputs.
 	ThinkingTokens string `json:"thinking_tokens,omitempty"`
+	// Effort is the reasoning effort picked for this agent in this session:
+	// "" = none picked (the agent/project default applies), "default" =
+	// the provider/model default on purpose, else a native id ("high").
+	// Checked against the model at each spawn; see provider.ResolveSpawnEffort.
+	Effort string `json:"effort,omitempty"`
 	// ModelID pins a specific model id this agent uses on its next spawn,
 	// scoped to whichever provider Provider currently points at. Empty =
 	// use that provider instance's own default-model resolution. Every
@@ -346,6 +351,21 @@ func SetThinkingTokens(layout config.Layout, id, name, v string) error {
 	}
 	return updateAgent(layout, id, name, newIdleAgent, func(a *AgentEntry) bool {
 		a.ThinkingTokens = v
+		return true
+	})
+}
+
+// SetEffort persists the picked reasoning effort on the agent entry,
+// creating it if missing. "" clears the pick.
+func SetEffort(layout config.Layout, id, name, v string) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
+	return updateAgent(layout, id, name, newIdleAgent, func(a *AgentEntry) bool {
+		if a.Effort == v {
+			return false
+		}
+		a.Effort = v
 		return true
 	})
 }

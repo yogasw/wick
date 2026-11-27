@@ -41,8 +41,13 @@ type engine struct {
 	// e.reasoning; "/thinking on" restores this. Distinct from e.reasoning,
 	// which is the CURRENT (possibly toggled) request.
 	defaultReasoning *ReasoningConfig
-	tools            []toolDef
-	toolByName       map[string]toolDef
+
+	// pickedEffort is the unified effort picked for this spawn (see
+	// setPickedEffort); empty when none was picked.
+	pickedEffort string
+
+	tools      []toolDef
+	toolByName map[string]toolDef
 
 	// maxTurns caps total tool-call rounds per user message. 0 = unlimited
 	// (the consec-error + wall-clock guards below are the safety net).

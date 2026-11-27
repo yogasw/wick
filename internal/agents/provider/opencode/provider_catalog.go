@@ -2,9 +2,11 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -120,6 +122,9 @@ type providerList struct {
 			Limit  struct {
 				Context int `json:"context"`
 			} `json:"limit"`
+			// Variants are the model's reasoning variants (`--variant`),
+			// keyed by name; only the names are used.
+			Variants map[string]json.RawMessage `json:"variants"`
 		} `json:"models"`
 	} `json:"all"`
 	Default   map[string]string `json:"default"`
@@ -153,7 +158,7 @@ func fetchCatalog(ctx context.Context, c *apiClient) (*provider.OpencodeCatalog,
 			if id == "" {
 				id = key
 			}
-			cp.Models = append(cp.Models, provider.ModelSeed{ID: p.ID + "/" + id, Desc: m.Name})
+			cp.Models = append(cp.Models, provider.ModelSeed{ID: p.ID + "/" + id, Desc: m.Name, Variants: variantNames(m.Variants)})
 		}
 		cat.Providers = append(cat.Providers, cp)
 	}
@@ -253,4 +258,32 @@ func autoCompaction(ctx context.Context, c *apiClient) *bool {
 		on = *cfg.Compaction.Auto
 	}
 	return &on
+}
+
+// variantOrder ranks the usual reasoning variants low to high; anything
+// else follows in name order, so the slider runs from least to most effort.
+var variantOrder = map[string]int{"none": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "xhigh": 5, "max": 6}
+
+func variantNames(v map[string]json.RawMessage) []string {
+	if len(v) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(v))
+	for name := range v {
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		oi, iok := variantOrder[out[i]]
+		oj, jok := variantOrder[out[j]]
+		switch {
+		case iok && jok:
+			return oi < oj
+		case iok != jok:
+			return iok
+		}
+		return out[i] < out[j]
+	})
+	return out
 }

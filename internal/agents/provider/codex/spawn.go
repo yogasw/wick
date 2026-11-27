@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -188,6 +189,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// Pinned model (per-instance model picker) → --model. No-op when
 	// unpinned, AI-router, or --model already given.
 	args = append(args, provider.ModelArgs(opt, args)...)
+	// After the instance's own args, so a picked effort overrides an
+	// instance-wide -c model_reasoning_effort (the last -c wins).
+	args = append(args, effortArgs(opt.Effort)...)
 
 	// AI router: when the instance routes through an embedded proxy, the
 	// selected router contributes the codex model_provider wiring + env here
@@ -425,4 +429,13 @@ func termuxProotWrap(bin string, args []string) (string, []string) {
 	}, args...)
 	log.Info().Str("bin", bin).Msg("agents.spawn: codex wrapped with proot (termux)")
 	return "proot", wrapped
+}
+
+// effortArgs is the -c override that sets codex's reasoning effort; none
+// for an empty effort (the instance config and codex decide).
+func effortArgs(effort string) []string {
+	if effort == "" {
+		return nil
+	}
+	return []string{"-c", "model_reasoning_effort=" + strconv.Quote(effort)}
 }

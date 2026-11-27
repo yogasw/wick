@@ -290,6 +290,8 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}", sessionDetail)
 	r.POST("/sessions/{id}/send", sendMessage)
 	r.POST("/sessions/{id}/provider", switchProvider)
+	r.GET("/sessions/{id}/effort", getSessionEffort)
+	r.POST("/sessions/{id}/effort", setSessionEffort)
 	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.POST("/sessions/{id}/runs/{runID}/cancel", cancelSessionRun)

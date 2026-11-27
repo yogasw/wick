@@ -337,6 +337,11 @@ type Options struct {
 	// each spawn (claude). Empty = unset (provider default). Forwarded
 	// verbatim into SpawnOptions.
 	ThinkingTokens string
+	// Effort is the requested reasoning effort for this agent: "" =
+	// inherit (nothing set), "default" = the provider/model default, else
+	// a native id. Resolved against the model of each spawn (a model retry
+	// may land on a model that does not offer it), see spawnEffortLocked.
+	Effort string
 	// ModelID pins a model id on each spawn, scoped to the active provider
 	// instance. Empty = that provider's own default. Forwarded verbatim
 	// into SpawnOptions.
@@ -495,6 +500,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		IdleTimeout:       a.cfg.IdleTimeout,
 		ThinkingTokens:    a.cfg.ThinkingTokens,
 		ModelID:           a.spawnModelIDLocked(),
+		Effort:            a.spawnEffortLocked(ctx),
 		MemGuard:          a.cfg.MemGuard,
 		SpawnSeq:          nextSpawnSeq(),
 		ToolMemoryMaxMB:   a.cfg.ToolMemoryMaxMB,
@@ -956,6 +962,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 		IdleTimeout:       a.cfg.IdleTimeout,
 		ThinkingTokens:    a.cfg.ThinkingTokens,
 		ModelID:           a.spawnModelIDLocked(),
+		Effort:            a.spawnEffortLocked(ctx),
 		MemGuard:          a.cfg.MemGuard,
 		SpawnSeq:          nextSpawnSeq(),
 		ToolMemoryMaxMB:   a.cfg.ToolMemoryMaxMB,

@@ -371,6 +371,11 @@ func spawnEnv(base []string, opt provider.SpawnOptions) []string {
 	if opt.ThinkingTokens != "" {
 		env = append(env, "MAX_THINKING_TOKENS="+opt.ThinkingTokens)
 	}
+	// Appended after the instance env so a picked effort wins over an
+	// instance-wide CLAUDE_CODE_EFFORT_LEVEL (exec keeps the last value).
+	if opt.Effort != "" {
+		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+opt.Effort)
+	}
 	return env
 }
 

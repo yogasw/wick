@@ -482,6 +482,9 @@ type FactoryOptions struct {
 	// spawn (claude). Pulled from the agent entry by the pool; empty = unset
 	// (provider default, thinking on); "0" = disabled; "<n>" = budget.
 	ThinkingTokens string
+	// Effort is the requested reasoning effort ("" = none, "default", or
+	// a native id); the agent resolves it against each spawn's model.
+	Effort string
 	// ModelID pins a model id on the spawn, scoped to the active provider
 	// instance. Pulled from the agent entry by the pool; empty = that
 	// provider's own default.
@@ -521,6 +524,10 @@ type runEntry struct {
 	// (before a foreign pin is dropped): maybeFollowDefault compares it
 	// with agents.json to spot a process left on an older pin.
 	pinnedModel string
+	// effort is the reasoning effort agents.json named at spawn (as
+	// requested, before resolution): maybeFollowDefault compares it with
+	// agents.json so a pick made meanwhile respawns at the next turn.
+	effort string
 	// callerUserID is the wick user whose message caused this subprocess to
 	// spawn. Its MCP credential is minted for that human, and the credential
 	// is baked into the spawn argv — so it cannot change while the process
@@ -1684,6 +1691,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 	resumeID := ""
 	maxTurns := 0
 	thinkingTokens := ""
+	effort := ""
 	modelID := ""
 	pinnedModel := ""
 	pType := ""
@@ -1693,6 +1701,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 			resumeID = a.CLISessionID
 			maxTurns = a.MaxTurns
 			thinkingTokens = a.ThinkingTokens
+			effort = a.Effort
 			modelID = a.ModelID
 			pinnedModel = a.ModelID
 			// A pin only means anything on the instance it was chosen on.
@@ -1747,6 +1756,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		TitleCustom:     sess.Meta.TitleCustom,
 		MaxTurns:        maxTurns,
 		ThinkingTokens:  thinkingTokens,
+		Effort:          p.requestedEffort(ctx, sessionID, effort),
 		ModelID:         modelID,
 		OnFailover:      failoverHook(sess.Meta, p.decideFailover),
 		FailoverMsgKey:  resend.msgKey,
@@ -1782,6 +1792,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) (
 		provType:    pType,
 		provName:    pName,
 		pinnedModel: pinnedModel,
+		effort:      effort,
 		// Remember who this process speaks for, and with which credential,
 		// so a later message from a DIFFERENT user can be detected (the MCP
 		// identity is fixed in the argv) and so the credential dies with the
@@ -2300,6 +2311,25 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // entry (creating it if missing) so the next spawn passes --max-turns.
 func (p *Pool) SetMaxTurns(sessionID, agentName string, maxTurns int) error {
 	return session.SetMaxTurns(p.cfg.Layout, sessionID, agentName, maxTurns)
+}
+
+// SetEffort persists the picked reasoning effort on the agent entry. The
+// running process keeps its effort until its turn ends; the next message
+// respawns it with the new one (maybeFollowDefault), so no turn is cut.
+func (p *Pool) SetEffort(sessionID, agentName, v string) error {
+	return session.SetEffort(p.cfg.Layout, sessionID, agentName, v)
+}
+
+// requestedEffort is the effort a spawn asks for: the session's own pick,
+// else the default its Team agent or project sets (provider.EffortInherited).
+func (p *Pool) requestedEffort(ctx context.Context, sessionID, picked string) string {
+	if picked != "" || provider.EffortInherited == nil {
+		return picked
+	}
+	if e, ok := provider.EffortInherited(ctx, sessionID); ok {
+		return e
+	}
+	return ""
 }
 
 // SetThinkingTokens persists the resolved MAX_THINKING_TOKENS env value on

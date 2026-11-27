@@ -109,6 +109,12 @@ func (e *engine) runThinkingCommand(arg string) {
 // baseline. No override saved → the baseline (e.reasoning). Override OFF → nil.
 // Override ON without an effort → the baseline-or-default (reasoningForOn).
 func (e *engine) effectiveReasoning() *ReasoningConfig {
+	// An effort picked in the composer / agent settings (resolved against
+	// this model at spawn) is the most explicit choice and wins over the
+	// legacy /thinking override and the configured baseline.
+	if e.pickedEffort != "" {
+		return &ReasoningConfig{Effort: e.pickedEffort}
+	}
 	r, set := overrideReasoning(e.wickSessionID)
 	if !set {
 		return e.reasoning // no runtime override → configured baseline
@@ -210,4 +216,10 @@ func effortSuffix(r *ReasoningConfig) string {
 		return fmt.Sprintf(" (budget %d tokens)", r.BudgetTokens)
 	}
 	return ""
+}
+
+// setPickedEffort records the native effort resolved for this spawn; "" =
+// none picked, the override / baseline chain applies as before.
+func (e *engine) setPickedEffort(effort string) {
+	e.pickedEffort = effort
 }

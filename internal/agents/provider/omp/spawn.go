@@ -81,6 +81,11 @@ func buildArgs(ins provider.Instance, opt provider.SpawnOptions, soulPath, overl
 		// seen a model work or fail does it pick instead.
 		args = append(args, "--model", d)
 	}
+	// After the instance's args: a picked effort overrides an
+	// instance-wide --thinking.
+	if opt.Effort != "" {
+		args = append(args, "--thinking", opt.Effort)
+	}
 	if opt.ResumeID != "" {
 		args = append(args, "--resume", opt.ResumeID)
 	}

@@ -56,7 +56,7 @@ func (p *Pool) maybeFollowDefault(ctx context.Context, sessionID, agentName stri
 			follow = (home != tag || homeModel != model) && (cur != tag || a.ModelID != model)
 		}
 	}
-	stale := alive && cur != "" && (normProviderKey(entry.provType+"/"+entry.provName) != cur || entry.pinnedModel != a.ModelID)
+	stale := alive && cur != "" && (normProviderKey(entry.provType+"/"+entry.provName) != cur || entry.pinnedModel != a.ModelID || entry.effort != a.Effort)
 	if !follow && !stale {
 		return false
 	}

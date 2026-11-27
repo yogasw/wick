@@ -615,6 +615,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		}(),
 		MaxTurns:       opt.MaxTurns,
 		ThinkingTokens: opt.ThinkingTokens,
+		Effort:         opt.Effort,
 		ModelID:        opt.ModelID,
 		StripTags:      provider.StripTagList(resolvedIns.StripTags),
 		MemGuard:       memGuard,

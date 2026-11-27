@@ -37,6 +37,11 @@ func buildArgs(opt provider.SpawnOptions, extra []string, model string, modelInA
 	if model != "" && !modelInArgs {
 		args = append(args, "--model", model)
 	}
+	// A variant is opencode's per-model reasoning effort; after the
+	// instance's args so a pick overrides an instance-wide --variant.
+	if opt.Effort != "" {
+		args = append(args, "--variant", opt.Effort)
+	}
 	if opt.ResumeID != "" {
 		args = append(args, "--session", opt.ResumeID)
 	}

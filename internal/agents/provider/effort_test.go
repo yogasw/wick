@@ -184,3 +184,56 @@ func TestEffortCacheCoalescesConcurrentMisses(t *testing.T) {
 		t.Fatalf("concurrent misses ran the resolver %d times, want 1", got)
 	}
 }
+
+func TestStaticEffortResolverAndLabels(t *testing.T) {
+	r := StaticEffortResolver("test", "high", "low", "xhigh", "weird")
+	caps, err := r(context.Background(), Instance{}, "m")
+	if err != nil || caps.Default != "high" || caps.Source != "test" || len(caps.Options) != 3 {
+		t.Fatalf("caps %+v err=%v", caps, err)
+	}
+	if caps.Options[1].Label != "Extra High" || caps.Options[2].Label != "weird" {
+		t.Fatalf("labels %+v", caps.Options)
+	}
+	caps.Options[0].ID = "mutated"
+	again, _ := r(context.Background(), Instance{}, "m")
+	if again.Options[0].ID != "low" {
+		t.Fatal("a caller's edit leaked into the next answer")
+	}
+}
+
+func TestResolveSpawnEffort(t *testing.T) {
+	typ := Type("test-spawn-effort")
+	RegisterEffortResolver(typ, func(_ context.Context, _ Instance, model string) (EffortCapabilities, error) {
+		if model == "plain" {
+			return EffortCapabilities{}, nil
+		}
+		return EffortCapabilities{Options: []EffortOption{{ID: "low"}, {ID: "high"}}}, nil
+	})
+	defer RegisterEffortResolver(typ, nil)
+	ins := Instance{Type: typ, Name: "acme"}
+	ctx := context.Background()
+	if sel, err := ResolveSpawnEffort(ctx, ins, "smart", "high"); err != nil || sel.Native != "high" {
+		t.Fatalf("supported pick: %+v err=%v", sel, err)
+	}
+	if _, err := ResolveSpawnEffort(ctx, ins, "smart", "xhigh"); err == nil {
+		t.Fatal("an unsupported pick must be refused, not remapped")
+	}
+	if sel, err := ResolveSpawnEffort(ctx, ins, "plain", "high"); !errors.Is(err, ErrEffortNotConfigurable) || sel.Native != "" {
+		t.Fatalf("model with no options: %+v err=%v", sel, err)
+	}
+	if sel, err := ResolveSpawnEffort(ctx, ins, "plain", EffortDefault); err != nil || sel.Native != "" {
+		t.Fatalf("Default on a model with no options is fine: %+v err=%v", sel, err)
+	}
+	if _, err := ResolveSpawnEffort(ctx, Instance{Type: "unregistered-x"}, "m", "high"); !errors.Is(err, ErrEffortNotConfigurable) {
+		t.Fatalf("provider without resolver: err=%v", err)
+	}
+}
+
+func TestValidEffortChoice(t *testing.T) {
+	info := EffortInfo{Configurable: true, Options: []EffortOption{{ID: "low"}, {ID: "high"}}}
+	for v, want := range map[string]bool{"": true, EffortDefault: true, "high": true, "xhigh": false} {
+		if got := ValidEffortChoice(info, v); got != want {
+			t.Fatalf("ValidEffortChoice(%q) = %v, want %v", v, got, want)
+		}
+	}
+}

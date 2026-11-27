@@ -206,6 +206,13 @@ type SpawnOptions struct {
 	// node sets it (from its thinking + max_thinking_tokens inputs).
 	ThinkingTokens string
 
+	// Effort is the native reasoning-effort id to apply on this spawn
+	// ("high", "xhigh", "minimal", ...), already checked against the
+	// selected model's capabilities. Empty = emit nothing: the provider and
+	// the instance's own config decide. Each spawner maps it to its own
+	// wire format (env, -c, --thinking, --variant, request field).
+	Effort string
+
 	// MemGuard is the resolved memory policy for this spawn. nil = the
 	// guard is off, or the caller is a test fake; spawners then behave
 	// exactly as they did before the guard existed.

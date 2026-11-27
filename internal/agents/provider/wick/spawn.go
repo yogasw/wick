@@ -142,6 +142,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	eng := newEngine(llm, m.Model, sysPrompt, genCfg, tools, history, resolved.MaxTurns, emit)
 	eng.setModelID(m.ID)
 	eng.setReasoning(reasoning)
+	eng.setPickedEffort(opt.Effort)
 	eng.setWickSessionID(tc.SessionID)
 	eng.setToolSpillDir(opt.SessionDir)
 	eng.gate = gateCheckerFn
