@@ -5506,20 +5506,22 @@ func (s *Channel) userGroupMembers() ([]slackgo.UserGroup, error) {
 	return groups, nil
 }
 
+// metaHelpText is the reply to !help. Each command must be the whole message,
+// except !agent and !log, which take an argument. English, like every other
+// meta-command reply: this text comes from wick, not from the agent, so the
+// agent's persona or reply language never applies to it.
+const metaHelpText = "*Commands* (exact match, starting with `!`):\n" +
+	"• `!link` / `!dashboard`: link to this session\n" +
+	"• `!status`: session status\n" +
+	"• `!reset`: start a fresh context\n" +
+	"• `!log <N>`: last N gate log lines\n" +
+	"• `!agent <name>`: switch agent\n" +
+	"• `!help`: this list\n" +
+	"Any other message, including one that only starts with these words, goes to the agent as usual."
+
 // slackMeta is ParseMeta for Slack, where a command must start with "!". A "/"
 // is Slack's own slash-command syntax and never reaches the bot as a message,
 // and one prefix everywhere keeps what counts as a command exact.
-// metaHelpText is the reply to !help. Each command must be the whole message,
-// except !agent and !log, which take an argument.
-const metaHelpText = "*Perintah* (harus persis, diawali `!`):\n" +
-	"• `!link` / `!dashboard`: link sesi ini di dashboard\n" +
-	"• `!status`: status sesi\n" +
-	"• `!reset`: mulai konteks baru\n" +
-	"• `!log <N>`: N baris log gate terakhir\n" +
-	"• `!agent <nama>`: ganti agent\n" +
-	"• `!help`: daftar ini\n" +
-	"Pesan lain, termasuk yang hanya diawali kata-kata ini, dikirim ke agent seperti biasa."
-
 func slackMeta(text string) agentchannels.MetaResult {
 	if !strings.HasPrefix(strings.TrimSpace(text), "!") {
 		return agentchannels.MetaResult{}
@@ -5542,7 +5544,7 @@ func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult
 		s.postReply(channelID, threadTS, "_Reset acknowledged. The next message will start a fresh context._")
 	case "agent":
 		if meta.Arg == "" {
-			s.postReply(channelID, threadTS, "_Usage: /agent <name>_")
+			s.postReply(channelID, threadTS, "_Usage: `!agent <name>`_")
 			return
 		}
 		s.postReply(channelID, threadTS, fmt.Sprintf("_Switching to agent `%s` is not yet wired. Coming soon._", meta.Arg))
@@ -5555,6 +5557,19 @@ func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult
 // at boot. It is THE base for every link a bot posts: one value for the whole
 // instance, not one per channel row.
 var appURL = func() string { return "" }
+
+// teamSessionPath resolves a session to its page in the Team app, relative to
+// the app URL ("/tools/agents/team/<handle>…"), or "" when the session belongs
+// to no Team agent. The Team wiring lives outside this package, so it is
+// injected at boot (SetTeamSessionPath); unset, every link is the sessions page.
+var teamSessionPath = func(string) string { return "" }
+
+// SetTeamSessionPath installs the resolver for a Team agent session's page.
+func SetTeamSessionPath(f func(sessionID string) string) {
+	if f != nil {
+		teamSessionPath = f
+	}
+}
 
 // SetAppURL installs the resolver for the app URL.
 func SetAppURL(f func() string) {
@@ -5576,17 +5591,22 @@ func (s *Channel) baseURL() string {
 }
 
 // dashboardURL is the session's page as a Slack link (<url|label>), so it is
-// one click rather than a pasted address.
+// one click rather than a pasted address. A Team agent's conversation opens in
+// the Team app, where its owner chats with it; any other session opens the
+// sessions page.
 func (s *Channel) dashboardURL(sessionID string) string {
 	// A command is answered before any session exists: in a thread whose
 	// first message is "!link" there is nothing to open yet, and a link would
 	// land on "session not found".
 	if s.sessions != nil && !s.sessions.SessionExists(sessionID) {
-		return "Belum ada sesi di thread ini. Kirim pesan dulu, lalu ketik `!link` lagi."
+		return "No session in this thread yet. Send a message first, then type `!link` again."
 	}
 	base := s.baseURL()
 	if base == "" {
-		return "Alamat dashboard belum diatur di Settings (app_url)."
+		return "The dashboard address is not set yet (Settings › app_url)."
+	}
+	if p := teamSessionPath(sessionID); p != "" {
+		return fmt.Sprintf("<%s%s|Open this chat in Team>", base, p)
 	}
 	return fmt.Sprintf("<%s/tools/agents/sessions/%s|Open session in the dashboard>", base, url.PathEscape(sessionID))
 }

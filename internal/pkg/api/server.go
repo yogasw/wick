@@ -1839,6 +1839,8 @@ func NewServer() *Server {
 	// host behind a proxy that address is not the loopback port.
 	clitoken.SetBaseURL(configsSvc.AppURL)
 	slackch.SetAppURL(configsSvc.AppURL)
+	// !link / !status on a Team agent's chat open it in the Team app.
+	slackch.SetTeamSessionPath(agentstool.TeamSessionPath)
 	// CLI tokens are signed statements, not rows in a map: the app's own
 	// session secret is what lets ANY process — including a successor that
 	// booted after the token was minted — verify one. Rotating that secret

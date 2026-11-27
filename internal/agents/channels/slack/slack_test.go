@@ -647,7 +647,43 @@ func TestDashboardURL(t *testing.T) {
 
 	// Neither: a short plain line, no config jargon.
 	s.pubURL = ""
-	if got = s.dashboardURL("T123"); !strings.Contains(got, "belum diatur") {
+	if got = s.dashboardURL("T123"); !strings.Contains(got, "not set") {
 		t.Errorf("expected the unset message, got %q", got)
+	}
+}
+
+// A Team agent's session links to the Team app; anything else keeps the
+// sessions page.
+func TestDashboardURLTeamSession(t *testing.T) {
+	prevURL, prevTeam := appURL, teamSessionPath
+	t.Cleanup(func() { appURL, teamSessionPath = prevURL, prevTeam })
+
+	SetAppURL(func() string { return "https://app.example.com" })
+	SetTeamSessionPath(func(id string) string {
+		if id == "agent-chat" {
+			return "/tools/agents/team/franky?session=agent-chat"
+		}
+		return ""
+	})
+	s := &Channel{}
+	if got, want := s.dashboardURL("agent-chat"), "<https://app.example.com/tools/agents/team/franky?session=agent-chat|Open this chat in Team>"; got != want {
+		t.Errorf("team: got %q want %q", got, want)
+	}
+	if got, want := s.dashboardURL("T123"), "<https://app.example.com/tools/agents/sessions/T123|Open session in the dashboard>"; got != want {
+		t.Errorf("plain: got %q want %q", got, want)
+	}
+}
+
+// !help is wick's own reply, in English like every other meta-command.
+func TestMetaHelpTextEnglish(t *testing.T) {
+	for _, w := range []string{"*Commands*", "`!link`", "`!status`", "`!help`", "goes to the agent as usual"} {
+		if !strings.Contains(metaHelpText, w) {
+			t.Errorf("help text misses %q", w)
+		}
+	}
+	for _, w := range []string{"Perintah", "daftar ini", "seperti biasa"} {
+		if strings.Contains(metaHelpText, w) {
+			t.Errorf("help text still has Indonesian %q", w)
+		}
 	}
 }
