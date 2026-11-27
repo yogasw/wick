@@ -5,8 +5,8 @@ Status: in progress. Initial resolver contract only; not yet wired to production
 ## User-facing behavior
 
 - Compact reasoning/gauge icon in the composer beside microphone/send. Open a lightweight effort popover, without sending a message.
-- Mobile: horizontal swipe left/right across effort options, with snap, visible adjacent choices, selected indicator, and tap-to-select. The selected card scrolls into view on open. Swiping browses options; only explicit selection commits. Keep the keyboard/composer layout stable; support touch and reduced motion.
-- Desktop: the same options in a compact anchored popover, with keyboard arrows, Home/End, Enter and Escape; accessible labels and focus restoration.
+- Mobile: follow the supplied ChatGPT reference, not a carousel or list of cards. Opening the gauge icon shows a compact overlay above the composer/keyboard, with a centered large current-effort label and one wide rounded horizontal discrete slider. A circular thumb snaps to native effort stops, with dot markers and highlighted selected track. Drag left/right or tap a stop; update the label immediately during drag, commit once on release/tap (cancel restores the prior choice). Include Default as its own stop; generate all other stops from the selected model's capability callback. Preserve the composer draft and keyboard layout; dim the background lightly, dismiss outside, and support touch, keyboard accessibility and reduced motion. Provider/model changes re-resolve the stop list and default; never reuse a stale slider index.
+- Desktop: reuse the same discrete slider in a compact anchored popover with keyboard arrows, Home/End, Enter and Escape; accessible labels and focus restoration. Reuse the existing provider switch's visual tokens and interaction conventions.
 - Always offer Default; show the actual model/provider default when known and "Provider default" when unknown. Display only native supported options, never a universal fabricated list. No selectable effort if provider cannot apply it.
 - Composer changes affect the selected agent on its next turn, not the whole provider or an in-flight turn.
 - Shared model picker drill: provider → instance → optional nested provider/account/live set → model → effort. Keep back/cancel navigation and pin intact; use the same effort component for all entry points.
@@ -29,15 +29,15 @@ Status: in progress. Initial resolver contract only; not yet wired to production
 - [ ] Discover model-specific options/defaults for nested model sets and actual supported CLI versions; no inferred capability from vendor name alone.
 - [ ] Persist selection across provider, model, project, agent, team, workflow and failover config; migrate legacy settings safely.
 - [ ] Wire REST/session APIs, permissions, model list metadata and typed frontend contract.
-- [ ] Build reusable horizontal swipe effort picker and compact composer button; integrate both Composer and ProviderPicker model drill stacks.
+- [ ] Build reusable discrete horizontal effort slider (not a card carousel) and compact composer button; integrate both Composer and ProviderPicker model drill stacks.
 - [ ] Integrate instance/project/agent/team/member/subagent/workflow settings and failover target picker.
 - [ ] Carry effective effort through spawn, warm sessions, model retry, failover and return-home; prevent stale state or cross-agent leaks.
-- [ ] Tests: capability contract, default/inherit/off, per-model validation, argv/env/API payloads, persistence, failover, live provider probes, mobile swipe/tap/keyboard, desktop keyboard, reduced motion, cancel, busy turn behavior.
+- [ ] Tests: capability contract, default/inherit/off, per-model validation, argv/env/API payloads, persistence, failover, live provider probes, mobile drag/release/tap/keyboard, desktop keyboard, reduced motion, cancel, busy turn behavior.
 - [ ] Run Go and frontend tests/build; verify desktop and mobile; only then request merge to develop.
 
 ## Acceptance examples
 
 - Two models from the same provider can report different option lists and defaults.
 - An unknown default is not displayed as medium. A non-configurable model never shows bogus effort levels.
-- Swiping options on mobile never changes saved config until tap/confirm; switching agent immediately displays that agent's choice.
+- Dragging the thumb previews the label, then commits exactly once on release; cancel restores the previous value. Switching agent immediately displays that agent's choice and regenerates the stop list for the selected model.
 - Failover from a high-effort home model to a target with Default delegates to the target; returning home restores high. A target configured with a valid native effort runs with that effort.
