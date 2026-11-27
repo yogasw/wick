@@ -430,4 +430,5 @@ func InvalidateCLIModels(ins Instance) {
 	cliModelsMu.Lock()
 	cliModelsDrop(ins, cliModelsKey(ins))
 	cliModelsMu.Unlock()
+	InvalidateEffortCache(ins.Type, ins.Name)
 }

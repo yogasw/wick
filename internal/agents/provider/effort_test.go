@@ -2,7 +2,11 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestEffortResolverPreservesFullPin(t *testing.T) {
@@ -69,5 +73,114 @@ func TestEffortCapabilitiesRejectMalformedOptions(t *testing.T) {
 		if err := validateEffortCapabilities(caps); err == nil {
 			t.Fatalf("accepted invalid capability: %+v", caps)
 		}
+	}
+}
+
+func TestEffortCapabilitiesCachedPerModel(t *testing.T) {
+	typ := Type("test-effort-cache")
+	var calls atomic.Int32
+	RegisterEffortResolver(typ, func(_ context.Context, _ Instance, modelID string) (EffortCapabilities, error) {
+		calls.Add(1)
+		if modelID == "model-b" {
+			return EffortCapabilities{Options: []EffortOption{{ID: "low"}}}, nil
+		}
+		return EffortCapabilities{Options: []EffortOption{{ID: "low"}, {ID: "high"}}, Default: "high"}, nil
+	})
+	defer RegisterEffortResolver(typ, nil)
+	ins := Instance{Type: typ, Name: "acme"}
+	for i := 0; i < 3; i++ {
+		caps, _, err := EffortCapabilitiesFor(context.Background(), ins, "model-a")
+		if err != nil || len(caps.Options) != 2 {
+			t.Fatalf("model-a: %+v err=%v", caps, err)
+		}
+	}
+	caps, _, _ := EffortCapabilitiesFor(context.Background(), ins, "model-b")
+	if len(caps.Options) != 1 {
+		t.Fatalf("model-b must not reuse model-a's answer: %+v", caps)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("resolver calls = %d, want 2 (one per model)", got)
+	}
+	// a returned slice must not alias the cache
+	caps, _, _ = EffortCapabilitiesFor(context.Background(), ins, "model-a")
+	caps.Options[0].ID = "mutated"
+	caps, _, _ = EffortCapabilitiesFor(context.Background(), ins, "model-a")
+	if caps.Options[0].ID != "low" {
+		t.Fatalf("cache was mutated through a returned slice")
+	}
+	// a config change (new binary/env) is a different key
+	EffortCapabilitiesFor(context.Background(), Instance{Type: typ, Name: "acme", Env: []string{"KEY=2"}}, "model-a")
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("config change should re-resolve, calls = %d", got)
+	}
+	InvalidateEffortCache(typ, "acme")
+	EffortCapabilitiesFor(context.Background(), ins, "model-a")
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("invalidate should re-resolve, calls = %d", got)
+	}
+}
+
+func TestEffortCacheExpiryAndErrors(t *testing.T) {
+	typ := Type("test-effort-expiry")
+	now := time.Unix(1000, 0)
+	oldNow := effortNow
+	effortNow = func() time.Time { return now }
+	defer func() { effortNow = oldNow }()
+	var calls atomic.Int32
+	fail := true
+	RegisterEffortResolver(typ, func(context.Context, Instance, string) (EffortCapabilities, error) {
+		calls.Add(1)
+		if fail {
+			return EffortCapabilities{}, errors.New("probe failed")
+		}
+		return EffortCapabilities{Options: []EffortOption{{ID: "high"}}}, nil
+	})
+	defer RegisterEffortResolver(typ, nil)
+	ins := Instance{Type: typ, Name: "acme"}
+	if _, _, err := EffortCapabilitiesFor(context.Background(), ins, "m"); err == nil {
+		t.Fatal("want probe error")
+	}
+	EffortCapabilitiesFor(context.Background(), ins, "m")
+	if calls.Load() != 1 {
+		t.Fatal("error should be cached briefly")
+	}
+	fail = false
+	now = now.Add(effortErrorCacheTTL + time.Second)
+	if caps, _, err := EffortCapabilitiesFor(context.Background(), ins, "m"); err != nil || len(caps.Options) != 1 {
+		t.Fatalf("after error TTL: %+v err=%v", caps, err)
+	}
+	now = now.Add(effortCacheTTL + time.Second)
+	EffortCapabilitiesFor(context.Background(), ins, "m")
+	if calls.Load() != 3 {
+		t.Fatalf("success should expire after TTL, calls = %d", calls.Load())
+	}
+}
+
+func TestEffortCacheCoalescesConcurrentMisses(t *testing.T) {
+	typ := Type("test-effort-coalesce")
+	var calls atomic.Int32
+	release := make(chan struct{})
+	RegisterEffortResolver(typ, func(context.Context, Instance, string) (EffortCapabilities, error) {
+		calls.Add(1)
+		<-release
+		return EffortCapabilities{Options: []EffortOption{{ID: "high"}}}, nil
+	})
+	defer RegisterEffortResolver(typ, nil)
+	ins := Instance{Type: typ, Name: "acme"}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := EffortCapabilitiesFor(context.Background(), ins, "m"); err != nil {
+				t.Errorf("err=%v", err)
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent misses ran the resolver %d times, want 1", got)
 	}
 }

@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // EffortDefault delegates to the selected provider/model's default. An empty
@@ -44,6 +46,7 @@ func RegisterEffortResolver(t Type, resolve EffortResolver) {
 		return
 	}
 	effortResolvers[t] = resolve
+	dropEffortCache(func(k effortKey) bool { return k.typ == t })
 }
 
 // EffortCapabilitiesFor delegates to the provider. registered=false means
@@ -55,15 +58,112 @@ func EffortCapabilitiesFor(ctx context.Context, ins Instance, modelID string) (c
 	if resolve == nil {
 		return EffortCapabilities{}, false, nil
 	}
-	caps, err = resolve(ctx, ins, modelID)
+	caps, err = cachedEffort(ctx, ins, modelID, resolve)
 	if err != nil {
-		return EffortCapabilities{}, true, err
-	}
-	if err = validateEffortCapabilities(caps); err != nil {
 		return EffortCapabilities{}, true, err
 	}
 	caps.Options = append([]EffortOption{}, caps.Options...)
 	return caps, true, nil
+}
+
+// Capabilities are cached per instance + model pin, so a composer re-render,
+// a model list with many rows, or a failover check never re-runs a provider
+// probe. Concurrent misses for one key share a single resolver call.
+var (
+	effortCacheTTL      = 6 * time.Hour
+	effortErrorCacheTTL = time.Minute
+	effortNow           = time.Now
+
+	effortCacheMu sync.Mutex
+	effortCache   = map[effortKey]*effortEntry{}
+)
+
+// effortKey also hashes binary, args and env: a CLI upgrade or a new key
+// can change what a model offers, so it must not reuse the old answer.
+type effortKey struct {
+	typ    Type
+	name   string
+	model  string
+	config uint64
+}
+
+type effortEntry struct {
+	done    chan struct{}
+	caps    EffortCapabilities
+	err     error
+	expires time.Time
+}
+
+func newEffortKey(ins Instance, modelID string) effortKey {
+	h := fnv.New64a()
+	for _, part := range append(append([]string{ins.Binary}, ins.ExtraArgs...), ins.Env...) {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return effortKey{typ: ins.Type, name: ins.Name, model: modelID, config: h.Sum64()}
+}
+
+func cachedEffort(ctx context.Context, ins Instance, modelID string, resolve EffortResolver) (EffortCapabilities, error) {
+	key := newEffortKey(ins, modelID)
+	effortCacheMu.Lock()
+	entry, ok := effortCache[key]
+	if ok {
+		select {
+		case <-entry.done:
+			if effortNow().Before(entry.expires) {
+				effortCacheMu.Unlock()
+				return entry.caps, entry.err
+			}
+			ok = false // expired: fall through and refresh
+		default: // another caller is resolving this key: wait for it
+		}
+	}
+	if !ok {
+		entry = &effortEntry{done: make(chan struct{})}
+		effortCache[key] = entry
+		effortCacheMu.Unlock()
+		caps, err := resolve(ctx, ins, modelID)
+		if err == nil {
+			err = validateEffortCapabilities(caps)
+		}
+		ttl := effortCacheTTL
+		if err != nil {
+			caps, ttl = EffortCapabilities{}, effortErrorCacheTTL
+		}
+		effortCacheMu.Lock()
+		entry.caps, entry.err, entry.expires = caps, err, effortNow().Add(ttl)
+		if ctx.Err() != nil && err != nil {
+			// a cancelled caller's failure says nothing about the model
+			delete(effortCache, key)
+		}
+		close(entry.done)
+		effortCacheMu.Unlock()
+		return caps, err
+	}
+	effortCacheMu.Unlock()
+	select {
+	case <-entry.done:
+		return entry.caps, entry.err
+	case <-ctx.Done():
+		return EffortCapabilities{}, ctx.Err()
+	}
+}
+
+func dropEffortCache(match func(effortKey) bool) {
+	effortCacheMu.Lock()
+	defer effortCacheMu.Unlock()
+	for k := range effortCache {
+		if match(k) {
+			delete(effortCache, k)
+		}
+	}
+}
+
+// InvalidateEffortCache drops every cached model answer for one instance —
+// call it when its model list is refreshed or its config changes. An empty
+// type drops everything.
+func InvalidateEffortCache(t Type, name string) {
+	dropEffortCache(func(k effortKey) bool { return t == "" || (k.typ == t && k.name == name) })
 }
 
 func validateEffortCapabilities(caps EffortCapabilities) error {
