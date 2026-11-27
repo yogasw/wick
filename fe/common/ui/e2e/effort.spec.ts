@@ -3,9 +3,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const source = (name: string) => readFileSync(fileURLToPath(new URL("../src/" + name, import.meta.url)), "utf8");
-const helpers = source("effort-ui.mjs").replaceAll("export function", "function");
+const helpers = source("effort-ui.mjs").replaceAll("export function", "function").replace("const NEUTRAL", "var NEUTRAL").replace("const TONES", "var TONES");
 const picker = source("effort-picker.mjs")
-  .replace("import { effortAngle, effortIndex } from './effort-ui.mjs';", "")
+  .replace("import { effortAngle, effortFraction, effortIndex, effortTone } from './effort-ui.mjs';", "")
   .replaceAll("export function", "function");
 
 const fixture = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -29,7 +29,7 @@ test("mobile effort previews during drag and commits once, follows model changes
   await slider.focus();
   await slider.press("End");
   await expect(label).toHaveText("Extra High");
-  await expect(needle).toHaveAttribute("style", /rotate\(70deg\)/);
+  await expect(needle).toHaveAttribute("style", /rotate\(120deg\)/);
   const changes=()=>page.evaluate(()=> (window as unknown as {changes:string[]}).changes);
   expect(await changes()).toEqual(["xhigh"]);
   const box=(await slider.boundingBox())!;
@@ -62,6 +62,14 @@ test("desktop keyboard and dismissal", async ({page})=>{
   await expect(page.locator("#picker .label span")).toHaveText("Default");
   await slider.press("ArrowRight");
   await expect(page.locator("#picker .label span")).toHaveText("Low");
+  // the parent re-renders with the committed value: the panel stays open
+  await page.evaluate(()=>{
+    const w=window as unknown as {control:{update:(x:unknown)=>void};changes:string[]};
+    w.control.update({options:['default','low','medium','high','xhigh'].map((id,i)=>({id,label:['Default','Low','Medium','High','Extra High'][i]})),value:"low",onChange:(id:string)=>w.changes.push(id)});
+  });
+  await expect(slider).toBeVisible();
+  await slider.press("ArrowRight");
+  await expect(page.locator("#picker .label span")).toHaveText("Medium");
   await page.keyboard.press("Escape");
   await expect(trigger).toHaveAttribute("aria-expanded","false");
 });
