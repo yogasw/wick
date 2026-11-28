@@ -93,6 +93,7 @@ type delegateInput struct {
 	Mode         string `wick:"desc=background (default) returns a delegation_id immediately and the result is delivered later. foreground blocks this call until the sub-agent answers — only for a short lookup you cannot continue without."`
 	DeliverySink string `wick:"desc=Where a background result goes: session (default) wakes you with it, channel posts it to the chat thread, none records it only."`
 	Workspace    string `wick:"desc=shared (default) or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
+	Effort       string `wick:"desc=Reasoning effort for this sub-agent: low, medium, high, xhigh or max (default = the model's own). Empty uses the role's, then this conversation's. A level the sub-agent's model lacks runs at the nearest one it has. Raise it for hard reasoning, lower it for quick lookups."`
 	MemoryMode   string `wick:"desc=What this sub-agent is told beyond its task. no_history = nothing. state_summary (default) = one line per finished sibling. relevant_chunks = your context field only, curated by you. full_history = every sibling's full result, for audit and debugging only — expensive, noisy, and it biases the agent toward earlier conclusions."`
 	Supervised   bool   `wick:"desc=Ask this sub-agent to report progress as it works, waking you when it does. Turn it on for long work you intend to watch, so you can correct a wrong direction while it is still cheap. Off by default: a short task finishes before a report would be useful."`
 }
@@ -167,6 +168,7 @@ type createAgentInput struct {
 	Icon         string `wick:"desc=A single emoji shown beside this role in lists. Optional."`
 	Provider     string `wick:"desc=Agent runtime: claude, codex, wick, gemini. A specific instance may be named as type/name (e.g. codex/abc). Empty inherits whatever THIS conversation is running on — usually what you want, so omit it unless the role must run somewhere else."`
 	Model        string `wick:"desc=Model id within the chosen provider. Only read when you also set provider, because a model id is scoped to one instance: omit both to inherit this conversation's provider AND model together. Empty with an explicit provider uses that provider's own default."`
+	Effort       string `wick:"desc=Reasoning effort this role runs at: low, medium, high, xhigh or max (default = the model's own). Empty inherits the delegating conversation's. A level the model lacks runs at the nearest one it has."`
 	MaxTurns     int    `wick:"desc=Default turn budget for this role. Clamped to the system ceiling."`
 	MaxTokens    int    `wick:"desc=Default token budget for one delegation of this role. 0 = the role adds no cap of its own, and the per-tree budget still applies."`
 	// Tool access. Narrowed against your own tags server-side, so this can

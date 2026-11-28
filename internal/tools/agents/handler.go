@@ -1843,12 +1843,13 @@ func startNewSession(c *tool.Ctx) {
 		}
 	}
 	// The effort picked on the new-session composer, for the provider +
-	// model this session actually landed on: kept only when that pair
-	// offers it (a Team responder may have moved the session elsewhere).
+	// model this session actually landed on: kept when that pair offers it
+	// or has a nearest level to run it at (a Team responder may have moved
+	// the session elsewhere).
 	// "default" is kept too: picked on purpose, it stops a project default
 	// from applying.
 	if eff := strings.TrimSpace(c.Form("effort")); eff != "" {
-		if info := provider.EffortInfoFor(c.Context(), prov, modelID, "", ""); provider.ValidEffortChoice(info, eff) {
+		if info := provider.EffortInfoFor(c.Context(), prov, modelID, "", ""); provider.KeepableEffortPick(info, eff) {
 			if err := session.SetEffort(globalLayout, id, "main", eff); err != nil {
 				log.Ctx(c.Context()).Warn().Msgf("compose set effort: %s", err.Error())
 			}

@@ -29,6 +29,7 @@ type AgentProfileItem struct {
 	Icon               string   `json:"icon"`
 	Provider           string   `json:"provider"`
 	Model              string   `json:"model"`
+	Effort             string   `json:"effort"`
 	SystemPrompt       string   `json:"system_prompt"`
 	AllowedTagIDs      []string `json:"allowed_tag_ids"`
 	AllowedNativeTools []string `json:"allowed_native_tools"`
@@ -80,6 +81,7 @@ func profileToItem(p entity.AgentProfile) AgentProfileItem {
 		AllowedNativeTools: decodeJSONStrings(p.AllowedNativeTools),
 		StrictMCP:          p.StrictMCP,
 		DefaultMaxTurns:    p.DefaultMaxTurns,
+		Effort:             p.Effort,
 		CanDelegate:        p.CanDelegate,
 		AllowTakeOver:      p.AllowTakeOver,
 		Disabled:           p.Disabled,
@@ -370,6 +372,7 @@ func apiAgentProfileSave(c *tool.Ctx) {
 		AllowedNativeTools: encodeJSONStrings(req.AllowedNativeTools),
 		StrictMCP:          req.StrictMCP,
 		DefaultMaxTurns:    req.DefaultMaxTurns,
+		Effort:             delegation.DelegationEffort(req.Effort, ""),
 		CanDelegate:        req.CanDelegate,
 		AllowTakeOver:      req.AllowTakeOver,
 		Disabled:           req.Disabled,

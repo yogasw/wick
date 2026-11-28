@@ -186,11 +186,18 @@ type EffortSelection struct {
 	Requested string `json:"requested"`
 	Effective string `json:"effective,omitempty"`
 	Native    string `json:"-"`
+	// Clamped is set when Requested is not offered by the model and the
+	// nearest offered level stands in for it (Effective).
+	Clamped bool `json:"clamped,omitempty"`
 }
 
 // ResolveEffortSelection checks choices in caller-supplied precedence order.
-// Explicit Default stops inheritance. Unsupported choices are never silently
-// translated to a different effort.
+// Explicit Default stops inheritance. A choice the model does not offer
+// falls to the nearest offered level on the shared scale (the highest one
+// not above it, else the lowest above it) and is reported as Clamped, so
+// the caller can say so; the pick itself is kept by whoever stored it. A
+// choice off that scale (a vendor-specific variant) has no nearest level
+// and is an error.
 func ResolveEffortSelection(caps EffortCapabilities, choices ...string) (EffortSelection, error) {
 	for _, choice := range choices {
 		if choice == "" {
@@ -204,9 +211,47 @@ func ResolveEffortSelection(caps EffortCapabilities, choices ...string) (EffortS
 				return EffortSelection{Requested: choice, Effective: choice, Native: choice}, nil
 			}
 		}
+		if near := nearestEffort(caps.Options, choice); near != "" {
+			return EffortSelection{Requested: choice, Effective: near, Native: near, Clamped: true}, nil
+		}
 		return EffortSelection{}, fmt.Errorf("effort %q is not supported by the selected model", choice)
 	}
 	return EffortSelection{Requested: EffortDefault, Effective: caps.Default}, nil
+}
+
+// effortRank orders the levels the integrations share, lowest first. Ids
+// missing here (auto, vendor variants) have no place on the scale.
+var effortRank = map[string]int{
+	"none": 0, "off": 0, "minimal": 1, "low": 2, "medium": 3,
+	"high": 4, "xhigh": 5, "max": 6,
+}
+
+// nearestEffort is the offered level closest to choice on the shared
+// scale: the highest not above it, else the lowest above it. "" when
+// choice or every option is off the scale.
+func nearestEffort(options []EffortOption, choice string) string {
+	want, ok := effortRank[choice]
+	if !ok {
+		return ""
+	}
+	below, above := "", ""
+	belowRank, aboveRank := -1, 1<<30
+	for _, o := range options {
+		r, ok := effortRank[o.ID]
+		if !ok {
+			continue
+		}
+		if r <= want && r > belowRank {
+			below, belowRank = o.ID, r
+		}
+		if r > want && r < aboveRank {
+			above, aboveRank = o.ID, r
+		}
+	}
+	if below != "" {
+		return below
+	}
+	return above
 }
 
 // effortLabels names the native ids the integrations use. An id missing
@@ -320,8 +365,13 @@ type EffortInfo struct {
 	Inherited string `json:"inherited,omitempty"`
 	// Effective is the native id a spawn applies ("" = the model default).
 	Effective string `json:"effective,omitempty"`
-	// Stale is set when the pick is not offered by the current model (it
-	// was made on another model): a spawn ignores it until it is changed.
+	// Clamped is set when the pick is not offered by the current model and
+	// the nearest offered level (Effective) runs instead; the pick stays,
+	// so a model that offers it again gets it back.
+	Clamped bool `json:"clamped,omitempty"`
+	// Stale is set when the pick is not offered and has no nearest level
+	// (a vendor-specific variant made on another model): a spawn ignores
+	// it until it is changed.
 	Stale bool   `json:"stale,omitempty"`
 	Error string `json:"error,omitempty"`
 }
@@ -355,7 +405,16 @@ func EffortInfoFor(ctx context.Context, providerKey, modelID, requested, inherit
 		return info
 	}
 	info.Effective = sel.Effective
+	info.Clamped = sel.Clamped
 	return info
+}
+
+// KeepableEffortPick reports whether a session may keep v as its pick on
+// this model: one it offers, or one with a nearest offered level (a pick
+// carried over from another model, which runs clamped here and comes back
+// on a model that offers it).
+func KeepableEffortPick(info EffortInfo, v string) bool {
+	return ValidEffortChoice(info, v) || (info.Configurable && nearestEffort(info.Options, v) != "")
 }
 
 // ValidEffortChoice reports whether v can be saved as a pick for caps: ""

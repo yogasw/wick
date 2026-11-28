@@ -3,21 +3,37 @@ package claude
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/provider"
 )
 
-func TestSpawnEnvEffort(t *testing.T) {
-	env := spawnEnv(nil, provider.SpawnOptions{ExtraEnv: []string{"CLAUDE_CODE_EFFORT_LEVEL=low"}, Effort: "xhigh"})
-	// the pick comes after the instance env, so exec keeps it
-	if env[len(env)-1] != "CLAUDE_CODE_EFFORT_LEVEL=xhigh" {
-		t.Fatalf("effort must be the last entry, env=%q", env)
-	}
-	for _, e := range spawnEnv(nil, provider.SpawnOptions{}) {
-		if e == "CLAUDE_CODE_EFFORT_LEVEL=" || len(e) > 24 && e[:24] == "CLAUDE_CODE_EFFORT_LEVEL" {
-			t.Fatalf("no effort must not set the env, got %q", e)
+func TestSpawnEnvEffortDropsInstanceLevel(t *testing.T) {
+	env := spawnEnv(nil, provider.SpawnOptions{ExtraEnv: []string{"CLAUDE_CODE_EFFORT_LEVEL=low", "FOO=1"}, Effort: "max"})
+	for _, e := range env {
+		if strings.HasPrefix(e, "CLAUDE_CODE_EFFORT_LEVEL=") {
+			t.Fatalf("a picked effort must drop the instance env, env=%q", env)
 		}
+	}
+	if !slices.Contains(env, "FOO=1") {
+		t.Fatalf("other env must stay, env=%q", env)
+	}
+	kept := spawnEnv(nil, provider.SpawnOptions{ExtraEnv: []string{"CLAUDE_CODE_EFFORT_LEVEL=low"}})
+	if !slices.Contains(kept, "CLAUDE_CODE_EFFORT_LEVEL=low") {
+		t.Fatalf("no pick keeps the instance env, env=%q", kept)
+	}
+}
+
+func TestEffortArgs(t *testing.T) {
+	if got := effortArgs("max", []string{"--model", "x"}); !slices.Equal(got, []string{"--effort", "max"}) {
+		t.Fatalf("got %q", got)
+	}
+	if got := effortArgs("", nil); got != nil {
+		t.Fatalf("no pick, no flag: %q", got)
+	}
+	if got := effortArgs("high", []string{"--effort=low"}); got != nil {
+		t.Fatalf("instance args already pass one: %q", got)
 	}
 }
 
@@ -30,10 +46,18 @@ func TestClaudeEffortResolverRegistered(t *testing.T) {
 	for _, o := range caps.Options {
 		ids = append(ids, o.ID)
 	}
-	if !slices.Equal(ids, []string{"low", "medium", "high", "xhigh"}) {
+	if !slices.Equal(ids, []string{"low", "medium", "high", "xhigh", "max"}) {
 		t.Fatalf("options %v", ids)
 	}
-	if caps.Options[3].Label != "Extra High" {
-		t.Fatalf("label %q", caps.Options[3].Label)
+	if caps.Default != "" {
+		t.Fatalf("no instance level, no default claimed: %q", caps.Default)
+	}
+}
+
+func TestClaudeEffortDefaultFromInstanceEnv(t *testing.T) {
+	ins := provider.Instance{Type: provider.TypeClaude, Name: "acme-env", Env: []string{"CLAUDE_CODE_EFFORT_LEVEL=high"}}
+	caps, _, err := provider.EffortCapabilitiesFor(context.Background(), ins, "")
+	if err != nil || caps.Default != "high" {
+		t.Fatalf("default %q err=%v", caps.Default, err)
 	}
 }

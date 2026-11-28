@@ -129,6 +129,9 @@ type ChildSpec struct {
 	// WorkspacePath is the isolated directory to run in (Phase 3).
 	// Empty = the project's shared workspace.
 	WorkspacePath string
+	// Effort is the delegation's own reasoning effort (the call's, else the
+	// role's). Empty = the child inherits its parent conversation's.
+	Effort string
 	// ParentSessionID is the conversation that delegated; the child takes
 	// its reasoning effort when it runs on the very same provider + model.
 	ParentSessionID string
@@ -307,6 +310,9 @@ type Request struct {
 	// MemoryMode decides what the sub-agent is told about the rest of the
 	// conversation. Empty = the profile default, then state_summary.
 	MemoryMode string
+	// Effort is the reasoning effort for this one delegation. Empty = the
+	// role's, then the parent conversation's.
+	Effort string
 	// Supervised asks this sub-agent to file progress notes as it works,
 	// which wake the delegating agent. Off by default: a short task should
 	// not pay for reporting nobody is watching for.
@@ -539,6 +545,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		MemoryMode:  NormalizeMemoryMode(req.MemoryMode, profile.DefaultMemoryMode),
 		Supervised:  req.Supervised,
 	}
+	row.Effort = DelegationEffort(req.Effort, profile.Effort)
 	// Stamp the investigation round this delegation belongs to, so "is
 	// the round finished?" stays a query. One indexed lookup against a
 	// process spawn is not worth avoiding, and it returns nothing for the
@@ -750,6 +757,7 @@ func (s *Service) execute(
 		WorkspacePath: workspacePath,
 	}
 	spec.ParentSessionID = row.ParentSessionID
+	spec.Effort = row.Effort
 	if err := s.Runner.StartAgent(runCtx, spec); err != nil {
 		cancel()
 		s.untrackInflight(id)

@@ -92,10 +92,23 @@ func resolveChildTarget(
 	return got
 }
 
-// childEffort is the reasoning effort a sub-agent inherits: its parent
-// conversation's pick, but only when the child runs on the very same
-// instance and model — a level belongs to the model it was chosen for.
+// DelegationEffort is the effort one delegation asks for: the call's own,
+// else its role's. "" = inherit the parent conversation's.
+func DelegationEffort(requested, roleDefault string) string {
+	if v := strings.ToLower(strings.TrimSpace(requested)); v != "" {
+		return v
+	}
+	return strings.ToLower(strings.TrimSpace(roleDefault))
+}
+
+// childEffort is the reasoning effort a sub-agent runs at: the delegation's
+// own (call, then role), else its parent conversation's pick. A level the
+// child's model does not offer runs at the nearest one it does, so the
+// parent's pick carries across providers and models.
 func childEffort(layout config.Layout, spec ChildSpec) string {
+	if spec.Effort != "" {
+		return spec.Effort
+	}
 	if strings.TrimSpace(spec.ParentSessionID) == "" {
 		return ""
 	}
@@ -111,9 +124,6 @@ func childEffort(layout config.Layout, spec ChildSpec) string {
 				break
 			}
 		}
-	}
-	if !provider.SameInstance(a.Provider, spec.Target.Provider) || a.ModelID != spec.Target.ModelID {
-		return ""
 	}
 	return a.Effort
 }

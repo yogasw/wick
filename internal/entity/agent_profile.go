@@ -34,6 +34,11 @@ type AgentProfile struct {
 	Provider string `gorm:"type:varchar(64);not null" json:"provider"`
 	// Model is a provider-specific model id. Empty = provider default.
 	Model string `gorm:"type:varchar(128);not null;default:''" json:"model"`
+	// Effort is the reasoning effort this role runs at (a level such as
+	// low, high or max, or "default" for the model default). Empty
+	// inherits the delegating conversation's. A level the child's model
+	// does not offer runs at the nearest one it does.
+	Effort string `gorm:"type:varchar(32);not null;default:''" json:"effort"`
 	// SystemPrompt is injected into the child spawn via
 	// provider.SpawnOptions.Preset (--append-system-prompt or the
 	// per-provider equivalent).

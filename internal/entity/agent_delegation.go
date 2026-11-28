@@ -219,6 +219,9 @@ type AgentDelegation struct {
 	// waits in the queue is started with the memory its caller asked for,
 	// not with whatever the default happens to be by then.
 	MemoryMode string `gorm:"type:varchar(32);not null;default:''" json:"memory_mode,omitempty"`
+	// Effort is the reasoning effort this delegation asked for (the call's,
+	// else its role's). Empty = the child inherits its parent's.
+	Effort string `gorm:"type:varchar(32);not null;default:''" json:"effort,omitempty"`
 	// IncidentID links this delegation to its tree's incident record, once
 	// one exists. This column is the whole of what a separate agent_tasks
 	// table would have been: status, timestamps, error and once-only

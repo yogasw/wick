@@ -37,6 +37,8 @@ type roleItem struct {
 	// caller that cannot see it cannot tell whether overriding is worth
 	// the argument.
 	MemoryMode string `json:"memory_mode"`
+	// Effort is the role's reasoning effort ("" = inherits the caller's).
+	Effort string `json:"effort,omitempty"`
 }
 
 func (h *handlers) listAgents(c *connector.Ctx) (any, error) {
@@ -58,6 +60,7 @@ func (h *handlers) listAgents(c *connector.Ctx) (any, error) {
 			Key: p.Key, Name: p.Name, Description: p.Description,
 			Provider: p.Provider, MaxTurns: p.DefaultMaxTurns, Scope: scope,
 			MemoryMode: delegation.NormalizeMemoryMode("", p.DefaultMemoryMode),
+			Effort:     p.Effort,
 		})
 	}
 
@@ -226,6 +229,7 @@ func (h *handlers) delegate(c *connector.Ctx) (any, error) {
 		DeliverySink:    sink,
 		Workspace:       workspace,
 		MemoryMode:      memory,
+		Effort:          strings.TrimSpace(c.Input("effort")),
 		Supervised:      c.InputBool("supervised"),
 		ParentSessionID: caller.sessionID,
 		ProjectID:       caller.projectID,
@@ -687,6 +691,7 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		}
 		p.DefaultWorkspace = ws
 	}
+	p.Effort = delegation.DelegationEffort(c.Input("effort"), "")
 	if mm := strings.TrimSpace(c.Input("memory_mode")); mm != "" {
 		if !delegation.ValidMemoryMode(mm) {
 			return nil, fmt.Errorf("memory_mode must be one of %s, got %q",
@@ -725,6 +730,9 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		}
 		if strings.TrimSpace(c.Input("icon")) == "" {
 			p.Icon = existing.Icon
+		}
+		if p.Effort == "" {
+			p.Effort = existing.Effort
 		}
 		if strings.TrimSpace(c.Input("allowed_native_tools")) == "" {
 			p.AllowedNativeTools = existing.AllowedNativeTools

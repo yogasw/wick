@@ -44,11 +44,13 @@ func TestResolveEffortSelection(t *testing.T) {
 		want    EffortSelection
 		wantErr bool
 	}{
-		{name: "inherit", choices: []string{"", "high"}, want: EffortSelection{"high", "high", "high"}},
-		{name: "default stops inheritance", choices: []string{"default", "high"}, want: EffortSelection{"default", "low", ""}},
-		{name: "empty defaults", want: EffortSelection{"default", "low", ""}},
-		{name: "none is explicit", choices: []string{"none"}, want: EffortSelection{"none", "none", "none"}},
-		{name: "unsupported", choices: []string{"xhigh", "high"}, wantErr: true},
+		{name: "inherit", choices: []string{"", "high"}, want: EffortSelection{Requested: "high", Effective: "high", Native: "high"}},
+		{name: "default stops inheritance", choices: []string{"default", "high"}, want: EffortSelection{Requested: "default", Effective: "low"}},
+		{name: "empty defaults", want: EffortSelection{Requested: "default", Effective: "low"}},
+		{name: "none is explicit", choices: []string{"none"}, want: EffortSelection{Requested: "none", Effective: "none", Native: "none"}},
+		{name: "unsupported falls to the nearest level below", choices: []string{"xhigh", "low"}, want: EffortSelection{Requested: "xhigh", Effective: "high", Native: "high", Clamped: true}},
+		{name: "between levels falls below", choices: []string{"medium"}, want: EffortSelection{Requested: "medium", Effective: "low", Native: "low", Clamped: true}},
+		{name: "off-scale variant is refused", choices: []string{"turbo"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := ResolveEffortSelection(caps, tc.choices...)
@@ -215,8 +217,14 @@ func TestResolveSpawnEffort(t *testing.T) {
 	if sel, err := ResolveSpawnEffort(ctx, ins, "smart", "high"); err != nil || sel.Native != "high" {
 		t.Fatalf("supported pick: %+v err=%v", sel, err)
 	}
-	if _, err := ResolveSpawnEffort(ctx, ins, "smart", "xhigh"); err == nil {
-		t.Fatal("an unsupported pick must be refused, not remapped")
+	if sel, err := ResolveSpawnEffort(ctx, ins, "smart", "xhigh"); err != nil || sel.Native != "high" || !sel.Clamped {
+		t.Fatalf("an unsupported pick runs on the nearest level: %+v err=%v", sel, err)
+	}
+	if sel, err := ResolveSpawnEffort(ctx, ins, "smart", "minimal"); err != nil || sel.Native != "low" || !sel.Clamped {
+		t.Fatalf("nothing below: the lowest level above: %+v err=%v", sel, err)
+	}
+	if _, err := ResolveSpawnEffort(ctx, ins, "smart", "turbo"); err == nil {
+		t.Fatal("an off-scale variant has no nearest level and must be refused")
 	}
 	if sel, err := ResolveSpawnEffort(ctx, ins, "plain", "high"); !errors.Is(err, ErrEffortNotConfigurable) || sel.Native != "" {
 		t.Fatalf("model with no options: %+v err=%v", sel, err)
@@ -235,5 +243,17 @@ func TestValidEffortChoice(t *testing.T) {
 		if got := ValidEffortChoice(info, v); got != want {
 			t.Fatalf("ValidEffortChoice(%q) = %v, want %v", v, got, want)
 		}
+	}
+}
+
+func TestKeepableEffortPick(t *testing.T) {
+	info := EffortInfo{Configurable: true, Options: []EffortOption{{ID: "low"}, {ID: "high"}}}
+	for v, want := range map[string]bool{"": true, "default": true, "high": true, "max": true, "turbo": false} {
+		if got := KeepableEffortPick(info, v); got != want {
+			t.Fatalf("%q: got %v want %v", v, got, want)
+		}
+	}
+	if KeepableEffortPick(EffortInfo{}, "high") {
+		t.Fatal("a model with no effort keeps no level")
 	}
 }

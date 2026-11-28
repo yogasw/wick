@@ -20,7 +20,7 @@ func init() {
 			// Model & thinking
 			{Key: "MAX_THINKING_TOKENS", Kind: provider.CatalogInt, Placeholder: "0",
 				Description: "Max extended-thinking tokens; 0 disables thinking."},
-			{Key: "CLAUDE_CODE_EFFORT_LEVEL", Kind: provider.CatalogEnum, Options: []string{"low", "medium", "high", "xhigh"},
+			{Key: "CLAUDE_CODE_EFFORT_LEVEL", Kind: provider.CatalogEnum, Options: []string{"low", "medium", "high", "xhigh", "max"},
 				Description: "Default effort level per session."},
 
 			// Config & paths

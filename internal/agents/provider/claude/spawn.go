@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -187,6 +188,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// Pinned model (per-instance model picker) → --model. No-op when
 	// unpinned, AI-router (sets model via env), or --model already given.
 	args = append(args, provider.ModelArgs(opt, args)...)
+	args = append(args, effortArgs(opt.Effort, args)...)
 	// AI router: when enabled, front the Anthropic API with wick's
 	// /airouter/<id>/v1 proxy. The selected router contributes base URL, auth
 	// token, and per-tier models via env (Claude Code's own gateway vars) — no
@@ -371,10 +373,12 @@ func spawnEnv(base []string, opt provider.SpawnOptions) []string {
 	if opt.ThinkingTokens != "" {
 		env = append(env, "MAX_THINKING_TOKENS="+opt.ThinkingTokens)
 	}
-	// Appended after the instance env so a picked effort wins over an
-	// instance-wide CLAUDE_CODE_EFFORT_LEVEL (exec keeps the last value).
+	// A picked effort goes on the command line (effortArgs); drop the
+	// instance-wide CLAUDE_CODE_EFFORT_LEVEL so the env cannot override it.
 	if opt.Effort != "" {
-		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+opt.Effort)
+		env = slices.DeleteFunc(env, func(e string) bool {
+			return strings.HasPrefix(e, effortEnv+"=")
+		})
 	}
 	return env
 }
