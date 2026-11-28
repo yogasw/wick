@@ -150,4 +150,4 @@ export * from "./usage/base/index.js";
 export { default as EffortPicker } from "./EffortPicker.svelte";
 export { default as EffortField } from "./EffortField.svelte";
 export type { EffortPickerConfig } from "./effort-picker.mjs";
-export { effortPickerConfig, effortDefaultLabel, type EffortInfo } from "./effort-config.js";
+export { effortPickerConfig, effortDefaultLabel, effortClampMessage, nearestEffort, type EffortInfo } from "./effort-config.js";

@@ -46,7 +46,7 @@ export function mountEffortPicker(host, initial) {
     const name=option?.label || 'Default';
     range.value=String(index); range.parentElement.style.setProperty('--frac',String(config.options.length>1?index/(config.options.length-1):0));
     label.textContent=name; range.setAttribute('aria-valuetext',name);
-    button.setAttribute('aria-label',`Reasoning effort: ${name}`); button.title=`Reasoning effort: ${name}`;
+    const tip=config.disabledReason||`Reasoning effort: ${name}`; button.setAttribute('aria-label',tip); button.title=tip;
     const angle=effortAngle(config.options,id,config.defaultValue), f=effortFraction(config.options,id,config.defaultValue), tone=effortTone(config.options,id,config.defaultValue);
     needle.style.transform=`rotate(${angle}deg)`;
     arc.setAttribute('stroke-dasharray',`${f===null?0:Math.max(2,f*100)} 100`);
@@ -60,7 +60,7 @@ export function mountEffortPicker(host, initial) {
   // switch) closes it and rebuilds the scale.
   const sameOptions=(a,b)=>a.length===b.length&&a.every((o,i)=>o.id===b[i].id&&o.label===b[i].label);
   let built=false;
-  function update(next){if(built&&sameOptions(config.options,next.options)){config=next;if(!dragging)render(selected());return;}built=true;close(true);config=next;range.max=String(Math.max(0,next.options.length-1));range.disabled=next.options.length<2;button.disabled=next.options.length<2;dots.replaceChildren(...next.options.map(()=>{const dot=document.createElement('i');dot.className='dot';return dot}));ends[0].textContent=next.options[0]?.label||'';ends[1].textContent=next.options.at(-1)?.label||'';render(selected());}
+  function update(next){if(built&&sameOptions(config.options,next.options)){config=next;if(!dragging)render(selected());return;}built=true;close(true);config=next;range.max=String(Math.max(0,next.options.length-1));range.disabled=next.options.length<2;button.disabled=next.options.length<2||!!next.disabledReason;dots.replaceChildren(...next.options.map(()=>{const dot=document.createElement('i');dot.className='dot';return dot}));ends[0].textContent=next.options[0]?.label||'';ends[1].textContent=next.options.at(-1)?.label||'';render(selected());}
   function commit(){const old=selected();if(value!==old){const next=value;config={...config,value:next};config.onChange(next)} }
   button.addEventListener('click',()=>{if(!panel.hidden){close(true);return;}if(matchMedia('(max-width:600px)').matches)panel.style.setProperty('--effort-bottom',`${Math.round(innerHeight-button.getBoundingClientRect().top+8)}px`);panel.hidden=false;button.setAttribute('aria-expanded','true');render(selected());if(!matchMedia('(pointer:coarse)').matches)range.focus({preventScroll:true});});
   range.addEventListener('pointerdown',()=>{dragging=true});

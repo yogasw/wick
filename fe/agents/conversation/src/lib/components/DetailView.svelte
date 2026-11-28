@@ -8,7 +8,7 @@
   import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk, toastWarn, pushToast, dismissToast } from "@wick-fe/common-stores";
-  import { Button, ConfirmDialog, Composer, Modal, effortPickerConfig, type EffortInfo } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, Composer, Modal, effortClampMessage, effortPickerConfig, type EffortInfo } from "@wick-fe/common-ui";
   import { seedUsage, glanceFromWire } from "@wick-fe/common-ui/usage";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
@@ -919,11 +919,21 @@
   // re-read whenever either changes (each model offers its own stops).
   let effortInfo = $state<EffortInfo | null>(null);
   let effortSeq = 0;
+  // Session + provider + model of the last effort read: a model switch in
+  // the same session whose pick runs at another level says so, once.
+  let effortPair = "";
   async function loadEffort() {
     const seq = ++effortSeq;
+    const pair = `${sessionId}|${activeProvider ?? ""}|${activeModelID}`;
     try {
       const info = await Effect.runPromise(getSessionEffort(base, sessionId).pipe(Effect.provide(WickClientLayer)));
-      if (seq === effortSeq) effortInfo = info;
+      if (seq !== effortSeq) return;
+      const prev = effortPair;
+      effortPair = pair;
+      effortInfo = info;
+      const switched = prev !== "" && prev !== pair && prev.startsWith(`${sessionId}|`);
+      const msg = switched ? effortClampMessage(info) : "";
+      if (msg) toastWarn(msg);
     } catch {
       if (seq === effortSeq) effortInfo = null; // no picker rather than a wrong one
     }
@@ -942,7 +952,7 @@
       void loadEffort();
     }
   }
-  const effortConfig = $derived(effortPickerConfig(effortInfo, (v) => void handleEffortChange(v)));
+  const effortConfig = $derived(effortPickerConfig(effortInfo, (v) => void handleEffortChange(v), { showUnavailable: true }));
   // Sub-agent roles are edited where they are scoped: the project's
   // Sub-agents tab, or the global roles page for a chat with no project.
   const rolesHref = $derived(

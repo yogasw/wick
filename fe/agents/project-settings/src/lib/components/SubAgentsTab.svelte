@@ -23,7 +23,7 @@
     ConfirmDialog,
   } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
-  import { getProviderOptionModels } from "$lib/api.js";
+  import { getProviderEffort, getProviderOptionModels } from "$lib/api.js";
   import SettingsSection from "./SettingsSection.svelte";
 
   type Props = { projectID: string; base: string };
@@ -168,6 +168,7 @@
       {tags}
       {providerList}
       loadModels={loadProviderModels}
+      loadEffort={getProviderEffort}
       {saving}
       error={formError}
       onsave={save}

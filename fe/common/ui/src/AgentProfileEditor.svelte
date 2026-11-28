@@ -13,6 +13,8 @@
   import LabeledInput from "./LabeledInput.svelte";
   import NumberInput from "./NumberInput.svelte";
   import ProviderPicker from "./ProviderPicker.svelte";
+  import EffortField from "./EffortField.svelte";
+  import type { EffortInfo } from "./effort-config.js";
   import TextArea from "./TextArea.svelte";
   import TextInput from "./TextInput.svelte";
   import { buildProviderOptions } from "./provider-options.js";
@@ -27,6 +29,9 @@
         Without it the picker only knows the models baked into providerList,
         so omp/opencode live lists show up empty. */
     loadModels?: ComponentProps<typeof ProviderPicker>["loadModels"];
+    /** What the picked provider + model offers for reasoning effort.
+        Without it the role's effort is not shown. */
+    loadEffort?: (provider: string, model: string) => Promise<EffortInfo>;
     tags?: TagOption[];
     /** Read-only mode: every control disabled, Save and Delete hidden.
         How a non-admin sees a global role. */
@@ -43,6 +48,7 @@
     profile,
     providerList = [],
     loadModels,
+    loadEffort,
     tags = [],
     readonly = false,
     saving = false,
@@ -222,6 +228,18 @@
           placeholder="Select provider"
           {loadModels}
         />
+      {/if}
+      {#if loadEffort && providerKey}
+        <div class="mt-2" class:pointer-events-none={frozen} class:opacity-60={frozen}>
+          <EffortField
+            provider={providerKey}
+            model={draft.model}
+            value={draft.effort ?? ""}
+            onChange={(v) => (draft.effort = v)}
+            load={loadEffort}
+            defaultLabel="Same as the delegating chat"
+          />
+        </div>
       {/if}
     </LabeledInput>
 

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { toastError } from "@wick-fe/common-stores";
-  import { ToastHost, Composer, effortPickerConfig, type EffortInfo } from "@wick-fe/common-ui";
+  import { toastError, toastWarn } from "@wick-fe/common-stores";
+  import { ToastHost, Composer, effortClampMessage, effortPickerConfig, type EffortInfo } from "@wick-fe/common-ui";
   import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectMentionPaths, listComposerCommands, getProviderEffort } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
@@ -25,12 +25,13 @@
   let effortInfo = $state<EffortInfo | null>(null);
   let effortSeq = 0;
   let effortFor = "";
+  // The pick survives a model switch: a model without that level runs it at
+  // the nearest one it has (said once, in a toast) and a model offering it
+  // again gets it back.
   $effect(() => {
     const pick = selectedProvider;
-    if (pick !== effortFor) {
-      effortFor = pick;
-      selectedEffort = "";
-    }
+    const switched = effortFor !== "" && pick !== effortFor;
+    effortFor = pick;
     const n = ++effortSeq;
     const sep = pick.indexOf("::");
     const prov = sep < 0 ? pick : pick.slice(0, sep);
@@ -40,7 +41,12 @@
       return;
     }
     getProviderEffort(base, prov, model)
-      .then((r) => { if (n === effortSeq) effortInfo = r; })
+      .then((r) => {
+        if (n !== effortSeq) return;
+        effortInfo = r;
+        const msg = switched ? effortClampMessage(r, selectedEffort) : "";
+        if (msg) toastWarn(msg);
+      })
       .catch(() => { if (n === effortSeq) effortInfo = null; });
   });
   // A project's default effort applies to chats on its default provider +
@@ -53,7 +59,7 @@
     return pair === selectedProvider ? proj.default_effort : "";
   });
   const effortConfig = $derived(
-    effortInfo ? effortPickerConfig({ ...effortInfo, requested: selectedEffort, inherited: inheritedEffort }, (v) => (selectedEffort = v)) : undefined,
+    effortInfo ? effortPickerConfig({ ...effortInfo, requested: selectedEffort, inherited: inheritedEffort }, (v) => (selectedEffort = v), { showUnavailable: true }) : undefined,
   );
   let selectedPreset = $state("");
   let selectedProject = $state("");

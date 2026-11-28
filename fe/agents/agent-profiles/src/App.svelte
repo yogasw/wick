@@ -17,6 +17,7 @@
     ConfirmDialog,
     ToastHost,
     withModelListMeta,
+    type EffortInfo,
   } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import { onMount } from "svelte";
@@ -47,6 +48,16 @@
     } catch {
       return [];
     }
+  }
+
+  // What the role's provider + model offers for reasoning effort.
+  async function loadProviderEffort(provider: string, model: string): Promise<EffortInfo> {
+    const resp = await fetch(`${base}/providers/effort?${new URLSearchParams({ provider, model }).toString()}`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) throw new Error(`effort: ${resp.status}`);
+    return (await resp.json()) as EffortInfo;
   }
 
   let profiles = $state<AgentProfile[]>([]);
@@ -193,6 +204,7 @@
             {tags}
             {providerList}
             loadModels={loadProviderModels}
+            loadEffort={loadProviderEffort}
             readonly={!isAdmin}
             {saving}
             error={formError}

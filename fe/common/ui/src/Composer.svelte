@@ -1713,7 +1713,7 @@
 
     <!-- right: context ring + provider chip (Claude-style) + send -->
     <div class="ml-auto flex items-center gap-2 min-w-0">
-      {#if effort && effort.options.length > 1}<EffortPicker config={effort}/>{/if}
+      {#if effort && (effort.options.length > 1 || effort.disabledReason)}<EffortPicker config={effort}/>{/if}
       {#if caption}
         <span data-testid="composer-caption" title={caption} class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700" style="max-width: 14rem">{caption}</span>
       {/if}

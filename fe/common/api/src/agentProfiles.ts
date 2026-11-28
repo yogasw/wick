@@ -18,6 +18,9 @@ export interface AgentProfile {
   icon: string;
   provider: string;
   model: string;
+  /** Reasoning effort the role runs at ("" = inherits the delegating
+      conversation's). */
+  effort?: string;
   system_prompt: string;
   allowed_tag_ids: string[];
   allowed_native_tools: string[];
@@ -98,6 +101,7 @@ export function emptyAgentProfile(projectID = ""): AgentProfile {
     icon: "",
     provider: "claude",
     model: "",
+    effort: "",
     system_prompt: "",
     allowed_tag_ids: [],
     allowed_native_tools: [],
