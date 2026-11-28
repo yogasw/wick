@@ -51,6 +51,8 @@ export interface ProjectSettingsData {
       (for wick, "<entryID>@<vendorModelID>" — down to a live-set leaf).
       Only meaningful alongside default_provider. */
   default_model: string;
+  /** Reasoning effort on default_provider + default_model ("" = model default). */
+  default_effort?: string;
   system_addon: string;
   chat_count: number;
   created_at: string;
@@ -180,6 +182,9 @@ export interface UpdateProjectRequest {
   /** Sent with provider, never alone: a model id resolves against one
       instance's registry, so the server drops it when provider is empty. */
   model: string;
+  /** Default reasoning effort on provider + model ("" = model default).
+      Omitted keeps it while the pair stays; a new pair drops it. */
+  effort?: string;
   system_addon: string;
   /** Widget CSP override. The allowlist travels as the raw textarea text so
       the server can name the offending line back to the operator. Omitted

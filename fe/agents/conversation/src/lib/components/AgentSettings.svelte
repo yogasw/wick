@@ -7,7 +7,7 @@
      flight per agent; edits made meanwhile go out in the next one. A
      rejected PATCH keeps the local value and shows the error inline. */
   import { onMount, untrack } from "svelte";
-  import { AIGenerateButton, Button, Modal, ProjectAccessRequests, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
+  import { AIGenerateButton, Button, EffortField, Modal, ProjectAccessRequests, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
@@ -15,7 +15,7 @@
   const pendingImage = (a: AvatarSpec) => isImageKind(a.kind) && !a.image?.v;
   import AvatarImageEditor from "./AvatarImageEditor.svelte";
   import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
-  import { getProviderOptions, getProviderOptionModels, getProjectOptions } from "../api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getProjectOptions, getProviderEffort } from "../api/options.js";
   import {
     getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
@@ -60,7 +60,7 @@
 
   type Draft = {
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
-    pick: string; features: AgentFeatures; avatar: AvatarSpec;
+    pick: string; effort: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; force_default_provider: boolean; channel_show_teammates: boolean; channel_hide_interim: boolean; stop_after_team_task: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number; reach_allow: string[];
@@ -71,7 +71,7 @@
   function draftOf(a: AgentItem): Draft {
     return {
       handle: a.handle, name: a.name, tagline: a.tagline ?? "", description: a.description,
-      system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
+      system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model), effort: a.effort ?? "",
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: grantsOf($state.snapshot(a.allowed_connectors) as ConnectorGrant[] | null),
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
@@ -244,7 +244,7 @@
     if (!id || id === agent.project_id) {
       Object.assign(draft, {
         name: agent.name, description: agent.description, system_prompt: agent.system_prompt,
-        pick: joinPick(agent.provider, agent.model),
+        pick: joinPick(agent.provider, agent.model), effort: agent.effort ?? "",
       });
       return;
     }
@@ -255,7 +255,7 @@
       if (draft.project_id !== id) return;
       Object.assign(draft, {
         name: p.name || draft.handle, description: p.description, system_prompt: p.system_prompt,
-        pick: joinPick(p.provider, p.model),
+        pick: joinPick(p.provider, p.model), effort: "",
       });
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -315,6 +315,9 @@
       p.provider = provider;
       p.model = model;
     }
+    // The effort belongs to the pick: sent when it changed, and the server
+    // drops it on a new pick that comes without one.
+    if (d.effort !== (saved.effort ?? "")) p.effort = d.effort;
     if (!sameValue(d.features, saved.features)) p.features = { ...d.features };
     // Image with no picture yet is a local, pending state (Style shows
     // Image, the editor "No image yet"): the style is not saved until an
@@ -1064,10 +1067,21 @@
       <ProviderPicker
         options={buildProviderOptions(providers, draft.pick)}
         value={draft.pick}
-        onChange={(v) => (draft.pick = v)}
+        onChange={(v) => { if (v !== draft.pick) draft.effort = ""; draft.pick = v; }}
         placeholder="Default project"
         loadModels={loadProviderModels}
       />
+      {#if splitPick(draft.pick).provider}
+        <div class="mt-2">
+          <EffortField
+            provider={splitPick(draft.pick).provider}
+            model={splitPick(draft.pick).model}
+            value={draft.effort}
+            onChange={(v) => (draft.effort = v)}
+            load={(prov, model) => runApi(getProviderEffort(base, prov, model))}
+          />
+        </div>
+      {/if}
     </div>
     <div class="space-y-2" role="radiogroup" aria-label="Provider in chats" data-testid="as-provider-lock">
       <span class={label}>Provider in chats</span>

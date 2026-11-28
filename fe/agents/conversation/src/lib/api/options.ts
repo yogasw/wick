@@ -142,3 +142,8 @@ export const getSessionEffort = (base: string, sessionId: string) =>
 
 export const setSessionEffort = (base: string, sessionId: string, effort: string) =>
   apiPostE<EffortInfo>(`${base}/sessions/${encodeURIComponent(sessionId)}/effort`, { effort });
+
+// What a provider + model offers for reasoning effort: the step a form shows
+// right after its model pick (agent settings, failover targets).
+export const getProviderEffort = (base: string, provider: string, model: string) =>
+  apiGetE<EffortInfo>(`${base}/providers/effort?${new URLSearchParams({ provider, model }).toString()}`);

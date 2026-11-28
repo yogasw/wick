@@ -2,8 +2,8 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
-  import { ToastHost, Composer } from "@wick-fe/common-ui";
-  import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectMentionPaths, listComposerCommands } from "$lib/api/options.js";
+  import { ToastHost, Composer, effortPickerConfig, type EffortInfo } from "@wick-fe/common-ui";
+  import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectMentionPaths, listComposerCommands, getProviderEffort } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
   const appEl = document.getElementById("app");
@@ -19,6 +19,42 @@
   let loadingProviders = $state(true);
 
   let selectedProvider = $state("");
+  // Reasoning effort for the first turn, picked before the session exists.
+  // It belongs to the provider + model pick: a new pick starts at Default.
+  let selectedEffort = $state("");
+  let effortInfo = $state<EffortInfo | null>(null);
+  let effortSeq = 0;
+  let effortFor = "";
+  $effect(() => {
+    const pick = selectedProvider;
+    if (pick !== effortFor) {
+      effortFor = pick;
+      selectedEffort = "";
+    }
+    const n = ++effortSeq;
+    const sep = pick.indexOf("::");
+    const prov = sep < 0 ? pick : pick.slice(0, sep);
+    const model = sep < 0 ? "" : pick.slice(sep + 2);
+    if (!prov) {
+      effortInfo = null;
+      return;
+    }
+    getProviderEffort(base, prov, model)
+      .then((r) => { if (n === effortSeq) effortInfo = r; })
+      .catch(() => { if (n === effortSeq) effortInfo = null; });
+  });
+  // A project's default effort applies to chats on its default provider +
+  // model: show it as the starting value so the gauge tells the truth.
+  const inheritedEffort = $derived.by(() => {
+    const proj = projects.find((p) => p.id === selectedProject);
+    if (!proj?.default_effort || !proj.default_provider) return "";
+    const key = proj.default_provider.includes("/") ? proj.default_provider : `${proj.default_provider}/${proj.default_provider}`;
+    const pair = proj.default_model ? `${key}::${proj.default_model}` : key;
+    return pair === selectedProvider ? proj.default_effort : "";
+  });
+  const effortConfig = $derived(
+    effortInfo ? effortPickerConfig({ ...effortInfo, requested: selectedEffort, inherited: inheritedEffort }, (v) => (selectedEffort = v)) : undefined,
+  );
   let selectedPreset = $state("");
   let selectedProject = $state("");
   let submitting = $state(false);
@@ -191,7 +227,7 @@
     }
     submitting = true;
     try {
-      const url = await createSession(base, text, files, selectedProvider, selectedPreset, selectedProject);
+      const url = await createSession(base, text, files, selectedProvider, selectedPreset, selectedProject, selectedEffort);
       window.location.href = url;
     } catch (err) {
       toastError(err instanceof Error ? err.message : "Failed to create session.");
@@ -237,6 +273,7 @@
         preset={presetSelect}
         onSearchFiles={searchMentionFiles}
         commands={composerCommands}
+        effort={effortConfig}
       />
     </div>
 

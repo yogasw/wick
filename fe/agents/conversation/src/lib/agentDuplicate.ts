@@ -59,6 +59,7 @@ export function duplicateBody(a: AgentItem, taken: Iterable<string>): AgentWrite
     system_prompt: a.system_prompt,
     provider: a.provider,
     model: a.model,
+    effort: a.effort ?? "",
     preset: a.preset,
     avatar: { kind: a.avatar?.kind, shape: a.avatar?.shape ?? "circle", color: shiftColor(a.avatar?.color ?? ""), expression: a.avatar?.expression },
     features: a.features,

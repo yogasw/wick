@@ -61,6 +61,8 @@ export type AgentItem = {
   system_prompt: string;
   provider: string;
   model: string;
+  /** Default reasoning effort on provider + model ("" = model default). */
+  effort?: string;
   preset: string;
   features: AgentFeatures;
   avatar: AgentAvatarSpec;
@@ -264,6 +266,8 @@ export type AgentWrite = Partial<{
   system_prompt: string;
   provider: string;
   model: string;
+  /** Default reasoning effort on provider + model ("" = model default). */
+  effort: string;
   /** Create only: the new project's preset. */
   preset: string;
   project_id: string;

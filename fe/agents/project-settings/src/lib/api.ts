@@ -3,6 +3,7 @@
 // needs none of them.
 import { withModelListMeta } from "@wick-fe/common-ui/model-list-meta";
 import type { ProjectSettingsData, UpdateProjectRequest } from "./types.js";
+import type { EffortInfo } from "@wick-fe/common-ui";
 
 class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -107,6 +108,7 @@ export async function createProject(req: UpdateProjectRequest): Promise<string> 
   // Sent with the provider: the server drops a model that arrives without
   // one, since a model id resolves against a single instance's registry.
   form.set("model", req.model);
+  if (req.effort) form.set("effort", req.effort);
   form.set("system_addon", req.system_addon);
   const resp = await fetch(`${base}/projects`, {
     method: "POST",
@@ -227,3 +229,11 @@ export async function unpinSession(projectID: string, sessionID: string): Promis
 }
 
 export { ApiError };
+
+/** What a provider + model offers for reasoning effort (the effort step
+    shown right after the model pick). */
+export async function getProviderEffort(provider: string, model: string): Promise<EffortInfo> {
+  const base = getBase();
+  const q = new URLSearchParams({ provider, model });
+  return get<EffortInfo>(`${base}/providers/effort?${q.toString()}`);
+}

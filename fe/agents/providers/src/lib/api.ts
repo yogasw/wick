@@ -17,7 +17,7 @@ import type {
   ConfigFieldDTO,
   ProviderConnection,
 } from "./types.js";
-import type { ModelCaps, ComposerModelOption } from "@wick-fe/common-ui";
+import type { ModelCaps, ComposerModelOption, EffortInfo } from "@wick-fe/common-ui";
 import type { ProviderListItem } from "@wick-fe/common-api";
 import { parseSavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
@@ -1782,6 +1782,8 @@ export interface FailoverTarget {
   /* instance is the "type/name" tag; model_id the pin ("" = default). */
   instance: string;
   model_id?: string;
+  /* Reasoning effort on this target ("" = its model default). */
+  effort?: string;
 }
 
 export interface FailoverConfig {
@@ -1872,4 +1874,10 @@ export async function apiFailoverOptionModels(
   if (opts?.refresh) q.set("refresh", "1");
   const qs = q.toString();
   return get(`${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${qs ? `?${qs}` : ""}`);
+}
+
+/** What a provider + model offers for reasoning effort (a failover target's
+    effort step, shown once its model is picked). */
+export async function apiProviderEffort(base: string, provider: string, model: string): Promise<EffortInfo> {
+  return get<EffortInfo>(`${base}/providers/effort?${new URLSearchParams({ provider, model }).toString()}`);
 }

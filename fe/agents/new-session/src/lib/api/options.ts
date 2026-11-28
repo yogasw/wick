@@ -41,6 +41,8 @@ export type ProjectOption = {
       "<entryID>@<vendorModelID>"). Applied WITH the provider, never alone. */
   default_model: string;
   default_preset: string;
+  /** Reasoning effort on that provider + model ("" = model default). */
+  default_effort?: string;
 };
 
 export const getProviderOptions = (base: string) =>
@@ -126,15 +128,28 @@ export async function createSession(
   provider: string,
   preset: string,
   projectId: string,
+  effort = "",
 ): Promise<string> {
   const fd = new FormData();
   fd.append("message", message);
   for (const f of files) fd.append("files", f);
   fd.append("provider", provider);
+  if (effort) fd.append("effort", effort);
   fd.append("preset", preset);
   fd.append("project_id", projectId);
   const res = await fetch(`${base}/`, { method: "POST", body: fd, credentials: "same-origin" });
   if (res.ok || res.redirected) return res.url;
   const body = await res.text().catch(() => "");
   throw new Error(body || `create session failed: ${res.status}`);
+}
+
+// What a provider + model offers for reasoning effort: the composer shows the
+// gauge for the pick before the session exists.
+export async function getProviderEffort(base: string, provider: string, model: string): Promise<EffortInfo> {
+  const res = await fetch(`${base}/providers/effort?${new URLSearchParams({ provider, model }).toString()}`, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`effort: ${res.status}`);
+  return (await res.json()) as EffortInfo;
 }

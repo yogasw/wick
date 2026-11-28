@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { DeleteProjectDialog, ProjectAccessRequests, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
+  import { DeleteProjectDialog, ProjectAccessRequests, ProviderPicker, EffortField, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
@@ -7,6 +7,7 @@
     createProject,
     unpinSession,
     getProviderOptionModels,
+    getProviderEffort,
     saveTicketConfig,
   } from "$lib/api.js";
   import type { ProjectSettingsData, WidgetPolicy, TicketConfig } from "$lib/types.js";
@@ -61,6 +62,9 @@
   // apart only on save. Holding them separately here would let a save pair
   // a provider with a model belonging to a different instance.
   let pickerValue = $state("");
+  // Default reasoning effort on the picked provider + model; a new pick
+  // resets it (a level belongs to the model it was chosen for).
+  let effort = $state("");
   const providerKey = $derived(pickerValue.split("::")[0] ?? "");
   const modelID = $derived.by(() => {
     const i = pickerValue.indexOf("::");
@@ -113,6 +117,7 @@
       preset,
       provider: providerKey,
       model: modelID,
+      effort,
       system_addon: systemAddon,
       widget: widgetPayload(),
     });
@@ -153,6 +158,7 @@
       // provider exists to resolve it against.
       const key = normalizeProviderKey(d.default_provider);
       pickerValue = key && d.default_model ? `${key}::${d.default_model}` : key;
+      effort = d.default_effort ?? "";
       systemAddon = d.system_addon;
       widget = d.widget ?? {};
       widgetAllowlistText = (d.widget?.allowlist ?? []).join("\n");
@@ -225,6 +231,7 @@
         preset,
         provider: providerKey,
         model: modelID,
+        effort,
         system_addon: systemAddon,
       });
       window.location.href = redirectURL;
@@ -519,10 +526,21 @@
             id="ps-provider"
             options={providerOptions}
             value={pickerValue}
-            onChange={(v) => { pickerValue = v; change(); }}
+            onChange={(v) => { if (v !== pickerValue) effort = ""; pickerValue = v; change(); }}
             loadModels={loadProviderModels}
             placeholder="Select provider"
           />
+          {#if providerKey}
+            <div class="mt-2">
+              <EffortField
+                provider={providerKey}
+                model={modelID}
+                value={effort}
+                onChange={(v) => { effort = v; change(); }}
+                load={getProviderEffort}
+              />
+            </div>
+          {/if}
         </div>
         <div>
           <label for="ps-preset" class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">Preset</label>

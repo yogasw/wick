@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Button, ProviderPicker, buildProviderOptions, withModelListMeta } from "@wick-fe/common-ui";
+  import { Button, EffortField, ProviderPicker, buildProviderOptions, withModelListMeta } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import type { ProviderListItem } from "@wick-fe/common-api";
   import {
@@ -9,6 +9,7 @@
     apiResetProviderHealth,
     apiFailoverOptions,
     apiFailoverOptionModels,
+    apiProviderEffort,
     type FailoverConfig,
   } from "$lib/api.js";
   import type { ProviderHealthDTO } from "$lib/types.js";
@@ -58,8 +59,15 @@
   let rowIds = $state<number[]>([]);
   let nextRowId = 0;
 
+  // A target carries effort only when one is set, so an untouched chain
+  // saves exactly as it did before effort existed.
+  function withEffort(t: FailoverConfig["chain"][number], effort: string): FailoverConfig["chain"][number] {
+    const { effort: _drop, ...rest } = t;
+    return effort ? { ...rest, effort } : rest;
+  }
+
   function apply(c: FailoverConfig) {
-    cfg = { ...c, triggers: [...c.triggers], chain: c.chain.map((t) => ({ instance: t.instance, model_id: t.model_id ?? "" })) };
+    cfg = { ...c, triggers: [...c.triggers], chain: c.chain.map((t) => withEffort({ instance: t.instance, model_id: t.model_id ?? "" }, t.effort ?? "")) };
     rowIds = c.chain.map(() => nextRowId++);
     recheckText = String(c.recheck_minutes);
   }
@@ -271,7 +279,7 @@
                 />
               {:else}
                 <span data-testid={`failover-target-text-${i}`} class="block truncate font-mono text-xs text-black-900 dark:text-white-100" title={pickValue(t)}>
-                  {t.instance}{#if t.model_id}<span class="text-black-700 dark:text-black-600"> · {t.model_id}</span>{/if}
+                  {t.instance}{#if t.model_id}<span class="text-black-700 dark:text-black-600"> · {t.model_id}</span>{/if}{#if t.effort}<span class="text-black-700 dark:text-black-600"> · effort {t.effort}</span>{/if}
                 </span>
               {/if}
             </div>
@@ -281,6 +289,18 @@
           </div>
           {#if !t.instance}
             <p class="pl-7 text-[11px] text-black-700 dark:text-black-600">Pick a provider and model.</p>
+          {:else if canEdit}
+            <!-- The target's own effort: runs there instead of the home's,
+                 and the return home restores the home's. -->
+            <div class="pl-7" data-testid={`failover-target-effort-${i}`}>
+              <EffortField
+                provider={t.instance}
+                model={t.model_id ?? ""}
+                value={t.effort ?? ""}
+                onChange={(v) => (cfg.chain[i] = withEffort(cfg.chain[i], v))}
+                load={(prov, model) => apiProviderEffort(base, prov, model)}
+              />
+            </div>
           {/if}
           {#if problems[i]}
             <p data-testid={`failover-problem-${i}`} class="pl-7 text-[11px] text-red-600 dark:text-red-400">{problems[i]}</p>
