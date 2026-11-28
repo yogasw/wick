@@ -44,6 +44,13 @@ func TestContinueInTicketRoomStaysUnderTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A shared-cache memory database lives as long as a connection does:
+	// close it, or a repeated run (-count) finds the rows already there.
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	if err := db.AutoMigrate(&entity.AgentDelegation{}); err != nil {
 		t.Fatal(err)
 	}
