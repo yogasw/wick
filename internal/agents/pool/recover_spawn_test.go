@@ -325,3 +325,55 @@ func TestUserMessageRestoresTheRestartBudget(t *testing.T) {
 		t.Fatalf("after the user message the budget allowed %d spawns, want %d", got, 1+maxRespawnAttempts)
 	}
 }
+
+// A restart notice that arrives while the previous restart is still
+// spawning joins that spawn. When the process of that spawn dies before
+// Start returns, its exit releases the entry first, so the spawn ends with
+// nothing alive to drain into. The joined notice must then get a spawn of
+// its own: left in the buffer, the crash loop stalls short of its budget
+// and the halt is never announced.
+func TestJoinedSpawnRestartsWhenSpawnEndsDead(t *testing.T) {
+	sp := &scriptedSpawner{Lines: [][]string{{
+		`{"type":"system","subtype":"init","session_id":"abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+	}}}
+	p, layout := newPool(t, 2, sp)
+	setupSession(t, layout, "S1")
+
+	key := sessionKey("S1", "default")
+	p.mu.Lock()
+	p.spawningKeys[key] = struct{}{}
+	p.mu.Unlock()
+
+	if err := p.Send(context.Background(), "S1", "default", "recover", "system", "restart notice"); err != nil {
+		t.Fatal(err)
+	}
+	if n := sp.procCount(); n != 0 {
+		t.Fatalf("a send joining a spawn in flight started %d processes, want 0", n)
+	}
+
+	p.endSpawn(key, "S1", "default")
+	waitFor(t, func() bool { return sp.procCount() == 1 }, 3*time.Second)
+	if stdin := sp.procAt(0).recordedStdin(); !contains(stdin, "restart notice") {
+		t.Fatalf("restarted prompt missing the joined notice: %q", stdin)
+	}
+}
+
+// A spawn nobody joined that ends dead starts nothing: only a send that
+// was left waiting on it earns a restart.
+func TestUnjoinedSpawnEndingDeadStartsNothing(t *testing.T) {
+	sp := &scriptedSpawner{}
+	p, layout := newPool(t, 2, sp)
+	setupSession(t, layout, "S1")
+
+	key := sessionKey("S1", "default")
+	p.mu.Lock()
+	p.spawningKeys[key] = struct{}{}
+	p.mu.Unlock()
+	p.endSpawn(key, "S1", "default")
+	time.Sleep(100 * time.Millisecond)
+	if n := sp.procCount(); n != 0 {
+		t.Fatalf("an unjoined dead spawn started %d processes, want 0", n)
+	}
+}

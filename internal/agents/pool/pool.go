@@ -79,6 +79,11 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+	// joinedSpawn names the source of a spawn-worthy send that found its
+	// session mid-spawn and left the buffered message to that spawn. When
+	// the spawn ends with no live process (it died before Start returned)
+	// endSpawn starts the agent again for it instead of stranding it.
+	joinedSpawn map[string]string
 	// predWait: session+agent keys held for a draining predecessor's turn
 	// (waitForPredecessor). Guarded by mu.
 	predWait map[string]bool
@@ -600,6 +605,7 @@ func New(cfg PoolConfig) *Pool {
 		cfg:          cfg,
 		active:       map[string]*runEntry{},
 		spawningKeys: map[string]struct{}{},
+		joinedSpawn:  map[string]string{},
 		buffers:      map[string]*Buffer{},
 		stopCh:       make(chan struct{}),
 		providerMax:  providerMaxConcurrent,
@@ -1254,6 +1260,7 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 	// If this session is already mid-spawn, the in-flight spawn's Drain
 	// will pick up the buffered message — nothing more to do here.
 	if _, spawning := p.spawningKeys[key]; spawning {
+		p.joinedSpawn[key] = source
 		p.mu.Unlock()
 		return nil
 	}
@@ -1292,7 +1299,7 @@ func (p *Pool) spawnOrQueue(ctx context.Context, sessionID, agentName, source st
 		// is queued or joins a spawn in flight starts nothing.
 		yieldIdleServers(sessionID, pType, pName)
 		err := p.spawn(ctx, sessionID, agentName, source)
-		p.endSpawn(key, sessionID)
+		p.endSpawn(key, sessionID, agentName)
 		return err
 	}
 	// Full — queue the request (dedup: one slot per session+agent; the
@@ -2219,7 +2226,7 @@ func (p *Pool) tryGrantQueue() {
 		// serve it go first (as on the direct Send path).
 		yieldIdleServers(q.sessionID, qType, qName)
 		_ = p.spawn(context.Background(), q.sessionID, q.agentName, "queue")
-		p.endSpawn(key, q.sessionID)
+		p.endSpawn(key, q.sessionID, q.agentName)
 	}()
 }
 
@@ -2230,12 +2237,26 @@ func (p *Pool) tryGrantQueue() {
 // that drain, which already happened. Checked after spawningKeys is
 // cleared, so every such message is in the buffer by then, and a later
 // sender sees no spawn and delivers its own.
-func (p *Pool) endSpawn(key, sessionID string) {
+//
+// A process that dies before Start returns has its exit handled while the
+// spawn is still in flight, so the entry is gone by now. A send that
+// joined the spawn meanwhile (a crash-recovery restart, a user turn) would
+// then wait in the buffer for a drain that never comes; it gets its own
+// spawn here instead.
+func (p *Pool) endSpawn(key, sessionID, agentName string) {
 	p.mu.Lock()
 	delete(p.spawningKeys, key)
+	joined, rejoin := p.joinedSpawn[key]
+	delete(p.joinedSpawn, key)
 	e, alive := p.active[key]
+	closed := p.closed
 	p.mu.Unlock()
 	if !alive {
+		if rejoin && !closed {
+			if buf, err := p.bufferFor(sessionID); err == nil && buf.Len() > 0 {
+				_ = p.spawnOrQueue(context.Background(), sessionID, agentName, joined)
+			}
+		}
 		return
 	}
 	buf, err := p.bufferFor(sessionID)
