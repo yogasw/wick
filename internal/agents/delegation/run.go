@@ -129,6 +129,9 @@ type ChildSpec struct {
 	// WorkspacePath is the isolated directory to run in (Phase 3).
 	// Empty = the project's shared workspace.
 	WorkspacePath string
+	// ParentSessionID is the conversation that delegated; the child takes
+	// its reasoning effort when it runs on the very same provider + model.
+	ParentSessionID string
 }
 
 // TokenIssuer mints and revokes scoped MCP identities.
@@ -746,6 +749,7 @@ func (s *Service) execute(
 		MaxTokens:     row.MaxTokens,
 		WorkspacePath: workspacePath,
 	}
+	spec.ParentSessionID = row.ParentSessionID
 	if err := s.Runner.StartAgent(runCtx, spec); err != nil {
 		cancel()
 		s.untrackInflight(id)

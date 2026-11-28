@@ -325,6 +325,7 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 		set(&meta.Name, in.Name, "name")
 		set(&meta.Description, in.Description, "description")
 		set(&meta.Defaults.SystemAddon, in.SystemPrompt, "system prompt")
+		capPair := meta.Defaults.Provider + "\x00" + meta.Defaults.Model
 		if prov != nil && *prov != meta.Defaults.Provider {
 			meta.Defaults.Provider = *prov
 			changed = append(changed, "provider")
@@ -342,6 +343,11 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 				meta.Defaults.Model = nv
 				changed = append(changed, "model")
 			}
+		}
+		// A default effort belongs to the provider + model it was set for.
+		if meta.Defaults.Effort != "" && capPair != meta.Defaults.Provider+"\x00"+meta.Defaults.Model {
+			meta.Defaults.Effort = ""
+			changed = append(changed, "effort")
 		}
 		if _, err := globalMgr.UpdateProject(ctx, p.ProjectID, meta); err != nil {
 			return nil, err

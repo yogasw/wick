@@ -1508,6 +1508,19 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		// A new agent created with an effort (a duplicate, the wizard):
+		// stored on its fresh project once the pair is known to offer it.
+		if req.Effort != nil && strings.TrimSpace(*req.Effort) != "" {
+			if proj, ok := globalMgr.Registry().Project(pid); ok {
+				meta := proj.Meta
+				if eff, err := nextDefaultEffort(c.Context(), meta.Defaults, "", req.Effort); err == nil && eff != meta.Defaults.Effort {
+					meta.Defaults.Effort = eff
+					if _, err := globalMgr.UpdateProject(c.Context(), pid, meta); err != nil {
+						log.Ctx(c.Context()).Warn().Err(err).Str("project", pid).Msg("team create: store default effort")
+					}
+				}
+			}
+		}
 	}
 	// The owner's first Wick agent becomes their Captain, whatever its
 	// name: the role, not a fixed "captain" agent, runs the Team. A

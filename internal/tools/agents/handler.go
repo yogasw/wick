@@ -1842,6 +1842,18 @@ func startNewSession(c *tool.Ctx) {
 			log.Ctx(c.Context()).Warn().Msgf("compose set model id: %s", err.Error())
 		}
 	}
+	// The effort picked on the new-session composer, for the provider +
+	// model this session actually landed on: kept only when that pair
+	// offers it (a Team responder may have moved the session elsewhere).
+	// "default" is kept too: picked on purpose, it stops a project default
+	// from applying.
+	if eff := strings.TrimSpace(c.Form("effort")); eff != "" {
+		if info := provider.EffortInfoFor(c.Context(), prov, modelID, "", ""); provider.ValidEffortChoice(info, eff) {
+			if err := session.SetEffort(globalLayout, id, "main", eff); err != nil {
+				log.Ctx(c.Context()).Warn().Msgf("compose set effort: %s", err.Error())
+			}
+		}
+	}
 	// Pre-subscribe: the new-session composer carries a bell with a
 	// hidden "subscribe" input that flips to "1" when toggled on. If
 	// set, opt the calling user in to lifecycle pushes for this brand-
@@ -3214,6 +3226,9 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// one instance's registry and is meaningless beside another.
 		DefaultModel  string `json:"default_model"`
 		DefaultPreset string `json:"default_preset"`
+		// DefaultEffort is the reasoning effort on that pair ("" = model
+		// default): chats on the pair inherit it.
+		DefaultEffort string `json:"default_effort,omitempty"`
 		// TicketEnabled lets the UI offer ticket affordances (the board jump
 		// in a chat's menu) only where a board exists. Without it the client
 		// would have to fetch each project's ticket config to find out.
@@ -3304,6 +3319,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,
 			DefaultModel:    p.Meta.Defaults.Model,
+			DefaultEffort:   p.Meta.Defaults.Effort,
 			DefaultPreset:   p.Meta.Defaults.Preset,
 			TicketEnabled:   p.Meta.Ticket.Enabled,
 			Shared:          isShared(shared, id),
@@ -3597,6 +3613,14 @@ func createProject(c *tool.Ctx) {
 			SystemAddon: c.Form("system_addon"),
 		},
 	}
+	if v := strings.TrimSpace(c.Form("effort")); v != "" {
+		eff, err := nextDefaultEffort(c.Context(), opt.Defaults, "", &v)
+		if err != nil {
+			c.Error(http.StatusBadRequest, err.Error())
+			return
+		}
+		opt.Defaults.Effort = eff
+	}
 	if _, err := globalMgr.CreateProject(c.Context(), opt); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("create project %s: %s", name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
@@ -3658,9 +3682,12 @@ func updateProject(c *tool.Ctx) {
 		c.Error(http.StatusForbidden, errNoProviderAccess(prov))
 		return
 	}
+	formPair := meta.Defaults.Provider + "\x00" + meta.Defaults.Model
 	meta.Defaults.Provider = strings.TrimSpace(c.Form("provider"))
 	meta.Defaults.Model = modelWithProvider(c.Form("provider"), c.Form("model"))
 	meta.Defaults.SystemAddon = c.Form("system_addon")
+	// This form has no effort field: keep the effort while the pair stays.
+	meta.Defaults.Effort, _ = nextDefaultEffort(c.Context(), meta.Defaults, formPair, nil)
 	// Folder mode radio: "managed" forces empty custom path; "custom"
 	// keeps the path input. Managed files/ left in place on switch (§4.2).
 	customPath := strings.TrimSpace(c.Form("custom_path"))

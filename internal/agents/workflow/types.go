@@ -215,6 +215,7 @@ type Node struct {
 	MaxTurns          int      `json:"max_turns,omitempty"`
 	Thinking          string   `json:"thinking,omitempty"`
 	MaxThinkingTokens int      `json:"max_thinking_tokens,omitempty"`
+	Effort            string   `json:"effort,omitempty"`
 	RequireStatus     bool     `json:"require_status,omitempty"`
 
 	// channel (action) — Channel field name avoided clash with Event.Channel
@@ -225,8 +226,8 @@ type Node struct {
 	// resolve from the firing trigger's bot, else the first instance.
 	ChannelInstance string            `json:"channel_instance,omitempty"`
 	Op              string            `json:"op,omitempty"`
-	Args        map[string]any    `json:"args,omitempty"`
-	ArgModes    map[string]string `json:"arg_modes,omitempty"`
+	Args            map[string]any    `json:"args,omitempty"`
+	ArgModes        map[string]string `json:"arg_modes,omitempty"`
 
 	// connector — uses row_id for instance (datatable_* nodes own `row:`)
 	Module string `json:"module,omitempty"`
@@ -461,13 +462,13 @@ type Trigger struct {
 	// channel type, which is what every pre-existing trigger does.
 	ChannelInstance string            `json:"channel_instance,omitempty"`
 	Event           string            `json:"event,omitempty"`
-	Target       string            `json:"target,omitempty"`
-	Match        map[string]any    `json:"match,omitempty"`
-	MatchEnabled bool              `json:"match_enabled,omitempty"`
-	MatchModes   map[string]string `json:"match_modes,omitempty"`
-	Whitelist    *Whitelist        `json:"whitelist,omitempty"`
-	DedupTTLSec  int               `json:"dedup_ttl_sec,omitempty"`
-	ReplySource  *bool             `json:"reply_source,omitempty"`
+	Target          string            `json:"target,omitempty"`
+	Match           map[string]any    `json:"match,omitempty"`
+	MatchEnabled    bool              `json:"match_enabled,omitempty"`
+	MatchModes      map[string]string `json:"match_modes,omitempty"`
+	Whitelist       *Whitelist        `json:"whitelist,omitempty"`
+	DedupTTLSec     int               `json:"dedup_ttl_sec,omitempty"`
+	ReplySource     *bool             `json:"reply_source,omitempty"`
 
 	// webhook
 	Path      string `json:"path,omitempty"`

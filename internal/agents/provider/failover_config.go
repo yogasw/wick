@@ -43,6 +43,9 @@ const (
 type FailoverTarget struct {
 	Instance string
 	ModelID  string
+	// Effort is the reasoning effort a session runs with on this target
+	// ("" = the target model's default), independent of the home's.
+	Effort string
 }
 
 // FailoverConfig is one instance's failover settings.
@@ -133,7 +136,11 @@ func NormalizeFailover(cfg FailoverConfig) FailoverConfig {
 		}
 		typ, name := SplitInstanceTag(tg.Instance)
 		typ = Type(strings.ToLower(string(typ)))
-		out.Chain = append(out.Chain, FailoverTarget{Instance: InstanceTag(typ, name), ModelID: strings.TrimSpace(tg.ModelID)})
+		effort := strings.TrimSpace(tg.Effort)
+		if effort == EffortDefault {
+			effort = ""
+		}
+		out.Chain = append(out.Chain, FailoverTarget{Instance: InstanceTag(typ, name), ModelID: strings.TrimSpace(tg.ModelID), Effort: effort})
 	}
 	return out
 }
@@ -314,7 +321,7 @@ func failoverFromUser(in *userconfig.FailoverConfig) *FailoverConfig {
 		ReturnHome:     in.ReturnHome,
 	}
 	for _, t := range in.Chain {
-		out.Chain = append(out.Chain, FailoverTarget{Instance: t.Instance, ModelID: t.ModelID})
+		out.Chain = append(out.Chain, FailoverTarget{Instance: t.Instance, ModelID: t.ModelID, Effort: t.Effort})
 	}
 	return out
 }
@@ -330,7 +337,7 @@ func failoverToUser(in *FailoverConfig) *userconfig.FailoverConfig {
 		ReturnHome:     in.ReturnHome,
 	}
 	for _, t := range in.Chain {
-		out.Chain = append(out.Chain, userconfig.FailoverTarget{Instance: t.Instance, ModelID: t.ModelID})
+		out.Chain = append(out.Chain, userconfig.FailoverTarget{Instance: t.Instance, ModelID: t.ModelID, Effort: t.Effort})
 	}
 	return out
 }

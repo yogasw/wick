@@ -402,6 +402,7 @@ func (p *Pool) runFailover(j failoverJob) {
 	res, err := provider.ApplySwitch(p.cfg.Layout, sid, name, j.target.Instance, provider.SwitchOptions{
 		Source:         "failover",
 		ModelID:        j.target.ModelID,
+		Effort:         &j.target.Effort,
 		Failover:       true,
 		FailoverReason: j.reason,
 		MsgKey:         j.msgKey,
@@ -777,6 +778,7 @@ func (p *Pool) maybeReturnHome(sessionID, agentName string) bool {
 	_, err = provider.ApplySwitch(p.cfg.Layout, sessionID, agentName, t.Instance, provider.SwitchOptions{
 		Source:     "failover",
 		ModelID:    t.ModelID,
+		Effort:     &t.Effort,
 		ReturnHome: true,
 		ExpectFrom: cur,
 		Notify: func(tag string, steps []string) {

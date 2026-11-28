@@ -3,7 +3,9 @@ package delegation
 import (
 	"strings"
 
+	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -88,4 +90,30 @@ func resolveChildTarget(
 		got.ModelID = parent.ModelID
 	}
 	return got
+}
+
+// childEffort is the reasoning effort a sub-agent inherits: its parent
+// conversation's pick, but only when the child runs on the very same
+// instance and model — a level belongs to the model it was chosen for.
+func childEffort(layout config.Layout, spec ChildSpec) string {
+	if strings.TrimSpace(spec.ParentSessionID) == "" {
+		return ""
+	}
+	parent, err := session.Load(layout, spec.ParentSessionID)
+	if err != nil || len(parent.Agents) == 0 {
+		return ""
+	}
+	a := parent.Agents[0]
+	if active := parent.Meta.ActiveAgent; active != "" {
+		for _, x := range parent.Agents {
+			if x.Name == active {
+				a = x
+				break
+			}
+		}
+	}
+	if !provider.SameInstance(a.Provider, spec.Target.Provider) || a.ModelID != spec.Target.ModelID {
+		return ""
+	}
+	return a.Effort
 }

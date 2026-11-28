@@ -82,6 +82,9 @@ type FailoverState struct {
 	HomeProvider string `json:"home_provider,omitempty"`
 	// HomeModelID is the model pin the home runs with ("" = its default).
 	HomeModelID string `json:"home_model_id,omitempty"`
+	// HomeEffort is the reasoning effort the home runs with ("" = none
+	// picked); a stand-in runs its own target's, a return home restores it.
+	HomeEffort string `json:"home_effort,omitempty"`
 	// Tried lists the instance keys this run already failed on, so one
 	// message never visits an instance twice.
 	Tried []string `json:"tried,omitempty"`
@@ -366,6 +369,11 @@ func SetEffort(layout config.Layout, id, name, v string) error {
 			return false
 		}
 		a.Effort = v
+		// A pick made on the home is the home's; one made on a stand-in
+		// is the stand-in's and leaves the home alone.
+		if a.Failover != nil && a.Failover.HomeProvider != "" && a.Failover.HomeProvider == a.Provider {
+			a.Failover.HomeEffort = v
+		}
 		return true
 	})
 }

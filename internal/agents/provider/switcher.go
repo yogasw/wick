@@ -25,6 +25,10 @@ type Pool interface {
 
 // SwitchOptions controls optional behaviour after a provider switch.
 type SwitchOptions struct {
+	// Effort is the reasoning effort to run with after the switch: nil
+	// clears it (a level belongs to the model it was chosen for), except
+	// a return home, which restores the home's own.
+	Effort *string
 	// Greeting, if non-empty, is sent as a user message to the new agent
 	// immediately after the switch so it can introduce itself.
 	Greeting string
@@ -339,6 +343,14 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 				// to their binary via --model. Empty clears any stale pin (so a
 				// switch back doesn't resurrect a foreign instance's choice).
 				loaded.Agents[i].ModelID = opts.ModelID
+				// The effort belongs to the provider + model it was picked
+				// for: a switch carries the one asked for (a failover
+				// target's own), a return home restores the home's, and
+				// anything else starts from the model default.
+				loaded.Agents[i].Effort = ""
+				if opts.Effort != nil {
+					loaded.Agents[i].Effort = *opts.Effort
+				}
 				if opts.Pin != nil {
 					loaded.Agents[i].Pinned = *opts.Pin
 				}
@@ -353,6 +365,7 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 						standIns = returnStandIns(st.StandIns, fromKey, newKey)
 						if newKey == st.HomeProvider {
 							st.StandIns = nil
+							loaded.Agents[i].Effort = st.HomeEffort
 						} else {
 							st.StandIns = append([]string(nil), st.StandIns...)
 						}
@@ -361,7 +374,7 @@ func ApplySwitch(layout config.Layout, sessionID, agentName, tag string, opts Sw
 				default:
 					// A manual pick is the new home; whatever run was in
 					// flight is over.
-					loaded.Agents[i].Failover = &session.FailoverState{HomeProvider: newKey, HomeModelID: opts.ModelID}
+					loaded.Agents[i].Failover = &session.FailoverState{HomeProvider: newKey, HomeModelID: opts.ModelID, HomeEffort: loaded.Agents[i].Effort}
 				}
 				home = loaded.Agents[i].Failover
 				break
@@ -493,7 +506,7 @@ func advanceFailover(a session.AgentEntry, fromKey, toKey, msgKey string, now ti
 		st.StandIns = append(st.StandIns, toKey)
 	}
 	if st.HomeProvider == "" {
-		st.HomeProvider, st.HomeModelID = fromKey, a.ModelID
+		st.HomeProvider, st.HomeModelID, st.HomeEffort = fromKey, a.ModelID, a.Effort
 	}
 	seen := false
 	for _, k := range st.Tried {

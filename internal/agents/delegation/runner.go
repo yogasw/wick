@@ -153,6 +153,10 @@ func (r *PoolRunner) StartAgent(ctx context.Context, spec ChildSpec) error {
 	if err := session.SetModelID(r.Layout, spec.SessionID, spec.AgentName, spec.Target.ModelID); err != nil {
 		log.Warn().Err(err).Msg("delegation: pin model failed")
 	}
+	// Also written unconditionally, for the same reuse reason.
+	if err := session.SetEffort(r.Layout, spec.SessionID, spec.AgentName, childEffort(r.Layout, spec)); err != nil {
+		log.Warn().Err(err).Msg("delegation: set effort failed")
+	}
 	// Set the native turn cap too where the provider supports it. This is
 	// an OPTIMISATION, not the enforcement: it lets the CLI stop cleanly
 	// on its own before wick's own Done-counter has to force a kill.

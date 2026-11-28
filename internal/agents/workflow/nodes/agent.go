@@ -28,6 +28,7 @@ type agentSchema struct {
 	MaxTurns          int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
 	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below), off disables it to cut latency (claude only)."`
 	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default), set >=1024 to cap. Claude only."`
+	Effort            string `wick:"key=effort;desc=Reasoning effort for this agent: a level its provider and model offer (e.g. low, high, xhigh). Empty = the model default. A level the model does not offer is skipped with a notice."`
 	Session           string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
 	Workspace         string `wick:"key=workspace;desc=Project (workspace id) this agent's session runs in. Applies only when the agent creates its own session: session = new, or no session_init before it. When it inherits a session_init's session the project is already fixed there and this is ignored, so set it on session_init instead."`
 	TimeoutSec        int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
@@ -336,6 +337,12 @@ func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.N
 				return fmt.Errorf("set model: %w", err)
 			}
 		}
+	}
+	// Always persisted (including "") so a reused session runs this node's
+	// effort, not a prior run's. Written after the provider: a provider
+	// change clears the effort it was picked for.
+	if err := e.Pool.SetEffort(sessionID, "default", strings.TrimSpace(n.Effort)); err != nil {
+		return fmt.Errorf("set effort: %w", err)
 	}
 	return nil
 }

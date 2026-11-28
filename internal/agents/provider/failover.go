@@ -59,6 +59,9 @@ type Target struct {
 	// Instance is the canonical "type/name" tag.
 	Instance string
 	ModelID  string
+	// Effort is the target's own reasoning effort ("" = model default).
+	// For the home it is empty: a return home restores the home's.
+	Effort string
 	// Home: the target is the home instance itself.
 	Home bool
 }
@@ -248,7 +251,7 @@ func PickTarget(in PickInput) (Target, bool) {
 				continue
 			}
 		}
-		return Target{Instance: tag, ModelID: c.ModelID, Home: i == 0}, true
+		return Target{Instance: tag, ModelID: c.ModelID, Effort: c.Effort, Home: i == 0}, true
 	}
 	return Target{}, false
 }

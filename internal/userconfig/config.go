@@ -380,6 +380,9 @@ type FailoverConfig struct {
 type FailoverTarget struct {
 	Instance string `json:"instance"`
 	ModelID  string `json:"model_id,omitempty"`
+	// Effort is the reasoning effort this target runs with ("" = its
+	// model default); it must be offered by Instance + ModelID.
+	Effort string `json:"effort,omitempty"`
 }
 
 // WickModel is one registered custom model on the wick provider.

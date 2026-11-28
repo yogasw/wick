@@ -17,6 +17,8 @@ type FailoverTargetDTO struct {
 	Instance string `json:"instance"`
 	// ModelID is the model pin, flat or "<path>@<model>"; "" = default.
 	ModelID string `json:"model_id,omitempty"`
+	// Effort is the reasoning effort on this target ("" = model default).
+	Effort string `json:"effort,omitempty"`
 }
 
 // FailoverConfigDTO is an instance's failover config on the wire.
@@ -104,7 +106,7 @@ func failoverDTO(c provider.FailoverConfig) FailoverConfigDTO {
 		ReturnHome:     c.ReturnHome,
 	}
 	for _, t := range c.Chain {
-		out.Chain = append(out.Chain, FailoverTargetDTO{Instance: t.Instance, ModelID: t.ModelID})
+		out.Chain = append(out.Chain, FailoverTargetDTO{Instance: t.Instance, ModelID: t.ModelID, Effort: t.Effort})
 	}
 	return out
 }
@@ -117,7 +119,7 @@ func failoverFromDTO(d FailoverConfigDTO) provider.FailoverConfig {
 		ReturnHome:     d.ReturnHome,
 	}
 	for _, t := range d.Chain {
-		out.Chain = append(out.Chain, provider.FailoverTarget{Instance: t.Instance, ModelID: t.ModelID})
+		out.Chain = append(out.Chain, provider.FailoverTarget{Instance: t.Instance, ModelID: t.ModelID, Effort: t.Effort})
 	}
 	return out
 }
@@ -251,6 +253,17 @@ func saveProviderFailover(c *tool.Ctx) {
 		if !userCanAccessProvider(c.Context(), u, tt, tn) {
 			denied[tg.Instance] = true
 			deniedErrs = append(deniedErrs, "unknown provider instance "+tg.Instance)
+		}
+	}
+	// A target's effort must be one its own model offers: a stale level
+	// would be dropped at every failover spawn without anyone noticing.
+	for _, tg := range cfg.Chain {
+		if tg.Effort == "" || denied[tg.Instance] {
+			continue
+		}
+		info := provider.EffortInfoFor(c.Context(), tg.Instance, tg.ModelID, "", "")
+		if !provider.ValidEffortChoice(info, tg.Effort) {
+			deniedErrs = append(deniedErrs, tg.Instance+": reasoning effort "+tg.Effort+" is not offered by its model")
 		}
 	}
 	// Validate and warn as if the refused targets did not exist, so no
